@@ -11,7 +11,8 @@
 //
 // Cleanup joins before it removes: it awaits every transport's shared stop
 // (the leader's actual exit, an empty group, every handler job joined), then
-// removes the root in finally. Overlapping cleanups share one promise. A stop
+// removes the root in finally. Overlapping cleanups, including one reentered
+// from a handler's abort listener while stop runs, share one promise. A stop
 // failure rejects the cleanup with that failure once, by identity, unless the
 // test explicitly took that exact rejection through case.stopFailure().
 import fs from 'node:fs'
@@ -140,18 +141,28 @@ export function transportCases(prefix: string): TransportCases {
     }
   }
 
+  const body = async (): Promise<void> => {
+    const outcomes = await Promise.allSettled(opened.map((entry) => entry.transport.stop()))
+    try {
+      const failures = outcomes.flatMap((outcome, index) =>
+        outcome.status === 'rejected' && opened[index]!.asserted?.error !== outcome.reason ? [outcome.reason as unknown] : [])
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) throw new AggregateError(failures, 'transport stops failed')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
   const cleanup = (): Promise<void> => {
-    cleaning ??= (async () => {
-      const outcomes = await Promise.allSettled(opened.map((entry) => entry.transport.stop()))
-      try {
-        const failures = outcomes.flatMap((outcome, index) =>
-          outcome.status === 'rejected' && opened[index]!.asserted?.error !== outcome.reason ? [outcome.reason as unknown] : [])
-        if (failures.length === 1) throw failures[0]
-        if (failures.length > 1) throw new AggregateError(failures, 'transport stops failed')
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true })
-      }
-    })()
+    if (cleaning) return cleaning
+    // Reserve the one shared promise before the body runs: stop() aborts the
+    // handlers synchronously, and an abort listener that reenters cleanup
+    // must get this same promise, never a second body or finalizer.
+    let settle!: { resolve(): void; reject(error: unknown): void }
+    cleaning = new Promise<void>((resolve, reject) => (settle = { resolve, reject }))
+    // Callers take the rejection; an unawaited reentry adds no unhandled one.
+    void cleaning.catch(() => {})
+    body().then(settle.resolve, settle.reject)
     return cleaning
   }
 
