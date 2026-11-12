@@ -7,6 +7,9 @@
 // the same original object. The join's empty decision, slot release and
 // settlement are one synchronous step (R7, findings-7712679a): a call queued
 // by the last harness's settlement gets a new join that joins its harness.
+// Since task-666e5edd the join mechanics are the package's shared test helper
+// (packages/agent-runtime/__tests__/helpers/ownedCleanup.ts); these cases are
+// its root delegation witnesses over the actual production composition.
 // Held cases hold the actual adapter's returned turn_started callback promise
 // and release it in finally; nothing sleeps longer than 10 ms.
 import { afterEach, expect, test } from 'bun:test'
@@ -273,6 +276,53 @@ test('on the rejection path the finalizing join reports its raw failure once and
   } finally {
     ga.release()
     await Promise.allSettled([first, second, scheduled, a.h.cleanup(), late?.cleanup()])
+  }
+})
+
+// Delegation witness (task-666e5edd): the join runs in the package's shared
+// helper over the actual createChatDriver → adapter → package harnesses.
+// Two unasserted failures, one held past the other's rejection, are both
+// joined and reach the caller as the harness's AggregateError of the two
+// original cleanup rejections, in creation order.
+test('the shared cleanup owner joins every real harness after a first rejection and reports both originals in order', async () => {
+  const boomA = new Error('first harness callback rejected')
+  const boomB = new Error('second harness callback rejected')
+  const ga = gate()
+  const gb = gate()
+  const rejectingA = ga.held.then(() => {
+    throw boomA
+  })
+  const rejectingB = gb.held.then(() => {
+    throw boomB
+  })
+  void rejectingA.catch(() => {})
+  void rejectingB.catch(() => {})
+  const a = heldHarness(rejectingA)
+  const b = heldHarness(rejectingB)
+  let joined: Promise<void> | undefined
+  try {
+    await enter(a.h, a.entered)
+    await enter(b.h, b.entered)
+    joined = cleanupHarnesses()
+    const outcome = joined.then(() => null, (error: unknown) => error)
+    ga.release()
+    await tick()
+    // The first rejection did not end the join: the second harness still holds its callback.
+    expect(await settledNow(joined)).toBe(false)
+    gb.release()
+    const reported = await outcome
+    expect(reported).toBeInstanceOf(AggregateError)
+    expect((reported as AggregateError).message).toBe('Claude harness cleanups failed')
+    const errors = (reported as AggregateError).errors
+    expect(errors).toHaveLength(2)
+    expect(errors[0]).toBe(await a.h.failure())
+    expect(errors[1]).toBe(await b.h.failure())
+    expect([rawCauses(errors[0]), rawCauses(errors[1])]).toEqual([[boomA], [boomB]])
+    await cleanupHarnesses()
+  } finally {
+    ga.release()
+    gb.release()
+    await Promise.allSettled([joined, a.h.cleanup(), b.h.cleanup()])
   }
 })
 

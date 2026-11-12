@@ -14,7 +14,10 @@
 // - cleanup() kills the driver and joins its settled() (the package stop,
 //   callbacks and owned work). The one shared promise is reserved before the
 //   kill runs, so overlapping calls and a reentry from a callback the kill
-//   triggers share it; a settled() failure rejects it raw, once.
+//   triggers share it; a settled() failure rejects it raw, once. The
+//   reservation and the suite join below are the package's shared test
+//   helper (packages/agent-runtime/__tests__/helpers/ownedCleanup.ts,
+//   task-666e5edd); the stop body stays here.
 // - The fake reads its prompt stream eagerly, as the CLI reads stdin, into
 //   a buffer that pullPrompt() and `prompt` read from (same 10 ms "nothing
 //   waiting" answer as the shared fake). The package admits a send after its
@@ -67,6 +70,8 @@ import {
   type FakeQueryHandle,
   type FakeUsageControl,
 } from './chatDriverHarness'
+// Test code only: the package's shared cleanup owner, imported by path (no package export).
+import { ownedAggregate, ownedOnce } from '../../../../packages/agent-runtime/__tests__/helpers/ownedCleanup'
 
 /** Kawai's production Claude composition, as createChatDriver returns it. */
 export type RuntimeDriver = ChatAgentDriver & {
@@ -144,55 +149,34 @@ export type Harness = RuntimeHarness
 export const createHarness = (overrides?: RuntimeHarnessOverrides): RuntimeHarness => createRuntimeHarness(overrides)
 
 type LiveEntry = { harness: RuntimeHarness; asserted: { error: unknown } | null }
-const live = new Set<LiveEntry>()
-/** The one suite-level join in flight, shared by every overlapping caller (parent review F2). */
-let joining: Promise<void> | null = null
+
+/**
+ * Every harness created since the last join, owned by the package's shared
+ * test-cleanup helper (task-666e5edd; mechanics in its header): one
+ * reserved in-flight join shared by overlapping callers, every entry joined
+ * whatever rejects and removed only once joined, harnesses created during
+ * the join joined by it, and the empty check, slot release and settlement
+ * one synchronous step (task-602c71e9 R7, findings-7712679a). A failure is
+ * suppressed only when expectFailures() asserted that exact value; no
+ * assertion (null) never matches, so an unasserted raw undefined is
+ * reported.
+ */
+const harnesses = ownedAggregate<LiveEntry, void>({
+  join: (entry) => entry.harness.cleanup(),
+  failures: (entry, outcome) =>
+    outcome.status === 'rejected' && (entry.asserted === null || entry.asserted.error !== outcome.reason)
+      ? [outcome.reason]
+      : [],
+  message: 'Claude harness cleanups failed',
+})
 
 /**
  * Join every harness created since the last call (each suite's afterEach):
- * a failure no case took through failure() rejects once, raw (one) or as an
- * AggregateError (several). The join is reserved before any harness cleanup
- * runs or any entry leaves `live`, so an overlapping call gets the same
- * promise and never settles while a harness it owns is still joining. An
- * entry leaves `live` only after its cleanup settled, and a harness created
- * during the join is joined by it too.
- *
- * The final observation that `live` is empty, the release of `joining` and
- * the settlement of the reserved promise are one synchronous step inside
- * the drain's own continuation (task-602c71e9 R7, findings-7712679a): no
- * await or later reaction separates them, so a harness registered at any
- * point is either joined by the pending join or, once that join has
- * settled, owned by the next one a later call starts.
+ * a failure no case asserted rejects once, raw (one) or as an AggregateError
+ * of the originals (several). An overlapping call gets the pending join.
  */
 export function cleanupHarnesses(): Promise<void> {
-  if (joining) return joining
-  let settle!: Settle
-  const reserved = new Promise<void>((resolve, reject) => (settle = { resolve, reject }))
-  joining = reserved
-  void drainLive(settle)
-  return reserved
-}
-
-type Settle = { resolve(): void; reject(error: unknown): void }
-
-async function drainLive(settle: Settle): Promise<void> {
-  const failures: unknown[] = []
-  for (;;) {
-    if (live.size === 0) {
-      // One synchronous completion step: empty decision, slot release, settlement.
-      joining = null
-      if (failures.length === 0) settle.resolve()
-      else if (failures.length === 1) settle.reject(failures[0])
-      else settle.reject(new AggregateError(failures, 'Claude harness cleanups failed'))
-      return
-    }
-    const entries = [...live]
-    const outcomes = await Promise.allSettled(entries.map((entry) => entry.harness.cleanup()))
-    for (const entry of entries) live.delete(entry)
-    outcomes.forEach((outcome, index) => {
-      if (outcome.status === 'rejected' && entries[index]!.asserted?.error !== outcome.reason) failures.push(outcome.reason)
-    })
-  }
+  return harnesses.join()
 }
 
 export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): RuntimeHarness {
@@ -300,7 +284,7 @@ export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): R
     throw new Error('createRuntimeHarness: the Claude adapter lost sendWorkspaceContext or settled')
   }
 
-  let cleaning: Promise<void> | null = null
+  const cleaning = ownedOnce<void>()
   const body = async (): Promise<void> => {
     driver.kill()
     try {
@@ -310,16 +294,9 @@ export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): R
       await Promise.all(readers)
     }
   }
-  const cleanup = (): Promise<void> => {
-    if (cleaning) return cleaning
-    // Reserved before kill() runs: a callback the kill triggers that reenters
-    // cleanup gets this same promise, never a second body.
-    let settle!: { resolve(): void; reject(error: unknown): void }
-    cleaning = new Promise<void>((resolve, reject) => (settle = { resolve, reject }))
-    void cleaning.catch(() => {})
-    body().then(settle.resolve, settle.reject)
-    return cleaning
-  }
+  // Reserved before kill() runs: a callback the kill triggers that reenters
+  // cleanup gets this same promise, never a second body.
+  const cleanup = (): Promise<void> => cleaning.run(body)
 
   const failure = async (): Promise<unknown> => {
     try {
@@ -334,7 +311,7 @@ export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): R
     ? Promise.resolve()
     : new Promise<void>((wake) => admissions.push({ count, wake }))
   let awaitedWrites = 0
-  const entry: { harness: RuntimeHarness; asserted: { error: unknown } | null } = { harness: undefined as never, asserted: null }
+  const entry: LiveEntry = { harness: undefined as never, asserted: null }
   const harness: RuntimeHarness = {
     ...h,
     driver,
@@ -363,6 +340,6 @@ export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): R
     },
   }
   entry.harness = harness
-  live.add(entry)
+  harnesses.add(entry)
   return harness
 }
