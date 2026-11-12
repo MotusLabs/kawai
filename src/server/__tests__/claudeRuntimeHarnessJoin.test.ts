@@ -4,9 +4,11 @@
 // is removed, so an overlapping call gets the same promise and never settles
 // while a harness callback it owns is still held. A harness created during
 // the join is joined by it; an unasserted raw failure reaches every caller as
-// the same original object. Each case holds the actual adapter's returned
-// turn_started callback promise and releases it in finally; nothing sleeps
-// longer than 10 ms.
+// the same original object. The join's empty decision, slot release and
+// settlement are one synchronous step (R7, findings-7712679a): a call queued
+// by the last harness's settlement gets a new join that joins its harness.
+// Held cases hold the actual adapter's returned turn_started callback promise
+// and release it in finally; nothing sleeps longer than 10 ms.
 import { afterEach, expect, test } from 'bun:test'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import type { ChatEvent } from '../../shared/chat'
