@@ -66,6 +66,10 @@ const handle = (line) => {
       // A parse-level failure names no request: id null.
       out({ id: null, error: { code: -32700, message: 'parse error' } })
       break
+    case 'launch':
+      // The child's actual cwd and complete environment, as it sees them.
+      out({ id, result: { cwd: process.cwd(), env: { ...process.env } } })
+      break
     case 'pgid': {
       // /proc/self/stat: pid (comm) state ppid pgrp — pgrp is field 5.
       const stat = require('node:fs').readFileSync('/proc/self/stat', 'utf8')
@@ -301,6 +305,13 @@ test('a child exit rejects pending requests, fires onExit, and refuses later one
   }
 })
 
+test('the child runs in the cwd it inherits at launch with exactly the supplied environment', async () => {
+  const launchedFrom = process.cwd()
+  const { transport } = startTransport('launch')
+  const result = await transport.request('x') as { cwd: string; env: Record<string, string> }
+  expect(result).toEqual({ cwd: launchedFrom, env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: 'launch' } })
+})
+
 test('stop() ends the child with SIGTERM by default; a planned stop reports no onExit', async () => {
   const { transport, exits, stop } = startTransport('echo')
   await transport.request('ping')
@@ -323,13 +334,18 @@ test('cleanup joins held handler work before it removes the root; overlapping cl
       throw signal.reason // the stop's own cancellation, never a failure
     },
   })
-  await transport.request('turn/start', {})
-  expect(await until(() => entered)).toBe(true)
-  const first = cases.cleanup()
-  const second = cases.cleanup()
-  expect(second).toBe(first)
-  release()
-  await first
+  let first: Promise<void> | undefined
+  try {
+    await transport.request('turn/start', {})
+    expect(await until(() => entered)).toBe(true)
+    first = cases.cleanup()
+    const second = cases.cleanup()
+    expect(second).toBe(first)
+  } finally {
+    // Whatever failed above, the hold is released and the shared cleanup joined.
+    release()
+    await (first ?? cases.cleanup())
+  }
   expect({ seen, rootKept: fs.existsSync(cases.root) }).toEqual({ seen: [true], rootKept: false })
 })
 

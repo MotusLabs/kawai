@@ -1,7 +1,9 @@
 // Test-only boundary from the retired root AppServerClient's cases to the
 // package's AppServerTransport (extract-agent-runtime 6.2/6.3, task-d52b6709).
-// It only maps calls and data: an explicit launch (cwd = the owned root, the
-// child's complete env exactly as the old case gave it), the command and the
+// It only maps calls and data: an explicit launch (cwd = the test process's
+// own cwd captured at launch, which the old client's child inherited; the
+// child's complete env exactly as the old case gave it; the owned temp root
+// holds only the launch's home/cache/temp resources), the command and the
 // default `app-server` argv, clientInfo/capabilities at construction, the
 // old {dir, line} view of the package's wire frames, and the old kill grace
 // as the stop's graceMs. Buffering, correlation, deadlines, drain, process
@@ -10,8 +12,8 @@
 // Cleanup joins before it removes: it awaits every transport's shared stop
 // (the leader's actual exit, an empty group, every handler job joined), then
 // removes the root in finally. Overlapping cleanups share one promise. A stop
-// failure the test did not take itself (case.stop()) rejects the cleanup with
-// that failure once, by identity; a taken stop's outcome is the test's.
+// failure rejects the cleanup with that failure once, by identity, unless the
+// test explicitly took that exact rejection through case.stopFailure().
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -53,8 +55,13 @@ export interface TransportCase {
   exits: LeaderExit[]
   /** Resolves with the first exit the transport reports through onExit. */
   reportedExit: Promise<LeaderExit>
-  /** The transport's shared stop; calling it hands its outcome to the caller. */
+  /** The transport's shared stop (one terminal promise for every caller). */
   stop(): Promise<ProcessExitFact>
+  /**
+   * The shared stop's rejection, for a test that asserts it: that exact
+   * rejection is then not reported again by cleanup. Throws when the stop resolves.
+   */
+  stopFailure(): Promise<unknown>
 }
 
 export interface TransportCases {
@@ -66,7 +73,7 @@ export interface TransportCases {
 
 export function transportCases(prefix: string): TransportCases {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)))
-  const opened: Array<{ transport: AppServerTransport; taken: boolean }> = []
+  const opened: Array<{ transport: AppServerTransport; asserted: { error: unknown } | null }> = []
   let cleaning: Promise<void> | null = null
 
   const open = (input: TransportCaseInput): TransportCase => {
@@ -79,7 +86,7 @@ export function transportCases(prefix: string): TransportCases {
     let reported!: (exit: LeaderExit) => void
     const reportedExit = new Promise<LeaderExit>((resolve) => (reported = resolve))
     const transport = new AppServerTransport({
-      launch: resolveLaunch({ cwd: root, childEnv: input.env, homeDir, cacheDir, tempDir }),
+      launch: resolveLaunch({ cwd: process.cwd(), childEnv: input.env, homeDir, cacheDir, tempDir }),
       generation: 1,
       command: input.executable,
       clientInfo: input.clientInfo,
@@ -95,7 +102,7 @@ export function transportCases(prefix: string): TransportCases {
       ...(input.drainBoundMs !== undefined ? { drainBoundMs: input.drainBoundMs } : {}),
       ...(input.graceMs !== undefined ? { terminate: { graceMs: input.graceMs } } : {}),
     })
-    const entry = { transport, taken: false }
+    const entry: (typeof opened)[number] = { transport, asserted: null }
     opened.push(entry)
     transport.start()
     return {
@@ -104,9 +111,15 @@ export function transportCases(prefix: string): TransportCases {
       notifications,
       exits,
       reportedExit,
-      stop: () => {
-        entry.taken = true
-        return transport.stop()
+      stop: () => transport.stop(),
+      stopFailure: async () => {
+        try {
+          await transport.stop()
+        } catch (error) {
+          entry.asserted = { error }
+          return error
+        }
+        throw new Error('expected the transport stop to fail')
       },
     }
   }
@@ -116,7 +129,7 @@ export function transportCases(prefix: string): TransportCases {
       const outcomes = await Promise.allSettled(opened.map((entry) => entry.transport.stop()))
       try {
         const failures = outcomes.flatMap((outcome, index) =>
-          outcome.status === 'rejected' && !opened[index]!.taken ? [outcome.reason as unknown] : [])
+          outcome.status === 'rejected' && opened[index]!.asserted?.error !== outcome.reason ? [outcome.reason as unknown] : [])
         if (failures.length === 1) throw failures[0]
         if (failures.length > 1) throw new AggregateError(failures, 'transport stops failed')
       } finally {
