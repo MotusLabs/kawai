@@ -494,13 +494,46 @@ export interface TeamTaskDetail {
 }
 
 /** The agent's bounded detail (bounded-log-reads-and-task-get D4): journal, subtask, and message windows, oldest first, with their bounds; other sections whole. */
-export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal'> {
+export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal' | 'revisions'> {
   journal: TaskJournalPreview[]
+  /** bounded-metrics-and-task-get D7: the newest 50 revisions as text-free rows, oldest first. */
+  revisions: AgentRevisionRow[]
+  /** The whole text of the revision named by `revision`; absent otherwise. */
+  revisionText?: AgentRevisionText
   bounds: AgentTaskBounds
   /** review-findings-ledger D10: whether ledger rows older than the newest 100 were left out. */
   ledgerOlderRemaining?: boolean
 }
-export interface AgentTaskBounds { journal: { total: number; returned: number; olderRemaining: boolean; nextBefore: string | null }; subtasks: TaskListBound; messages: TaskListBound }
+export interface AgentTaskBounds {
+  journal: { total: number; returned: number; olderRemaining: boolean; nextBefore: string | null }
+  subtasks: TaskListBound
+  messages: TaskListBound
+  /** `nextBefore` is the oldest returned revision number while older ones remain. */
+  revisions: { total: number; returned: number; truncated: boolean; nextBefore: number | null }
+}
+/**
+ * One revision as the agent's `task_get` lists it (D7): identity and byte lengths, never the
+ * direction or acceptance. `rationale` is a preview of at most 2,000 stored bytes (null without
+ * one, or when the bytes are not valid UTF-8); `rationaleBytes` is its stored length.
+ */
+export interface AgentRevisionRow {
+  revision: number
+  /** `r<N>#<hash12>`, as a whole read of the revision reports it. */
+  identity: string
+  /** The revision's contract hash; null without a contract. */
+  contractHash: string | null
+  author: TaskCreator
+  createdAt: string
+  /** Null for revisions published before notifications existed. */
+  notify: boolean | null
+  directionBytes: number
+  acceptanceBytes: number
+  rationale: string | null
+  rationaleBytes: number
+  rationaleCut: boolean
+}
+/** One revision whole (D7), returned when `task_get` names it with `revision`. */
+export interface AgentRevisionText { revision: number; direction: string; acceptance: string | null; rationale: string | null }
 export interface TaskListBound { total: number; returned: number; truncated: boolean }
 /** A journal entry's preview (D4): at most 2,000 stored bytes; `text` is null when they are not valid UTF-8, and `resumeOffsetBytes` is then 0. */
 export interface TaskJournalPreview { id: string; author: JournalAuthor; createdAt: string; text: string | null; previewBytes: number; totalBytes: number; cut: boolean; resumeOffsetBytes: number }

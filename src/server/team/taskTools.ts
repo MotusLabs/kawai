@@ -21,6 +21,9 @@ const journalLimit = `journal_limit must be an integer from 1 to ${JOURNAL_LIMIT
 // The same for task_list (bounded-task-list D2/D3): one message per argument.
 const listStatus = `status must be one of ${TASK_LIST_STATUSES.join(', ')}`
 const listLimit = `limit must be an integer from 1 to ${TASK_LIST_LIMIT_MAX}`
+// bounded-metrics-and-task-get D7: a revision argument that is not a number is refused naming the
+// value, as the store refuses a number outside the task's revisions.
+const unknownRevision = { error: (issue: { input?: unknown }) => `Unknown revision of this task: ${String(issue.input)}` }
 const offsetBytes = 'offset_bytes must be a safe non-negative integer'
 export const taskSchemas = {
   task_create: z.object({
@@ -32,6 +35,8 @@ export const taskSchemas = {
     ...taskId, journal_before: z.string().min(1).optional(),
     journal_limit: z.number({ error: journalLimit }).int({ error: journalLimit }).min(1, { error: journalLimit })
       .max(JOURNAL_LIMIT_MAX, { error: journalLimit }).optional(),
+    revisions_before: z.number(unknownRevision).optional(),
+    revision: z.number(unknownRevision).optional(),
   }),
   task_journal_read: z.object({
     ...taskId, entry_id: z.string().min(1),
@@ -97,7 +102,7 @@ export const taskSchemas = {
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
   task_create: 'Create a team task (only if your group may create tasks). Optional parent_id, worktree (a worktree root of this repository), and openspec_change; plan_id with plan_change links the task to a change of an open plan\'s approved revision (both or neither; fixed afterwards). Optional contract: an implementation contract in Markdown — a `## Implementation contract` heading, then `### Acceptance`, `### Invariants`, `### Scope`, `### Verification`, `### Excluded` in that order, clauses as `- A1: text` (I, V, X likewise), Scope as one glob per bullet; Acceptance, Scope, and Verification need at least one entry. A contract that does not parse refuses the creation with every problem and its line. You become its creator.',
-  task_get: 'Read a task: current direction and acceptance, every revision with its contract identity (r<revision>#<hash>) and contract (null when it has none), assignment, and result whole; the journal, subtasks, and messages as bounded windows, oldest first, each with its total — the newest 50 journal entries (journal_limit 1–200), 100 subtasks, and 50 messages. A journal entry is a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8). Page older entries with journal_before set to bounds.journal.nextBefore; read any entry whole with task_journal_read. findingsLedger lists the newest 100 findings (F<n>), newest first, each with level, clause, state, and transitions (ledgerOlderRemaining when more exist); each result\'s findings rows carry their items, class, and whether they counted.',
+  task_get: 'Read a task: current direction, acceptance, and contract (in task), assignment, and result whole; the journal, subtasks, and messages as bounded windows, oldest first, each with its total — the newest 50 journal entries (journal_limit 1–200), 100 subtasks, and 50 messages. A journal entry is a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8). Page older entries with journal_before set to bounds.journal.nextBefore; read any entry whole with task_journal_read. revisions lists the newest 50 revisions oldest first as rows — revision, identity (r<revision>#<hash>), contractHash (null without a contract), author, createdAt, notify, directionBytes, acceptanceBytes, and a rationale preview of at most 2,000 stored bytes with rationaleBytes and rationaleCut — never their direction or acceptance; bounds.revisions has total, returned, truncated, and nextBefore, and revisions_before (an integer from 2 to the task\'s revision) returns the revisions below it. Read one revision whole with revision (an integer from 1 to the task\'s revision): revisionText carries its direction, acceptance, and rationale. findingsLedger lists the newest 100 findings (F<n>), newest first, each with level, clause, state, and transitions (ledgerOlderRemaining when more exist); each result\'s findings rows carry their items, class, and whether they counted.',
   task_journal_read: 'Read one journal entry of a task losslessly (entry_id from task_get): up to 8,192 stored bytes from offset_bytes (default 0; a preview\'s resumeOffsetBytes continues it) as dataBase64, which is authoritative, with their text when valid UTF-8 (else null), the entry\'s totalBytes, and nextOffsetBytes (null at the end). Read-only.',
   task_note: "Append a note to a task's journal (decisions, findings, progress). Notes are permanent.",
   task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its creator only). Optional note is journaled.',
@@ -119,8 +124,10 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
   return {
     task_create: async (input: unknown) => tasks.create(caller, taskSchemas.task_create.parse(input)),
     task_get: async (input: unknown) => {
-      const { task_id, journal_before, journal_limit } = taskSchemas.task_get.parse(input)
-      const detail = await reads.agentGet(caller, task_id, { journalBefore: journal_before, journalLimit: journal_limit })
+      const { task_id, journal_before, journal_limit, revisions_before, revision } = taskSchemas.task_get.parse(input)
+      const detail = await reads.agentGet(caller, task_id, {
+        journalBefore: journal_before, journalLimit: journal_limit, revisionsBefore: revisions_before, revision,
+      })
       // The blind-first seal (independent-verification D6): project the
       // results for the reading session when the server has a result
       // service; the human's path (humanDetail) never seals.
