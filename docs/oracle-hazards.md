@@ -175,6 +175,22 @@ or property that would have caught it, and the source finding.
   validity equals the unmemoized check, first and repeated").
 - **Source finding.** task-dbc1481b contract A6.
 
+### A workflow oracle driving a retired copy of the production path (task-ce05430a G2)
+
+- **Hazard.** A workflow test reaches the system through a helper that
+  production stopped using. Here the Codex half of the task-journal and
+  task-list tool tables called Kawai's old dynamic-tool dispatcher, while
+  production serves `item/tool/call` through the package's bound tool set.
+  The test stays green while the real path is never exercised, and deleting
+  the dead helper looks like deleting the coverage.
+- **Oracle that catches it.** Drive the workflow through the production
+  composition (`createChatDriver` -> `codexRuntime.ts` -> the package
+  factory) against the fake app-server, with the scripted `item/tool/call`
+  and its captured reply. Take the expected tool table, schemas and handler
+  results from the caller's table, never from what the driver emitted.
+- **Source finding.** task-ce05430a R1 read-only table (note 652afc49) and
+  creator decision G2.
+
 ### An idempotence oracle observing only the uniquely constrained row (findings-d2f9140b F1)
 
 - **Hazard.** A replay oracle checks only the row class a store constraint
