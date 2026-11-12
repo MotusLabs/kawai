@@ -4,12 +4,29 @@
 // no reset (null) instead of throwing RangeError. Representable epochs,
 // including both ±8.64e12 s boundaries, and valid ISO strings keep their exact
 // results, and each affected caller keeps every other report and limit fact.
+// The Codex callers are the package's public quota and limit readers since
+// task-ce05430a (R2 A6), read through Kawai's production views.
 import { describe, expect, test } from 'bun:test'
-import { toIsoResetsAt } from '@motuslabs/agent-runtime/usage'
-import { codexRetryLimitSignal, codexTurnLimitSignal, latestExhaustedReset } from '../chat/codex/codexLimits'
-import { normalizeRateLimitSnapshot } from '../chat/codex/codexUsage'
-import type { RateLimitSnapshot } from '../chat/codex/protocol/v2/RateLimitSnapshot'
+import { codexExhaustedReset as latestExhaustedReset, codexLimitFailure, codexQuotaReport, toIsoResetsAt } from '@motuslabs/agent-runtime/usage'
+import type { ChatUsageSource } from '../../shared/chat'
 import { parseOpenRouterKey } from '../chat/openRouterUsage'
+import { chatLimitSignal, chatUsageReport } from '../chat/provider/runtimeEvents'
+
+type RateLimitSnapshot = Record<string, unknown>
+
+/** A Codex snapshot as Kawai's usage report (a push, or the read reply shown as a provider read). */
+const normalizeRateLimitSnapshot = (snap: unknown, receivedAt: string, source: ChatUsageSource) =>
+  chatUsageReport(codexQuotaReport(snap, source === 'push' ? 'push' : 'report', receivedAt), source)
+/** A failed turn's final limit signal as Kawai receives it. */
+const codexTurnLimitSignal = (turn: { error: unknown }, snap: unknown) => {
+  const failure = codexLimitFailure(turn.error, true, snap)
+  return failure ? chatLimitSignal(failure) : null
+}
+/** A retrying error's non-final limit signal as Kawai receives it. */
+const codexRetryLimitSignal = (notification: { error: unknown }, snap: unknown) => {
+  const failure = codexLimitFailure(notification.error, false, snap)
+  return failure ? chatLimitSignal(failure) : null
+}
 
 const MAX_EPOCH_S = 8.64e12
 const OVERFLOWS = [1e13, -1e13, MAX_EPOCH_S + 1, -(MAX_EPOCH_S + 1)]

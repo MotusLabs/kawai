@@ -231,6 +231,16 @@ describe('Codex limit waits', () => {
     await (await h.driver.send(script([retry('other'), delta()]))).result
     expect(h.limits).toEqual([])
   })
+
+  // Moved from Kawai's codexLimits.test.ts ("a not-retrying or non-limit error
+  // records nothing", task-ce05430a): the willRetry gate is the package's.
+  test('a not-retrying limit error is no failure and opens no wait', async () => {
+    const h = recorded()
+    await h.driver.start()
+    const final: Note = { method: 'error', params: { willRetry: false, error: { message: 'x', codexErrorInfo: 'rateLimitExceeded', additionalDetails: null } } }
+    await (await h.driver.send(script([final, delta()]))).result
+    expect(h.limits).toEqual([])
+  })
 })
 
 describe('Codex quota sources', () => {
