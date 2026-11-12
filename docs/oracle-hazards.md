@@ -161,6 +161,20 @@ or property that would have caught it, and the source finding.
   subtracted as an observed baseline.
 - **Source finding.** findings-f4b1ebad B1–B3.
 
+### A memo's parity oracle whose reference is the memo's own check (task-dbc1481b A6)
+
+- **Hazard.** A memoized check is compared against the unmemoized function
+  it wraps, from the same module. When that inner function moves or changes,
+  the oracle moves with it, so the memo can never disagree with its
+  reference, and a wrong check stays green on both sides.
+- **Oracle that catches it.** Take the reference from an independent public
+  source, never from the memo's module. Here Kawai's 256-entry reset-zone memo
+  is compared against the package's uncached public `isResetTimeZone` over
+  every supported zone plus seeded malformed strings, on first and repeated
+  calls (`src/server/__tests__/resetTimeZoneMemo.test.ts` › "P2: memoized zone
+  validity equals the unmemoized check, first and repeated").
+- **Source finding.** task-dbc1481b contract A6.
+
 ### An idempotence oracle observing only the uniquely constrained row (findings-d2f9140b F1)
 
 - **Hazard.** A replay oracle checks only the row class a store constraint

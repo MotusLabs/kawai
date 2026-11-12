@@ -46,7 +46,7 @@ Use `packages/agent-runtime/` in the Kawai repository. Export ESM plus declarati
 | ClaudeProfiles credential blanking/transport pinning | Pure `src/profiles/` helpers only; catalog loading, retained-name DB and trusted wrapper policy stay in Kawai |
 | codex driver/client/events/requests/thread/usage/limits/activity/sandbox/auth and executable | `src/codex/`; remove Git, team, logger and outbound imports |
 | Generated protocol directory | Internal `src/codex/protocol/`, unchanged generation provenance/VERSION and required notices; not a public API |
-| usageLimits/usageWindowPeriods/limitSignals/contextUsage/providerCost | `src/usage/`; provider account stores, routing/cooldowns and Kawai quota HTTP services remain in Kawai |
+| usageLimits/usageWindowPeriods/limitSignals/contextUsage/providerCost | `src/usage/`; provider account stores (`UsageLimitStore`), provider-row units and calendar months, the reset-zone memo, routing/cooldowns, Kawai quota HTTP services and the views onto Kawai's chat shapes remain in Kawai |
 | codexTools/audit and Claude audit hooks | Generic tool dispatch/observation in package; Kawai supplies namespace, descriptions, schemas, handlers and optional detailed audit adapter |
 | wireTap process wrapping and linear line splitter | `src/process/`; optional sink, always-owned process |
 | codexRollout/history replay, smoke scrubber and application fixtures | Stay in Kawai or tests; no library dependency on transcript UI/recovery stores |
