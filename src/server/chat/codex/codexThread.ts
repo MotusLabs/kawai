@@ -9,18 +9,54 @@
 // Kawai's adapter over the package (provider/codexRuntime.ts); the in-tree
 // state machine these served is deleted (task-5906f19c), and the helpers stay
 // with their own tests as deferred extract-agent-runtime 6.2/6.3 families.
+// The root AppServerClient is deleted too (task-d52b6709): the client types
+// below are structural declarations of its former shapes, kept for the
+// deferred helpers (CodexCommandDiscovery, answerAsyncQuestion) and the
+// refused createClient knob; no implementation remains behind them.
 import type { ChatApprovalPolicy, ChatContextUsage } from '../../../shared/chat'
 import { logger } from '../../logger'
 import type { OutboundAuditSink } from '../../outbound/observer'
 import type { TeamToolSpec } from '../../team/mailboxTools'
 import type { ChatDriverCallbacks, ChatEffort } from '../provider/driver'
 import type { ChatWireRecorder } from '../wireTap'
-import type { AppServerClient, AppServerClientOptions } from './appServerClient'
 import { codexSandbox, gitCommonDir } from './codexSandbox'
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown'
 
-/** The client surface the driver uses; injectable for tests. */
-export type CodexClient = Pick<AppServerClient, 'start' | 'request' | 'initialize' | 'end'>
+/** How an app-server process ended: an exit code, a kill signal, or a spawn failure (both null). */
+export interface CodexClientExit {
+  code: number | null
+  signal: string | null
+}
+
+/** A Codex app-server client's construction options (the retired AppServerClient's shape). */
+export interface CodexClientOptions {
+  /** The resolved Codex executable (codexExecutable.ts); never a shell command. */
+  executable: string
+  /** The child's full environment; the caller builds it (codexSpawnEnv). */
+  env: Record<string, string>
+  /** Every inbound and outbound line, plus spawn/exit lifecycle frames. */
+  wire: ChatWireRecorder
+  /** A server-initiated notification (a `method` with no id). */
+  onNotification(method: string, params: Record<string, unknown>): void
+  /** A server request (a `method` with an id): the resolved value becomes the reply's `result`. */
+  onServerRequest(method: string, params: Record<string, unknown>): Promise<unknown>
+  /** The child ended. */
+  onExit(exit: CodexClientExit): void
+  /** SIGTERM -> SIGKILL escalation delay for end(). */
+  killGraceMs?: number
+  /** Per-request deadline in ms; 0 disables. */
+  requestTimeoutMs?: number
+  /** How long after the child's exit the stdio streams may keep the exit unsettled. */
+  drainBoundMs?: number
+}
+
+/** The client surface the driver used (the retired AppServerClient's start/request/initialize/end). */
+export type CodexClient = {
+  start(): void
+  request(method: string, params?: Record<string, unknown>): Promise<unknown>
+  initialize(info: { name: string; title?: string; version: string }): Promise<unknown>
+  end(): void
+}
 
 export interface CodexSessionDriverOptions extends ChatDriverCallbacks {
   sessionId: string
@@ -66,8 +102,11 @@ export interface CodexSessionDriverOptions extends ChatDriverCallbacks {
    * catalog edit or a retention write — withholds from the respawn too.
    */
   withheldCredentials: () => ReadonlySet<string>
-  /** Builds the app-server client; default the real AppServerClient. */
-  createClient?: (options: AppServerClientOptions) => CodexClient
+  /**
+   * A legacy-driver knob: built the deleted in-tree driver's client. The
+   * production adapter never reads it, and the test harness refuses it.
+   */
+  createClient?: (options: CodexClientOptions) => CodexClient
   /** How long interrupt waits for the app-server's acknowledgement. */
   interruptTimeoutMs?: number
 }

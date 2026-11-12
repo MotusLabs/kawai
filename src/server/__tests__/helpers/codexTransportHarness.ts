@@ -32,6 +32,9 @@ export interface RecordedFrame {
   line: string
 }
 
+/** One observation in the order the test saw it: a recorded wire frame or an onExit report. */
+export type TimelineEntry = ({ kind: 'frame' } & RecordedFrame) | { kind: 'onExit'; exit: LeaderExit }
+
 export interface TransportCaseInput {
   executable: string
   /** The child's complete environment, exactly as the old case built it. */
@@ -50,6 +53,8 @@ export interface TransportCaseInput {
 export interface TransportCase {
   transport: AppServerTransport
   frames: RecordedFrame[]
+  /** Recorded frames and onExit reports, interleaved in the order they happened. */
+  timeline: TimelineEntry[]
   notifications: Array<{ method: string; params: JsonObject }>
   /** Every unsolicited exit the transport reported through onExit. */
   exits: LeaderExit[]
@@ -81,6 +86,7 @@ export function transportCases(prefix: string): TransportCases {
     for (const dir of dirs) fs.mkdirSync(dir)
     const [homeDir, cacheDir, tempDir] = dirs as [string, string, string]
     const frames: RecordedFrame[] = []
+    const timeline: TimelineEntry[] = []
     const notifications: TransportCase['notifications'] = []
     const exits: LeaderExit[] = []
     let reported!: (exit: LeaderExit) => void
@@ -91,11 +97,20 @@ export function transportCases(prefix: string): TransportCases {
       command: input.executable,
       clientInfo: input.clientInfo,
       capabilities: input.capabilities,
-      ...(input.record === false ? {} : { wire: { record: (frame) => frames.push({ dir: frame.direction, line: frame.text }) } }),
+      ...(input.record === false ? {} : {
+        wire: {
+          record: (frame) => {
+            const recorded = { dir: frame.direction, line: frame.text }
+            frames.push(recorded)
+            timeline.push({ kind: 'frame', ...recorded })
+          },
+        },
+      }),
       onNotification: (method, params) => notifications.push({ method, params }),
       ...(input.onServerRequest ? { onServerRequest: input.onServerRequest } : {}),
       onExit: (exit) => {
         exits.push(exit)
+        timeline.push({ kind: 'onExit', exit })
         reported(exit)
       },
       ...(input.requestTimeoutMs !== undefined ? { requestTimeoutMs: input.requestTimeoutMs } : {}),
@@ -108,6 +123,7 @@ export function transportCases(prefix: string): TransportCases {
     return {
       transport,
       frames,
+      timeline,
       notifications,
       exits,
       reportedExit,
