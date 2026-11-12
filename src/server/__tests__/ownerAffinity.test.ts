@@ -1,8 +1,8 @@
-// Owner affinity (group-mail-task-affinity D3, task 3.1): rows A1–A9 and A12
-// of design.md's owner-affinity table as pure rows over `ownerAffinity`,
-// `evaluateEligibility`, and `builtinPick` — the decision the built-in path
-// makes without a rule. The rule rows (A10, A11) and the router composition
-// are in routingAffinity.test.ts.
+// Owner affinity (group-mail-task-affinity D3): design.md's derivation table
+// A1–A9 as pure rows over `ownerAffinity`, then the built-in path's rows of
+// the routing table (B1–B4, B6, B7) over `evaluateEligibility` and
+// `builtinPick` — the decision made without a rule. The rule rows (B8, B9),
+// B5, B10, and the router composition are in routingAffinity.test.ts.
 import { describe, expect, test } from 'bun:test'
 import { parseGroupFile, type GroupDefinition } from '../team/groupFile'
 import { builtinPick } from '../team/routing/builtin'
@@ -29,7 +29,7 @@ const excluded = (sessionId: string, profileId: string, ...kinds: MemberExclusio
 function state(members: EligibilityMember[], over: Partial<EligibilityState> = {}): EligibilityState {
   return {
     group: LEAD, members, pendingSpawnProfiles: [], spawnAllowed: false, spawnCwd: null, now: CREATED + 10 * MIN,
-    taskOwner: { sessionId: 'a', createdAt: CREATED, waitMs: WAIT }, ...over,
+    taskOwner: { sessionId: 'a', dueAt: CREATED, waitMs: WAIT }, ...over,
   }
 }
 
@@ -44,48 +44,48 @@ function decide(input: EligibilityState, strategy: GroupDefinition['strategy'] =
   return pick?.id ?? 'none'
 }
 
-describe('owner affinity rows (A1–A9, A12)', () => {
-  test('A1: no task owner — the strategy picks the longest-idle member', () => {
+describe('built-in path rows (B1–B4, B6, B7)', () => {
+  test('B1: no task owner — the strategy picks the longest-idle member', () => {
     expect(decide(state([idle('a', 'opus', 1), idle('b', 'opus', 10 * MIN)], { taskOwner: null }))).toBe('member:b')
   })
 
   // @covers: team-routing-rules › Groups may route by task owner › Owner preferred over the longest-idle member
-  test('A2: an eligible owner receives it over a member idle longer', () => {
+  test('B2: an eligible owner receives it over a member idle longer', () => {
     expect(decide(state([idle('a', 'opus', 1), idle('b', 'opus', 10 * MIN)]))).toBe('member:a')
   })
 
-  test('A3: a busy or card-waiting owner holds until created+wait, up to the last millisecond', () => {
+  test('B4: a busy or card-waiting owner holds until due+wait, up to the last millisecond', () => {
     for (const kinds of [['busy'], ['pending-card'], ['pending-card', 'busy']] as MemberExclusionKind[][]) {
       expect(decide(state([excluded('a', 'opus', ...kinds), idle('b', 'opus', 5 * MIN)]))).toBe('hold@30')
       expect(decide(state([excluded('a', 'opus', ...kinds), idle('b', 'opus', 5 * MIN)], { now: CREATED + WAIT - 1 }))).toBe('hold@30')
     }
   })
 
-  test('A4: at exactly created+wait and after, the strategy picks among the others', () => {
+  test('B7: at exactly due+wait and after, the strategy picks among the others', () => {
     for (const now of [CREATED + WAIT, CREATED + WAIT + MIN]) {
       expect(decide(state([excluded('a', 'opus', 'busy'), idle('b', 'opus', 5 * MIN)], { now }))).toBe('member:b')
     }
   })
 
-  test('A5: the wait over and no other candidate — no candidates, no hold', () => {
+  test('B6: the wait over and no other candidate — no candidates, no hold', () => {
     expect(decide(state([excluded('a', 'opus', 'busy'), excluded('b', 'opus', 'busy')], { now: CREATED + WAIT }))).toBe('none')
   })
 
-  test('A6: an owner parked, context-exhausted, unavailable, startup-failed, or elsewhere never holds', () => {
+  test('B7: an owner parked, context-exhausted, unavailable, startup-failed, or elsewhere never holds', () => {
     const others: MemberExclusionKind[][] = [['parked'], ['context-exhausted'], ['unavailable'], ['startup-failed'], ['other-worktree'], ['busy', 'parked'], ['busy', 'context-exhausted']]
     for (const kinds of others) {
       expect(decide(state([excluded('a', 'opus', ...kinds), idle('b', 'opus', 5 * MIN)]))).toBe('member:b')
     }
   })
 
-  test('A7: a cooling owner, idle or busy, gives way to another candidate with no wait', () => {
+  test('B7: a cooling owner, idle or busy, gives way to another candidate with no wait', () => {
     const cooldowns = { opus: new Date(CREATED + 2 * 60 * MIN).toISOString() }
     expect(decide(state([idle('a', 'opus', 1), idle('b', 'sonnet', 5 * MIN)], { cooldowns }))).toBe('member:b')
     expect(decide(state([excluded('a', 'opus', 'busy'), idle('b', 'sonnet', 5 * MIN)], { cooldowns }))).toBe('member:b')
     expect(decide(state([excluded('a', 'opus', 'busy', 'profile-cooling'), idle('b', 'sonnet', 5 * MIN)]))).toBe('member:b')
   })
 
-  test('A8: an owner the message filters drop, idle or busy, never holds or gets preferred', () => {
+  test('B7: an owner the message filters drop, idle or busy, never holds or gets preferred', () => {
     const filters: Array<Partial<EligibilityState>> = [
       { allowedProfiles: ['sonnet'] },
       { workerChoice: { selector: 'sonnet', profiles: ['sonnet'] } },
@@ -97,12 +97,12 @@ describe('owner affinity rows (A1–A9, A12)', () => {
     }
   })
 
-  test('A9: an owner that is not a live member of the group never holds', () => {
+  test('B7: an owner that is not a live member of the group never holds', () => {
     expect(decide(state([idle('b', 'opus', 5 * MIN), idle('c', 'opus', 1)]))).toBe('member:b')
   })
 
   // @covers: team-routing-rules › Groups may route by task owner › Owner preferred under profile order
-  test('A12: under profile-order the owner on the second profile beats a member on the first', () => {
+  test('B3: under profile-order the owner on the second profile beats a member on the first', () => {
     const members = [idle('b', 'opus', 10 * MIN), idle('a', 'sonnet', 1)]
     expect(decide(state(members), 'profile-order')).toBe('member:a')
     expect(decide(state(members, { taskOwner: null }), 'profile-order')).toBe('member:b')
@@ -138,7 +138,7 @@ describe('evaluateEligibility with a task owner', () => {
 
 describe('ownerAffinity', () => {
   const base: OwnerAffinityInput = {
-    owner: 'a', member: { eligible: false, causes: ['busy'] }, filtered: false, cooling: false, createdAt: CREATED, waitMs: WAIT, now: CREATED,
+    owner: 'a', member: { eligible: false, causes: ['busy'] }, filtered: false, cooling: false, dueAt: CREATED, waitMs: WAIT, now: CREATED,
   }
 
   test('affinityWait 0 never holds: within the wait is always false', () => {
@@ -169,5 +169,39 @@ describe('builtinPick with a preferred session', () => {
       expect(builtinPick(strategy, candidates, ['opus', 'sonnet'], profileId => profileId === 'sonnet', 'a')?.id).toBe('member:b')
       expect(builtinPick(strategy, candidates, ['opus', 'sonnet'], () => false, 'z')?.id).toBe('member:b')
     }
+  })
+})
+
+// design.md's derivation table, verbatim: affinity on or off (off reaches
+// `ownerAffinity` as no owner — the router passes none without affinity),
+// the resolved owner, its state, and `now < due + wait`. A3 and A4 each have a
+// scheduled row: the wait counts from `deliver_at`, not `created_at`.
+describe('ownerAffinity derivation table (A1–A9)', () => {
+  const DUE = CREATED + 25 * MIN // a row created at CREATED, scheduled for 25 minutes later
+  const row = (over: Partial<OwnerAffinityInput>): OwnerAffinityInput => ({
+    owner: 'a', member: { eligible: false, causes: ['busy'] }, filtered: false, cooling: false, dueAt: CREATED, waitMs: WAIT, now: CREATED + 10 * MIN, ...over,
+  })
+  const cases: Array<[string, OwnerAffinityInput, ReturnType<typeof ownerAffinity>]> = [
+    ['A1 on, no owner', row({ owner: null }), { kind: 'none' }],
+    ['A2 on, eligible owner', row({ member: { eligible: true, causes: [] } }), { kind: 'prefer', sessionId: 'a' }],
+    ['A3 on, busy, within the wait', row({}), { kind: 'hold', sessionId: 'a', until: CREATED + WAIT }],
+    ['A3 on, awaiting a card, within the wait', row({ member: { eligible: false, causes: ['pending-card'] } }), { kind: 'hold', sessionId: 'a', until: CREATED + WAIT }],
+    ['A3 scheduled: due 25 min after creation, 40 min after creation', row({ dueAt: DUE, now: CREATED + 40 * MIN }), { kind: 'hold', sessionId: 'a', until: DUE + WAIT }],
+    ['A4 on, busy, now = due + wait', row({ now: CREATED + WAIT }), { kind: 'none' }],
+    ['A4 scheduled: now = deliver_at + wait', row({ dueAt: DUE, now: DUE + WAIT }), { kind: 'none' }],
+    ['A5 on, other cause', row({ member: { eligible: false, causes: ['parked'] } }), { kind: 'none' }],
+    ['A6 on, cooling', row({ cooling: true }), { kind: 'none' }],
+    ['A7 on, filtered', row({ filtered: true }), { kind: 'none' }],
+    ['A8 on, not live', row({ member: null }), { kind: 'none' }],
+  ]
+  for (const [name, input, expected] of cases) {
+    test(`${name} → ${expected.kind}`, () => expect(ownerAffinity(input)).toEqual(expected))
+  }
+
+  test('A9 off: a group without affinity gives the eligibility check no owner, so affinity is none', () => {
+    const off = group('profiles: [opus, sonnet]\nmax: 4')
+    expect(off.affinity).toBeUndefined()
+    // The router passes taskOwner only while the group has affinity (router.ts), so off reads as no owner.
+    expect(evaluateEligibility(state([excluded('a', 'opus', 'busy'), idle('b', 'opus', 1)], { group: off, taskOwner: null })).affinity).toEqual({ kind: 'none' })
   })
 })

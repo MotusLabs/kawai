@@ -1,4 +1,4 @@
-// Group-mail aging (group-mail-task-affinity D4, task 5.1): rows G1–G6 of
+// Group-mail aging (group-mail-task-affinity D4, task 5.1): rows G1–G7 of
 // design.md's group-aging table through the production composition (hazard
 // M1) — the real mailbox and task stores, the dispatcher with the task-owner
 // resolver, and the profile router over a lead group with `affinity:
@@ -113,22 +113,23 @@ interface Row {
   first: 'direct' | 'group'
 }
 
-// design.md's group-aging table, verbatim; G1b is G1 for a scheduled message
-// created long ago but due only 5 minutes ago.
+// design.md's group-aging table, verbatim; G7 is G1 for a scheduled message
+// created 20 minutes ago but due only 5 minutes ago.
 const ROWS: Row[] = [
   { id: 'G1', group: { priority: 'normal', ageMin: 5 }, direct: 'normal', first: 'direct' },
-  { id: 'G1b', group: { priority: 'normal', ageMin: 60, dueMin: 5 }, direct: 'normal', first: 'direct' },
   { id: 'G2', group: { priority: 'normal', ageMin: 15 }, direct: 'normal', first: 'group' },
   { id: 'G3', group: { priority: 'normal', ageMin: 60 }, direct: 'urgent', first: 'direct' },
   { id: 'G4', group: { priority: 'urgent', ageMin: 0 }, direct: 'normal', first: 'group' },
   { id: 'G5', group: { priority: 'normal', ageMin: 20 }, direct: 'normal', owner: 'busy-a, idle b', first: 'direct' },
   { id: 'G6', group: { priority: 'normal', ageMin: 20 }, direct: 'normal', owner: 'idle a', first: 'group' },
+  { id: 'G7', group: { priority: 'normal', ageMin: 20, dueMin: 5 }, direct: 'normal', first: 'direct' },
 ]
 
-describe('aged normal group mail is routed before normal direct mail (G1–G6)', () => {
+describe('aged normal group mail is routed before normal direct mail (G1–G7)', () => {
   for (const row of ROWS) {
-    // G1, G1b:
+    // G1, G7:
     // @covers: agent-mailbox › Delivery order › Direct before group at equal priority
+    // @covers: agent-mailbox › Delivery order › Scheduled mail ages from its delivery time
     // G2, G6:
     // @covers: agent-mailbox › Delivery order › Aged group mail before direct mail
     // G3:
@@ -160,6 +161,24 @@ describe('aged normal group mail is routed before normal direct mail (G1–G6)',
       if (row.id === 'G5') expect(groupTo(group)).toBeNull()
     })
   }
+
+  // @covers: agent-mailbox › Delivery order › Aged group mail still waits for a busy owner
+  test('aged mail held for busy owner a: idle b gets its direct mail, and a takes the group message at its next idle moment', async () => {
+    recipients = [lead('a', false), lead('b', true)]
+    const task = tasks.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'agent', sessionId: 'a' } }).id
+    const group = enqueue({ affinityTask: task }, 20)
+    const direct = enqueue({ toKind: 'session', toId: 'b' }, 1)
+    await run()
+    expect(delivered).toEqual([direct.id])
+    expect(store.get(group.id)?.state).toBe('queued')
+    // a goes idle (its own direct mail waits too): the aged group message reaches it first.
+    const own = enqueue({ toKind: 'session', toId: 'a' }, 1)
+    recipients.find(row => row.sessionId === 'a')!.idle = true
+    await run()
+    expect(delivered).toEqual([direct.id, group.id])
+    expect(store.get(group.id)?.claimedBy).toBe('a')
+    expect(store.get(own.id)?.state).toBe('queued')
+  })
 
   test('the threshold is 15 minutes from the due time, inclusive', async () => {
     expect(GROUP_AGING_MS).toBe(15 * MIN)

@@ -87,6 +87,10 @@ Group mail held for its busy task owner SHALL have the immediate blocker `owner-
 - **WHEN** a message created at 17:00Z with `affinityWait: 30` waits because its owner `A` is working
 - **THEN** its reason shows `owner-busy` naming `A` with a retry time of 17:30Z
 
+#### Scenario: Held while nobody else is free
+- **WHEN** it is 17:10Z and every member of the group, including the owner `A`, is working
+- **THEN** its reason still shows `owner-busy` naming `A` with a retry time of 17:30Z, beside the members' busy states
+
 #### Scenario: Wait over, everyone busy
 - **WHEN** it is 17:31Z and every member of the group, including `A`, is working
 - **THEN** its reason reports the members as busy and does not show `owner-busy`

@@ -1,10 +1,10 @@
 // Owner affinity through the production composition (group-mail-task-affinity
 // D1/D3, task 3.2; hazard M1): the real mailbox and task stores, the
 // dispatcher with the production task-owner resolver, and the profile router
-// over a lead group with `affinity: task-owner`. Rows A1–A11 of design.md's
-// owner-affinity table, the route half of R1–R7, a real rule loaded through
-// the rule registry (A10, A11), and property P3 (the router's hold or pick
-// agrees with `ownerAffinity`).
+// over a lead group with `affinity: task-owner`. Rows B1–B10 of design.md's
+// routing table, the route half of R1–R7, a real rule loaded through the rule
+// registry (B8, B9), and property P3 (the router's hold or pick agrees with
+// `ownerAffinity`, on unscheduled and scheduled rows).
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -99,7 +99,7 @@ const run = async () => { dispatcher.notify(); await dispatcher.settled() }
 const at = (minutes: number) => { clock = CREATED + minutes * MIN }
 const set = (sessionId: string, over: Partial<MailRecipient>) => Object.assign(recipients.find(row => row.sessionId === sessionId)!, over)
 const leadTask = (owner = 'a') => tasks.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'agent', sessionId: owner } }).id
-const mail = (affinityTask: string | null, extra: { tags?: string[]; workerChoice?: string } = {}) => store.enqueue({
+const mail = (affinityTask: string | null, extra: { tags?: string[]; workerChoice?: string; deliverAt?: string } = {}) => store.enqueue({
   teamId: team.teamId, toKind: 'group', toId: 'lead', fromSession: 'dev', fromGroup: 'devs', originPath: repo, body: 'report',
   ...(affinityTask ? { affinityTask } : {}), ...extra,
 }, new Date(CREATED).toISOString())
@@ -156,8 +156,8 @@ beforeEach(() => {
 })
 afterEach(() => { dispatcher.close(); db.close() })
 
-describe('owner affinity through the dispatcher and router (A1–A11)', () => {
-  test('A1: without an affinity task the longest-idle member takes it', async () => {
+describe('owner affinity through the dispatcher and router (B1–B10)', () => {
+  test('B1: without an affinity task the longest-idle member takes it', async () => {
     await bothIdle()
     const message = mail(null)
     at(1); await run()
@@ -165,7 +165,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
   })
 
   // @covers: team-routing-rules › Groups may route by task owner › Owner preferred over the longest-idle member
-  test('A2 (R1, R2): the idle owner takes it over a member idle longer', async () => {
+  test('B2 (R1, R2): the idle owner takes it over a member idle longer', async () => {
     await bothIdle()
     const message = mail(leadTask('a'))
     at(1); await run()
@@ -174,7 +174,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
 
   // @covers: team-routing-rules › A busy task owner holds its mail for a bounded wait › Owner busy within the wait
   // @covers: team-routing-rules › A busy task owner holds its mail for a bounded wait › Owner frees up within the wait
-  test('A3: a busy owner holds the message with owner-busy until it frees up', async () => {
+  test('B4: a busy owner holds the message with owner-busy until it frees up', async () => {
     await bothIdle()
     set('a', { idle: false })
     const message = mail(leadTask('a'))
@@ -186,7 +186,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
     expect(deliveredTo(message)).toBe('a')
   })
 
-  test('A3: an owner awaiting a card holds it too', async () => {
+  test('B4: an owner awaiting a card holds it too', async () => {
     await bothIdle()
     set('a', { pendingRequest: true })
     const message = mail(leadTask('a'))
@@ -196,7 +196,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
   })
 
   // @covers: team-routing-rules › A busy task owner holds its mail for a bounded wait › Wait runs out
-  test('A4: at created+wait with the owner still busy, the other member takes it', async () => {
+  test('B7: at due+wait with the owner still busy, the other member takes it', async () => {
     await bothIdle()
     set('a', { idle: false })
     const message = mail(leadTask('a'))
@@ -207,7 +207,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
   })
 
   // @covers: team-routing-rules › A busy task owner holds its mail for a bounded wait › No other candidate
-  test('A5: the wait over and every member busy, it waits as before; the owner takes it once idle', async () => {
+  test('B6: the wait over and every member busy, it waits as before; the owner takes it once idle', async () => {
     await bothIdle()
     set('a', { idle: false })
     set('b', { idle: false })
@@ -224,7 +224,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
   })
 
   // @covers: team-routing-rules › A busy task owner holds its mail for a bounded wait › Context-exhausted owner does not hold
-  test('A6: a context-exhausted, parked, or unavailable owner gives way at once', async () => {
+  test('B7: a context-exhausted, parked, or unavailable owner gives way at once', async () => {
     for (const over of [{ contextExhausted: true }, { parked: true }, { available: false }] as Array<Partial<MailRecipient>>) {
       await bothIdle()
       set('a', { idle: false, ...over })
@@ -235,7 +235,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
   })
 
   // @covers: team-routing-rules › A busy task owner holds its mail for a bounded wait › Cooling owner does not hold
-  test('A7: an owner on a cooling profile, idle or busy, gives way at once', async () => {
+  test('B7: an owner on a cooling profile, idle or busy, gives way at once', async () => {
     for (const busy of [false, true]) {
       await bothIdle('opus', 'glm')
       cooling = { opus: CREATED + 120 * MIN }
@@ -247,7 +247,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
     }
   })
 
-  test('A8: an owner outside the worker choice gives way at once', async () => {
+  test('B7: an owner outside the worker choice gives way at once', async () => {
     for (const busy of [false, true]) {
       await bothIdle('opus', 'glm')
       if (busy) set('a', { idle: false })
@@ -257,7 +257,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
     }
   })
 
-  test('A9: an archived owner is no live member, so nothing waits for it', async () => {
+  test('B7: an archived owner is no live member, so nothing waits for it', async () => {
     await bothIdle()
     const task = leadTask('a')
     records.set('a', record('a', 'lead', 'opus', { archivedAt: new Date(CREATED).toISOString() }))
@@ -268,7 +268,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
   })
 
   // @covers: team-routing-rules › Rules see the task owner › Rule overrides the owner
-  test('A10: a real rule picking b beats the idle owner and the busy owner hold', async () => {
+  test('B8: a real rule picking b beats the idle owner and the busy owner hold', async () => {
     withRule = true
     for (const busy of [false, true]) {
       await bothIdle()
@@ -280,7 +280,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
   })
 
   // @covers: team-routing-rules › Rules see the task owner › Rule reads the owner
-  test('A11: a real rule\'s hold wins over the idle owner, and the rule sees the owner', async () => {
+  test('B9: a real rule\'s hold wins over the idle owner, and the rule sees the owner', async () => {
     withRule = true
     await bothIdle()
     const message = mail(leadTask('a'), { tags: ['hold'] })
@@ -301,7 +301,7 @@ describe('owner affinity through the dispatcher and router (A1–A11)', () => {
   })
 
   // @covers: team-routing-rules › Groups may route by task owner › Owner preferred under profile order
-  test('A12: under profile-order the owner on the second profile beats the first', async () => {
+  test('B3: under profile-order the owner on the second profile beats the first', async () => {
     writeLead('strategy: profile-order')
     await bothIdle('glm', 'opus')
     const message = mail(leadTask('a'))
@@ -365,13 +365,42 @@ describe('the task owner at route time (R5, R7)', () => {
     expect(deliveredTo(message)).toBe('b')
   })
 
-  test('the owner counts only while the group keeps affinity', async () => {
+  // @covers: team-routing-rules › A busy task owner holds its mail for a bounded wait › Affinity removed while mail waits
+  test('B10: removing affinity from the group file releases a held message on the next pass, no restart; the row keeps its affinity task', async () => {
     await bothIdle()
     set('a', { idle: false })
     const task = leadTask('a')
     const message = mail(task)
-    fs.writeFileSync(path.join(repo, '.kawai', 'groups', 'lead.md'), '---\nprofiles: [opus, glm]\n---\nLead.')
     at(1); await run()
+    expect(deliveredTo(message)).toBeNull()
+    expect(reasons.get(message.id)?.[0]?.kind).toBe('owner-busy')
+    fs.writeFileSync(path.join(repo, '.kawai', 'groups', 'lead.md'), '---\nprofiles: [opus, glm]\n---\nLead.')
+    at(2); await run()
+    expect(deliveredTo(message)).toBe('b')
+    expect(store.get(message.id)?.affinityTask).toBe(task)
+  })
+
+  test('B5: within the wait with no candidate, the hold names owner-busy first and the members\' busy states after it', async () => {
+    await bothIdle()
+    set('a', { idle: false })
+    set('b', { idle: false })
+    const message = mail(leadTask('a'))
+    at(10); await run()
+    expect(deliveredTo(message)).toBeNull()
+    const kinds = reasons.get(message.id)?.map(entry => entry.kind) ?? []
+    expect(kinds[0]).toBe('owner-busy')
+    expect(kinds.slice(1)).toContain('no-eligible-member')
+  })
+
+  test('a scheduled message holds until deliver_at + wait, not created_at + wait', async () => {
+    await bothIdle()
+    set('a', { idle: false })
+    // Created at minute 0, due at minute 20: the hold ends at minute 50.
+    const message = mail(leadTask('a'), { deliverAt: new Date(CREATED + 20 * MIN).toISOString() })
+    at(35); await run()
+    expect(deliveredTo(message)).toBeNull()
+    expect(reasons.get(message.id)?.[0]).toEqual({ kind: 'owner-busy', sessionIds: ['a'], retryAt: new Date(CREATED + 50 * MIN).toISOString() })
+    at(50); await run()
     expect(deliveredTo(message)).toBe('b')
   })
 })
@@ -403,7 +432,9 @@ describe('P3: the router agrees with ownerAffinity', () => {
       const coolingProfile = pick([null, null, 'opus', 'glm'])
       const owner = pick([null, 'a', 'b', 'z'])
       const choice = pick([null, null, 'zai'])
-      const message = { id: `m${index}`, teamId: 't', toKind: 'group', toId: 'lead', createdAt: new Date(CREATED).toISOString(), tags: [], priority: 'normal', fromGroup: 'devs', taskId: null, ...(choice ? { workerChoice: choice } : {}) } as unknown as TeamMessage
+      // A third of the rows are scheduled: created earlier, due at CREATED.
+      const scheduled = random() < 1 / 3
+      const message = { id: `m${index}`, teamId: 't', toKind: 'group', toId: 'lead', createdAt: new Date(scheduled ? CREATED - 20 * MIN : CREATED).toISOString(), ...(scheduled ? { deliverAt: new Date(CREATED).toISOString() } : {}), tags: [], priority: 'normal', fromGroup: 'devs', taskId: null, ...(choice ? { workerChoice: choice } : {}) } as unknown as TeamMessage
       const options: ProfileRouterOptions = {
         groupOf: async () => lead.group,
         members: () => members.map(member => ({ sessionId: member.sessionId, profileId: member.profileId, cwd: '/r' })),
@@ -431,7 +462,7 @@ describe('P3: the router agrees with ownerAffinity', () => {
         owner, member: ownerMember ? { eligible: ownerMember.causes.length === 0, causes: ownerMember.causes } : null,
         filtered: ownerMember !== null && choice === 'zai' && providerOf(ownerMember.profileId) !== 'zai',
         cooling: ownerMember !== null && ownerMember.profileId === coolingProfile,
-        createdAt: CREATED, waitMs: 30 * MIN, now,
+        dueAt: CREATED, waitMs: 30 * MIN, now,
       })
       const ownerBusy = result.kind === 'hold' && result.diagnosis?.[0]?.kind === 'owner-busy'
       expect({ index, hold: ownerBusy }).toEqual({ index, hold: expected.kind === 'hold' })

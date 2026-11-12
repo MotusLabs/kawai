@@ -129,8 +129,8 @@ export interface OwnerAffinityInput {
   filtered: boolean
   /** The owner's profile is cooling at `now`. */
   cooling: boolean
-  /** The message's creation, epoch ms. */
-  createdAt: number
+  /** When the message became due — `deliver_at ?? created_at`, the origin aging uses (D4) — epoch ms. */
+  dueAt: number
   /** The group's `affinityWait`, ms. */
   waitMs: number
   /** Evaluation time, epoch ms; null = the wait counts as over. */
@@ -148,7 +148,7 @@ export function ownerAffinity(input: OwnerAffinityInput): OwnerAffinity {
   const { owner, member } = input
   if (owner === null || member === null || input.filtered || input.cooling) return { kind: 'none' }
   if (member.eligible) return { kind: 'prefer', sessionId: owner }
-  const until = input.createdAt + input.waitMs
+  const until = input.dueAt + input.waitMs
   const waitable = member.causes.length > 0 && member.causes.every(cause => WAITABLE.has(cause))
   if (waitable && input.now !== null && input.now < until) return { kind: 'hold', sessionId: owner, until }
   return { kind: 'none' }
@@ -224,7 +224,7 @@ export interface EligibilityState {
    * (epoch ms), and the group's `affinityWait` (group-mail-task-affinity D3);
    * null or absent = no owner.
    */
-  taskOwner?: { sessionId: string; createdAt: number; waitMs: number } | null
+  taskOwner?: { sessionId: string; dueAt: number; waitMs: number } | null
 }
 
 /** One reason an alternative is excluded: a waiting-constraint kind or a member cause. */
@@ -375,7 +375,7 @@ function taskOwnerAffinity(
     member: member === null ? null : { eligible: member.eligible, causes },
     filtered: member !== null && filterReasons(member.profileId).length > 0,
     cooling: member !== null && coolingAt(member.profileId) !== null,
-    createdAt: owner.createdAt,
+    dueAt: owner.dueAt,
     waitMs: owner.waitMs,
     now: state.now ?? null,
   })

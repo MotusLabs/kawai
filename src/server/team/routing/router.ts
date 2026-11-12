@@ -141,7 +141,7 @@ export class ProfileRouter implements GroupRouter {
       cooldowns: this.memberCooldowns(members),
       now,
       taskOwner: taskOwner && group.affinity
-        ? { sessionId: taskOwner, createdAt: Date.parse(message.createdAt), waitMs: group.affinity.waitMs } : null,
+        ? { sessionId: taskOwner, dueAt: Date.parse(message.deliverAt ?? message.createdAt), waitMs: group.affinity.waitMs } : null,
     })
     const ownerHold = affinity.kind === 'hold' ? ownerBusy(affinity.sessionId, affinity.until) : null
     if (candidates.length === 0) {

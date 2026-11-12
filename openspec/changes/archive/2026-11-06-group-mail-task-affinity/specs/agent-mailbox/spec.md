@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Delivery order
-Among messages eligible for an agent, the system SHALL deliver urgent messages before normal ones; at equal priority, direct messages before group messages, except that normal group mail due for 15 minutes or longer SHALL come before normal direct mail; and otherwise the oldest first.
+Among messages eligible for an agent, the system SHALL deliver urgent messages before normal ones; at equal priority, direct messages before group messages, except that normal group mail due for 15 minutes or longer SHALL come before normal direct mail unless a task-owner hold keeps it for its busy owner; and otherwise the oldest first. A message's age SHALL count from its scheduled delivery time, else its creation.
 
 #### Scenario: Urgent group mail before normal direct mail
 - **WHEN** an idle agent has a normal direct message and an urgent message in its group's mailbox
@@ -22,8 +22,16 @@ Among messages eligible for an agent, the system SHALL deliver urgent messages b
 - **THEN** the urgent direct message is delivered first
 
 #### Scenario: Group mail is not starved by a steady direct stream
-- **WHEN** two members of one group keep sending each other normal direct mail, so each finds a direct message waiting every time it goes idle, and a normal group message to that group has been due for 15 minutes
+- **WHEN** two members of one group keep sending each other normal direct mail, so each finds a direct message waiting every time it goes idle, and a normal group message to that group with no task owner has been due for 15 minutes
 - **THEN** the group message reaches the next of them to go idle
+
+#### Scenario: Aged group mail still waits for a busy owner
+- **WHEN** under the same direct stream, the group message's affinity task is owned by `A`, the group sets `affinityWait: 30`, the message has been due for 20 minutes, `A` is working, and `B` goes idle
+- **THEN** `B` receives its direct message, and the group message reaches `A` at `A`'s next idle moment, or the first member to go idle once it has been due for 30 minutes
+
+#### Scenario: Scheduled mail ages from its delivery time
+- **WHEN** an idle agent has a normal direct message and a normal group message created 20 minutes ago but scheduled for delivery 5 minutes ago
+- **THEN** the direct message is delivered first
 
 ## ADDED Requirements
 

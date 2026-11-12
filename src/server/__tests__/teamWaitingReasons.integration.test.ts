@@ -455,6 +455,7 @@ test('a message held for its working owner shows owner-busy naming it, retrying 
   })
 })
 
+// @covers: team-waiting-reasons › Waiting reasons name a busy task owner › Held while nobody else is free
 // @covers: team-waiting-reasons › Waiting reasons name a busy task owner › Wait over, everyone busy
 test('once the wait is over and every member works, the reason names the busy members and not the owner hold', async () => {
   const m = await ownerMail()
@@ -463,7 +464,7 @@ test('once the wait is over and every member works, the reason names the busy me
   await settle()
   // Within the wait, the owner hold leads and the members' states follow.
   const held = runtime.waitingFor(team.teamId)[m.id]!
-  expect(held.blocker).toMatchObject({ kind: 'owner-busy', sessionIds: ['lead'] })
+  expect(held.blocker).toEqual({ kind: 'owner-busy', sessionIds: ['lead'], retryAt: new Date(CREATED_AT + 30 * 60_000).toISOString() })
   // The leads group is at its max, so no spawn is possible either.
   expect(held.others.map(entry => entry.kind)).toEqual(['group-cap', 'no-eligible-member'])
   clockOverride = CREATED_AT + 31 * 60_000

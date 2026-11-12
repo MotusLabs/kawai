@@ -36,6 +36,7 @@ describe('group affinity frontmatter', () => {
     expect(group.warnings).toEqual(['affinity must be task-owner, got "newest"; ignored'])
   })
 
+  // @covers: team-routing-rules › Groups may route by task owner › Invalid wait value
   test('invalid waits warn and keep the 30-minute default', () => {
     for (const raw of ['-1', '2.5', '30m', 'soon']) {
       const group = parse(`affinity: task-owner\naffinityWait: ${raw}`)

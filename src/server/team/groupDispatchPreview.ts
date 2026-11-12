@@ -76,7 +76,7 @@ export function previewGroupDispatch(input: GroupPreviewInput): TaskDispatchPrev
     cooldowns: Object.fromEntries(input.members.map(member => [member.profileId, input.cooldownUntil(member.profileId)])),
     now,
     // The instruction would be a new message: its wait starts now.
-    taskOwner: input.taskOwner && group.affinity ? { sessionId: input.taskOwner, createdAt: now, waitMs: group.affinity.waitMs } : null,
+    taskOwner: input.taskOwner && group.affinity ? { sessionId: input.taskOwner, dueAt: now, waitMs: group.affinity.waitMs } : null,
   })
   const members = result.candidates.filter(candidate => candidate.kind === 'member')
   // The slots no filter or profile cap drops, in the group's order: the staffing facts alone may still block them.

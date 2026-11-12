@@ -5,12 +5,16 @@
 // finding a direct message from the other waiting at every idle moment, and
 // one normal group message whose affinity task `a` owns, with clock steps of
 // 1–5 minutes. Per case the group's `affinityWait` is 0, 10, or 30 minutes,
-// and the owner either stays busy or idles at random.
+// the owner either stays busy or idles at random, and a third of the
+// messages are scheduled (created up to an hour earlier, due at T0), so the
+// aging and the owner hold count from `deliver_at`. No urgent mail, no rule.
 //
-// - P1, no starvation (seed 4242, 300 cases): the group message is claimed
-//   no later than the earlier of the owner's first idle moment at or after
-//   15 minutes and within the wait (and then by the owner), and the first
-//   idle moment of any member at or after max(15 min, wait).
+// - P1, no starvation (seed 4242, 300 cases), design P1 verbatim: with
+//   `due = deliver_at ?? created_at`, let T be the first idle moment at or
+//   after due + 15 min at which the owner is idle, or at which
+//   now ≥ due + wait and some member is idle. The message is not claimed
+//   before due + 15 min, it is claimed at T, its claimant is the owner when
+//   the owner is idle at T, and before due + wait no other member claims it.
 // - P2, at most one claim (seed 4243, 300 cases): the same generator with
 //   replayed notifications, a restart (a fresh dispatcher over the same
 //   store) between passes, and human turns that arrive while a delivery is
@@ -69,6 +73,7 @@ function leadGroup(waitMin: number): GroupDefinition {
 
 interface CaseResult {
   waitMs: number
+  scheduled: boolean
   /** Pass times with the members idle at the pass's start. */
   moments: Array<{ at: number; idle: string[] }>
   /** Every claim: message, session, time. */
@@ -80,6 +85,7 @@ interface CaseResult {
 async function runCase(random: () => number, chaos: boolean): Promise<CaseResult> {
   const waitMin = [0, 10, 30][Math.floor(random() * 3)]!
   const ownerStaysBusy = random() < 0.4
+  const scheduled = random() < 1 / 3
   const db: Database = schemaCopy()
   const store = new MailboxStore(db)
   const tasks = new TaskStore(db, store)
@@ -124,7 +130,8 @@ async function runCase(random: () => number, chaos: boolean): Promise<CaseResult
     const task = tasks.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'agent', sessionId: 'a' } }).id
     const groupMail = store.enqueue({
       teamId: team.teamId, toKind: 'group', toId: 'lead', fromSession: 'dev', fromGroup: 'devs', originPath: root, body: 'report', affinityTask: task,
-    }, new Date(T0).toISOString())
+      ...(scheduled ? { deliverAt: new Date(T0).toISOString() } : {}),
+    }, new Date(scheduled ? T0 - (5 + Math.floor(random() * 56)) * MIN : T0).toISOString())
     while (clock < T0 + 75 * MIN) {
       clock += (1 + Math.floor(random() * 5)) * MIN
       for (const row of recipients) {
@@ -152,7 +159,7 @@ async function runCase(random: () => number, chaos: boolean): Promise<CaseResult
       humanTurns = false
       if (claims.some(claim => claim.id === groupMail.id)) break
     }
-    return { waitMs: waitMin * MIN, moments, claims, groupId: groupMail.id }
+    return { waitMs: waitMin * MIN, scheduled, moments, claims, groupId: groupMail.id }
   } finally {
     dispatcher.close()
     db.close()
@@ -164,23 +171,27 @@ describe('group-mail aging properties', () => {
   test('P1: seed 4242, 300 cases — a steady direct stream never starves the group message', async () => {
     const random = rng(4242)
     let byOwner = 0
-    let byAny = 0
+    let byOther = 0
+    let scheduledClaims = 0
     for (let index = 0; index < 300; index++) {
       const result = await runCase(random, false)
-      const ownerMoment = result.moments.find(moment => moment.at - T0 >= AGED && moment.at - T0 < result.waitMs && moment.idle.includes('a'))
-      const anyMoment = result.moments.find(moment => moment.at - T0 >= Math.max(AGED, result.waitMs) && moment.idle.length > 0)
-      const bound = Math.min(ownerMoment?.at ?? Infinity, anyMoment?.at ?? Infinity)
-      if (bound === Infinity) continue
+      const due = T0 // every message is due at T0; scheduled ones were created earlier
+      const T = result.moments.find(moment => moment.at >= due + AGED
+        && (moment.idle.includes('a') || (moment.at >= due + result.waitMs && moment.idle.length > 0)))
       const claim = result.claims.find(entry => entry.id === result.groupId)
-      expect({ index, claimedBy: bound }).toEqual({ index, claimedBy: claim && claim.at <= bound ? bound : -1 })
-      if (ownerMoment && ownerMoment.at === bound) {
-        byOwner++
-        expect({ index, to: claim!.sessionId }).toEqual({ index, to: 'a' })
-      } else byAny++
+      expect({ index, claimedAt: claim?.at ?? null }).toEqual({ index, claimedAt: T?.at ?? null })
+      if (!claim || !T) continue
+      expect(claim.at).toBeGreaterThanOrEqual(due + AGED)
+      if (T.idle.includes('a')) expect({ index, to: claim.sessionId }).toEqual({ index, to: 'a' })
+      if (claim.sessionId !== 'a') expect(claim.at).toBeGreaterThanOrEqual(due + result.waitMs)
+      if (claim.sessionId === 'a') byOwner++
+      else byOther++
+      if (result.scheduled) scheduledClaims++
     }
-    // Non-vacuity: both arms of the bound are reached.
+    // Non-vacuity: owner claims, other-member claims, and scheduled rows all occur.
     expect(byOwner).toBeGreaterThan(20)
-    expect(byAny).toBeGreaterThan(20)
+    expect(byOther).toBeGreaterThan(20)
+    expect(scheduledClaims).toBeGreaterThan(20)
   }, 120_000)
 
   test('P2: seed 4243, 300 cases — with replays, restarts, and racing human turns, no message is claimed twice', async () => {

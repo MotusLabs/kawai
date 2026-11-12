@@ -44,3 +44,10 @@
 
 - Map every oracle id (A1–A12, G1–G6, R1–R7, T1–T11, O1–O4, P1–P4) to its test title and killed mutant in the result.
 - Archive the change after review, adding `@covers` annotations for every ADDED and MODIFIED scenario.
+
+## 8. Spec verification F1–F4 (revision 644d6fa0)
+
+- [x] 8.1 Count the owner hold from `deliver_at ?? created_at` (`OwnerAffinityInput.dueAt`, the router, and the dispatch preview), the origin aging uses. Verify: the scheduled-hold routing test, P3 with scheduled rows, and P1 pass. Mutant killed: the hold counted from `created_at` again (the scheduled-hold test, P1, and P3 fail).
+- [x] 8.2 Commit the derivation table A1–A9 verbatim as pure `ownerAffinity` rows, with scheduled rows for A3 and A4, and relabel the routing tests to B1–B10. Add B5 (owner held, no candidate) and B10 (affinity removed while a message is held; the next pass routes it and the row keeps its affinity task). Mutant killed: the router ignoring the group's current affinity (B10 fails).
+- [x] 8.3 Restate P1 per design: the claim lands exactly at `T`, never before `due + 15 min`, to the owner when it is idle at `T`, and to another member only from `due + wait`; a third of the cases are scheduled. Rename G1b to G7 (created 20 minutes ago, due 5 minutes ago) and add the aged-mail-held-for-a-busy-owner sequence.
+- [x] 8.4 Cover the new scenarios: Invalid wait value, Affinity removed while mail waits, Held while nobody else is free (with its retry time), Scheduled mail ages from its delivery time, and Aged group mail still waits for a busy owner. B5 keeps a hold until `t` rather than the bare `none`, so the pass re-routes when the wait ends; design B5 and P3 say so.

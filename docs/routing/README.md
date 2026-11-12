@@ -38,8 +38,10 @@ affinityWait: 30                           # minutes a busy owner holds its mail
   `task_transfer_owner`. An idle owner gets the message even when another
   member has been idle longer or ranks earlier under `profile-order`. A busy
   owner, or one awaiting an approval or answer, holds the message for up to
-  `affinityWait` minutes after it was sent (the `owner-busy` waiting reason),
-  then any member may take it. An owner that is gone, archived, parked,
+  `affinityWait` minutes after it became due — its scheduled delivery time,
+  else when it was sent — (the `owner-busy` waiting reason), then any member
+  may take it. Settings apply on each pass: removing `affinity` releases held
+  mail on the next pass, with no restart. An owner that is gone, archived, parked,
   context-exhausted, unavailable, cooling, or outside the message's filters
   is never waited for. `affinityWait: 0` prefers an idle owner and never waits.
 - `workers` is the new name of `profiles`, and `modelEffort` of `profileEffort`.
