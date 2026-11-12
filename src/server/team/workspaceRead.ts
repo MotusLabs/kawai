@@ -31,6 +31,7 @@ import {
   type PlanAttentionFact, type PlanSummaryRows,
 } from './planAttention'
 import type { GroupCatalog } from './groupCatalog'
+import { taskOwner } from './taskStatusRights'
 import type { TeamIdentity } from './teamIdentity'
 
 /** The provider holding the model, for the Members tab's grouping (D13). */
@@ -344,7 +345,8 @@ export class WorkspaceRead {
       if (!result || result.accepted || summary.status === 'done' || summary.status === 'cancelled') return []
       if (result.reviewVerdict !== 'fail' && ownedByExecution(summary.id)) return []
       const submittedBy = store.results.get(result.id)?.submittedBy
-      const creatorId = summary.creator.sessionId
+      // Acceptance follows the closing right, so it awaits the owner (group-mail-task-affinity D7).
+      const creatorId = taskOwner(summary)
       const creator = creatorId ? records.find(record => record.sessionId === creatorId && record.archivedAt == null) : undefined
       return [{
         resultId: result.id, taskId: summary.id, submitter: submittedBy ? actorName(submittedBy) : 'Human',

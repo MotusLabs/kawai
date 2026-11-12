@@ -38,6 +38,12 @@ export interface TeamTask {
   title: string
   status: TaskStatus
   creator: TaskCreator
+  /**
+   * The session holding the task's agent rights (group-mail-task-affinity
+   * D7): the creating agent until ownership is transferred; null on human
+   * and Kawai tasks.
+   */
+  ownerSession?: string | null
   parentId: string | null
   /** Target worktree root (normalized to `git worktree list`); null = none. */
   worktree: string | null
@@ -166,6 +172,8 @@ export interface AgentTaskRow {
   title: string
   status: TaskStatus
   creator: TaskCreator
+  /** The session holding the task's agent rights (group-mail-task-affinity D7); null on human and Kawai tasks. */
+  ownerSession: string | null
   parentId: string | null
   worktree: string | null
   openspecChange: string | null

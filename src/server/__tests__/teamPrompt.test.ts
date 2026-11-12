@@ -78,9 +78,10 @@ describe('buildTeamPrompt', () => {
       expect(prompt).toContain('`mcp__kawai-team__task_journal_read`: read any journal entry whole, in byte chunks from `offset_bytes`')
       expect(prompt).not.toMatch(/whole journal|full journal/)
       expect(prompt).toContain(TASK_JOURNAL_GUIDANCE)
-      expect(prompt).toContain('add a journal note or message the creator')
+      expect(prompt).toContain('add a journal note or message the owner')
       expect(prompt).toContain("that change's proposal, design, and tasks are the authoritative direction")
-      expect(prompt).toContain('`done` or `cancelled` (the creator only)')
+      expect(prompt).toContain('`done` or `cancelled` (the owner only)')
+      expect(prompt).toContain('`mcp__kawai-team__task_transfer_owner`: move a task\'s ownership within your group')
       // task-revision-publication 4.4: when to acknowledge, and task_amend's new options.
       expect(prompt).toContain('or receive a revision notice (mail tagged `task-revision`), call `mcp__kawai-team__task_acknowledge` with the revision in the task header')
       expect(prompt).toContain('Delivery is not acknowledgement')

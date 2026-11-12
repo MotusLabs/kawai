@@ -4,9 +4,12 @@
 // are now, never from tool arguments. Human calls arrive through the
 // authenticated UI connection with a team already resolved. Rules:
 // - create: the human, or an agent whose current group sets canCreateTasks;
-// - amend direction/acceptance: the task's creator or the human;
+// - amend direction/acceptance and revision notices: the task's owner or the
+//   human (the owner starts as the creating agent; group-mail-task-affinity D7);
 // - journal notes and active/blocked: any member of the team, and the human;
-// - done/cancelled: the creator; every status (including reopening): the human.
+// - done/cancelled: the owner; every status (including reopening): the human;
+// - transfer ownership (`ownership`, taskOwnership.ts): the owner, or its
+//   group once it is gone, archived, or context-exhausted.
 // References are validated before anything is written: parent tasks of the
 // same team, worktrees listed for the team's repository (stored as their
 // root), OpenSpec changes that exist, and a plan-change link to an open plan's
@@ -30,7 +33,8 @@ import { resolvePlanLink } from '../plans/planLink'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import { remapFindings } from './findingRemap'
 import { executionOf, refuseSystem, type SystemCaller } from './systemCaller'
-import { originStatusRefusal, statusRefusal } from './taskStatusRights'
+import { originStatusRefusal, ownerLabel, statusRefusal, taskOwner } from './taskStatusRights'
+import { TaskOwnership } from './taskOwnership'
 import { contractInput } from './taskContractRows'
 export { statusRefusal } from './taskStatusRights'
 
@@ -137,7 +141,11 @@ export class TaskService {
     ownership?: ExecutionOwnership
   }) {
     this.worktrees = options.worktrees ?? new TeamWorktrees()
+    this.ownership = new TaskOwnership(this, options.getSession)
   }
+
+  /** `task_transfer_owner` (group-mail-task-affinity D7). */
+  readonly ownership: TaskOwnership
 
   async create(caller: TaskCaller, input: TaskCreateInput): Promise<TeamTask> {
     refuseSystem(caller, 'create-linked')
@@ -226,7 +234,7 @@ export class TaskService {
   }
 
   /**
-   * Publish the next revision (D2): the creator or the human only. The human
+   * Publish the next revision (D2): the owner or the human only. The human
    * UI sends the draft's base revision and a command key, so a resend is a
    * replay and a stale base is refused; the agent tool sends neither. A
    * human publication drops the draft it came from. Announced once after a
@@ -235,8 +243,8 @@ export class TaskService {
   async publish(caller: TaskCaller, taskId: string, input: TaskPublishInput): Promise<PublishOutcome> {
     const { team, actor } = await this.revisionPublisher(caller)
     const task = this.sameTeamTask(team, taskId)
-    if (actor.kind === 'agent' && task.creator.sessionId !== actor.sessionId) {
-      throw new Error(`Only the task's creator or the human can amend its direction. Add a journal note with task_note, or message the creator${task.creator.sessionId ? ` (${task.creator.sessionId})` : ' (the human)'} instead.`)
+    if (actor.kind === 'agent' && taskOwner(task) !== actor.sessionId) {
+      throw new Error(`Only the task's owner or the human can amend its direction. Add a journal note with task_note, or message ${ownerLabel(task)} instead.`)
     }
     if (input.direction !== undefined && !input.direction.trim()) throw new Error('A task needs a direction')
     // Parsed before anything is written (C5); only the human's blank text clears (C6, C7).
@@ -280,13 +288,13 @@ export class TaskService {
    * Notify, or retry a failed notice (D4): send the published revision to
    * each assignment holder that has neither received it nor holds a pending
    * notice for it, under the command's key; a replay sends nothing more.
-   * Never creates a revision. The creator or the human.
+   * Never creates a revision. The owner or the human.
    */
   async notify(caller: TaskCaller, taskId: string, revision: number, requestKey: string): Promise<{ replay: boolean; notices: SentNotice[]; task: TeamTask }> {
     const { team, actor } = await this.revisionPublisher(caller)
     const task = this.sameTeamTask(team, taskId)
-    if (actor.kind === 'agent' && task.creator.sessionId !== actor.sessionId) {
-      throw new Error("Only the task's creator or the human can send revision notices.")
+    if (actor.kind === 'agent' && taskOwner(task) !== actor.sessionId) {
+      throw new Error(`Only the task's owner or the human can send revision notices; the owner is ${ownerLabel(task)}.`)
     }
     const key = requestKey.trim()
     if (!key) throw new Error('A notification needs a request key')
@@ -471,10 +479,10 @@ export class TaskService {
     }
   }
 
-  /** Publishing a revision and sending notices: the creator agent or the human, never Kawai (D2). */
+  /** Publishing a revision and sending notices: the owner agent or the human, never Kawai (D2). */
   private async revisionPublisher(caller: TaskCaller): Promise<{ team: TeamIdentity; actor: TaskActor }> {
     const { team, actor } = await this.context(caller)
-    if (actor.kind === 'system') throw new Error('Kawai never publishes a task revision or sends its notices; only the creator or the human does.')
+    if (actor.kind === 'system') throw new Error('Kawai never publishes a task revision or sends its notices; only the owner or the human does.')
     return { team, actor }
   }
 

@@ -153,7 +153,7 @@ export const TASK_JOURNAL_GUIDANCE = [
 function taskNote({ group }: TeamPromptInput): string {
   const tool = (name: string) => `mcp__${TEAM_MCP_SERVER}__${name}`
   const creation = group?.canCreateTasks
-    ? `Your group may create tasks: \`${tool('task_create')}\` makes you the task's creator, which means you own its direction and decide when it is done or cancelled.`
+    ? `Your group may create tasks: \`${tool('task_create')}\` makes you the task's creator and its owner, which means you own its direction and decide when it is done or cancelled until ownership moves.`
     : 'You cannot create tasks; a team lead or the human does. You contribute to tasks others created.'
   // Permitted by default (member-release D7): only a group whose file sets
   // canReleaseMembers: false is not told about the tool.
@@ -172,14 +172,15 @@ function taskNote({ group }: TeamPromptInput): string {
     `- \`${tool('task_journal_read')}\`: read any journal entry whole, in byte chunks from \`offset_bytes\` (a preview's \`resumeOffsetBytes\` continues it).`,
     `- \`${tool('task_list')}\`: the team's tasks as compact rows, newest first — no direction or acceptance, so read a task's direction with \`${tool('task_get')}\`. Without \`status\` it lists only open, active, and blocked tasks; pass one status or \`status: "all"\` for done and cancelled work. At most \`limit\` rows (1–200, default 50); page older with \`before\` (the returned \`bounds.nextBefore\`).`,
     `- \`${tool('task_note')}\`: append a journal note. Record decisions, findings, and handoff state here; notes are permanent and every participant sees them.`,
-    `- \`${tool('task_update_status')}\`: set \`active\` or \`blocked\` (anyone); \`done\` or \`cancelled\` (the creator only).`,
-    `- \`${tool('task_amend')}\`: publish a new revision of direction or acceptance criteria (the creator only), with an optional \`rationale\` saying why; \`notify: true\` also sends the assignment's claimed agent a revision notice.`,
+    `- \`${tool('task_update_status')}\`: set \`active\` or \`blocked\` (anyone); \`done\` or \`cancelled\` (the owner only).`,
+    `- \`${tool('task_amend')}\`: publish a new revision of direction or acceptance criteria (the owner only), with an optional \`rationale\` saying why; \`notify: true\` also sends the assignment's claimed agent a revision notice.`,
     `- \`${tool('task_acknowledge')}\`: state the published revision you are working from.`,
+    `- \`${tool('task_transfer_owner')}\`: move a task's ownership within your group. The owner hands a task to another live session with \`task_id\` and \`to_session\` before leaving it; once an owner is archived, gone, or context-exhausted, a session of its group takes over one task (\`task_id\`) or all of its open tasks (\`from_session\`). A live owner is never taken over — message it. Every move is journaled; the creator stays recorded.`,
     release,
     '',
     TASK_JOURNAL_GUIDANCE,
     '',
-    "Only a task's creator (or the human) changes its direction. If you disagree with the direction or find it wrong, add a journal note or message the creator — do not work around it. When a task links an OpenSpec change, that change's proposal, design, and tasks are the authoritative direction; the task's own direction text only summarizes it.",
+    "Only a task's owner (its creator until ownership moves) or the human changes its direction. If you disagree with the direction or find it wrong, add a journal note or message the owner — do not work around it. When a task links an OpenSpec change, that change's proposal, design, and tasks are the authoritative direction; the task's own direction text only summarizes it.",
     '',
     `When you start or take over work on a task, or receive a revision notice (mail tagged \`task-revision\`), call \`${tool('task_acknowledge')}\` with the revision in the task header once you are working from it. Delivery is not acknowledgement: until you acknowledge, the human sees the new revision as unacknowledged.`,
   ].join('\n')

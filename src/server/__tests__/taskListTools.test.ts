@@ -137,7 +137,7 @@ async function pageAll(call: (typeof RUNTIMES)[number]['call'], args: Record<str
   }
 }
 
-const ROW_KEYS: Array<keyof AgentTaskRow> = ['id', 'title', 'status', 'creator', 'parentId', 'worktree', 'openspecChange', 'planId',
+const ROW_KEYS: Array<keyof AgentTaskRow> = ['id', 'title', 'status', 'creator', 'ownerSession', 'parentId', 'worktree', 'openspecChange', 'planId',
   'planChange', 'revision', 'createdAt', 'updatedAt', 'assignee', 'result']
 
 for (const { runtime, call } of RUNTIMES) {

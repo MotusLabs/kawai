@@ -210,7 +210,7 @@ test('a contributor cannot accept a result of a human-created task: refused, and
   const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
   const result = await results.submit(agent('dev'), task.id, submission)
   const journal = tasks.store.journal(task.id).length
-  await expect(results.accept(agent('dev'), task.id, result.id)).rejects.toThrow("Only the task's creator can accept its results and close it")
+  await expect(results.accept(agent('dev'), task.id, result.id)).rejects.toThrow("Only the task's owner can accept its results and close it")
   expect(accepted(result.id)).toBe(false)
   expect(tasks.store.journal(task.id)).toHaveLength(journal)
   expect(tasks.store.get(task.id)?.status).toBe('open')

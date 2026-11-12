@@ -47,6 +47,8 @@ beforeEach(() => {
   fs.writeFileSync(path.join(groups, 'pair.md'), '---\nprofiles: { sonnet: 2, glm-flash: 1 }\n---\nPaired')
   fs.writeFileSync(path.join(groups, 'strict.md'), '---\nprofiles: [sonnet]\napproval: manual\n---\nStrict')
   fs.writeFileSync(path.join(groups, 'solo.md'), '---\nprofiles: { sonnet: 1 }\nmax: 3\n---\nSolo')
+  fs.writeFileSync(path.join(groups, 'lead.md'), '---\nprofiles: [sonnet]\naffinity: task-owner\n---\nLead')
+  fs.writeFileSync(path.join(groups, 'leads.md'), '---\nprofiles: [sonnet]\n---\nLeads without affinity')
   fs.writeFileSync(path.join(groups, 'eager.md'), '---\nprofiles: [sonnet]\napproval: auto\n---\nEager')
   db = initDatabase({ path: path.join(dir, 'db.sqlite') })
   mail = new MailboxStore(db.db)
@@ -191,6 +193,30 @@ describe('with a worker the preview applies the choice through the eligibility c
     expect((await preview(task.id, 'solo')).spawn).toEqual({ allowed: false, profile: null, blockedBy: 'every allowed profile is at its cap or cooling down' })
     expect((await preview(task.id, 'solo')).profile).toBeNull()
     expect((await preview(task.id, 'solo', 'claude')).spawn).toEqual({ allowed: false, profile: null, blockedBy: 'every profile of worker claude (sonnet) is at its cap' })
+  })
+
+  test('an idle task owner is previewed first, before a member listed ahead of it (group-mail-task-affinity 3.3)', async () => {
+    const task = await worktreeTask()
+    for (const group of ['lead', 'leads']) {
+      records.clear()
+      member('b', { groupId: group })
+      member('a', { groupId: group })
+      db.db.prepare('UPDATE team_tasks SET owner_session = ? WHERE id = ?').run('a', task.id)
+      // Only a group with affinity puts the owner first; without it the roster order stands.
+      expect((await preview(task.id, group)).idleMembers).toEqual(group === 'lead' ? ['a', 'b'] : ['b', 'a'])
+    }
+    // An owner in another group, or none, changes nothing.
+    db.db.prepare('UPDATE team_tasks SET owner_session = ? WHERE id = ?').run('dev', task.id)
+    records.clear()
+    member('b', { groupId: 'lead' })
+    member('a', { groupId: 'lead' })
+    member('dev')
+    expect((await preview(task.id, 'lead')).idleMembers).toEqual(['b', 'a'])
+    // A cooling owner is not preferred.
+    db.db.prepare('UPDATE team_tasks SET owner_session = ? WHERE id = ?').run('a', task.id)
+    expect((await preview(task.id, 'lead')).idleMembers).toEqual(['a', 'b'])
+    cooldowns.set('sonnet', FUTURE)
+    expect((await preview(task.id, 'lead')).idleMembers).toEqual(['b', 'a'])
   })
 
   test('a session target with a worker is refused, as dispatch refuses it', async () => {

@@ -133,11 +133,14 @@ export class MailboxStore {
     // The choice is written at call time, never in the eagerly prepared
     // insert, so a store opened on a database before migration 18 (`worker-choice`) still
     // prepares (D1); with the insert in one transaction.
-    if (input.workerChoice) {
+    // The affinity task likewise (migration 27, `task-affinity`).
+    if (input.workerChoice || input.affinityTask) {
       const choice = input.workerChoice
+      const affinityTask = input.affinityTask
       this.db.transaction(() => {
         insert()
-        this.cachedStatement('UPDATE team_messages SET worker_choice = $choice WHERE id = $id').run({ $choice: choice, $id: id })
+        if (choice) this.cachedStatement('UPDATE team_messages SET worker_choice = $choice WHERE id = $id').run({ $choice: choice, $id: id })
+        if (affinityTask) this.cachedStatement('UPDATE team_messages SET affinity_task = $task WHERE id = $id').run({ $task: affinityTask, $id: id })
       }).immediate()
     } else insert()
     this.changed(id, true)

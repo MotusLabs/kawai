@@ -426,3 +426,54 @@ test('direct mail reasons surface through the ledger and clear on delivery', asy
     kind: 'recipient-unavailable', detail: 'This chat is archived and read-only',
   })
 })
+
+// group-mail-task-affinity 4.1 (D5): group mail held for its busy task owner,
+// through the production SessionMailbox wiring (the task-owner resolver, the
+// dispatcher, the router, and the ledger).
+// Created an hour past the wall clock (as HELD_AT), so the dispatcher's own
+// timer, armed for the wait's end, never fires while the test holds the clock.
+const CREATED_AT = HELD_AT
+async function ownerMail() {
+  writeGroup('leads', 'label: Team leads\naffinity: task-owner\naffinityWait: 30')
+  await refreshCatalog()
+  records.set('lead-b', record('lead-b', { groupId: 'leads', status: 'waiting' }))
+  const owned = runtime.tasks.store.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'agent', sessionId: 'lead' } })
+  expect(owned.ownerSession).toBe('lead')
+  return store().enqueue({
+    teamId: team.teamId, toKind: 'group', toId: 'leads', fromSession: null, fromGroup: null, originPath: repo, body: 'report', affinityTask: owned.id,
+  }, new Date(CREATED_AT).toISOString())
+}
+
+// @covers: team-waiting-reasons › Waiting reasons name a busy task owner › Held for the owner
+test('a message held for its working owner shows owner-busy naming it, retrying at the end of the wait', async () => {
+  const m = await ownerMail()
+  clockOverride = CREATED_AT + 10 * 60_000
+  await settle()
+  expect(deliveries.filter(delivery => delivery.messageId === m.id)).toEqual([])
+  expect(runtime.waitingFor(team.teamId)[m.id]).toEqual({
+    blocker: { kind: 'owner-busy', sessionIds: ['lead'], retryAt: new Date(CREATED_AT + 30 * 60_000).toISOString() }, others: [],
+  })
+})
+
+// @covers: team-waiting-reasons › Waiting reasons name a busy task owner › Held while nobody else is free
+// @covers: team-waiting-reasons › Waiting reasons name a busy task owner › Wait over, everyone busy
+test('once the wait is over and every member works, the reason names the busy members and not the owner hold', async () => {
+  const m = await ownerMail()
+  records.get('lead-b')!.status = 'working'
+  clockOverride = CREATED_AT + 10 * 60_000
+  await settle()
+  // Within the wait, the owner hold leads and the members' states follow.
+  const held = runtime.waitingFor(team.teamId)[m.id]!
+  expect(held.blocker).toEqual({ kind: 'owner-busy', sessionIds: ['lead'], retryAt: new Date(CREATED_AT + 30 * 60_000).toISOString() })
+  // The leads group is at its max, so no spawn is possible either.
+  expect(held.others.map(entry => entry.kind)).toEqual(['group-cap', 'no-eligible-member'])
+  clockOverride = CREATED_AT + 31 * 60_000
+  await settle()
+  const reason = runtime.waitingFor(team.teamId)[m.id]!
+  expect([reason.blocker, ...reason.others].map(entry => entry.kind)).not.toContain('owner-busy')
+  expect(reason.blocker.kind).toBe('group-cap')
+  expect(reason.others.find(entry => entry.kind === 'no-eligible-member')).toMatchObject({
+    sessionIds: ['lead', 'lead-b'],
+    members: [{ sessionId: 'lead', cause: 'working' }, { sessionId: 'lead-b', cause: 'working' }],
+  })
+})

@@ -20,6 +20,7 @@ import { MailboxStore } from './mailboxStore'
 import { MailDispatcher, type MailRecipient, type PassOutcome } from './dispatcher'
 import { reconcileMailbox, transcriptReceipt, type Receipt } from './receipt'
 import { TaskStore } from './taskStore'
+import { taskOwnerResolver } from './taskOwnerResolver'
 import { TaskService } from './TaskService'
 import { MemberRelease, type ArchiveResult } from './memberRelease'
 import { MailboxManagement } from './mailboxManagement'
@@ -286,6 +287,8 @@ export class SessionMailbox {
       excludedProfile: message => message.excludedProfile ?? undefined,
       allowedProfiles: message => message.allowedProfiles ?? null,
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
+      // The owner hold's wait reads the mailbox's clock too, so a test can hold it (production: wall clock).
+      ...(options.now ? { now: options.now } : {}),
     })
     this.outcomes = new LimitOutcomes(db, {
       store, limits: this.limits, rules: this.rules, homeDir: options.homeDir,
@@ -342,6 +345,8 @@ export class SessionMailbox {
       },
       taskContext: taskId => buildTaskContext(taskStore, taskId, this.plans, options.ownership),
       targetWorktree,
+      // Each pass reads the affinity task's owner afresh (group-mail-task-affinity D1).
+      taskOwner: taskOwnerResolver({ tasks: taskStore, getRecord: options.getRecord, teamOf: id => options.teams.teamOf(id)?.teamId }),
       router: this.router,
       associateTask: (id, taskId) => options.associateTask?.(id, taskId),
       watchReceipt: mail => {

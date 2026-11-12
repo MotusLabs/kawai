@@ -6,9 +6,10 @@
 // (D5, settled on send). A reply without a task id keeps the task of the
 // message it answers. Urgent direct mail to an agent whose profile is cooling
 // after a provider limit is refused (profile routing): it could neither
-// interrupt usefully nor run.
+// interrupt usefully nor run. Group mail to a group with `affinity:
+// task-owner` records its affinity task (group-mail-task-affinity D1).
 import type { ChatSessionRecord } from '../db'
-import { loadGroupCatalog } from './groupCatalog'
+import { loadGroupCatalog, type GroupCatalog } from './groupCatalog'
 import { loadTeamGroups } from './teamGroups'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
 import { MailboxStore, type TeamMessage } from './mailboxStore'
@@ -110,6 +111,19 @@ export class TeamMailbox {
     return task.id
   }
 
+  /**
+   * The task group mail is about, for a group with `affinity: task-owner`
+   * (group-mail-task-affinity D1): the message's own task, else the sending
+   * agent's current task, else none. It never becomes the message's task,
+   * so the envelope and the recipient's current task are untouched; routing
+   * reads the task's owner from it at route time.
+   */
+  private affinityTaskOf(caller: MailCaller, catalog: GroupCatalog, target: { kind: string; id: string }, taskId: string | null): string | null {
+    if (target.kind !== 'group' || !catalog.groups.get(target.id)?.group.affinity) return null
+    if (taskId) return taskId
+    return caller.kind === 'agent' ? this.options.getSession(caller.sessionId)?.taskId ?? null : null
+  }
+
   /** The sender's team, catalog, and the identity the row is stamped with. */
   private async context(caller: MailCaller) {
     if (caller.kind === 'human') {
@@ -157,6 +171,7 @@ export class TeamMailbox {
     const target = this.targetOf(sender, input)
     const workerChoice = input.worker !== undefined && target.kind === 'group'
       ? checkWorkerChoice(input.worker, sender.catalog.groups.get(target.id)!.group, this.options.homeDir, sender.team.groupsRoot) : null
+    const affinityTask = this.affinityTaskOf(caller, sender.catalog, target, taskId)
     if (target.kind === 'session') {
       const recipient = target.recipient
       if ((await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
@@ -175,6 +190,7 @@ export class TeamMailbox {
         originPath: sender.originPath, body: input.body,
         priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
         hopLimit: sender.hopLimit, deliverAt, taskId, ...(workerChoice ? { workerChoice } : {}),
+        ...(affinityTask ? { affinityTask } : {}),
       }),
       after: async message => this.publish(this.store.get(message.id) ?? message),
     }

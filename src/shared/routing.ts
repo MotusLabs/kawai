@@ -118,6 +118,14 @@ export interface RouteMessage {
    * already limited to it, and a pick outside them is unknown.
    */
   worker?: string
+  /**
+   * The message's task owner as resolved for this decision
+   * (group-mail-task-affinity D1): the current owner of its affinity task,
+   * when that owner is a session of the target group; absent when it has
+   * none. An idle owner comes first among the candidates; a rule's pick or
+   * hold still wins.
+   */
+  taskOwner?: string
 }
 
 /**

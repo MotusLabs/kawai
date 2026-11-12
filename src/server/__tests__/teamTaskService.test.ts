@@ -141,10 +141,12 @@ describe('references', () => {
 })
 
 describe('permission matrix', () => {
+  // @covers: team-tasks › Only the creator or the human amends direction › Creator amends
+  // @covers: team-tasks › Only the creator or the human amends direction › Contributor cannot amend
   test('amend: creator and human only; contributors are pointed to a note or message', async () => {
     const task = await service.create(agent('lead'), { title: 'x', direction: 'v1' })
-    await expect(service.amend(agent('dev'), task.id, { direction: 'hijack' })).rejects.toThrow(/task_note.*message the creator \(lead\)/)
-    await expect(service.amend(agent('lead2'), task.id, { direction: 'hijack' })).rejects.toThrow('creator')
+    await expect(service.amend(agent('dev'), task.id, { direction: 'hijack' })).rejects.toThrow(/task_note.*message the owner \(lead\)/)
+    await expect(service.amend(agent('lead2'), task.id, { direction: 'hijack' })).rejects.toThrow('owner')
     // A refused amendment writes nothing (task-revision-publication 2.2).
     expect(service.store.revisions(task.id)).toHaveLength(1)
     expect(service.store.get(task.id)?.revision).toBe(1)
@@ -156,22 +158,25 @@ describe('permission matrix', () => {
 
   test('a human-created task can be amended by no agent', async () => {
     const task = await service.create(human(), { title: 'x', direction: 'v1' })
-    await expect(service.amend(agent('lead'), task.id, { direction: 'v2' })).rejects.toThrow('message the creator (the human)')
+    await expect(service.amend(agent('lead'), task.id, { direction: 'v2' })).rejects.toThrow('message the human')
   })
 
+  // @covers: team-tasks › Task status and closing › Contributor reports blocked
+  // @covers: team-tasks › Task status and closing › Contributor cannot close
   test('notes and active/blocked are open to every member; done/cancelled to the creator', async () => {
     const task = await service.create(agent('lead'), { title: 'x', direction: 'y' })
     expect((await service.note(agent('dev'), task.id, 'Picked option B')).author).toEqual({ kind: 'agent', sessionId: 'dev' })
     expect((await service.setStatus(agent('dev'), task.id, 'active')).status).toBe('active')
     expect((await service.setStatus(agent('dev'), task.id, 'blocked', 'waiting on API')).status).toBe('blocked')
-    await expect(service.setStatus(agent('dev'), task.id, 'done')).rejects.toThrow('Only the task\'s creator')
-    await expect(service.setStatus(agent('dev'), task.id, 'cancelled')).rejects.toThrow('Only the task\'s creator')
+    await expect(service.setStatus(agent('dev'), task.id, 'done')).rejects.toThrow('Only the task\'s owner')
+    await expect(service.setStatus(agent('dev'), task.id, 'cancelled')).rejects.toThrow('Only the task\'s owner')
     await expect(service.setStatus(agent('lead'), task.id, 'open')).rejects.toThrow('Only the human can reopen')
     expect((await service.get(human(), task.id)).task.status).toBe('blocked')
     expect((await service.setStatus(agent('lead'), task.id, 'done')).status).toBe('done')
     expect((await service.get(human(), task.id)).journal.map(entry => entry.text)).toEqual(['Picked option B', 'waiting on API'])
   })
 
+  // @covers: team-tasks › Task status and closing › Human reopens
   test('the human reopens, closes, and amends a task whose creator was killed', async () => {
     const task = await service.create(agent('lead'), { title: 'x', direction: 'y' })
     await service.setStatus(agent('lead'), task.id, 'done')
@@ -194,9 +199,9 @@ describe('change-lead pilot composition (change-lead-pilot D3/D6)', () => {
     // The child is the Change Lead's: its own creator rights, the parent link, the change, the worktree.
     expect(child).toMatchObject({ parentId: parent.id, openspecChange: 'add-export', worktree: feature, creator: { kind: 'agent', sessionId: 'cl' } })
     // Parent ownership grants no child authority: amend and closure are refused, writing nothing.
-    await expect(service.amend(agent('lead'), child.id, { direction: 'hijack' })).rejects.toThrow('creator')
-    await expect(service.setStatus(agent('lead'), child.id, 'done')).rejects.toThrow('Only the task\'s creator')
-    await expect(service.setStatus(agent('lead'), child.id, 'cancelled')).rejects.toThrow('Only the task\'s creator')
+    await expect(service.amend(agent('lead'), child.id, { direction: 'hijack' })).rejects.toThrow('owner')
+    await expect(service.setStatus(agent('lead'), child.id, 'done')).rejects.toThrow('Only the task\'s owner')
+    await expect(service.setStatus(agent('lead'), child.id, 'cancelled')).rejects.toThrow('Only the task\'s owner')
     expect(service.store.revisions(child.id)).toHaveLength(1)
     // The child's creator amends and closes, recording that closure is not acceptance.
     expect((await service.amend(agent('cl'), child.id, { direction: 'v2' })).revision).toBe(2)
@@ -212,16 +217,16 @@ describe('change-lead pilot composition (change-lead-pilot D3/D6)', () => {
     const parent = await service.create(agent('lead'), { title: 'pilot parent', direction: 'enrolled', openspec_change: 'add-export' })
     const child = await service.create(agent('cl'), { title: 'serializer', direction: 'v1', parent_id: parent.id, openspec_change: 'add-export', worktree: feature })
     // Same group, different session: hierarchy conveys nothing.
-    await expect(service.amend(agent('cl2'), child.id, { direction: 'takeover' })).rejects.toThrow('creator')
-    await expect(service.setStatus(agent('cl2'), child.id, 'done')).rejects.toThrow('Only the task\'s creator')
-    await expect(service.setStatus(agent('cl2'), child.id, 'cancelled')).rejects.toThrow('Only the task\'s creator')
+    await expect(service.amend(agent('cl2'), child.id, { direction: 'takeover' })).rejects.toThrow('owner')
+    await expect(service.setStatus(agent('cl2'), child.id, 'done')).rejects.toThrow('Only the task\'s owner')
+    await expect(service.setStatus(agent('cl2'), child.id, 'cancelled')).rejects.toThrow('Only the task\'s owner')
     // Within its own rights it coordinates: a new child under the same parent.
     const next = await service.create(agent('cl2'), { title: 'assembly', direction: 'assemble', parent_id: parent.id, openspec_change: 'add-export', worktree: feature })
     expect(next).toMatchObject({ parentId: parent.id, creator: { kind: 'agent', sessionId: 'cl2' } })
     expect((await service.amend(agent('cl2'), next.id, { direction: 'v2' })).revision).toBe(2)
-    // The original creator is gone: the replacement still cannot take the child; only the human recovers it.
+    // The original creator is gone: without a takeover (task_transfer_owner, group-mail-task-affinity D7) the replacement still cannot amend the child.
     records.delete('cl')
-    await expect(service.amend(agent('cl2'), child.id, { direction: 'still no' })).rejects.toThrow(/creator/)
+    await expect(service.amend(agent('cl2'), child.id, { direction: 'still no' })).rejects.toThrow(/owner/)
     expect(service.store.get(child.id)?.revision).toBe(1)
     expect((await service.amend(human(), child.id, { direction: 'handover direction' })).direction).toBe('handover direction')
     expect((await service.setStatus(human(), child.id, 'cancelled')).status).toBe('cancelled')
@@ -237,7 +242,7 @@ describe('task tools', () => {
     await expect(dev.task_create({ title: 'x', direction: 'y' })).rejects.toThrow('cannot create tasks')
     await dev.task_note({ task_id: task.id, text: 'started', author: 'lead' })
     await dev.task_update_status({ task_id: task.id, status: 'active' })
-    await expect(dev.task_amend({ task_id: task.id, direction: 'mine', session_id: 'lead' })).rejects.toThrow('creator')
+    await expect(dev.task_amend({ task_id: task.id, direction: 'mine', session_id: 'lead' })).rejects.toThrow('owner')
     await lead.task_amend({ task_id: task.id, acceptance: 'A file downloads' })
     const full = await dev.task_get({ task_id: task.id })
     expect(full.task).toMatchObject({ status: 'active', revision: 2, acceptance: 'A file downloads' })
@@ -301,7 +306,7 @@ describe('task_amend publishes with rationale and notify (task-revision-publicat
       revisionNotice: { revision: 2, assignmentId: assignment.id, rationale: 'Customer asked' } }])
     expect(notices[0]!.body).toContain('revision 2 published by lead: Customer asked')
     // A non-creator still cannot: no revision, no notice.
-    await expect(taskHandlers(notifying, 'dev').task_amend({ task_id: task.id, direction: 'mine', notify: true })).rejects.toThrow('creator')
+    await expect(taskHandlers(notifying, 'dev').task_amend({ task_id: task.id, direction: 'mine', notify: true })).rejects.toThrow('owner')
     expect(notifying.store.revisions(task.id)).toHaveLength(2)
     expect(mail.forTask(task.id).filter(message => message.tags.includes('task-revision'))).toHaveLength(1)
     assignments.close()
@@ -318,7 +323,8 @@ describe('spawn-time registration', () => {
     const server = await createMailboxServer(mailbox, 'lead', { tasks: service, management })
     const registered = Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools)
     const expected = ['send_message', 'reply', 'schedule_message', 'list_groups', 'list_mailbox', 'cancel_message', 'discard_message', 'task_create', 'task_get', 'task_journal_read', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge']
-    expect(registered.sort()).toEqual([...expected].sort())
+    // task_transfer_owner (group-mail-task-affinity D7) registers with the task tools, after the result tools in the allowed list.
+    expect(registered.sort()).toEqual([...expected, 'task_transfer_owner'].sort())
     // Product strategy (product-strategy 3.2) rides the same allowed list —
     // read/propose only, no approve/publish/withdraw tool anywhere — and so
     // does release_member (member-release D6; registered when a MemberRelease
@@ -333,7 +339,7 @@ describe('spawn-time registration', () => {
     const planTools = ['plan_list', 'plan_get', 'plan_create', 'plan_save_draft', 'plan_submit_for_review']
     // Validation tools (plan-validation D10; validate, read, assess — no decide or approve).
     const validationTools = ['plan_validate', 'plan_validation_get', 'plan_assess']
-    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), ...resultTools, 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review', 'strategy_impact_get', 'strategy_impact_propose', ...planTools, ...validationTools, 'decision_ask', 'decision_record', 'team_metrics',
+    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), ...resultTools, 'task_transfer_owner', 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review', 'strategy_impact_get', 'strategy_impact_propose', ...planTools, ...validationTools, 'decision_ask', 'decision_record', 'team_metrics',
       'process_report_submit', 'process_reports_list', 'process_report_get', 'process_proposal_link',
       // task_checkpoint (revision-control D7) rides the same allowed list, registered only with a checkpoints service.
       'task_checkpoint', 'team_capacity']

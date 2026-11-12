@@ -18,26 +18,30 @@ import type { StaffingCapacity } from './staffing'
  * blocker is pinned to it by the snapshot derivation, not by this order.
  */
 const KIND_ORDER: Record<WaitingConstraintKind, number> = {
-  'group-missing': 0,
-  'group-cap': 1,
-  'profile-cap': 2,
-  'team-spawn-cap': 3,
-  'worktree-occupied': 4,
-  'startup-failed': 5,
-  'no-eligible-member': 6,
-  'recipient-busy': 7,
-  'recipient-pending-request': 8,
-  'recipient-unavailable': 9,
-  'outside-role': 10,
-  'profile-cooling': 11,
-  'spawn-backoff': 12,
+  // While the owner hold applies it is the immediate blocker, even beside a
+  // capacity constraint (group-mail-task-affinity D5); a group without a
+  // definition has no affinity, so the two never meet.
+  'owner-busy': 0,
+  'group-missing': 1,
+  'group-cap': 2,
+  'profile-cap': 3,
+  'team-spawn-cap': 4,
+  'worktree-occupied': 5,
+  'startup-failed': 6,
+  'no-eligible-member': 7,
+  'recipient-busy': 8,
+  'recipient-pending-request': 9,
+  'recipient-unavailable': 10,
+  'outside-role': 11,
+  'profile-cooling': 12,
+  'spawn-backoff': 13,
   // A routing specific after the capacity constraints (dispatch-worker-choice
   // D5): a capped chosen worker's `profile-cap` stays the blocker, and a
   // cooling choice names itself ahead of the generic all-cooling hold.
-  'worker-choice': 13,
-  'routing-hold': 14,
-  'all-profiles-cooling': 15,
-  'starting-agent': 16,
+  'worker-choice': 14,
+  'routing-hold': 15,
+  'all-profiles-cooling': 16,
+  'starting-agent': 17,
 }
 
 /** Constraints in blocker-first order; the sort is stable within a kind. */

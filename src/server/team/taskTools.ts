@@ -1,6 +1,7 @@
 // Task tools on the per-session `kawai-team` MCP server (team-tasks design
 // D2). Handlers bind the calling session id and strip unknown arguments, so
 // a forged creator or team in the input is never seen by the service.
+// `task_transfer_owner` moves ownership (group-mail-task-affinity D7).
 // `task_get` and `task_journal_read` read through one TaskJournalReads
 // (bounded-log-reads-and-task-get D4–D6): bounded windows and byte-bounded
 // previews, and any entry whole, behind task_get's caller and team rules.
@@ -12,7 +13,7 @@ import { JOURNAL_LIMIT_MAX, TaskJournalReads } from './taskJournalWindow'
 import { TASK_LIST_LIMIT_MAX, TASK_LIST_STATUSES } from './taskListWindow'
 
 export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_journal_read', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
-  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result'] as const
+  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result', 'task_transfer_owner'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
 const taskId = { task_id: z.string().min(1) }
@@ -98,6 +99,10 @@ export const taskSchemas = {
     worker: z.string().min(1).optional(),
   }),
   task_check_result: z.object({ ...taskId, result_id: z.string().min(1) }),
+  task_transfer_owner: z.object({
+    task_id: z.string().min(1).optional(), from_session: z.string().min(1).optional(),
+    to_session: z.string().min(1).optional(), reason: z.string().optional(),
+  }),
 }
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
@@ -105,14 +110,15 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_get: 'Read a task: current direction, acceptance, and contract (in task), assignment, and result whole; the journal, subtasks, and messages as bounded windows, oldest first, each with its total — the newest 50 journal entries (journal_limit 1–200), 100 subtasks, and 50 messages. A journal entry is a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8). Page older entries with journal_before set to bounds.journal.nextBefore; read any entry whole with task_journal_read. revisions lists the newest 50 revisions oldest first as rows — revision, identity (r<revision>#<hash>), contractHash (null without a contract), author, createdAt, notify, directionBytes, acceptanceBytes, and a rationale preview of at most 2,000 stored bytes with rationaleBytes and rationaleCut — never their direction or acceptance; bounds.revisions has total, returned, truncated, and nextBefore, and revisions_before (an integer from 2 to the task\'s revision) returns the revisions below it. Read one revision whole with revision (an integer from 1 to the task\'s revision): revisionText carries its direction, acceptance, and rationale. findingsLedger lists the newest 100 findings (F<n>), newest first, each with level, clause, state, and transitions (ledgerOlderRemaining when more exist); each result\'s findings rows carry their items, class, and whether they counted.',
   task_journal_read: 'Read one journal entry of a task losslessly (entry_id from task_get): up to 8,192 stored bytes from offset_bytes (default 0; a preview\'s resumeOffsetBytes continues it) as dataBase64, which is authoritative, with their text when valid UTF-8 (else null), the entry\'s totalBytes, and nextOffsetBytes (null at the end). Read-only.',
   task_note: "Append a note to a task's journal (decisions, findings, progress). Notes are permanent.",
-  task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its creator only). Optional note is journaled.',
-  task_amend: "Publish a new revision of a task's direction, acceptance criteria, or contract (its creator only). Optional contract (the task_create grammar) replaces the current one; omitted or blank carries it forward unchanged, and a contract can never be removed. A contract that does not parse refuses the amendment with every problem and publishes nothing. Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice.",
+  task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its owner only). Optional note is journaled.',
+  task_amend: "Publish a new revision of a task's direction, acceptance criteria, or contract (its owner only). Optional contract (the task_create grammar) replaces the current one; omitted or blank carries it forward unchanged, and a contract can never be removed. A contract that does not parse refuses the amendment with every problem and publishes nothing. Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice.",
   task_list: `List this team's tasks as compact rows (no direction or acceptance — use task_get), newest first. Without status, only open, active, and blocked tasks; status takes one status or "all". At most limit rows (1–${TASK_LIST_LIMIT_MAX}, default 50); page older with before set to bounds.nextBefore. bounds.total counts every match; statuses names the filter applied.`,
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
   task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
   task_submit_coverage: 'Record your own coverage map for a result (result_id from task_get): the same clause/citation map a submission carries. While you hold a task\'s outstanding review handoff and have recorded no map for its result, the submitter\'s maps stay withheld from you — recording yours unseals them. Maps are append-only; your newest map for a result counts.',
   task_submit_findings: 'Report review or QA findings on one exact result (result_id from task_get), kind review|qa. Structured (required for a plan change\'s review): items, each with level P0 (security, data corruption, severe correctness) | P1 (a reproducible requirement violation, a significant regression) | P2 (advisory, never blocks), the clause it violates (A1, or r<N>#<hash> › A1; on a task without a contract, its revision identity), evidence (file:line, test output, or a counterexample), impact, and an optional reproduction; and dispositions resolved | still-open | regressed (the latter two with evidence) for every blocking finding listed in task_get. The verdict is derived (fail exactly when a P0/P1 is accepted and open); the reply lists each item\'s class. Text form: findings and verdict pass|fail. Findings stay bound to that result — a newer result inherits nothing.',
   task_handoff: 'Hand a result off (kind review, qa, or fix — return for fixes; the result_id, instructions, and an optional expected_response) to a recipient: target_kind "group" (the default when omitted, even for a session-shaped id) with target: <group id>, or target_kind "session" with target: <session id> to dispatch ordinary direct task mail to that exact session — no other member is chosen. While an equivalent handoff (same task, result, kind) is outstanding, this returns it instead of dispatching again; if the standing handoff names another recipient, the notice says so and nothing is reassigned. Optional worker (group targets only) limits who may take it to one provider (e.g. claude) or one model (provider/model, or a bare model key) of the group\'s workers, as on send_message; a handoff naming another worker is another handoff.',
+  task_transfer_owner: "Move a task's ownership (its amend and close rights) within your group. As the owner, give task_id and to_session to hand it to another live session of your group before you leave it. To take over, give task_id, or from_session for every open, active, and blocked task of that owner, once the owner is archived, gone, or context-exhausted; a takeover moves tasks only to you, and a live owner is never taken over — message it instead. Optional reason. Every move is journaled; the creator stays recorded as author.",
   task_dispute_findings: 'Dispute blocking findings of a task whose result you submitted, instead of changing code for a finding you can refute: each with its id (F<n> from task_get) and counter-evidence (a test run, file:line, a counterexample), at most 10 per call. A disputed finding waits for a decision: a decision card for the plan\'s Lead role (or the owner) on a plan change\'s task, else the task creator decides with task_decide_dispute. A finding is disputed at most once in each state it enters.',
   task_decide_dispute: 'Decide a dispute of a finding on a task you created that is not a plan change\'s task (those are decided on their decision cards): uphold (the finding blocks again) or reject (it never blocks), with a rationale that is journaled.',
   task_check_result: 'Ask Kawai to check a result again (result_id from task_get): the commit, its worktree state, the recorded full-check pass, and merges against the base and other open tasks\' branches. The check never gates anything; it runs in the background and the newest check rides task_get. A request while a check is pending returns that pending check.',
@@ -195,5 +201,6 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
       },
     } : {}),
     task_list: async (input: unknown) => tasks.agentList(caller, taskSchemas.task_list.parse(input)),
+    task_transfer_owner: async (input: unknown) => tasks.ownership.transfer(caller, taskSchemas.task_transfer_owner.parse(input)),
   }
 }

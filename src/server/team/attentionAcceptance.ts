@@ -19,7 +19,7 @@ export interface PendingAcceptance {
   needsReevaluation: boolean
   /** The verdict of the newest findings bound to the result; null without findings. */
   reviewVerdict: 'pass' | 'fail' | null
-  /** The task's creator when it is a live (present, not archived) agent session; null otherwise. */
+  /** The task's owner (group-mail-task-affinity D7; the creating agent unless transferred) when it is a live (present, not archived) agent session; null otherwise. */
   liveCreator: { sessionId: string; name: string } | null
 }
 

@@ -40,6 +40,12 @@ export interface EnqueueInput {
    * (dispatch-worker-choice D1), already validated; a forward never carries it.
    */
   workerChoice?: string | null
+  /**
+   * The task group mail is about, for a group with `affinity: task-owner`
+   * (group-mail-task-affinity D1): the message's task, else the sender's
+   * current task. Never sets `taskId`; a limit forward keeps it.
+   */
+  affinityTask?: string | null
   /** Who caused the send (event log): the human through a composer, else the system. */
   actor?: 'system' | 'human'
   /** The revision a notice announces (task-revision-publication D3); absent for every other row. */
