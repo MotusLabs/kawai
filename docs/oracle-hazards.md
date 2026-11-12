@@ -234,6 +234,23 @@ or property that would have caught it, and the source finding.
   before it settles"). The control restores the unshared snapshot-and-clear.
 - **Source finding.** findings-74686a77 F2 (task-602c71e9 R5 review), fixed
   in R6.
+- **Second form: a gap between the drain and its settlement.** The R6 fix
+  shared the join but split its completion: the drain saw the set empty and
+  returned, and a later reaction released the slot and settled the promise.
+  A microtask queued in between (by the last harness's own settlement)
+  registered a new harness and got back the old join, which then settled
+  without joining it. Returning from the drain is not the join's completion.
+  The oracle: the empty decision, the slot release and the settlement are
+  one synchronous step in the drain's own continuation, on success and
+  failure alike. Reproduce with a registration and a suite call queued by
+  the last harness's settlement, and assert that call gets a different join
+  that has joined the new harness when it settles (same test file ›
+  "a cleanup call during aggregate finalization joins a newly tracked held
+  harness", "on the rejection path the finalizing join reports its raw
+  failure once and a call during finalization owns the late harness").
+  Controls restore the split completion and a release deferred by one
+  microtask. Source: findings-7712679a (task-602c71e9 R6 re-review), fixed
+  in R7.
 
 ## Cache keys
 
