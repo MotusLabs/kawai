@@ -1,3 +1,4 @@
+// @reads: packages/agent-runtime/src/codex/protocol/VERSION
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -224,7 +225,8 @@ describe('version parsing', () => {
 
 describe('protocol baseline pairing (design D3)', () => {
   test('CODEX_MIN_VERSION equals the vendored protocol VERSION', async () => {
-    const file = path.join(import.meta.dir, '../chat/codex/protocol/VERSION')
+    // The package's protocol is the one vendored copy (task-ce05430a R2 G4).
+    const file = path.join(import.meta.dir, '../../../packages/agent-runtime/src/codex/protocol/VERSION')
     expect((await Bun.file(file).text()).trim()).toBe(CODEX_MIN_VERSION)
   })
 })

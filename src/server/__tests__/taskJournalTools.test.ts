@@ -30,10 +30,9 @@ import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { TeamWorktrees } from '../team/worktreeRoots'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
-import { dispatchTeamToolCall, teamNamespaceSpec } from '../chat/codex/codexTools'
+import { CodexToolSessions } from './codexToolSession'
 import { at, rawNote } from './taskJournalFixture'
 
-const THREAD = 'thread-journal-tools'
 type Outcome = { error: string; value: null } | { error: null; value: any }
 type Registered = Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>
 
@@ -70,12 +69,17 @@ async function viaClaude(sessionId: string, name: string, args: unknown): Promis
   return result.isError ? { error: text, value: null } : { error: null, value: JSON.parse(text) }
 }
 
-/** The Codex runtime: the dynamic-tool dispatch over the same table, which answers success false with text on a refusal. */
+/**
+ * The Codex runtime: Kawai's production Codex composition (createChatDriver
+ * over the package, task-ce05430a G2) serving the fake app-server's
+ * `item/tool/call` on the session's own thread with the same table; a
+ * refusal answers success false with text.
+ */
+const codex = new CodexToolSessions(sessionId => teamToolTable(mailbox, sessionId, services()))
 async function viaCodex(sessionId: string, name: string, args: unknown): Promise<Outcome> {
-  const answer = await dispatchTeamToolCall(teamToolTable(mailbox, sessionId, services()), THREAD,
-    { threadId: THREAD, namespace: 'kawai-team', tool: name, arguments: args } as never)
+  const answer = await codex.call(sessionId, name, args)
   const item = answer.contentItems[0]!
-  const text = item.type === 'inputText' ? item.text : ''
+  const text = item.type === 'inputText' ? item.text ?? '' : ''
   return answer.success ? { error: null, value: JSON.parse(text) } : { error: text, value: null }
 }
 
@@ -118,6 +122,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => server.instance.close()))
+  await codex.closeAll()
 })
 
 const newTask = async () => tasks.create(agent('lead'), { title: 'Export', direction: 'CSV' })
@@ -377,8 +382,10 @@ describe('system callers and the shared catalogue', () => {
     expect(TASK_TOOL_NAMES).toContain('task_journal_read')
     expect(TEAM_ALLOWED_TOOLS).toContain('mcp__kawai-team__task_journal_read')
     const table = teamToolTable(mailbox, 'dev', services())
-    const spec = teamNamespaceSpec(table)
-    const codexTools = spec.type === 'namespace' ? spec.tools : []
+    // The namespace the production Codex driver registered at thread/start (G2).
+    const [spec] = (await codex.dynamicTools('dev')) as Array<{ type: string; name: string; tools: Array<{ name: string }> }>
+    expect(spec!.name).toBe('kawai-team')
+    const codexTools = spec!.type === 'namespace' ? spec!.tools : []
     const server = await createMailboxServer(mailbox, 'dev', services())
     servers.push(server as unknown as { instance: { close: () => Promise<void> } })
     const claudeNames = Object.keys((server.instance as unknown as { _registeredTools: Registered })._registeredTools)
