@@ -9,19 +9,18 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentEvent, PendingRequest } from '../src/events.js'
+import { CompatibilityCleanup } from './helpers/claudeCompatibilityCleanup.js'
 import { driver, type Driver, type DriverHooks } from './helpers/claudeDriverHarness.js'
 
 const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-/** Every driver this file started; the one cleanup stops each and joins its stop. */
-const live: Driver[] = []
-afterEach(async () => {
-  for (const f of live.splice(0)) await f.d.kill()
-})
+/** Every driver this file started; the shared owner stops and joins all of them, then rethrows unasserted failures. */
+const cleanup = new CompatibilityCleanup()
+afterEach(() => cleanup.finishAll())
 
 async function idle(hooks: DriverHooks = {}): Promise<Driver> {
   const f = driver(hooks)
-  live.push(f)
+  cleanup.track(f)
   const start = f.d.start()
   while (f.queries.length === 0) await tick()
   f.q().ready()

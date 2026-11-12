@@ -13,21 +13,20 @@ import type { TurnHandle, TurnResult } from '../src/contract.js'
 import { AgentRuntimeError } from '../src/errors.js'
 import type { BeforeSubmit } from '../src/options.js'
 import { createClaudeDriverWith } from '../src/claude/driver.js'
+import { CompatibilityCleanup } from './helpers/claudeCompatibilityCleanup.js'
 import { driver, type Driver, type DriverHooks } from './helpers/claudeDriverHarness.js'
 import { controlledQueries, frames } from './helpers/controlledQuery.js'
 import { fakeClaudeHome } from './helpers/fakeClaudeHome.js'
 
 const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-/** Every driver this file started; the one cleanup stops each and joins its stop. */
-const live: Driver[] = []
-afterEach(async () => {
-  for (const f of live.splice(0)) await f.d.kill().catch(() => {})
-})
+/** Every driver this file started; the shared owner stops and joins all of them, then rethrows unasserted failures. */
+const cleanup = new CompatibilityCleanup()
+afterEach(() => cleanup.finishAll())
 
 async function idle(join: boolean | undefined, hooks: DriverHooks = {}): Promise<Driver> {
   const f = driver({ ...hooks, session: { ...hooks.session, ...(join === undefined ? {} : { joinAgentStartedTurns: join }) } as never })
-  live.push(f)
+  cleanup.track(f)
   const start = f.d.start()
   while (f.queries.length === 0) await tick()
   f.q().ready()
@@ -97,7 +96,8 @@ describe('Claude joinAgentStartedTurns (GAP9)', () => {
       const box: { f?: Driver } = {}
       const beforeSubmit: BeforeSubmit = () => {
         if (how === 'interrupt') void box.f!.d.interrupt()
-        else void box.f!.d.kill()
+        // The reserved stop: the after-hook joins this same promise and reports its outcome.
+        else void cleanup.stop(box.f!)
         return { accepted: true }
       }
       const f = (box.f = await idle(true, { beforeSubmit }))
