@@ -24,22 +24,29 @@ test('cleanup removes the temp root only after a held host promise settles; over
   const held = new Promise<void>(resolve => (release = resolve))
   let reported = 0
   const harness = startRuntimeHarness(new Script().boot(), { onTranscriptPath: () => { reported += 1; return held as unknown as void } })
-  harness.driver.start()
-  await until(() => reported === 1)
-  const order: string[] = []
-  const first = harness.cleanup()
-  const second = harness.cleanup()
-  expect(second).toBe(first)
-  const cleaned = first.then(() => void order.push('cleaned'))
-  // The kill ends the process; the held promise still holds the join.
-  await until(() => exited(harness.wire))
-  await new Promise(resolve => setTimeout(resolve, 100))
-  expect({ order, rootKept: fs.existsSync(harness.dir) }).toEqual({ order: [], rootKept: true })
-  order.push('release')
-  release()
-  await cleaned
-  expect(order).toEqual(['release', 'cleaned'])
-  expect(fs.existsSync(harness.dir)).toBe(false)
+  try {
+    harness.driver.start()
+    await until(() => reported === 1)
+    const order: string[] = []
+    const first = harness.cleanup()
+    const second = harness.cleanup()
+    expect(second).toBe(first)
+    const cleaned = first.then(() => void order.push('cleaned'))
+    // The kill ends the process; the held promise still holds the join.
+    await until(() => exited(harness.wire))
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect({ order, rootKept: fs.existsSync(harness.dir) }).toEqual({ order: [], rootKept: true })
+    order.push('release')
+    release()
+    await cleaned
+    expect(order).toEqual(['release', 'cleaned'])
+    expect(fs.existsSync(harness.dir)).toBe(false)
+  } finally {
+    // Failure-safe: a failed assertion above still releases the held work
+    // and joins the same cleanup before the test ends.
+    release()
+    await harness.cleanup()
+  }
 })
 
 test('a raw host failure rejects cleanup once as the original object, after the join removed the root', async () => {
