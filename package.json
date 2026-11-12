@@ -26,7 +26,7 @@
     "build": "vite build",
     "start": "bun src/server/index.ts",
     "lint": "oxlint . --ignore-pattern src/server/chat/codex/protocol/",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p packages/agent-runtime/tsconfig.json",
     "test": "bun scripts/test-runner.ts",
     "test:ci": "bun scripts/test-runner.ts --skip-real-tmux",
     "check": "bun scripts/check.ts",

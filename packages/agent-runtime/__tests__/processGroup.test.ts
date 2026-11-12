@@ -1,4 +1,4 @@
-// @reads: packages/agent-runtime/__tests__/fixtures/**
+// @reads: packages/agent-runtime/__tests__/fixtures/**, packages/agent-runtime/__tests__/fixtures
 // Owned POSIX group termination (task 2.3, L11-L16/P16/I1): the leader exits
 // first while a helper in its group keeps the inherited stdout pipe open and
 // keeps writing. The leader's actual exit is retained apart from the pipe

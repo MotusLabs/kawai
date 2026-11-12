@@ -102,6 +102,29 @@ describe('computeContentKey', () => {
     expect(git('status', '--porcelain').trim()).toBe('?? src/untracked.ts')
   })
 
+  test('workspace package files key like any other path, and the real index stays byte-identical (6.4)', () => {
+    write('.gitignore', 'ignored.txt\nbuild/\ndist\n')
+    write('packages/demo/src/index.ts', 'export const a = 1\n')
+    git('add', '-A')
+    git('-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'package')
+    const index = path.join(repo, '.git', 'index')
+    const indexBefore = sha256File(index)
+    const committed = key()
+    write('packages/demo/src/index.ts', 'export const a = 2\n')
+    const edited = key()
+    expect(edited).not.toBe(committed)
+    write('packages/demo/__tests__/added.test.ts', "import { test } from 'bun:test'\ntest('x', () => {})\n")
+    const withNewTest = key()
+    expect(withNewTest).not.toBe(edited)
+    // Generated output under the ignored dist directory is no content.
+    write('packages/demo/dist/index.js', 'export const a = 2\n')
+    expect(key()).toBe(withNewTest)
+    write('packages/demo/src/index.ts', 'export const a = 1\n')
+    fs.rmSync(path.join(repo, 'packages/demo/__tests__/added.test.ts'))
+    expect(key()).toBe(committed)
+    expect(sha256File(index)).toBe(indexBefore)
+  })
+
   test('a GIT_INDEX_FILE exported by a hook never reaches the key computation', () => {
     const original = process.env.GIT_INDEX_FILE
     process.env.GIT_INDEX_FILE = path.join(tempRoot, 'missing-dir', 'foreign-index')

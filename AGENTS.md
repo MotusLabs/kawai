@@ -8,7 +8,7 @@
 bun run dev        # frontend + backend
 bun run build      # production build
 bun run lint       # oxlint
-bun run typecheck  # tsc --noEmit (incremental)
+bun run typecheck  # tsc --noEmit (incremental), then the agent-runtime package project
 bun run test       # unit tests
 bun run check      # lint + typecheck + tests, cached by content
 ```
@@ -16,7 +16,9 @@ bun run check      # lint + typecheck + tests, cached by content
 `bun run test` gives each test file fresh temporary database, log, config, and
 home directories (HOME points into the run root, so no test reads the real
 ~/.kawai, ~/.agentboard, or ~/.claude) and runs files with per-file isolation;
-a bare `bun test` keeps the old shared-process mode. Non-tmux files run in one parallel `bun test`
+a bare `bun test` keeps the old shared-process mode. The suite includes each
+workspace package's `packages/*/__tests__/*.test.ts`, and the `@reads` and
+`@covers` guards scan them. Non-tmux files run in one parallel `bun test`
 step, and the real-tmux files serially after it (`--skip-real-tmux` skips
 them). A full run runs a real-tmux file only when the working tree differs
 from its merge-base with the local `origin/master` ref (no fetch) in a path

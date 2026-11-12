@@ -1,4 +1,4 @@
-// @reads: packages/agent-runtime/README.md, packages/agent-runtime/examples/**, packages/agent-runtime/__tests__/fixtures/**
+// @reads: packages/agent-runtime/README.md, packages/agent-runtime/examples/**, packages/agent-runtime/__tests__/fixtures/**, packages/agent-runtime
 // The README's inline request example (task 4.3 Claude portion, V2): the
 // README block is byte-for-byte examples/inline-requests.ts, which the
 // package typecheck compiles, and this test runs that file unchanged through

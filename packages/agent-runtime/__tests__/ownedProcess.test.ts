@@ -1,4 +1,4 @@
-// @reads: packages/agent-runtime/__tests__/fixtures/**
+// @reads: packages/agent-runtime/__tests__/fixtures/**, packages/agent-runtime/__tests__/fixtures
 // Owned spawner oracles on real child processes (task 2.1): the exact
 // environment and cwd (P02-P04/I3, control M-env), launch validation (P01),
 // actual-exit stop receipts (L11-L16/I1, control M-join), the never-started

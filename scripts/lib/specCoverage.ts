@@ -22,12 +22,15 @@ import path from 'node:path'
 export const COVERAGE_CONFIG_PATH = 'openspec/coverage.json'
 
 // The corpus the guard scans for annotations: every unit and e2e test file
-// (D8). Sorted glob output keeps failure order deterministic.
+// (D8), workspace packages' tests included (extract-agent-runtime 6.4; the
+// glob stays under __tests__, never a package's node_modules). Sorted glob
+// output keeps failure order deterministic.
 export const SCAN_GLOBS = [
   'src/**/*.test.ts',
   'src/**/*.test.tsx',
   'scripts/**/*.test.ts',
   'tests/e2e/**/*.spec.ts',
+  'packages/*/__tests__/**/*.test.ts',
 ] as const
 
 export type CoverageFailureKind =

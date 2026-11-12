@@ -562,3 +562,16 @@ Both drivers emit the same `AgentEvent` stream and settle the same
     stop still stops everything.
   - Checkpoint (`onCheckpoint`) and context (`beforeSubmit`) failures stay
     critical, as described above.
+
+## Development in the Kawai repository
+
+The root checks include this package. `bun run test` runs its
+`__tests__/*.test.ts` files with Kawai's, `bun run typecheck` compiles this
+package's own NodeNext project (`tsconfig.json`: `src`, `examples` and
+`__tests__`) after Kawai's, and `bun run lint` and `bun run check` cover its
+files. Package tests declare the files they read or spawn at runtime in an
+`@reads` header and name the scenarios they cover with `@covers`, as Kawai's
+do. `bun run test packages/agent-runtime/__tests__/<file>.test.ts` runs one
+file through the same runner. `bun run build` here emits the ignored
+`dist/`; remove a leftover one before a typecheck you rely on, since a stale
+build can hide a missing source module.

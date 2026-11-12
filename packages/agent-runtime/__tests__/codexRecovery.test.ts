@@ -1,3 +1,4 @@
+// @reads: packages/agent-runtime/__tests__/fixtures/**
 // Codex recovery and launch authority through the public driver (L02, R10,
 // P04, P08): two ACTUAL host processes share only a retained Codex home and
 // keep one conversation across an awaited kill and an awaited shutdown; every
