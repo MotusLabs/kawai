@@ -1,15 +1,17 @@
 // Pure helpers of Kawai's Codex chat adapter (codexRuntime.ts; task 6.1):
 // the package's exit-cause text and the quiescence check over it, the
 // package logger, approval card inputs, the team tool table as a package
-// tool set, the per-spawn launch fields, the forwarded host callbacks, and
-// the request-answer outcome texts, and the pending-request view.
+// tool set, the per-spawn launch fields, the forwarded host callbacks,
+// the request-answer outcome texts, the pending-request view, and an
+// agentMessage's async questions as Kawai's question cards (moved verbatim
+// from codex/codexEvents.ts, task-ce05430a R2).
 import os from 'node:os'
 import type { AnswerOutcome, CodexDriverOptions, Logger, PendingRequest, ToolSet } from '@motuslabs/agent-runtime'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import type { ChatPendingRequest, ChatQuestion } from '../../../shared/chat'
 import { logger } from '../../logger'
-import type { CodexSessionDriverOptions } from '../codex/codexThread'
-import { TEAM_NAMESPACE } from '../codex/codexTools'
+import type { CodexSessionDriverOptions } from './codexDriverTypes'
+import { TEAM_MCP_SERVER } from '../../team/teamPrompt'
 import { chatLimitSignal, chatUsageReport } from './runtimeEvents'
 
 /**
@@ -73,7 +75,7 @@ export interface AsyncQuestion {
 export function teamToolSet(table: NonNullable<CodexSessionDriverOptions['teamTools']>): ToolSet | undefined {
   if (!table.length) return undefined
   return {
-    namespace: TEAM_NAMESPACE,
+    namespace: TEAM_MCP_SERVER,
     tools: table.map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -140,4 +142,22 @@ export function holdRefusal(requestId: string, ownQuestion: boolean, pending: re
 export function pendingOf(request: PendingRequest, cards: ReadonlyMap<string, Card>): ChatPendingRequest {
   if (request.kind === 'question') return { kind: 'question', requestId: request.requestId, questions: request.questions as ChatQuestion[], at: request.at }
   return { kind: 'approval', requestId: request.requestId, tool: request.tool, input: cards.get(request.requestId)?.input ?? request.input, at: request.at }
+}
+
+/** Async questions (title + options) as question cards; null when none. */
+export function asyncQuestions(raw: unknown): ChatQuestion[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const questions: ChatQuestion[] = []
+  for (const entry of raw) {
+    const title = (entry as { title?: unknown } | null)?.title
+    if (typeof title !== 'string' || title.trim() === '') continue
+    const options = (entry as { options?: unknown }).options
+    questions.push({
+      question: title,
+      header: '',
+      multiSelect: false,
+      options: Array.isArray(options) ? options.filter((o): o is string => typeof o === 'string').map(label => ({ label })) : [],
+    })
+  }
+  return questions.length > 0 ? questions : null
 }

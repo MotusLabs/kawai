@@ -47,14 +47,12 @@ import { logger } from '../../logger'
 import { formatEnvelope } from '../../team/envelope'
 import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
 import { codexSpawnEnv } from '../codexProfiles'
-import { auditDeniedCard, auditItem, auditSpawnEnd } from '../codex/codexAudit'
-import { asyncQuestions } from '../codex/codexEvents'
+import { auditDeniedCard, auditItem, auditSpawnEnd, type AuditItem } from '../codex/codexAudit'
 import { gitCommonDir } from '../codex/codexSandbox'
-import type { CodexSessionDriverOptions } from '../codex/codexThread'
-import type { ThreadItem } from '../codex/protocol/v2/ThreadItem'
+import type { CodexSessionDriverOptions } from './codexDriverTypes'
 import type { ChatAgentDriver } from './driver'
 import { ChatEventSequencer, chatDraftOf, type ChatEventDraft } from './runtimeEvents'
-import { cardInput, forwardedCallbacks, holdRefusal, launchFields, pendingOf, requestOutcome, teamToolSet, type AsyncQuestion, type Card } from './codexRuntimeSupport'
+import { asyncQuestions, cardInput, forwardedCallbacks, holdRefusal, launchFields, pendingOf, requestOutcome, teamToolSet, type AsyncQuestion, type Card } from './codexRuntimeSupport'
 import { OwnedWork, TerminalJoin, outsideRuntime } from './runtimeOwnership'
 import { DeliveredTurns } from './deliveredTurns'
 import { RuntimeBoot } from './runtimeBoot'
@@ -521,7 +519,7 @@ class CodexChatDriver implements ChatAgentDriver {
     }
     if (!this.activeTurnId) return
     const phase = detail.status === 'inProgress' ? 'started' : 'completed'
-    auditItem(phase, detail as unknown as ThreadItem, { sink: this.options.outbound, spawnId: this.spawnId, cwd: this.projectPath })
+    auditItem(phase, detail as unknown as AuditItem, { sink: this.options.outbound, spawnId: this.spawnId, cwd: this.projectPath })
   }
 
   private pendingCount(): number {

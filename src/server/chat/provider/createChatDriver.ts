@@ -8,7 +8,7 @@
 import type { ChatSessionDriverOptions } from './claudeDriverTypes'
 import { createClaudeChatDriver, type ClaudeChatDriverOptions } from './claudeRuntime'
 import { createCodexChatDriver } from './codexRuntime'
-import type { CodexSessionDriverOptions } from '../codex/codexThread'
+import type { CodexSessionDriverOptions } from './codexDriverTypes'
 import type { ChatAgentDriver, ChatDriverCallbacks, ChatRuntime } from './driver'
 
 /**

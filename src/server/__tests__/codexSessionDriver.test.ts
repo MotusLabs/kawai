@@ -6,7 +6,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { z } from 'zod'
 import type { ChatEvent, ChatUsageReport } from '../../shared/chat'
 import type { ChatLimitSignal } from '../chat/limitSignals'
-import { codexEffort } from '../chat/codex/codexThread'
+import type { ChatEffort } from '../chat/provider/driver'
 import { eventTypes, ROLLOUT, Script, sentRequest, startHarness, THREAD_ID, until, type Harness } from './codexDriverHarness'
 
 let harness: Harness | null = null
@@ -148,12 +148,30 @@ test('a compaction item reports onCompaction and the compacted notice; usage nam
   expect(sources).toEqual(['model-window-fallback'])
 })
 
-test('effort passes through to the Codex levels the models advertise; numbers are dropped', () => {
-  expect(codexEffort('low')).toBe('low')
-  expect(codexEffort('xhigh')).toBe('xhigh')
-  expect(codexEffort('max')).toBe('max')
-  expect(codexEffort(3)).toBeUndefined()
-  expect(codexEffort(undefined)).toBeUndefined()
+// The retired codexThread.codexEffort mapping, read on the production path
+// (task-ce05430a R2): each send's effort reaches its turn/start unchanged for
+// a named level and is omitted for a number or none.
+test('effort passes through to the Codex levels the models advertise; numbers are dropped', async () => {
+  const cases: Array<{ effort: ChatEffort | undefined; sent: string | undefined }> = [
+    { effort: 'low', sent: 'low' },
+    { effort: 'xhigh', sent: 'xhigh' },
+    { effort: 'max', sent: 'max' },
+    { effort: 3, sent: undefined },
+    { effort: undefined, sent: undefined },
+  ]
+  const script = new Script().boot()
+  cases.forEach((_, n) => script.turn(`ct-${n}`).completed(`ct-${n}`))
+  let current: ChatEffort | undefined
+  harness = startHarness(script, { getEffort: () => current })
+  for (const [n, { effort }] of cases.entries()) {
+    current = effort
+    harness.driver.send(`turn ${n}`)
+    await until(() => completedOf(harness!.events).length === n + 1)
+  }
+  const sent = cases.map((_, n) => sentRequest(harness!, 'turn/start', n)!)
+  expect(sent.map(params => ({ has: 'effort' in params, effort: params.effort }))).toEqual(
+    cases.map(({ sent }) => ({ has: sent !== undefined, effort: sent })),
+  )
 })
 
 test('per-item state lives one turn: a long session keeps only the open turn’s tool calls', async () => {

@@ -4,7 +4,7 @@
 import type { ChatCommandState } from '../../../shared/chat'
 import { logger } from '../../logger'
 import { codexCommandCatalog, codexSkillInputs, type CodexCommandCatalog } from './codexCommands'
-import type { CodexClient } from './codexThread'
+import type { CodexClient } from '../provider/codexDriverTypes'
 
 export class CodexCommandDiscovery {
   private client: CodexClient | null = null
