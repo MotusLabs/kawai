@@ -101,34 +101,37 @@ test('C2: a ready send keeps the skill its catalog named when the project moves 
   })
 })
 
-for (const via of ['getEffort', 'onStatus'] as const) {
-  test(`C2: a project move from the send's own ${via} callback leaves that send's skill and effort and moves the live catalog`, async () => {
-    let armed = false
-    let run!: Run
-    const move = () => {
-      if (!armed) return
-      armed = false
-      run.driver.setProjectPath(run.changed)
-    }
-    run = open({
-      getEffort: () => {
-        if (via === 'getEffort') move()
-        return 'high'
-      },
-      onStatus: (status) => {
-        if (via === 'onStatus' && status === 'working') move()
-      },
-    })
-    await ready(run)
-    armed = true
-    run.driver.send('/deploy')
-    await until(() => completed(run) === 1 && run.driver.getCommandState().status === 'ready')
-    const start = received(run, 'turn/start')[0]!.params
-    expect({ armed, input: start.input, effort: start.effort, last: lists(run).at(-1) }).toEqual({
-      armed: false, input: [text('/deploy'), skill(OLD)], effort: 'high', last: { cwds: [run.changed], forceReload: true },
-    })
+/** A move from the send's own `via` callback: the send keeps OLD and its effort; the live catalog moves. */
+async function callbackMove(via: 'getEffort' | 'onStatus'): Promise<void> {
+  let armed = false
+  let run!: Run
+  const move = () => {
+    if (!armed) return
+    armed = false
+    run.driver.setProjectPath(run.changed)
+  }
+  run = open({
+    getEffort: () => {
+      if (via === 'getEffort') move()
+      return 'high'
+    },
+    onStatus: (status) => {
+      if (via === 'onStatus' && status === 'working') move()
+    },
+  })
+  await ready(run)
+  armed = true
+  run.driver.send('/deploy')
+  await until(() => completed(run) === 1 && run.driver.getCommandState().status === 'ready')
+  const start = received(run, 'turn/start')[0]!.params
+  expect({ armed, input: start.input, effort: start.effort, last: lists(run).at(-1) }).toEqual({
+    armed: false, input: [text('/deploy'), skill(OLD)], effort: 'high', last: { cwds: [run.changed], forceReload: true },
   })
 }
+
+test("C2: a project move from the send's own getEffort callback leaves that send's skill and effort and moves the live catalog", () => callbackMove('getEffort'))
+
+test("C2: a project move from the send's own onStatus callback leaves that send's skill and effort and moves the live catalog", () => callbackMove('onStatus'))
 
 test("C2: a send from a send's own getEffort callback steers after it, and both steers carry text only", async () => {
   let nested = false
