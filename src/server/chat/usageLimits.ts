@@ -5,24 +5,9 @@
 // rate_limit_event, /usage report and usage pull are parsed by
 // @motuslabs/agent-runtime's public usage entry and reach the store through
 // runtimeEvents.ts chatUsageReport; provider quota replies parse in
-// zaiQuotaLimit.ts and openRouterUsage.ts.
+// zaiQuotaLimit.ts and openRouterUsage.ts, which read percentages and reset
+// times with the package's percentValue and toIsoResetsAt.
 import type { ChatUsageReport } from '../../shared/chat'
-
-export { percentValue } from '@motuslabs/agent-runtime/usage'
-
-/**
- * ISO reset time from an epoch-seconds number (rate_limit_event, e.g.
- * 1791723600) or ISO string; null when unusable.
- */
-export function toIsoResetsAt(value: unknown): string | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return new Date(value * 1000).toISOString()
-  }
-  if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Date.parse(value))) {
-    return value
-  }
-  return null
-}
 
 // ----------------------------------------------------------------- per-provider store
 

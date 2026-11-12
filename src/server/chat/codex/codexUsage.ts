@@ -10,7 +10,7 @@
 // dropped while the others still render. Pure and SDK-free, so tests pin
 // the recorded wire shapes.
 import type { ChatUsageReport, ChatUsageSource, ChatUsageWindow } from '../../../shared/chat'
-import { percentValue, toIsoResetsAt } from '../usageLimits'
+import { percentValue, toIsoResetsAt } from '@motuslabs/agent-runtime/usage'
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot'
 
 /** Display label for one window's length; null or unusable falls back to a plain window. */

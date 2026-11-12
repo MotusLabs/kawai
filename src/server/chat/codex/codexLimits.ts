@@ -13,7 +13,7 @@
 // (openrouter-provider 3.1) — and any Codex failure outside the table
 // records nothing at all.
 import type { ChatLimitSignal } from '../limitSignals'
-import { toIsoResetsAt } from '../usageLimits'
+import { toIsoResetsAt } from '@motuslabs/agent-runtime/usage'
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo'
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot'
 
