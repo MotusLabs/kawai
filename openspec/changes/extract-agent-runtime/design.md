@@ -128,6 +128,8 @@ Eighth post-freeze exception (owner approval 13229af9 of proposal f6919297, task
 
 The same task also restores two behaviors with no API change. A Claude generation counts `interrupt_cancel_queued_v1` as supported until an init reports a capabilities array, and each such array replaces the answer. When unsupported, a cooperative interrupt is plain and logs `interrupt-cancel-queued-unsupported`; stop never interrupts. Kawai's adapter re-anchors the last context reading to a respawned process's profile window before its first frame (§6).
 
+The parent migration's first formal review (task-602c71e9 R6, findings-74686a77) restores one more behavior with no API change. The retired driver re-read the context threshold when it interrupted an active turn, at the local turn boundary and before any CLI result. A Claude cooperative interrupt that settles an active turn on a live generation therefore runs the existing context probe for that generation at once, the same owned control that already runs after initialize and after each result. It does not wait for the interrupt's acknowledgement or a result, which may never arrive. Its stop, stale-generation and raw-failure handling are unchanged. An interrupt with no active turn, an interrupt refused inside a decided frame, and kill or shutdown (which never interrupt) ask nothing.
+
 ### 3. Process ownership, stop and error semantics
 
 The default local process owner uses the existing Node child-process substrate on Bun and owns each spawned generation from before listener installation through terminal join. Claude always supplies SDK spawnClaudeCodeProcess; optional wire capture decorates this spawner. Codex carries AppServerClient's actual exit promise through its driver.

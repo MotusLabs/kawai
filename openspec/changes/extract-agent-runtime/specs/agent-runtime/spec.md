@@ -35,6 +35,10 @@ A cooperative interrupt SHALL cancel pending requests, settle the active turn an
 - **WHEN** a submission waits for a checkpoint to persist, the turn before it has ended, and the caller interrupts
 - **THEN** the submission is refused as interrupted at once, before the persistence settles, it never runs later, and the receipt reports that work was cancelled
 
+#### Scenario: Claude interrupt re-reads the context report
+- **WHEN** a Claude caller cooperatively interrupts an active turn on a live generation
+- **THEN** the driver asks that generation for its context report at once, without waiting for the CLI's result, while an interrupt with no active turn, a refused interrupt and a forced stop ask nothing
+
 ### Requirement: Forced stop has an actual exit boundary
 Forced stop SHALL prevent further submissions, request termination of every process generation still owned by the driver, and await actual process exits and owned asynchronous work. Success SHALL include an explicit exit receipt. A signal acknowledgement, closed iterator or elapsed drain bound SHALL NOT substitute for exit. Unsupported or failed stop evidence SHALL fail explicitly.
 

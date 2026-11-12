@@ -565,6 +565,12 @@ Both drivers emit the same `AgentEvent` stream and settle the same
     `hostQuotaReport(...)` (`host-supplied`). The runtime never fills them in.
   - Without a source, no report arrives. A missing report means unknown,
     not "no limit".
+- **Context reports.** Claude asks the CLI for its context report
+  (`getContextUsage`) after initialize, after each result, and when
+  `interrupt()` settles an active turn. The interrupt asks at once, without
+  waiting for the CLI's result. An interrupt with no active turn, `kill()`
+  and `shutdown()` ask nothing. A report for a replaced generation is
+  dropped. A rejecting request is reported by the stop.
 - **Observers** (`onLimitEvent`, `onQuotaReport`, `onContextUsage`,
   `onCompaction`, `onModel`, `onEvent`, `onTurnResult`) are optional, and
   they only observe.
