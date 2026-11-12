@@ -196,6 +196,45 @@ or property that would have caught it, and the source finding.
 - **Source finding.** findings-6b5befb7 F2 (task-98101592), fixed in
   c5c67808.
 
+### A migrated oracle given a new stimulus to pass (task-602c71e9 parent F1)
+
+- **Hazard.** While moving a suite onto a new implementation, a case that
+  now fails keeps its title and final assertion, but the migration feeds it
+  an extra input the original never sent (here, a CLI result after an
+  interrupt) until the old value comes out. The title-for-title inventory
+  stays complete and the suite is green, yet the behavior the case named
+  (re-reading the context threshold at the interrupt itself) is gone. In
+  production the extra input may never arrive.
+- **Oracle that catches it.** Diff each migrated case's stimuli, not only its
+  titles and expectations, against the original, and treat any added input
+  as a contract change. Keep the original stimulus and counts
+  (`src/server/__tests__/chatSessionDriver.test.ts` › "interrupting a turn
+  re-resolves the threshold"; `src/server/__tests__/claudeInterruptContext.test.ts`
+  › "the original interrupt boundary re-resolves context without a new CLI
+  result stimulus"). The control removes the interrupt's context probe, and
+  both fail on the call count.
+- **Source finding.** findings-74686a77 F1 (task-602c71e9 R5 review), fixed
+  in R6.
+
+### A suite-level join that clears its set before joining (task-602c71e9 parent F2)
+
+- **Hazard.** A harness's per-instance cleanup is reserved and shared, but
+  the suite-level helper that joins every instance snapshots its live set,
+  clears it, then awaits. A second, overlapping call finds the set empty and
+  resolves at once, while the first still owns a held callback, so a caller
+  that trusts the second call removes resources under live work. An empty
+  set does not mean the join settled.
+- **Oracle that catches it.** Reserve one in-flight join before any effect
+  or removal and hand it to every overlapping caller. Remove an entry only
+  after its cleanup settled, and loop until the set stays empty. Hold an
+  actual callback the cleanup must join and assert the second call is still
+  pending (`src/server/__tests__/claudeRuntimeHarnessJoin.test.ts` ›
+  "overlapping suite cleanup joins a harness whose stop still owns a held
+  callback", "a harness created while the join is held is joined by it
+  before it settles"). The control restores the unshared snapshot-and-clear.
+- **Source finding.** findings-74686a77 F2 (task-602c71e9 R5 review), fixed
+  in R6.
+
 ## Cache keys
 
 ### A key input no fixture varies (findings-f4b1ebad B4)
