@@ -1,8 +1,9 @@
-// Property P2 of catalog-resolution-cache: the memoized `isResetTimeZone`
-// equals the unmemoized check for every supported IANA zone plus seeded
-// malformed strings, on the first and on repeated calls (design D3).
+// Property P2 of catalog-resolution-cache: Kawai's memoized `isResetTimeZone`
+// equals the package's uncached public check for every supported IANA zone
+// plus seeded malformed strings, on the first and on repeated calls (design D3).
 import { expect, test } from 'bun:test'
-import { checkResetTimeZone, isResetTimeZone } from '../chat/limitSignals'
+import { isResetTimeZone as checkResetTimeZone } from '@motuslabs/agent-runtime/usage'
+import { isResetTimeZone } from '../chat/limitSignals'
 
 const SEED = 0x7e2a
 const MALFORMED = 50
