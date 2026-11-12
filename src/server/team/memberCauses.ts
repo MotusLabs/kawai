@@ -18,7 +18,18 @@ export { outsideRoleExclusion }
  * them get no entry here; the router names the message filter that dropped
  * them from the one eligibility check.
  */
-export function messageExclusions(input: {
+export function messageExclusions(input: MessageCausesInput): MemberExclusion[] {
+  return [...messageMemberCauses(input).values()].map(causes => {
+    // Cooling is never a breakdown cause (it is the separate all-profiles-
+    // cooling constraint); every other cause — excluded profile included —
+    // names this member's reason for not taking the message. A start
+    // failure carries its error text for the standalone constraint.
+    const cause = causes.find(entry => entry.kind !== 'profile-cooling') ?? causes[0]!
+    return cause.kind === 'startup-failed' && input.startFailure?.sessionId === cause.sessionId ? { ...cause, detail: input.startFailure.error } : cause
+  })
+}
+
+export interface MessageCausesInput {
   message: TeamMessage
   recipients: MailRecipient[]
   eligibleIds: ReadonlySet<string>
@@ -26,9 +37,17 @@ export function messageExclusions(input: {
   startFailure: { sessionId: string; error: string } | null
   now: number
   startupFailed: (sessionId: string) => boolean
-}): MemberExclusion[] {
+}
+
+/**
+ * Every cause of each group member the member-state predicates reject, in
+ * recipient order: the whole state the owner hold judges
+ * (group-mail-task-affinity D3), cooling included. A member that missed
+ * this pass's idle order reads busy.
+ */
+export function messageMemberCauses(input: MessageCausesInput): Map<string, MemberExclusion[]> {
   const { message } = input
-  const out: MemberExclusion[] = []
+  const out = new Map<string, MemberExclusion[]>()
   for (const row of input.recipients) {
     if (row.teamId !== message.teamId || row.groupId !== message.toId) continue
     // An eligible member's filters (excluded profile or provider, the plan
@@ -36,13 +55,7 @@ export function messageExclusions(input: {
     // router adds those entries from `evaluateEligibility` (D10).
     if (input.eligibleIds.has(row.sessionId)) continue
     const causes = memberExclusions(row, message, { targetWorktree: input.targetWorktree, now: input.now, startupFailed: input.startupFailed(row.sessionId) })
-    // Cooling is never a breakdown cause (it is the separate all-profiles-
-    // cooling constraint); every other cause — excluded profile included —
-    // names this member's reason for not taking the message. A start
-    // failure carries its error text for the standalone constraint.
-    const cause = causes.find(entry => entry.kind !== 'profile-cooling')
-      ?? causes[0] ?? { sessionId: row.sessionId, kind: 'busy' as const, detail: 'became idle after this pass began' }
-    out.push(cause.kind === 'startup-failed' && input.startFailure?.sessionId === cause.sessionId ? { ...cause, detail: input.startFailure.error } : cause)
+    out.set(row.sessionId, causes.length > 0 ? causes : [{ sessionId: row.sessionId, kind: 'busy', detail: 'became idle after this pass began' }])
   }
   return out
 }

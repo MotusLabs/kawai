@@ -177,7 +177,9 @@ export default rule`)
     expect(await host.onLimit({ ...event, message: CTX.message })).toEqual({ type: 'park' })
     const published = fs.readFileSync(path.join(home, '.kawai', 'routing', 'kawai-routing.d.ts'), 'utf8')
     expect(published).toBe(fs.readFileSync(path.resolve(import.meta.dir, '../../shared/routing.ts'), 'utf8'))
-    expect(published).toMatch(/interface RouteMessage \{[^}]*\n {2}worker\?: string\n\}/)
+    expect(published).toMatch(/interface RouteMessage \{[^}]*\n {2}worker\?: string\n/)
+    // group-mail-task-affinity D3: the resolved task owner is published beside it.
+    expect(published).toMatch(/interface RouteMessage \{[^}]*\n {2}taskOwner\?: string\n\}/)
   })
 
   test('onLimit is called and validated', async () => {

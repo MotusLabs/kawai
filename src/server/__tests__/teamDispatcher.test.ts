@@ -41,7 +41,7 @@ test('busy member keeps mail queued; idle notification delivers it', async () =>
   expect(delivered).toEqual([{ recipient: 'dev', id: mail.id }])
   expect(store.get(mail.id)).toMatchObject({ state: 'claimed', claimedBy: 'dev', deliveredAt: null })
 })
-test('urgent group precedes normal direct; direct precedes older group at equal priority', async () => {
+test('urgent group precedes normal direct; direct precedes fresh group mail at equal priority', async () => {
   for (const urgent of [true, false]) {
     const group = send({ priority: urgent ? 'urgent' : 'normal' })
     const direct = send({ toKind: 'session', toId: 'dev' })

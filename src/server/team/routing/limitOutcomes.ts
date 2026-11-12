@@ -474,6 +474,8 @@ export class LimitOutcomes {
       // The sender's worker choice is dropped (dispatch-worker-choice D4): a
       // choice pinned to the limited provider would wait out its reset.
       workerChoice: null,
+      // The same message about the same task (group-mail-task-affinity D1).
+      affinityTask: message.affinityTask ?? null,
     })
     store.replaceResume(message.id)
     store.markForwarded(message.id, `forwarded: ${forwarded.id}`)

@@ -52,6 +52,8 @@ export function mapRow(row: Record<string, unknown>): TeamMessage {
     allowedProfiles,
     // Absent, not null, on a row without a choice: it reads as before (D1).
     ...(typeof row.worker_choice === 'string' && row.worker_choice !== '' ? { workerChoice: row.worker_choice } : {}),
+    // Absent on a row without one (group-mail-task-affinity D1).
+    ...(typeof row.affinity_task === 'string' && row.affinity_task !== '' ? { affinityTask: row.affinity_task } : {}),
   }
 }
 

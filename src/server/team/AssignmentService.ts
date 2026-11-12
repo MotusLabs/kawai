@@ -43,6 +43,7 @@ import type { WorktreeStaffing } from './staffing'
 import type { MailRecipient } from './dispatcher'
 import { ambientProviderOf } from './cooldowns'
 import { previewGroupDispatch } from './groupDispatchPreview'
+import { resolveTaskOwner } from './taskOwnerResolver'
 import { liveGroupMembers } from './routing/router'
 import { worktreeRootOf, type TeamWorktrees } from './worktreeRoots'
 import type { PlanStore } from '../plans/planStore'
@@ -291,16 +292,21 @@ export class AssignmentService {
     const workerChoice = this.workerChoice(caller, team, input.target, input.worker)
     if (input.target.kind === 'group') {
       const group = this.groupOf(team, input.target.id)
-      return await this.previewGroup(team, taskWorktree, input.target, group, workerChoice)
+      const taskOwner = input.taskId
+        ? resolveTaskOwner({ tasks: this.tasks, getRecord: this.options.getSession, teamOf: id => this.options.teamOf(id)?.teamId }, { taskId: input.taskId, teamId: team.teamId, groupId: input.target.id })
+        : null
+      return await this.previewGroup(team, taskWorktree, input.target, group, workerChoice, taskOwner)
     }
     const recipient = await this.sessionTarget(team, input.target)
     if (!recipient) throw new Error(`Unknown session: ${input.target.id}`)
     return this.previewSession(taskWorktree, input.target, recipient)
   }
 
-  private async previewGroup(team: TeamIdentity, worktree: string | null, target: AssignmentTarget, group: GroupDefinition, workerChoice: string | null): Promise<TaskDispatchPreview> {
+  private async previewGroup(
+    team: TeamIdentity, worktree: string | null, target: AssignmentTarget, group: GroupDefinition, workerChoice: string | null, taskOwner: string | null,
+  ): Promise<TaskDispatchPreview> {
     return previewGroupDispatch({
-      worktree, target, group, workerChoice,
+      worktree, target, group, workerChoice, taskOwner,
       members: liveGroupMembers(this.options.records(), id => this.options.teamOf(id)?.teamId, team.teamId, target.id),
       recipient: id => this.options.recipient?.(id),
       facts: this.options.staffing.preview(team.teamId, target.id, worktree),

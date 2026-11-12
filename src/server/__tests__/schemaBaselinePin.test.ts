@@ -34,7 +34,9 @@
 // tables; migration 18 (`worker-choice`) the nullable `worker_choice` on
 // `team_messages` and `team_task_assignments`; migration 19
 // (`plan-workspace`) the bindings, document references, turn-context
-// snapshots, and command-ledger tables.
+// snapshots, and command-ledger tables; migration 27 (`task-affinity`) the
+// nullable `affinity_task` on `team_messages` and `owner_session` on
+// `team_tasks`.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -581,8 +583,12 @@ test('a fresh database opened by this build has the same shape plus each migrati
   const results = expected.tables.team_task_results!
   const withCoverage = { ...results, columns: [...results.columns, optional('coverage')] }
   const messages = expected.tables.team_messages!
-  // Migration 18's: the sender's worker choice (dispatch-worker-choice D1).
-  const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles'), optional('worker_choice')] }
+  // Migration 18's: the sender's worker choice (dispatch-worker-choice D1);
+  // migration 27's: the affinity task (group-mail-task-affinity D1).
+  const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles'), optional('worker_choice'), optional('affinity_task')] }
+  // Migration 27's: the task owner (group-mail-task-affinity D7), after the plan link.
+  const tasks = expected.tables.team_tasks!
+  const withOwner = { ...tasks, columns: [...tasks.columns, optional('owner_session')] }
   const assignments = expected.tables.team_task_assignments!
   const withChoice = { ...assignments, columns: [...assignments.columns, optional('worker_choice')] }
   // Migration 23's: a revision's contract and hash, and a draft's raw
@@ -630,7 +636,7 @@ test('a fresh database opened by this build has the same shape plus each migrati
     plan_decision_cards: appended(migration16.plan_decision_cards!, { name: 'kind', type: 'TEXT', notnull: 1, dflt_value: "'question'", pk: 0 }),
   }
   expect(schemaShape(session.db)).toEqual({
-    tables: { ...expected.tables, ...added, ...convergence, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage, team_task_revisions: withContract, team_task_drafts: withContractText, team_task_findings: withLedger, plan_execution_rounds: withRegate },
+    tables: { ...expected.tables, ...added, ...convergence, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage, team_task_revisions: withContract, team_task_drafts: withContractText, team_task_findings: withLedger, plan_execution_rounds: withRegate, team_tasks: withOwner },
   })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })

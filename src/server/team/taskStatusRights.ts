@@ -1,13 +1,31 @@
 // Task status rights (team-tasks D2; plan-execution D2): who may set which
 // status. The one rule every closing path — status changes and result
-// acceptance — checks first.
+// acceptance — checks first. An agent's rights follow the task's owner
+// (group-mail-task-affinity D7), which starts as the creating agent and moves
+// only by `task_transfer_owner`; `taskOwner` is the one reading of it.
 import type { ActingParty } from '../../shared/team'
 import type { TaskStatus, TeamTask } from '../../shared/teamTasks'
 import { originLabel, type SystemOrigin } from './systemCaller'
 
 /**
+ * The agent session holding a task's agent rights (D7): its recorded owner;
+ * a record read without the field (a fixture, or a row from before the
+ * owner existed) falls back to the creating agent.
+ */
+export function taskOwner(task: TeamTask): string | null {
+  if (task.ownerSession !== undefined) return task.ownerSession
+  return task.creator.kind === 'agent' ? task.creator.sessionId : null
+}
+
+/** How a refusal names whom to report to instead: the owner session, else the human. */
+export function ownerLabel(task: TeamTask): string {
+  const owner = taskOwner(task)
+  return owner ? `the owner (${owner})` : 'the human'
+}
+
+/**
  * The status rights (team-tasks D2): an agent sets `done`/`cancelled` only on
- * a task it created and never reopens; the human sets anything. The one rule
+ * a task it owns and never reopens; the human sets anything. The one rule
  * every closing path — status changes and result acceptance — checks first.
  */
 export function statusRefusal(actor: ActingParty, task: TeamTask, status: TaskStatus): string | null {
@@ -21,8 +39,8 @@ export function statusRefusal(actor: ActingParty, task: TeamTask, status: TaskSt
       return closing && task.creator.kind !== 'system' ? `Kawai sets ${status} only on the tasks it created.` : null
     case 'agent':
       if (status === 'open') return 'Only the human can reopen a task'
-      if (closing && task.creator.sessionId !== actor.sessionId) {
-        return `Only the task's creator can set it to ${status}. Report your result in a journal note or a message to the creator instead.`
+      if (closing && taskOwner(task) !== actor.sessionId) {
+        return `Only the task's owner can set it to ${status}. Report your result in a journal note or a message to ${ownerLabel(task)} instead.`
       }
       return null
     default: {

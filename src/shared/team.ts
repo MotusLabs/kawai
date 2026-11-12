@@ -111,6 +111,12 @@ export interface TeamMessage {
    * time; absent when the message has none.
    */
   workerChoice?: string | null
+  /**
+   * The task this group mail is about (group-mail-task-affinity D1), recorded
+   * at send for a group with `affinity: task-owner`; routing reads the task's
+   * current owner from it. Absent when the message has none.
+   */
+  affinityTask?: string | null
   /** A revision notice (task-revision-publication D3): the revision it announces; absent = not a notice. */
   revisionNotice?: RevisionNotice | null
 }
@@ -267,6 +273,8 @@ export type WaitingConstraintKind =
   | 'worktree-occupied'
   | 'spawn-backoff'
   | 'routing-hold'
+  /** Group mail held for its busy task owner (group-mail-task-affinity D5): `sessionIds` is the owner, `retryAt` the wait's end. */
+  | 'owner-busy'
   | 'all-profiles-cooling'
   | 'group-missing'
   | 'starting-agent'
@@ -293,7 +301,8 @@ export interface WaitingConstraint {
 
 /**
  * Why a message waits (D1): the immediate blocker plus every other constraint
- * that also applies, ordered deterministically — a missing group definition,
+ * that also applies, ordered deterministically — an owner hold
+ * (group-mail-task-affinity D5), a missing group definition,
  * then capacity (group, per-profile, team spawn, worktree occupancy), then
  * member facts, then spawn and routing specifics. A `spawning` row always
  * carries `starting-agent` as its blocker, its own reservation's capacity

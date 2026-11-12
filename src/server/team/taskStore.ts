@@ -222,6 +222,12 @@ export class TaskStore {
         input.parentId ?? null, input.worktree ?? null, input.openspecChange ?? null,
         input.planId ?? null, input.planChange ?? null, input.requestKey ?? null, now, now,
       )
+      // An agent's task starts owned by its creator (group-mail-task-affinity
+      // D7), written apart from the insert so a store on a database before
+      // migration 27 still creates human and Kawai tasks.
+      if (input.creator.kind === 'agent') {
+        this.db.prepare('UPDATE team_tasks SET owner_session = ? WHERE id = ?').run(input.creator.sessionId, id)
+      }
       this.insertRevision(id, 1, input.direction, input.acceptance ?? null, input.contract ?? null, input.creator, now)
       within?.(this.get(id)!)
     })()
@@ -397,6 +403,18 @@ export class TaskStore {
     return this.db.transaction(write)()
   }
 
+  /** Move ownership only while `from` still owns it (group-mail-task-affinity D7); false when it moved meanwhile. */
+  setOwner(id: string, from: string, to: string): boolean {
+    return this.db.prepare('UPDATE team_tasks SET owner_session = ? WHERE id = ? AND owner_session = ?').run(to, id, from).changes === 1
+  }
+
+  /** A session's open, active, and blocked tasks in its team, oldest first (D7's `from_session`). */
+  openTasksOwnedBy(teamId: string, owner: string): TeamTask[] {
+    const rows = this.db.prepare(`SELECT id FROM team_tasks WHERE team_id = ? AND owner_session = ?
+      AND status IN ('open', 'active', 'blocked') ORDER BY created_at, rowid`).all(teamId, owner) as Array<{ id: string }>
+    return rows.map(row => this.get(row.id)!)
+  }
+
   appendJournal(id: string, author: JournalAuthor, entry: string, now = nowIso()): TaskJournalEntry | null {
     if (!this.get(id)) return null
     const journalId = `note-${crypto.randomUUID()}`
@@ -466,6 +484,7 @@ export class TaskStore {
   summary(task: TeamTask): TeamTaskSummary {
     const ids = new Set<string>()
     if (task.creator.sessionId) ids.add(task.creator.sessionId)
+    if (task.ownerSession) ids.add(task.ownerSession)
     const rows = this.db.prepare(`
       SELECT session_id AS id FROM chat_sessions WHERE task_id = $id
       UNION SELECT from_session FROM team_messages WHERE task_id = $id AND from_session IS NOT NULL
@@ -523,6 +542,7 @@ function mapTask(row: Record<string, unknown>): TeamTask {
     title: String(row.title),
     status: TASK_STATUSES.includes(status) ? status : 'open',
     creator: partyFromRow(row.creator_kind, row.creator_session),
+    ownerSession: text(row.owner_session),
     parentId: text(row.parent_id),
     worktree: text(row.worktree),
     openspecChange: text(row.openspec_change),
