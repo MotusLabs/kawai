@@ -114,4 +114,39 @@ describe('package compatibility cleanup owner', () => {
     expect(inner.every((p) => p === outer)).toBe(true)
     expect([outcome, cleanup.kills(f), f.d.state]).toEqual([{ resolved: true }, 1, 'stopped'])
   })
+
+  // Delegation witness (task-666e5edd): the after-hook is the shared helper's
+  // join over real drivers. A second finishAll() while the first is pending
+  // gets the same promise, and a driver first tracked from a stopping callback
+  // the pending join owns is stopped and joined before it settles.
+  test('an overlapping after-hook shares the pending join, which stops a driver tracked while it runs', async () => {
+    const cleanup = owner()
+    const late = driver()
+    const lateStart = late.d.start()
+    while (late.queries.length === 0) await tick()
+    late.q().ready()
+    await lateStart
+    let trackedLate = false
+    await idle(cleanup, {
+      onState: (state) => {
+        if (state === 'stopping' && !trackedLate) {
+          trackedLate = true
+          cleanup.track(late)
+        }
+      },
+    })
+    let first: Promise<void> | undefined
+    try {
+      first = cleanup.finishAll()
+      expect(cleanup.finishAll()).toBe(first)
+      await first
+      expect([trackedLate, cleanup.kills(late), late.d.state]).toEqual([true, 1, 'stopped'])
+      // The join settled with its slot released: the next call starts a new, empty one.
+      const next = cleanup.finishAll()
+      expect(next).not.toBe(first)
+      await next
+    } finally {
+      await Promise.allSettled([first, late.d.kill()])
+    }
+  })
 })

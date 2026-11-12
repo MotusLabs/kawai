@@ -8,9 +8,16 @@
 // failure no test asserted as the original object (an AggregateError of the
 // originals when there are several). failed() suppresses a failure only after
 // its raw causes matched exactly by identity, order and count.
+//
+// The reservation and the join are the shared test helper ownedCleanup.ts
+// (task-666e5edd), which Kawai's Claude runtime harness uses too: an
+// overlapping finishAll() gets the pending join, and a driver tracked while
+// it is pending is stopped and joined by it. The stop body, the outcome shape
+// and the assertion rule stay here.
 import { expect } from 'bun:test'
 import { AgentRuntimeError } from '../../src/errors.js'
 import type { Driver } from './claudeDriverHarness.js'
+import { ownedAggregate, ownedOnce, type OwnedOnce } from './ownedCleanup.js'
 
 /** A stop's outcome: resolved, or rejected with the original error. */
 export interface StopOutcome {
@@ -19,7 +26,7 @@ export interface StopOutcome {
 }
 
 interface Entry {
-  stopping: Promise<StopOutcome> | null
+  stop: OwnedOnce<StopOutcome>
   asserted: boolean
 }
 
@@ -34,33 +41,39 @@ export class CompatibilityCleanup {
   private readonly entries = new Map<Driver, Entry>()
   /** Kill bodies run per driver; kept after finishAll() so a test can count them. */
   private readonly killed = new WeakMap<Driver, number>()
+  private readonly owned = ownedAggregate<Driver, StopOutcome>({
+    join: (f) => this.stop(f),
+    failures: (f, outcome) => {
+      // Read before the entry leaves: only an asserted stop failure is suppressed.
+      const asserted = this.entries.get(f)?.asserted === true
+      this.entries.delete(f)
+      if (outcome.status === 'rejected') return [outcome.reason]
+      return !outcome.value.resolved && !asserted ? [outcome.value.error] : []
+    },
+    message: 'unasserted compatibility-fixture stop failures',
+  })
 
   /** Track a driver; its stop is owned here from now on. */
   track(f: Driver): Driver {
-    if (!this.entries.has(f)) this.entries.set(f, { stopping: null, asserted: false })
+    if (!this.entries.has(f)) {
+      this.entries.set(f, { stop: ownedOnce<StopOutcome>(), asserted: false })
+      this.owned.add(f)
+    }
     return f
   }
 
   /** The driver's one stop: reserved before the kill runs, joined by every later call. */
   stop(f: Driver): Promise<StopOutcome> {
-    const entry = this.entry(f)
-    if (entry.stopping === null) {
-      let begin!: (outcome: Promise<StopOutcome>) => void
-      entry.stopping = new Promise<StopOutcome>((resolve) => (begin = resolve))
-      // Reserved above; the body starts now, so a reentrant stop() inside kill() sees the stored promise.
-      begin(
-        (async () => {
-          this.killed.set(f, (this.killed.get(f) ?? 0) + 1)
-          try {
-            await f.d.kill()
-            return { resolved: true }
-          } catch (error) {
-            return { resolved: false, error }
-          }
-        })(),
-      )
-    }
-    return entry.stopping
+    // Reserved first; the body starts now, so a reentrant stop() inside kill() sees the stored promise.
+    return this.entry(f).stop.run(async () => {
+      this.killed.set(f, (this.killed.get(f) ?? 0) + 1)
+      try {
+        await f.d.kill()
+        return { resolved: true }
+      } catch (error) {
+        return { resolved: false, error }
+      }
+    })
   }
 
   /** How many kill bodies ran for this driver (one, once stopped). */
@@ -79,17 +92,8 @@ export class CompatibilityCleanup {
   }
 
   /** The after-hook: stop and join every tracked driver, then rethrow each unasserted failure. */
-  async finishAll(): Promise<void> {
-    const tracked = [...this.entries]
-    const outcomes = await Promise.allSettled(tracked.map(([f]) => this.stop(f)))
-    for (const [f] of tracked) this.entries.delete(f)
-    const unasserted: unknown[] = []
-    outcomes.forEach((result, index) => {
-      if (result.status === 'rejected') unasserted.push(result.reason)
-      else if (!result.value.resolved && !tracked[index]![1].asserted) unasserted.push(result.value.error)
-    })
-    if (unasserted.length === 1) throw unasserted[0]
-    if (unasserted.length > 1) throw new AggregateError(unasserted, 'unasserted compatibility-fixture stop failures')
+  finishAll(): Promise<void> {
+    return this.owned.join()
   }
 
   private entry(f: Driver): Entry {
