@@ -2511,12 +2511,6 @@ describe('ChatSessionDriver context usage', () => {
     expect(fake.contextCalls).toHaveLength(1) // attach only, mid-turn
     harness.driver.interrupt()
     await flush()
-    // The package settles the interrupt locally and probes only after a CLI
-    // result (session.ts 'result'): the re-resolve waits for the result the
-    // CLI owes the interrupted turn, not the local interrupt itself.
-    expect(fake.contextCalls).toHaveLength(1)
-    fake.push(result('error_during_execution', { is_error: true }))
-    await flush()
     expect(fake.contextCalls).toHaveLength(2) // the interrupted boundary
   })
 

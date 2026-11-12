@@ -2,8 +2,10 @@
 // an owned job that stop joins. A rejection is kept, unless it is exactly the
 // stop's own cancellation of that generation's query, so stop reports it.
 // None starts once stop has begun.
-// - The context probe (`getContextUsage`) runs after each initialize and each
-//   result. Its report is applied only while its generation is current.
+// - The context probe (`getContextUsage`) runs after each initialize, each
+//   result, and an interrupt that settles an active turn (at once, not after
+//   the result it owes; task-602c71e9 R6). Its report is applied only while
+//   its generation is current.
 // - The host-login quota pull (`usage_EXPERIMENTAL...`) runs once per driver
 //   and only when the caller chose quotaSource `host-login`. It reads the
 //   supplied home's login, which can be another account than a proxy
@@ -93,7 +95,7 @@ export class UsageControls {
     return generation === this.host.current() && !generation.retired && state !== 'stopping' && state !== 'stopped'
   }
 
-  /** Ask the CLI for its context report (after initialize and after each result). */
+  /** Ask the CLI for its context report (after initialize, after each result, and at an active turn's interrupt). */
   probe(generation: Generation): void {
     const query = generation.query as ControlQuery
     const probe = query.getContextUsage

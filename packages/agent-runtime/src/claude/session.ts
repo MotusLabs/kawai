@@ -507,6 +507,9 @@ export class ClaudeSession {
     if (generation && active) {
       // Stop and urgent mail reach here; kill and shutdown never interrupt.
       if (!generation.cancelQueued) this.violation('interrupt-cancel-queued-unsupported')
+      // The interrupted turn's boundary re-reads the context report at once, as the retired driver did:
+      // the result the CLI owes may never arrive (task-602c71e9 R6, design §2).
+      this.controls.probe(generation)
       void this.lifecycle.jobs.run(
         `interrupt:${generation.number}`,
         async () => {
