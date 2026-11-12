@@ -64,3 +64,12 @@ test('a raw host failure rejects cleanup once as the original object, after the 
   // The same join answers a later call the same way; nothing is reported twice.
   expect(await harness.cleanup().then(() => null, (caught: unknown) => caught)).toBe(error)
 })
+
+test('the legacy driver knobs the adapter never reads are refused, never dropped', () => {
+  // createTurnId and createClient configured the deleted in-tree class only;
+  // a test that still passes one gets a named refusal before anything starts.
+  for (const knob of ['createTurnId', 'createClient'] as const) {
+    expect(() => startHarness(new Script().boot(), { [knob]: () => ({}) } as never))
+      .toThrow(`startHarness: ${knob} is a legacy-driver knob the production adapter never reads`)
+  }
+})

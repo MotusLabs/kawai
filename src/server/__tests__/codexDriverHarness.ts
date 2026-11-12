@@ -74,10 +74,12 @@ export function tempDirs(): { dir: string; project: string; home: string } {
  * instead of createChatDriver's public one — the private-seam cases only
  * (createCodexDriverWith's per-method deadlines, task-5906f19c A7).
  */
-export function startHarness(script: Script, overrides: HarnessOverrides = {}, dirs = tempDirs(), create?: CreateCodexRuntime): Harness {
+export function startHarness(script: Script, overrides: HarnessOverrides = {}, given?: ReturnType<typeof tempDirs>, create?: CreateCodexRuntime): Harness {
   for (const knob of ['createTurnId', 'createClient']) {
     if (knob in overrides) throw new Error(`startHarness: ${knob} is a legacy-driver knob the production adapter never reads`)
   }
+  // Created only once the options are accepted, so a refusal leaves no root.
+  const dirs = given ?? tempDirs()
   const transcript = script.write(dirs.dir)
   const events: ChatEvent[] = []
   const statuses: SessionStatus[] = []
