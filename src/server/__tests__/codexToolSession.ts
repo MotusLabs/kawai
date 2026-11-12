@@ -8,12 +8,18 @@
 // test may name another thread or namespace. One driver per session id, built
 // with that session's team table at its first call (production registers the
 // table at thread start), so a test file closes them after each test.
+// closeAll() joins through the package's shared test-cleanup owner
+// (helpers/ownedCleanup.ts, imported by path; mechanics in its header): one
+// reserved join shared by overlapping callers, every session joined whatever
+// rejects (sessions opened during the join included), each session's close
+// run once, and its failure reported as the original value.
 import fs from 'node:fs'
 import type { ChatEvent } from '../../shared/chat'
 import { createChatDriver } from '../chat/provider/createChatDriver'
 import type { RuntimeDriver } from './codexDriverHarness'
 import type { TeamToolSpec } from '../team/mailboxTools'
 import { codexRoot, type CodexRoot } from '../../../packages/agent-runtime/__tests__/helpers/codexDriverHarness'
+import { ownedAggregate, ownedOnce, type OwnedOnce } from '../../../packages/agent-runtime/__tests__/helpers/ownedCleanup'
 
 /** One `item/tool/call` reply as the driver wrote it. */
 export interface CodexToolAnswer {
@@ -28,13 +34,30 @@ interface Session {
   waiting: Array<{ target: number; resolve: () => void }>
   answered: number
   queue: Promise<unknown>
+  closed: OwnedOnce<void>
 }
 
 const isReply = (message: Record<string, unknown>) =>
   typeof message.id === 'number' && message.id >= 1000 && message.method === undefined
 
+/** Kill the driver, join its owned work, then remove its root; once per session. */
+const close = (session: Session): Promise<void> =>
+  session.closed.run(async () => {
+    session.driver.kill()
+    try {
+      await session.driver.settled()
+    } finally {
+      fs.rmSync(session.root.root, { recursive: true, force: true })
+    }
+  })
+
 export class CodexToolSessions {
   private readonly live = new Map<string, Session>()
+  private readonly owned = ownedAggregate<Session, void>({
+    join: close,
+    failures: (_session, outcome) => (outcome.status === 'rejected' ? [outcome.reason] : []),
+    message: 'Codex tool session cleanups failed',
+  })
 
   /** `tableFor` builds a session's team table when its driver starts. */
   constructor(private readonly tableFor: (sessionId: string) => readonly TeamToolSpec[]) {}
@@ -61,24 +84,16 @@ export class CodexToolSessions {
   }
 
   /** Kill every driver, join its owned work, and remove its root. */
-  async closeAll(): Promise<void> {
-    const sessions = [...this.live.values()]
+  closeAll(): Promise<void> {
     this.live.clear()
-    await Promise.all(sessions.map(async ({ driver, root }) => {
-      driver.kill()
-      try {
-        await driver.settled()
-      } finally {
-        fs.rmSync(root.root, { recursive: true, force: true })
-      }
-    }))
+    return this.owned.join()
   }
 
   private session(sessionId: string): Session {
     const existing = this.live.get(sessionId)
     if (existing) return existing
     const root = codexRoot()
-    const session: Session = { root, driver: null as unknown as RuntimeDriver, completed: 0, waiting: [], answered: 0, queue: Promise.resolve() }
+    const session: Session = { root, driver: null as unknown as RuntimeDriver, completed: 0, waiting: [], answered: 0, queue: Promise.resolve(), closed: ownedOnce<void>() }
     const onEvent = (event: ChatEvent) => {
       if (event.type !== 'turn_completed') return
       session.completed += 1
@@ -97,6 +112,7 @@ export class CodexToolSessions {
       },
     }) as RuntimeDriver
     this.live.set(sessionId, session)
+    this.owned.add(session)
     return session
   }
 
