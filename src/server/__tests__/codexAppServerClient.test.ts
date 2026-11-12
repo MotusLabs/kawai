@@ -8,8 +8,10 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { CAPABILITIES, CLIENT_INFO } from '../../../packages/agent-runtime/src/codex/generation'
 import { AppServerClient, DRAIN_BOUND_MS, type AppServerClientOptions } from '../chat/codex/appServerClient'
 import type { ChatWireRecorder } from '../chat/wireTap'
+import { transportCases, type TransportCaseInput, type TransportCases } from './helpers/codexTransportHarness'
 
 const FAKE_SOURCE = `#!/usr/bin/env bun
 // Scripted Codex app-server fake for the AppServerClient unit tests (4.3):
@@ -138,6 +140,7 @@ const handle = (line) => {
 
 let tempDir: string
 let fakePath: string
+let cases: TransportCases
 const clients: AppServerClient[] = []
 
 
@@ -152,15 +155,17 @@ const recordingWire = (): ChatWireRecorder & { frames: RecordedFrame[] } => {
 }
 
 beforeEach(() => {
-  tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-codex-client-')))
+  cases = transportCases('kawai-codex-client-')
+  tempDir = cases.root
   fakePath = path.join(tempDir, 'fake-app-server')
   fs.writeFileSync(fakePath, FAKE_SOURCE)
   fs.chmodSync(fakePath, 0o755)
 })
 
-afterEach(() => {
+afterEach(async () => {
   for (const client of clients.splice(0)) client.end()
-  fs.rmSync(tempDir, { recursive: true, force: true })
+  // Every transport's shared stop joins before the root is removed.
+  await cases.cleanup()
 })
 
 const startClient = (
@@ -186,6 +191,21 @@ const startClient = (
   return { client, wire, notifications, exits }
 }
 
+/** One case over the package transport and the same fake, spawned `<fake> app-server`. */
+const startTransport = (
+  mode: string,
+  overrides: Partial<Pick<TransportCaseInput, 'onServerRequest' | 'graceMs' | 'requestTimeoutMs' | 'drainBoundMs' | 'clientInfo'>> = {},
+) => cases.open({
+  executable: fakePath,
+  env: { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_MODE: mode },
+  clientInfo: overrides.clientInfo ?? CLIENT_INFO,
+  capabilities: CAPABILITIES,
+  onServerRequest: overrides.onServerRequest ?? (async () => ({})),
+  graceMs: overrides.graceMs ?? 200,
+  requestTimeoutMs: overrides.requestTimeoutMs,
+  drainBoundMs: overrides.drainBoundMs,
+})
+
 const until = async (predicate: () => boolean, ms = 2_000): Promise<boolean> => {
   const start = Date.now()
   while (!predicate()) {
@@ -196,8 +216,8 @@ const until = async (predicate: () => boolean, ms = 2_000): Promise<boolean> => 
 }
 
 test('a request resolves with the response result, argv, and params', async () => {
-  const { client } = startClient('echo')
-  const result = await client.request('thread/start', { cwd: '/tmp/x' }) as Record<string, unknown>
+  const { transport } = startTransport('echo')
+  const result = await transport.request('thread/start', { cwd: '/tmp/x' }) as Record<string, unknown>
   expect(result.method).toBe('thread/start')
   expect(result.sawAppServerArg).toBe(true)
   expect(result.receivedParams).toEqual({ cwd: '/tmp/x' })
@@ -281,12 +301,36 @@ test('a child exit rejects pending requests, fires onExit, and refuses later one
   }
 })
 
-test('end() stops the child with SIGTERM by default', async () => {
-  const { client, exits } = startClient('echo')
-  await client.request('ping')
-  client.end()
-  await client.whenExited()
-  expect(exits).toEqual([{ code: null, signal: 'SIGTERM' }])
+test('stop() ends the child with SIGTERM by default; a planned stop reports no onExit', async () => {
+  const { transport, exits, stop } = startTransport('echo')
+  await transport.request('ping')
+  const fact = await stop()
+  expect(fact).toEqual({ generation: 1, state: 'exited', pid: transport.process!.pid!, code: null, signal: 'SIGTERM', escalated: false, groupCleared: true })
+  // onExit reports unsolicited exits only; the planned stop's fact is its receipt.
+  expect(exits).toEqual([])
+})
+
+test('cleanup joins held handler work before it removes the root; overlapping cleanups share one promise', async () => {
+  let release!: () => void
+  const held = new Promise<void>((resolve) => (release = resolve))
+  let entered = false
+  const seen: boolean[] = []
+  const { transport } = startTransport('server-request', {
+    onServerRequest: async (_method, _params, signal) => {
+      entered = true
+      await held
+      seen.push(fs.existsSync(cases.root))
+      throw signal.reason // the stop's own cancellation, never a failure
+    },
+  })
+  await transport.request('turn/start', {})
+  expect(await until(() => entered)).toBe(true)
+  const first = cases.cleanup()
+  const second = cases.cleanup()
+  expect(second).toBe(first)
+  release()
+  await first
+  expect({ seen, rootKept: fs.existsSync(cases.root) }).toEqual({ seen: [true], rootKept: false })
 })
 
 test('end() escalates to SIGKILL when the child ignores SIGTERM', async () => {
