@@ -23,6 +23,10 @@
 //   acknowledged, and an interrupt refuses every send still waiting
 //   (lifecycle/checkpoints.ts). State publications are held while a turn
 //   opens or settles, so a callback never reenters a half-finished step.
+// - Interrupt capability. A generation sends cancelQueued on interrupt until
+//   an init's capabilities array lacks interrupt_cancel_queued_v1 (each such
+//   array replaces the answer); then it sends a plain interrupt and logs
+//   interrupt-cancel-queued-unsupported. Stop never interrupts.
 // - Facts. Usage, context, quota and limit-wait facts (usageFacts.ts) are fed
 //   before the frame mapping; their control calls are owned jobs (usageControls.ts).
 // - Composition. Permissions, host integrations, requests (canUseTool) and
@@ -55,7 +59,7 @@ import { accountGenerations, cancelledByStop, generationOptions, interruptGenera
 import { ClaudeRequests } from './requests.js'
 import { SeenResultFrames } from './resultFrames.js'
 import { settleResult, type ResultSettlementHost } from './resultSettlement.js'
-import { CliTurnBinder } from './turnBinder.js'
+import { CliTurnBinder, type CliContractViolation } from './turnBinder.js'
 import { OpenTurns } from './openTurns.js'
 import { composeEnvelope } from './compose.js'
 import { checkSubmission, newTurn, promptMessage, type Turn } from './turns.js'
@@ -73,6 +77,8 @@ export class ClaudeSession {
   private readonly open: OpenTurns
   private readonly oldFrame = new OldFrameScope()
   private readonly binder: CliTurnBinder
+  /** Logs a deviation from the pinned CLI contract (docs/claude-cli-contract.md). */
+  private readonly violation: (reason: CliContractViolation) => void
   private readonly requests: ClaudeRequests
   private readonly frames: ClaudeFrames
   private readonly checkpoints: CheckpointGate
@@ -112,8 +118,9 @@ export class ClaudeSession {
     const persist = callbacks.onCheckpoint && ((checkpoint: ResumeCheckpoint) => callbacks.onCheckpoint!(checkpoint))
     const failed = () => { this.events.emit({ type: 'error', error: CHECKPOINT_FAILED }); void this.shutdown().catch(() => {}) }
     this.checkpoints = new CheckpointGate({ lifecycle: this.lifecycle, persist, failed }, this.runtimeSessionId)
+    this.violation = (reason) => logger?.warn({ reason }, 'claude_cli_contract_violation')
     this.binder = new CliTurnBinder({
-      violation: (reason) => logger?.warn({ reason }, 'claude_cli_contract_violation'),
+      violation: this.violation,
       unknownUuid: (uuid) => logger?.warn({ uuid }, 'claude_unknown_result_uuid'),
     })
     this.requests = new ClaudeRequests({
@@ -332,6 +339,9 @@ export class ClaudeSession {
       if (message.session_id !== generation.resumeTarget) return this.refuseSubstitution(generation)
       generation.identityConfirmed = true
     }
+    // Each init reporting a capabilities array replaces this generation's answer; any other value keeps it.
+    const capabilities = (message as { capabilities?: unknown }).capabilities
+    if (Array.isArray(capabilities)) generation.cancelQueued = capabilities.includes('interrupt_cancel_queued_v1')
     if (message.session_id) {
       this.runtimeSessionId = message.session_id
       this.checkpoints.report({ runtime: 'claude', runtimeSessionId: message.session_id })
@@ -459,6 +469,8 @@ export class ClaudeSession {
     this.open.settleAll(turns, error)
     this.frames.interrupted()
     if (generation && active) {
+      // Stop and urgent mail reach here; kill and shutdown never interrupt.
+      if (!generation.cancelQueued) this.violation('interrupt-cancel-queued-unsupported')
       void this.lifecycle.jobs.run(
         `interrupt:${generation.number}`,
         async () => {
