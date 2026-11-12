@@ -164,72 +164,83 @@ const RUNTIMES: Runtime[] = [
   },
 ]
 
+// One body per case, run once per runtime by the literal titles below (so a
+// coverage citation resolves each title), in the original claude-then-codex order.
+async function resumeAcrossHosts(runtime: Runtime): Promise<void> {
+  const fixture = runtime.fixture()
+  const entry = newCase(fixture.root)
+  const store = join(fixture.root, 'checkpoint.json')
+  const marker = `marker-${crypto.randomUUID()}`
+  const base = { runtime: runtime.name, launch: fixture.launch, store }
+
+  const first = await host(entry, fixture.root, { ...base, resume: false, prompts: [marker], stop: 'kill' })
+  expect(first.resumed).toBeNull()
+  expect(first.checkpoints).toHaveLength(1)
+  const saved = first.checkpoints[0]!
+  expect(saved.runtime).toBe(runtime.name)
+  expect(first.stored).toEqual(saved)
+  const firstIds = correlated(first, ['success'])
+  const firstLeaders = leadersGone(first, 'kill')
+  // Every process the fake recorded for this home is gone before host 2 starts.
+  expect(fixture.recorded().filter(alive)).toEqual([])
+
+  const second = await host(entry, fixture.root, { ...base, resume: true, prompts: [runtime.recall], stop: 'shutdown' })
+  expect(second.pid).not.toBe(first.pid)
+  expect(second.resumed).toEqual(saved)
+  // The same conversation: host 2's reply holds host 1's unique marker.
+  expect(second.results[0]!.finalText).toBe(runtime.expected(marker))
+  // The resumed identity is already saved: no new checkpoint, the store unchanged.
+  expect(second.checkpoints).toEqual([])
+  expect(second.stored).toEqual(saved)
+  const secondIds = correlated(second, ['success'])
+  const secondLeaders = leadersGone(second, 'shutdown')
+  expect(secondLeaders.some((pid) => firstLeaders.includes(pid))).toBe(false)
+  expect(fixture.recorded().filter(alive)).toEqual([])
+  // The runtime received exactly the message ids the handles reported, in order.
+  expect(fixture.received()).toEqual([...firstIds, ...secondIds])
+  expect(new Set([...firstIds, ...secondIds]).size).toBe(2)
+  // Neither host saw an unexpected process end.
+  expect([first.ends, second.ends]).toEqual([[], []])
+}
+
+async function failedStoreHost(runtime: Runtime): Promise<void> {
+  const fixture = runtime.fixture()
+  const entry = newCase(fixture.root)
+  // The store's directory does not exist: the caller's persistence throws.
+  const store = join(fixture.root, 'missing', 'checkpoint.json')
+  const outcome = await host(entry, fixture.root, { runtime: runtime.name, launch: fixture.launch, store, resume: false, prompts: ['one'], stop: 'kill' }).then(
+    () => null,
+    (error: Error) => error.message,
+  )
+  expect(outcome).toStartWith('host exited 1: ')
+  const report = JSON.parse(outcome!.trim().split('\n').at(-1)!) as HostReport
+  // The expected failures, exactly: the store's raw ENOENT, kept in order. A start
+  // that awaited the persistence rejects with category checkpoint (Codex readiness
+  // always does; Claude does when the persistence lands before its start settles),
+  // and the stop in finally then fails with every retained cause, the raw one first.
+  const raw = `Error: ENOENT: no such file or directory, open '${store}.tmp'`
+  const refused = `checkpoint: the runtime identity could not be persisted <= [${raw}]`
+  const shapes = [
+    [refused, `stop: stop failed: 2 owned operation(s) failed <= [${raw} ; ${refused}]`],
+    ...(runtime.name === 'claude' ? [[`stop: stop failed: 1 owned operation(s) failed <= [${raw}]`]] : []),
+  ]
+  expect(shapes).toContainEqual(report.failures)
+  // A failed stop carries no receipt; the stop still ran, and no process the fake started outlives the host.
+  expect(report.receipt).toBeNull()
+  expect(fixture.recorded().length).toBeGreaterThan(0)
+  expect(fixture.recorded().filter(alive)).toEqual([])
+}
+
+const [CLAUDE, CODEX] = RUNTIMES as [Runtime, Runtime]
+
 describe('cross-host resume with correlated identities (4.4, both public drivers)', () => {
-  for (const runtime of RUNTIMES) {
-    // @covers: agent-runtime › Shutdown preserves resumability › Resume after forced process termination
-    test(`${runtime.name}: host 2 resumes host 1's saved conversation only after host 1 exited; handles, results, callbacks and wire ids correlate and every leader is gone`, async () => {
-      const fixture = runtime.fixture()
-      const entry = newCase(fixture.root)
-      const store = join(fixture.root, 'checkpoint.json')
-      const marker = `marker-${crypto.randomUUID()}`
-      const base = { runtime: runtime.name, launch: fixture.launch, store }
+  // @covers: agent-runtime › Shutdown preserves resumability › Resume after forced process termination
+  test("claude: host 2 resumes host 1's saved conversation only after host 1 exited; handles, results, callbacks and wire ids correlate and every leader is gone", () => resumeAcrossHosts(CLAUDE))
 
-      const first = await host(entry, fixture.root, { ...base, resume: false, prompts: [marker], stop: 'kill' })
-      expect(first.resumed).toBeNull()
-      expect(first.checkpoints).toHaveLength(1)
-      const saved = first.checkpoints[0]!
-      expect(saved.runtime).toBe(runtime.name)
-      expect(first.stored).toEqual(saved)
-      const firstIds = correlated(first, ['success'])
-      const firstLeaders = leadersGone(first, 'kill')
-      // Every process the fake recorded for this home is gone before host 2 starts.
-      expect(fixture.recorded().filter(alive)).toEqual([])
+  test('claude: a host whose checkpoint store cannot be written still stops its driver in finally, reports the raw failure and exits nonzero, and the parent finds every leader gone', () => failedStoreHost(CLAUDE))
 
-      const second = await host(entry, fixture.root, { ...base, resume: true, prompts: [runtime.recall], stop: 'shutdown' })
-      expect(second.pid).not.toBe(first.pid)
-      expect(second.resumed).toEqual(saved)
-      // The same conversation: host 2's reply holds host 1's unique marker.
-      expect(second.results[0]!.finalText).toBe(runtime.expected(marker))
-      // The resumed identity is already saved: no new checkpoint, the store unchanged.
-      expect(second.checkpoints).toEqual([])
-      expect(second.stored).toEqual(saved)
-      const secondIds = correlated(second, ['success'])
-      const secondLeaders = leadersGone(second, 'shutdown')
-      expect(secondLeaders.some((pid) => firstLeaders.includes(pid))).toBe(false)
-      expect(fixture.recorded().filter(alive)).toEqual([])
-      // The runtime received exactly the message ids the handles reported, in order.
-      expect(fixture.received()).toEqual([...firstIds, ...secondIds])
-      expect(new Set([...firstIds, ...secondIds]).size).toBe(2)
-      // Neither host saw an unexpected process end.
-      expect([first.ends, second.ends]).toEqual([[], []])
-    })
+  // @covers: agent-runtime › Shutdown preserves resumability › Resume after forced process termination
+  test("codex: host 2 resumes host 1's saved conversation only after host 1 exited; handles, results, callbacks and wire ids correlate and every leader is gone", () => resumeAcrossHosts(CODEX))
 
-    test(`${runtime.name}: a host whose checkpoint store cannot be written still stops its driver in finally, reports the raw failure and exits nonzero, and the parent finds every leader gone`, async () => {
-      const fixture = runtime.fixture()
-      const entry = newCase(fixture.root)
-      // The store's directory does not exist: the caller's persistence throws.
-      const store = join(fixture.root, 'missing', 'checkpoint.json')
-      const outcome = await host(entry, fixture.root, { runtime: runtime.name, launch: fixture.launch, store, resume: false, prompts: ['one'], stop: 'kill' }).then(
-        () => null,
-        (error: Error) => error.message,
-      )
-      expect(outcome).toStartWith('host exited 1: ')
-      const report = JSON.parse(outcome!.trim().split('\n').at(-1)!) as HostReport
-      // The expected failures, exactly: the store's raw ENOENT, kept in order. A start
-      // that awaited the persistence rejects with category checkpoint (Codex readiness
-      // always does; Claude does when the persistence lands before its start settles),
-      // and the stop in finally then fails with every retained cause, the raw one first.
-      const raw = `Error: ENOENT: no such file or directory, open '${store}.tmp'`
-      const refused = `checkpoint: the runtime identity could not be persisted <= [${raw}]`
-      const shapes = [
-        [refused, `stop: stop failed: 2 owned operation(s) failed <= [${raw} ; ${refused}]`],
-        ...(runtime.name === 'claude' ? [[`stop: stop failed: 1 owned operation(s) failed <= [${raw}]`]] : []),
-      ]
-      expect(shapes).toContainEqual(report.failures)
-      // A failed stop carries no receipt; the stop still ran, and no process the fake started outlives the host.
-      expect(report.receipt).toBeNull()
-      expect(fixture.recorded().length).toBeGreaterThan(0)
-      expect(fixture.recorded().filter(alive)).toEqual([])
-    })
-  }
+  test('codex: a host whose checkpoint store cannot be written still stops its driver in finally, reports the raw failure and exits nonzero, and the parent finds every leader gone', () => failedStoreHost(CODEX))
 })

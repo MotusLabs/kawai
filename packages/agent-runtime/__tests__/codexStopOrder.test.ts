@@ -186,23 +186,82 @@ describe('Codex stop: I1 over fixed-seed operation sequences', () => {
 
 describe('Codex stop: I1 after readiness over the same fixed-seed sequences', () => {
   const reached: Reach[] = []
-  // 0xA601, the same 300 sequences, in sixty slices of five.
-  for (let slice = 0; slice < 60; slice++) {
-    test(`I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences ${slice * 5}-${slice * 5 + 4})`, async () => {
-      for (let i = slice * 5; i < slice * 5 + 5; i++) {
-        const { verdict, reach } = await run(0xa601 + i * 7919, true)
-        await stopDrivers()
-        reached[i] = reach
-        expect({ i, ...verdict }).toEqual({ i, ops: verdict.ops, liveAtStop: [], handlersOpenAtStop: 0, unreported: [], unsettledHandles: 0, duplicateResults: [] })
-        // A rejected stop is expected only from a crash: its one retained native exit, nothing else.
-        expect(reach.rejected).toBe(reach.failure !== null)
-        if (reach.failure) {
-          expect({ i, crashed: verdict.ops.includes('crash'), category: reach.failure.category, causes: reach.failure.causes.length }).toEqual({ i, crashed: true, category: 'stop', causes: 1 })
-          expect(reach.failure.causes[0]).toMatch(/^transport:agent process generation 1 exited with code 5 (before the stop|after the stop began)$/)
-        }
+  // 0xA601, the same 300 sequences, in sixty slices of five. Each slice is a
+  // literal title (so a coverage citation resolves it), in slice order.
+  const readySlice = async (n: number) => {
+    for (let i = n * 5; i < n * 5 + 5; i++) {
+      const { verdict, reach } = await run(0xa601 + i * 7919, true)
+      await stopDrivers()
+      reached[i] = reach
+      expect({ i, ...verdict }).toEqual({ i, ops: verdict.ops, liveAtStop: [], handlersOpenAtStop: 0, unreported: [], unsettledHandles: 0, duplicateResults: [] })
+      // A rejected stop is expected only from a crash: its one retained native exit, nothing else.
+      expect(reach.rejected).toBe(reach.failure !== null)
+      if (reach.failure) {
+        expect({ i, crashed: verdict.ops.includes('crash'), category: reach.failure.category, causes: reach.failure.causes.length }).toEqual({ i, crashed: true, category: 'stop', causes: 1 })
+        expect(reach.failure.causes[0]).toMatch(/^transport:agent process generation 1 exited with code 5 (before the stop|after the stop began)$/)
       }
-    })
+    }
   }
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 0-4)', () => readySlice(0))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 5-9)', () => readySlice(1))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 10-14)', () => readySlice(2))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 15-19)', () => readySlice(3))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 20-24)', () => readySlice(4))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 25-29)', () => readySlice(5))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 30-34)', () => readySlice(6))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 35-39)', () => readySlice(7))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 40-44)', () => readySlice(8))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 45-49)', () => readySlice(9))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 50-54)', () => readySlice(10))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 55-59)', () => readySlice(11))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 60-64)', () => readySlice(12))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 65-69)', () => readySlice(13))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 70-74)', () => readySlice(14))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 75-79)', () => readySlice(15))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 80-84)', () => readySlice(16))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 85-89)', () => readySlice(17))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 90-94)', () => readySlice(18))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 95-99)', () => readySlice(19))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 100-104)', () => readySlice(20))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 105-109)', () => readySlice(21))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 110-114)', () => readySlice(22))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 115-119)', () => readySlice(23))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 120-124)', () => readySlice(24))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 125-129)', () => readySlice(25))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 130-134)', () => readySlice(26))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 135-139)', () => readySlice(27))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 140-144)', () => readySlice(28))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 145-149)', () => readySlice(29))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 150-154)', () => readySlice(30))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 155-159)', () => readySlice(31))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 160-164)', () => readySlice(32))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 165-169)', () => readySlice(33))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 170-174)', () => readySlice(34))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 175-179)', () => readySlice(35))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 180-184)', () => readySlice(36))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 185-189)', () => readySlice(37))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 190-194)', () => readySlice(38))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 195-199)', () => readySlice(39))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 200-204)', () => readySlice(40))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 205-209)', () => readySlice(41))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 210-214)', () => readySlice(42))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 215-219)', () => readySlice(43))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 220-224)', () => readySlice(44))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 225-229)', () => readySlice(45))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 230-234)', () => readySlice(46))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 235-239)', () => readySlice(47))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 240-244)', () => readySlice(48))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 245-249)', () => readySlice(49))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 250-254)', () => readySlice(50))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 255-259)', () => readySlice(51))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 260-264)', () => readySlice(52))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 265-269)', () => readySlice(53))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 270-274)', () => readySlice(54))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 275-279)', () => readySlice(55))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 280-284)', () => readySlice(56))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 285-289)', () => readySlice(57))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 290-294)', () => readySlice(58))
+  test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 295-299)', () => readySlice(59))
 
   test('I1 after readiness: every sequence booted its app-server, and the sequences reached helpers, handlers and a crash-caused rejection', () => {
     expect(reached.filter(Boolean)).toHaveLength(300)
