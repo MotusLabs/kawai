@@ -10,7 +10,7 @@
 // host callback stay raw owned failures, reported once.
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { ChatContextUsage } from '../../shared/chat'
-import { allCauses, compatibilityAdapter, finishAll, initFrame, settle, until, type ContextProbe, type Harness } from './helpers/claudeCompatibilityHarness'
+import { compatibilityAdapter, finishAll, initFrame, settle, until, type ContextProbe, type Harness } from './helpers/claudeCompatibilityHarness'
 
 afterEach(async () => {
   await finishAll()
@@ -82,8 +82,8 @@ describe('Claude respawn context correction through the production composition (
     expect(published.filter((p) => p.usage?.thresholdTokens === 167_000 && p.usage.usedTokens !== 157_900)).toEqual([])
 
     // The failed probe is the new driver's raw owned failure, reported once by identity.
-    const outcome = await h.finish()
-    expect([outcome.resolved, allCauses(outcome.error).filter((cause) => cause === probeFailed).length]).toEqual([false, 1])
+    // Exactly that one raw cause: no other failure rides along.
+    await h.failed([probeFailed])
     await expect(h.driver.settled()).resolves.toBeUndefined()
   })
 
@@ -144,8 +144,7 @@ describe('Claude respawn context correction through the production composition (
     h.scripts[1]!.push(assistantUsage(60_000, 'msg_2'))
     await until(() => published.at(-1)?.usage?.usedTokens === 60_000)
     expect(reading(published.at(-1))).toMatchObject({ used: 60_000, threshold: 100_000, percentage: 60, persist: false })
-    const outcome = await h.finish()
-    expect([outcome.resolved, allCauses(outcome.error).filter((cause) => cause === boom).length]).toEqual([false, 1])
+    await h.failed([boom])
     await expect(h.driver.settled()).resolves.toBeUndefined()
   })
 })

@@ -10,7 +10,7 @@
 // object.
 import { afterEach, beforeEach, describe, expect, spyOn, test, type Mock } from 'bun:test'
 import { logger } from '../logger'
-import { CAPS, busy, causes, compatibilityAdapter, finishAll, initFrame, settle, until } from './helpers/claudeCompatibilityHarness'
+import { CAPS, busy, compatibilityAdapter, finishAll, initFrame, settle, until } from './helpers/claudeCompatibilityHarness'
 
 let warn: Mock<typeof logger.warn>
 const violations = () => warn.mock.calls.filter(([name]) => name === 'claude_cli_contract_violation').map(([, data]) => (data as { reason?: string }).reason)
@@ -18,8 +18,11 @@ beforeEach(() => {
   warn = spyOn(logger, 'warn')
 })
 afterEach(async () => {
-  await finishAll()
-  warn.mockRestore()
+  try {
+    await finishAll()
+  } finally {
+    warn.mockRestore()
+  }
 })
 
 const UNSUPPORTED = 'interrupt-cancel-queued-unsupported'
@@ -137,8 +140,9 @@ describe('Claude interrupt capability through the production composition (GAP7)'
     await h.driver.interrupt()
     await until(() => h.scripts[0]!.interrupts.length === 1)
     await settle()
-    const outcome = await h.finish()
-    expect([outcome.resolved, outcome.closed, causes(outcome.error).filter((cause) => cause === boom).length]).toEqual([false, true, 1])
+    // Exactly that one raw cause, as the original object: no extra cause.
+    const outcome = await h.failed([boom])
+    expect(outcome.closed).toBe(true)
     expect(h.scripts[0]!.interrupts).toEqual([undefined])
     expect(violations()).toEqual([UNSUPPORTED])
     // Reported once: a later join reports nothing again.

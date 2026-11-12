@@ -5,11 +5,17 @@
 // interrupt answers with what the test queued (a receipt or a rejection), its
 // optional context probe with what the test's function returns, and exit()
 // ends its stream as a CLI exit would.
-// Cleanup is reserved once per adapter at creation: kill, the adapter's
-// settled() outcome, then every script's prompt reader (outside work the
-// fixture started) — a test that asserts the outcome awaits the same promise
-// the after-hook joins, so no stop reenters a second cleanup.
+// Cleanup invariant: each adapter has one cleanup promise, stored before any
+// of its effects run (the body starts a microtask later), so a reentrant or
+// overlapping finish() — from a test, a callback inside kill, or the
+// after-hook — joins that promise and never runs a second body. The body is
+// kill, the adapter's settled() outcome, then every script's prompt reader
+// (outside work the fixture started). finishAll() joins every cleanup first
+// and only then propagates each unasserted failure as the original object; a
+// failure is suppressed only after failed() matched its exact raw causes by
+// identity and count.
 import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import { expect } from 'bun:test'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import type { ChatEvent } from '../../../shared/chat'
 import type { ChatQueryFactory } from '../../chat/ChatSessionDriver'
@@ -88,12 +94,38 @@ function scripted(scripts: Script[], probe?: ContextProbe): ChatQueryFactory {
   }
 }
 
-/** Adapters created by this file's tests, each with its one reserved cleanup. */
-const reserved: Array<() => Promise<Outcome>> = []
+/** One adapter's cleanup: its reserved promise, and whether a test asserted its failure exactly. */
+interface Reservation {
+  finish(): Promise<Outcome>
+  asserted(): boolean
+}
 
-/** Run every reserved cleanup (the after-hook); a cleanup already run is joined, not repeated. */
+/** Adapters created by this file's tests, each with its one reserved cleanup. */
+const reserved: Reservation[] = []
+
+/**
+ * Join every reserved cleanup (the after-hook), then rethrow what no test
+ * asserted: a rejected cleanup body, or a settled() failure failed() did not
+ * match. One failure is rethrown as itself; several as an AggregateError of
+ * the originals. Nothing is retried or wrapped further.
+ */
 export async function finishAll(): Promise<void> {
-  for (const finish of reserved.splice(0)) await finish()
+  const entries = reserved.splice(0)
+  const joined = await Promise.allSettled(entries.map((entry) => entry.finish()))
+  const unasserted: unknown[] = []
+  joined.forEach((result, index) => {
+    if (result.status === 'rejected') unasserted.push(result.reason)
+    else if (!result.value.resolved && !entries[index]!.asserted()) unasserted.push(result.value.error)
+  })
+  if (unasserted.length === 1) throw unasserted[0]
+  if (unasserted.length > 1) throw new AggregateError(unasserted, 'unasserted compatibility-fixture cleanup failures')
+}
+
+/** Leaf causes of a settled() rejection: wrappers (AgentRuntimeError with causes, AggregateError) are opened, depth first. */
+export function rawCauses(error: unknown): unknown[] {
+  if (error instanceof AggregateError) return error.errors.flatMap((cause) => rawCauses(cause))
+  if (error instanceof AgentRuntimeError && error.causes.length > 0) return error.causes.flatMap((cause) => rawCauses(cause))
+  return [error]
 }
 
 export function compatibilityAdapter(extra: Record<string, unknown> = {}, probe?: ContextProbe) {
@@ -112,24 +144,38 @@ export function compatibilityAdapter(extra: Record<string, unknown> = {}, probe?
     } as never,
   }) as Adapter
   let finishing: Promise<Outcome> | null = null
-  /** The one cleanup: kill, settled()'s outcome, then the prompt readers. */
+  let asserted = false
+  let bodies = 0
+  /** The one cleanup body: kill, settled()'s outcome, then the prompt readers. */
+  const body = async (): Promise<Outcome> => {
+    bodies += 1
+    driver.kill()
+    let outcome: Outcome
+    try {
+      await driver.settled()
+      outcome = { resolved: true, closed: scripts.every((s) => s.closed) }
+    } catch (error) {
+      outcome = { resolved: false, closed: scripts.every((s) => s.closed), error }
+    }
+    await Promise.all(scripts.map((s) => s.reader))
+    return outcome
+  }
+  /** Reserve the promise first; the body runs a microtask later, so any reentry joins it. */
   const finish = (): Promise<Outcome> => {
-    finishing ??= (async () => {
-      driver.kill()
-      let outcome: Outcome
-      try {
-        await driver.settled()
-        outcome = { resolved: true, closed: scripts.every((s) => s.closed) }
-      } catch (error) {
-        outcome = { resolved: false, closed: scripts.every((s) => s.closed), error }
-      }
-      await Promise.all(scripts.map((s) => s.reader))
-      return outcome
-    })()
+    if (finishing === null) finishing = Promise.resolve().then(body)
     return finishing
   }
-  reserved.push(finish)
-  return { driver, scripts, events, statuses, finish }
+  /** Finish, require a failure whose raw causes are exactly `expected` (identity, order, count), and only then mark it asserted. */
+  const failed = async (expected: readonly unknown[]): Promise<Outcome> => {
+    const outcome = await finish()
+    const raw = rawCauses(outcome.error)
+    expect([outcome.resolved, raw.length]).toEqual([false, expected.length])
+    raw.forEach((cause, index) => expect(cause).toBe(expected[index]))
+    asserted = true
+    return outcome
+  }
+  reserved.push({ finish, asserted: () => asserted })
+  return { driver, scripts, events, statuses, finish, failed, bodies: () => bodies }
 }
 export type Harness = ReturnType<typeof compatibilityAdapter>
 
@@ -142,15 +188,6 @@ export async function until(probe: () => boolean, ms = 5_000): Promise<void> {
 }
 
 export const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
-
-/** The package stop's nested causes (the original objects), else none. */
-export const causes = (error: unknown): readonly unknown[] => (error instanceof AgentRuntimeError ? error.causes : [])
-
-/** Every object nested in a settled() rejection: AgentRuntimeError causes and AggregateError errors, depth first. */
-export function allCauses(error: unknown): unknown[] {
-  const nested = error instanceof AgentRuntimeError ? error.causes : error instanceof AggregateError ? error.errors : []
-  return [error, ...nested.flatMap((cause) => allCauses(cause))]
-}
 
 export const CAPS = ['interrupt_receipt_v1', 'interrupt_cancel_queued_v1']
 
