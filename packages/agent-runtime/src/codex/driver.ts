@@ -4,8 +4,9 @@
 // unenforceable permission set (P08), an invalid tool set, a foreign resume
 // checkpoint or a missing logger refuses construction with category
 // `configuration`. The returned value exposes only the public contract.
-// createCodexDriverWith adds the session's private seams; the package entry
-// exports only createCodexDriver.
+// createCodexDriverWith adds the session's private seams (the process spawn
+// and per-method request deadlines); the package entry exports only
+// createCodexDriver, which passes neither.
 import type { CodexAgentDriver } from '../contract.js'
 import { AgentRuntimeError } from '../errors.js'
 import type { CodexDriverOptions } from '../options.js'
@@ -22,7 +23,7 @@ export function createCodexDriver(options: CodexDriverOptions): CodexAgentDriver
   return createCodexDriverWith(options, {})
 }
 
-export function createCodexDriverWith(options: CodexDriverOptions, internal: Pick<CodexSessionOptions, 'spawn'>): CodexAgentDriver {
+export function createCodexDriverWith(options: CodexDriverOptions, internal: Pick<CodexSessionOptions, 'spawn' | 'requestTimeoutsMs'>): CodexAgentDriver {
   if (!options || typeof options !== 'object') throw configurationError('driver options are required')
   const logger = options.logger as unknown as Record<string, unknown> | undefined
   if (!logger || LOGGER_METHODS.some((method) => typeof logger[method] !== 'function')) throw configurationError('logger must have debug, info, warn and error methods')
@@ -58,5 +59,6 @@ export function createCodexDriverWith(options: CodexDriverOptions, internal: Pic
     ...(options.getEffort ? { getEffort: options.getEffort } : {}),
     ...(options.onThreadOpened ? { onThreadOpened: options.onThreadOpened } : {}),
     ...(internal.spawn ? { spawn: internal.spawn } : {}),
+    ...(internal.requestTimeoutsMs ? { requestTimeoutsMs: internal.requestTimeoutsMs } : {}),
   })
 }

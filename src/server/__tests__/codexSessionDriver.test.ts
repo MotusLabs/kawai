@@ -6,13 +6,14 @@ import { afterEach, expect, test } from 'bun:test'
 import { z } from 'zod'
 import type { ChatEvent, ChatUsageReport } from '../../shared/chat'
 import type { ChatLimitSignal } from '../chat/limitSignals'
-import { codexEffort } from '../chat/codex/CodexSessionDriver'
+import { codexEffort } from '../chat/codex/codexThread'
 import { eventTypes, ROLLOUT, Script, sentRequest, startHarness, THREAD_ID, until, type Harness } from './codexDriverHarness'
 
 let harness: Harness | null = null
-afterEach(() => {
-  harness?.cleanup()
+afterEach(async () => {
+  const done = harness?.cleanup()
   harness = null
+  await done
 })
 
 const completedOf = (events: ChatEvent[]) => events.filter((event): event is Extract<ChatEvent, { type: 'turn_completed' }> => event.type === 'turn_completed')
@@ -198,6 +199,21 @@ test('a rejected dynamic-tool registration refuses the start; no turn is asked',
   expect(harness.transcriptPaths).toEqual([])
   expect(harness.sessionIds).toEqual([])
   expect(sentRequest(harness, 'turn/start')).toBeUndefined()
+  // The refused boot is an owned failure: the joined cleanup reports one
+  // failure object, with the server's own JSON-RPC error as its cause. The
+  // adapter's aggregate names that same object under the failed start and
+  // again under the kill's stop that joined it (accepted 2f205942 behavior,
+  // recorded here, not repaired): one identity, never a second failure.
+  const owned = harness
+  harness = null
+  const failure = await owned.cleanup().then(() => null, (error: unknown) => error)
+  const all = (error: unknown): unknown[] =>
+    error !== null && typeof error === 'object'
+      ? [error, ...[...((error as { causes?: unknown[] }).causes ?? []), ...(error instanceof AggregateError ? error.errors : [])].flatMap(all)]
+      : [error]
+  const starts = [...new Set(all(failure).filter(cause => (cause as Error).message?.startsWith('Codex could not start a thread')))] as Array<Error & { causes?: Array<{ error?: unknown }> }>
+  expect(starts.map(cause => cause.message)).toEqual(['Codex could not start a thread: app-server request 2 (thread/start) failed: dynamic tools rejected'])
+  expect(starts[0]!.causes!.map(cause => cause.error)).toEqual([{ code: -32602, message: 'dynamic tools rejected' }])
 })
 
 test('a second turn reusing a question item id raises the card again', async () => {

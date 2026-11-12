@@ -11,7 +11,7 @@ import { afterEach, expect, test } from 'bun:test'
 import type { ChatEvent } from '../../shared/chat'
 import type { OutboundAuditSink } from '../outbound/observer'
 import { SECURITY_NOTE_BODY } from '../team/teamPrompt'
-import { Script, sentRequest, startRuntimeHarness as startHarness, THREAD_ID, until, type RuntimeHarness as Harness } from './codexDriverHarness'
+import { Script, sentRequest, startHarness, THREAD_ID, until, type Harness } from './codexDriverHarness'
 
 let harness: Harness | null = null
 afterEach(async () => {

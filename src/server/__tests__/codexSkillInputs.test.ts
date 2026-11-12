@@ -1,12 +1,19 @@
+// @reads: packages/agent-runtime/__tests__/fixtures/**
 // Submission table S: assertions inspect actual turn/start inputs through
-// the production driver and scripted app-server; P2 exercises the resolver.
+// Kawai's production Codex composition and the scripted app-server as a real
+// child (task-5906f19c); P2 exercises the resolver and, through the same
+// adapter over the package's in-process protocol model, every send's input.
 import { afterEach, expect, test } from 'bun:test'
 import { codexCommandCatalog, codexSkillInputs } from '../chat/codex/codexCommands'
-import { Script, startHarness, tempDirs, until, type Harness } from './codexDriverHarness'
+import { Script, startHarness, tempDirs, THREAD_ID, until, type Harness } from './codexDriverHarness'
 import { formatEnvelope } from '../team/envelope'
-import type { ChatPeerMessage } from '../../shared/chat'
-import { CodexSessionDriver } from '../chat/codex/CodexSessionDriver'
-import type { AppServerClientOptions } from '../chat/codex/appServerClient'
+import type { ChatEvent, ChatPeerMessage } from '../../shared/chat'
+import fs from 'node:fs'
+import path from 'node:path'
+import { createCodexChatDriver } from '../chat/provider/codexRuntime'
+import { createCodexDriverWith } from '../../../packages/agent-runtime/src/codex/driver'
+import { codexRoot } from '../../../packages/agent-runtime/__tests__/helpers/codexDriverHarness'
+import { inProcessSpawn } from '../../../packages/agent-runtime/__tests__/helpers/inProcessCodex'
 
 // Table S verbatim: [Id, Origin / catalog / text, Observable Codex input].
 export const submissionOracles = [
@@ -26,7 +33,11 @@ const response = (cwd: string) => ({ data: [{ cwd, skills, errors: [] }] })
 const textInput = (text: string) => ({ type: 'text', text, text_elements: [] })
 const native = (name: string) => ({ type: 'skill' as const, name, path: `/skills/${name}/SKILL.md` })
 let harness: Harness | null = null
-afterEach(() => { harness?.cleanup(); harness = null })
+afterEach(async () => {
+  const done = harness?.cleanup()
+  harness = null
+  await done
+})
 
 for (const [id, text, expected] of [
   ['S3', 'please /explore this', ['explore']],
@@ -63,7 +74,7 @@ test('S2: a send accepted before discovery stays plain text even when boot disco
 test('S1/S7: peer text never attaches skills; active-turn human inputs keep their send-time identities', async () => {
   const dirs = tempDirs()
   const script = new Script().boot().request('skills/list', response(dirs.project)).turn('ct-1').completed('ct-1')
-    .turn('ct-2').request('turn/start', { turn: { id: 'ct-2' } })
+    .turn('ct-2').request('turn/steer', { turnId: 'ct-2' })
   harness = startHarness(script, {}, dirs)
   harness.driver.start(); await until(() => harness!.driver.getCommandState().status === 'ready')
   const peer: ChatPeerMessage = {
@@ -80,9 +91,15 @@ test('S1/S7: peer text never attaches skills; active-turn human inputs keep thei
   await until(() => harness!.sent.filter(message => message.method === 'turn/start').length === 2)
   expect(harness.sent.filter(message => message.method === 'turn/start')[1]!.params!.input).toEqual([textInput('/explore'), native('explore')])
   // The second input steers the active turn; after invalidation it is plain.
+  // It joins ct-2 by turn/steer (task-5906f19c: the accepted 6.1 steering
+  // protocol in place of the legacy driver's third turn/start).
   harness.driver.send('/review')
-  await until(() => harness!.sent.filter(message => message.method === 'turn/start').length === 3)
-  expect(harness.sent.filter(message => message.method === 'turn/start')[2]!.params!.input).toEqual([textInput('/review')])
+  await until(() => harness!.sent.some(message => message.method === 'turn/steer'))
+  const review = harness.events.find((event): event is Extract<ChatEvent, { type: 'user_message' }> => event.type === 'user_message' && event.text === '/review')
+  expect(harness.sent.find(message => message.method === 'turn/steer')!.params).toEqual({
+    threadId: THREAD_ID, input: [textInput('/review')], expectedTurnId: 'ct-2', clientUserMessageId: review!.messageUuid,
+  })
+  expect(harness.sent.filter(message => message.method === 'turn/start')).toHaveLength(2)
 })
 
 test('P2: 1000 seeded messages preserve text and attach only exact accepted identities', async () => {
@@ -90,22 +107,45 @@ test('P2: 1000 seeded messages preserve text and attach only exact accepted iden
   const random = () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state }
   const catalog = codexCommandCatalog(response('/project'), '/project')!
   const words = ['/explore', '/review', '/off', '/missing', '/explore,', 'x/explore', '/Explore', '/explore/more']
-  let callbacks!: AppServerClientOptions
-  const requests: Array<Record<string, unknown>> = []
-  const driver = new CodexSessionDriver({
-    sessionId: 'property', projectPath: '/tmp', executable: 'unused', codexHome: '/tmp/unused', network: true,
-    withheldCredentials: () => new Set(), wire: { record() {} }, onEvent() {}, onStatus() {},
-    createClient: options => {
-      callbacks = options
-      return { start() {}, end() {}, initialize: async () => ({}), request: async (method, params) => {
-        if (method === 'skills/list') return response('/tmp')
-        if (method === 'turn/start') { requests.push(params!); return { turn: { id: `t-${requests.length}` } } }
-        return { thread: { id: 'thread' } }
-      } }
+  // Kawai's Codex adapter (codexRuntime.ts) over the package core and its real
+  // JSON-RPC client, with the package's asynchronous protocol model behind
+  // createCodexDriverWith's private spawn seam (task-5906f19c A4): model
+  // evidence, not a native process. Its catalog is this test's own skills
+  // file; each turn's input is what the model received, read once the turn
+  // completed (actual causal settlement, no microtask count).
+  const root = codexRoot()
+  fs.writeFileSync(path.join(root.home, 'skills.json'), JSON.stringify({ skills }))
+  let completed = 0
+  let waiting: { target: number; resolve: () => void } | null = null
+  const driver = createCodexChatDriver({
+    sessionId: 'property', projectPath: root.launch().cwd, executable: root.wrapper, codexHome: root.home, network: true,
+    serverEnv: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: root.root },
+    withheldCredentials: () => new Set(), wire: { record() {} }, claimRateLimitsRead: () => false, onStatus() {},
+    onEvent: event => {
+      if (event.type !== 'turn_completed') return
+      completed += 1
+      if (waiting && completed >= waiting.target) waiting.resolve()
     },
+  }, options => createCodexDriverWith({ ...options, wire: undefined }, { spawn: inProcessSpawn }))
+  const turnCompleted = (target: number) => new Promise<void>(resolve => {
+    waiting = { target, resolve }
+    if (completed >= target) resolve()
   })
-  driver.start(); await until(() => driver.getCommandState().status === 'ready')
+  // The model's received.jsonl, read forward from the last offset.
+  const received = path.join(root.home, 'received.jsonl')
+  let offset = 0
+  let lastInput: unknown
+  const readTurnStarts = () => {
+    const text = fs.readFileSync(received).subarray(offset).toString('utf8')
+    const end = text.lastIndexOf('\n') + 1
+    offset += Buffer.byteLength(text.slice(0, end))
+    for (const line of text.slice(0, end).split('\n').filter(Boolean)) {
+      const message = JSON.parse(line) as { method?: string; params?: { input?: unknown } }
+      if (message.method === 'turn/start') lastInput = message.params!.input
+    }
+  }
   try {
+    driver.start(); await until(() => driver.getCommandState().status === 'ready')
     for (let i = 0; i < 1000; i++) {
       const message = Array.from({ length: 1 + random() % 12 }, () => words[random() % words.length]!).join(i % 2 ? '\n' : ' ')
       const expected = [...new Set(message.split(/\s+/).filter(word => word === '/explore' || word === '/review'))].map(word => native(word.slice(1)))
@@ -116,9 +156,17 @@ test('P2: 1000 seeded messages preserve text and attach only exact accepted iden
       const isPeer = i % 3 === 0
       if (isPeer) driver.deliver(peer)
       else driver.send(message)
-      for (let microtask = 0; microtask < 8; microtask++) await Promise.resolve()
-      expect(requests.at(-1)!.input).toEqual([textInput(isPeer ? formatEnvelope(peer) : message), ...(isPeer ? [] : expected)])
-      callbacks.onNotification('turn/completed', { turn: { id: `t-${requests.length}`, status: 'completed', items: [], error: null } })
+      await turnCompleted(i + 1)
+      lastInput = undefined
+      readTurnStarts()
+      expect({ i, input: lastInput }).toEqual({ i, input: [textInput(isPeer ? formatEnvelope(peer) : message), ...(isPeer ? [] : expected)] })
     }
-  } finally { driver.kill() }
+  } finally {
+    driver.kill()
+    try {
+      await driver.settled()
+    } finally {
+      fs.rmSync(root.root, { recursive: true, force: true })
+    }
+  }
 })

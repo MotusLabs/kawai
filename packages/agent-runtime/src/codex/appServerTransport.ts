@@ -72,6 +72,13 @@ export interface AppServerTransportOptions {
   onExit?(exit: LeaderExit): void
   /** Per-request deadline; default 30 000 ms, 0 disables. */
   requestTimeoutMs?: number
+  /**
+   * Private per-method deadlines (task-5906f19c A7), fixed at construction: a
+   * listed method's request takes its own value, chosen once when the
+   * request is admitted, with the same numeric meaning (0 disables); any
+   * other method takes requestTimeoutMs. The public factory passes none.
+   */
+  requestTimeoutsMs?: Readonly<Record<string, number>>
   /** After the first of an unsolicited exit and EOF, how long pending requests wait for the other; default 1 000 ms. */
   drainBoundMs?: number
   terminate?: TerminateOptions
@@ -204,7 +211,7 @@ export class AppServerTransport {
     const id = this.nextId++
     return new Promise<unknown>((resolve, reject) => {
       const entry: Pending = { method, resolve, reject, timer: undefined }
-      const timeoutMs = this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS
+      const timeoutMs = this.timeoutFor(method)
       if (timeoutMs > 0) {
         entry.timer = setTimeout(() => {
           if (this.pending.get(id) !== entry) return
@@ -217,6 +224,13 @@ export class AppServerTransport {
       this.pending.set(id, entry)
       this.write({ jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) })
     })
+  }
+
+  /** The deadline a request of `method` is admitted with. */
+  private timeoutFor(method: string): number {
+    const own = this.options.requestTimeoutsMs
+    if (own && Object.hasOwn(own, method)) return own[method]!
+    return this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS
   }
 
   /** One notification (no id, no reply); throws the refusal when not admitted. */

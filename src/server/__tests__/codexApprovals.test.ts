@@ -10,9 +10,10 @@ import type { ChatApprovalPolicy, ChatEvent } from '../../shared/chat'
 import { Script, sentRequest, startHarness, tempDirs, THREAD_ID, until, type Harness } from './codexDriverHarness'
 
 let harness: Harness | null = null
-afterEach(() => {
-  harness?.cleanup()
+afterEach(async () => {
+  const done = harness?.cleanup()
   harness = null
+  await done
 })
 
 const COMMAND = { type: 'commandExecution', id: 'cmd-1', command: 'git push origin', cwd: '/w', status: 'inProgress', aggregatedOutput: null, exitCode: null }
@@ -198,7 +199,10 @@ test('under auto an async question still asks; its answer is input to the active
   const asking = { type: 'agentMessage', id: 'ask-1', text: 'Proceed?\n- yes\n- no', delivery: 'async', questions: [{ title: 'Proceed?', options: ['yes', 'no'] }] }
   const script = new Script().boot().turn('ct-1')
     .item('started', 'ct-1', asking)
-    .request('turn/start', { turn: { id: 'ct-1', status: 'inProgress', items: [], error: null } })
+    // The answer joins the active turn (task-5906f19c C4: the accepted 6.1
+    // steering protocol, design 97/257, in place of the legacy driver's
+    // second turn/start on the same thread).
+    .request('turn/steer', { turnId: 'ct-1' })
     .item('completed', 'ct-1', asking)
     .item('completed', 'ct-1', { type: 'agentMessage', id: 'msg-2', text: 'answered', questions: null })
     .completed('ct-1')
@@ -207,12 +211,25 @@ test('under auto an async question still asks; its answer is input to the active
   await until(() => harness!.driver.getPendingRequests().length === 1)
   const question = ofType(harness, 'question_request')[0]!
   expect(question.questions).toEqual([{ question: 'Proceed?', header: '', multiSelect: false, options: [{ label: 'yes' }, { label: 'no' }] }])
-  harness.driver.answerQuestion(question.requestId, { 'Proceed?': { options: ['yes'] } })
+  expect(harness.driver.answerQuestion(question.requestId, { 'Proceed?': { options: ['yes'] } })).toEqual({ ok: true })
   await until(() => turnDone(harness!))
-  expect(sentRequest(harness, 'turn/start', 1)).toEqual({ threadId: THREAD_ID, input: [{ type: 'text', text: 'Proceed?: yes', text_elements: [] }] })
-  // One Kawai turn throughout; the completed item does not ask again.
+  const steer = sentRequest(harness, 'turn/steer')!
+  const asked = ofType(harness, 'user_message')
+  expect({ ...steer, clientUserMessageId: typeof steer.clientUserMessageId } as Record<string, unknown>).toEqual({
+    threadId: THREAD_ID, input: [{ type: 'text', text: 'Proceed?: yes', text_elements: [] }], expectedTurnId: 'ct-1', clientUserMessageId: 'string',
+  })
+  // Its own message identity: a UUID that is not the asking send's, and the
+  // answer shows as no user message.
+  expect(steer.clientUserMessageId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  expect(asked.map(event => event.text)).toEqual(['ask me'])
+  expect(steer.clientUserMessageId).not.toBe(asked[0]!.messageUuid)
+  // One native turn and one Kawai turn throughout; the completed item does not ask again.
+  expect(sentRequest(harness, 'turn/start', 1)).toBeUndefined()
   expect(ofType(harness, 'turn_started')).toHaveLength(1)
   expect(ofType(harness, 'question_request')).toHaveLength(1)
+  expect(ofType(harness, 'request_resolved').map(({ requestId, outcome, decidedBy }) => ({ requestId, outcome, decidedBy })))
+    .toEqual([{ requestId: question.requestId, outcome: 'answered', decidedBy: 'user' }])
+  expect(ofType(harness, 'turn_completed')).toHaveLength(1)
 })
 
 test('interrupt cancels a pending card and Codex hears cancel', async () => {
@@ -254,7 +271,7 @@ test('approvalsReviewer is "user" at start and resume under both policies even w
       await until(() => turnDone(harness!))
       expect(reply(harness, 106)).toEqual({ decision: policy === 'manual' ? 'decline' : 'accept' })
       expect(ofType(harness, 'request_resolved')[0]).toMatchObject({ decidedBy: policy === 'manual' ? 'user' : 'policy' })
-      harness.cleanup()
+      await harness.cleanup()
       harness = null
     }
   }

@@ -1,6 +1,6 @@
 // Manager wiring for the registered-name set (provider-relay-setup
 // correction A, from advisories note-da7f0861 + note-0f4155a0): each test
-// drives the real ChatSessionManager — or the real CodexSessionDriver —
+// drives the real ChatSessionManager — or the production Codex driver —
 // against a real database and kills one wiring mutant:
 //   M1a  the manager's Codex withheldCredentials provider drops the db, so
 //        a retained name reaches the respawned child;
@@ -9,16 +9,15 @@
 //        persists at the resolve sites;
 //   M-freeze  the manager freezes the Codex set at driver creation, so a
 //        name registered after creation reaches the respawn;
-//   M2   the Codex driver caches the set instead of evaluating it per spawn.
+//   M2   the Codex driver caches the set instead of evaluating it per spawn
+//        (through createChatDriver's production composition and two runs of
+//        the replaying fake as real children).
 // The helper-level suites cover their own seams; none of them closes a
 // manager one — only a real composition can.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { AppServerClientOptions } from '../chat/codex/appServerClient'
-import { CodexSessionDriver } from '../chat/codex/CodexSessionDriver'
-import type { CodexClient } from '../chat/codex/codexThread'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatWireLogs } from '../chat/ChatWireLogs'
 import type { ChatEvent } from '../../shared/chat'
@@ -320,69 +319,67 @@ describe('registered names through the real manager wiring', () => {
   })
 })
 
-interface FakeCodexClient extends CodexClient {
-  /** Simulates the app-server process dying. */
-  die(): void
-  startedThread: boolean
+/**
+ * Two runs of the replaying fake as real default-owned children (the
+ * production Codex composition, task-5906f19c): the first exits once replayed,
+ * so the next send respawns and resumes; each run writes the NAMES of the
+ * environment it received to its own file.
+ */
+function respawnScript(): Script {
+  const script = new Script().boot().turn('ct-1').completed('ct-1')
+  script.lines.push(...new Script().boot('thread/resume').turn('ct-2').completed('ct-2').lines)
+  return script
 }
 
-function makeFakeClient(options: AppServerClientOptions): FakeCodexClient {
-  const client: FakeCodexClient = {
-    startedThread: false,
-    start() {},
-    end() {},
-    async initialize() {
-      return {}
-    },
-    async request(method: string) {
-      if (method === 'thread/start' || method === 'thread/resume') {
-        client.startedThread = true
-        return { thread: { id: `th-fresh-${Math.random()}` } }
-      }
-      return {}
-    },
-    die() {
-      options.onExit({ code: 0, signal: null })
-    },
-  }
-  return client
-}
+const envNames = (file: string): string[] => fs.readFileSync(file, 'utf8').split('\n')
 
-describe('CodexSessionDriver spawn freshness', () => {
+describe('Codex driver spawn freshness', () => {
   test('the withheld set is evaluated at every spawn, not cached at creation (M2)', async () => {
     let registered = new Set(['FIRST_WITHHELD_KEY'])
     let evaluations = 0
-    const clients: FakeCodexClient[] = []
-    const spawnEnvNames: string[][] = []
-    const harness = startHarness(new Script().boot(), {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-codex-m2-')))
+    const names = [path.join(dir, 'spawn-1.names'), path.join(dir, 'spawn-2.names')]
+    // Both names are ambient in the server environment, so only a correct
+    // per-spawn withholding keeps either one out of a launch.
+    const serverEnv: Record<string, string> = {
+      PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_EXIT_AFTER_REPLAY: '1', FAKE_RUN: '1', FAKE_ENV_NAMES: names[0]!,
+      FIRST_WITHHELD_KEY: 'first-value', SECOND_WITHHELD_KEY: 'second-value',
+    }
+    const turns = (h: { events: ChatEvent[] }) => h.events.filter(event => event.type === 'turn_completed').length
+    const harness = startHarness(respawnScript(), {
       withheldCredentials: () => {
         evaluations += 1
         return new Set(registered)
       },
-      createClient: options => {
-        const client = makeFakeClient(options)
-        clients.push(client)
-        spawnEnvNames.push(Object.keys(options.env))
-        return client
-      },
+      serverEnv,
     })
+    serverEnv.HOME = harness.dir
+    serverEnv.FAKE_TRANSCRIPT = harness.transcript
     try {
       harness.driver.send('first')
-      await until(() => clients.length === 1 && clients[0]!.startedThread)
-      expect(spawnEnvNames[0]).not.toContain('FIRST_WITHHELD_KEY')
+      await until(() => turns(harness) === 1 && harness.driver.isDead)
+      expect(envNames(names[0]!)).not.toContain('FIRST_WITHHELD_KEY')
+      // Not yet registered: the first child received it (the set is live).
+      expect(envNames(names[0]!)).toContain('SECOND_WITHHELD_KEY')
 
       // A name registered after the driver's creation must vanish from the
       // respawned child's environment — the caching mutant delivers it.
       registered = new Set([...registered, 'SECOND_WITHHELD_KEY'])
-      clients[0]!.die()
-      // The next send respawns the ended app-server (ensureClient).
+      serverEnv.FAKE_RUN = '2'
+      serverEnv.FAKE_ENV_NAMES = names[1]!
+      // The next send respawns the ended app-server.
       harness.driver.send('second')
-      await until(() => clients.length === 2 && clients[1]!.startedThread)
+      await until(() => turns(harness) === 2)
       expect(evaluations).toBeGreaterThanOrEqual(2)
-      expect(spawnEnvNames[1]).not.toContain('FIRST_WITHHELD_KEY')
-      expect(spawnEnvNames[1]).not.toContain('SECOND_WITHHELD_KEY')
+      expect(harness.sent.filter(message => message.method === 'initialize')).toHaveLength(2)
+      expect(envNames(names[1]!)).not.toContain('FIRST_WITHHELD_KEY')
+      expect(envNames(names[1]!)).not.toContain('SECOND_WITHHELD_KEY')
     } finally {
-      harness.cleanup()
+      try {
+        await harness.cleanup()
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
     }
   })
 })

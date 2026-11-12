@@ -1,5 +1,5 @@
 // The production-path Codex harness's own teardown (task-5906f19c A3):
-// startRuntimeHarness's cleanup kills the adapter, joins everything it owns
+// startHarness's cleanup kills the adapter, joins everything it owns
 // through settled(), and only then removes the temp root (the project, the
 // Codex home, the transcript the fake replays). A host promise the adapter
 // owns holds the removal; every cleanup call is the same join; a raw failure
@@ -8,7 +8,7 @@
 // native exit beyond the package wire's own lifecycle frame.
 import fs from 'node:fs'
 import { expect, test } from 'bun:test'
-import { Script, startRuntimeHarness, until } from './codexDriverHarness'
+import { Script, startHarness, until } from './codexDriverHarness'
 
 /** Every object a settled() failure carries: itself, its causes, an AggregateError's errors. */
 function causes(error: unknown): unknown[] {
@@ -23,7 +23,7 @@ test('cleanup removes the temp root only after a held host promise settles; over
   let release!: () => void
   const held = new Promise<void>(resolve => (release = resolve))
   let reported = 0
-  const harness = startRuntimeHarness(new Script().boot(), { onTranscriptPath: () => { reported += 1; return held as unknown as void } })
+  const harness = startHarness(new Script().boot(), { onTranscriptPath: () => { reported += 1; return held as unknown as void } })
   try {
     harness.driver.start()
     await until(() => reported === 1)
@@ -52,7 +52,7 @@ test('cleanup removes the temp root only after a held host promise settles; over
 test('a raw host failure rejects cleanup once as the original object, after the join removed the root', async () => {
   const boom = new Error('path store down')
   let reported = 0
-  const harness = startRuntimeHarness(new Script().boot(), { onTranscriptPath: () => { reported += 1; return Promise.reject(boom) as unknown as void } })
+  const harness = startHarness(new Script().boot(), { onTranscriptPath: () => { reported += 1; return Promise.reject(boom) as unknown as void } })
   harness.driver.start()
   await until(() => reported === 1)
   const first = harness.cleanup()

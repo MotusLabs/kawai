@@ -88,20 +88,24 @@ export interface HarnessOptions extends Partial<Omit<CodexDriverOptions, 'callba
   launch?: CodexDriverOptions['launch']
   /** The bulk campaigns' in-process app-server (helpers/inProcessCodex.ts); default: the owned process. */
   inProcess?: boolean
+  /** Private per-method request deadlines through createCodexDriverWith (task-5906f19c A7); never a public option. */
+  requestTimeoutsMs?: Readonly<Record<string, number>>
 }
 
 /**
  * A public-factory driver (the package's createCodexDriver over the owned
  * process) whose callbacks record everything, then call any supplied hooks.
- * With `inProcess`, the same options go through createCodexDriverWith's
- * private spawn seam instead.
+ * With `inProcess` or `requestTimeoutsMs`, the same options go through
+ * createCodexDriverWith's private seams instead (the in-process spawn, the
+ * per-method deadlines; the owned process stays the default spawn).
  */
 export function codexDriver(options: HarnessOptions = {}): Recorded {
-  const { root: given, env, callbacks = {}, launch, inProcess = false, ...rest } = options
+  const { root: given, env, callbacks = {}, launch, inProcess = false, requestTimeoutsMs, ...rest } = options
   const root = given ?? codexRoot()
   const recorded = { root, events: [] as AgentEvent[], results: [] as TurnResult[], states: [] as DriverState[], ends: [] as ProcessEndReport[], checkpoints: [] as ResumeCheckpoint[], warnings: [] as unknown[] }
   const logger = { debug() {}, info() {}, warn: (obj: object, msg?: string) => recorded.warnings.push([msg, obj]), error: (obj: object, msg?: string) => recorded.warnings.push([msg, obj]) }
-  const create = (o: CodexDriverOptions) => (inProcess ? createCodexDriverWith(o, { spawn: inProcessSpawn }) : createCodexDriver(o))
+  const internal = { ...(inProcess ? { spawn: inProcessSpawn } : {}), ...(requestTimeoutsMs ? { requestTimeoutsMs } : {}) }
+  const create = (o: CodexDriverOptions) => (inProcess || requestTimeoutsMs ? createCodexDriverWith(o, internal) : createCodexDriver(o))
   const driver = create({
     logger,
     launch: launch ?? root.launch(env),
