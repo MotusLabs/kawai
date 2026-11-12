@@ -10,7 +10,8 @@ import {
   resetCodexExecutableCache,
   resolveCodexExecutable,
 } from '../chat/codex/codexExecutable'
-import { hasCodexLogin, codexLoginErrorMessage } from '../chat/codex/codexAuth'
+import { hasCodexLogin } from '@motuslabs/agent-runtime/codex'
+import { codexLoginErrorMessage } from '../chat/codex/codexAuth'
 
 /** Write an executable shell script and return its path. */
 function makeExecutable(dir: string, name: string, script: string): string {
