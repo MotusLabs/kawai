@@ -207,6 +207,19 @@ describe('ChatSessionManager provider usage pull', () => {
     return created.session.id
   }
 
+  /**
+   * The started session's query exists (task-752c9e4c A7). The package's
+   * Claude driver builds it only after a dynamic import of the SDK, which a
+   * cold module cache settles on a later event-loop turn: drainNow's
+   * microtasks alone never reach it, so the initial pull had not been
+   * claimed (diagnostic /tmp/k752/a7). Fake timers hold setTimeout, not
+   * setImmediate; the wait is bounded and throws rather than passing late.
+   */
+  async function queryBuilt(handles: FakeHandle[], turns = 100): Promise<void> {
+    for (let i = 0; i < turns && handles.length === 0; i++) await new Promise((resolve) => setImmediate(resolve))
+    if (handles.length === 0) throw new Error('the started session built no query')
+  }
+
   const costFrame = (cost: number): SDKMessage => ({
     type: 'stream_event',
     event: { type: 'message_delta', delta: {}, usage: { cost } },
@@ -226,6 +239,7 @@ describe('ChatSessionManager provider usage pull', () => {
       )
       const id = startOpenRouterSession(manager)
       expect(await manager.start(id)).toEqual({ ok: true })
+      await queryBuilt(handles)
       await drainNow()
       expect(fetchCalls).toHaveLength(1)
 
@@ -278,6 +292,7 @@ describe('ChatSessionManager provider usage pull', () => {
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       expect(await manager.start(created.session.id)).toEqual({ ok: true })
+      await queryBuilt(handles)
       await drainNow()
       expect(fetchCalls).toHaveLength(1)
       expect(await manager.send(created.session.id, 'costly work')).toEqual({ ok: true })

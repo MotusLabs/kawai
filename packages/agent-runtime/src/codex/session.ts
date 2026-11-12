@@ -26,6 +26,9 @@
 //   its text names unless the send chose codexSkills 'none' (R9); a steer
 //   carries text only, as before. setSkillDirectory (R11) moves the live
 //   generation's catalog to another directory.
+// - Activity. The in-tree driver's rules (activity.ts) publish onActivity
+//   from the published events and the open turn's notifications; a settled,
+//   foreign or retired frame publishes nothing.
 // - Stop. The lifecycle reserves the terminal first; teardown decides the
 //   open turn, closes requests, publishes, then stops every current and
 //   retired transport and joins all owned work; accounting adds each
@@ -53,6 +56,7 @@ import { codexTurnStartParams, composeCodexPermissions, type CodexPermissionComp
 import { cancelReply, CodexRequests } from './requests.js'
 import type { CodexSessionOptions } from './sessionOptions.js'
 import { CodexSkillDiscovery } from './skills.js'
+import { CodexActivity } from './activity.js'
 import { dispatchCodexToolCall, type CodexDynamicToolCall } from './tools.js'
 import { completionOutcome, decideTurn, INTERRUPTED, newCodexTurn, type CodexTurnState } from './turns.js'
 export type { CodexSessionOptions } from './sessionOptions.js'
@@ -92,13 +96,22 @@ export class CodexSession {
   private quotaRequested = false
   /** Native skills from the app-server's own catalog (skills.ts); private turn inputs. */
   private readonly skills: CodexSkillDiscovery
+  /** C1: the in-tree driver's activity rules (activity.ts), fed from published events and open-turn notifications. */
+  private readonly activity: CodexActivity
 
   constructor(private readonly options: CodexSessionOptions) {
     this.tools = bindToolSet(options.tools)
     this.permissions = composeCodexPermissions(options.permissions)
     this.threadId = options.resume?.runtimeSessionId ?? null
     const { callbacks } = options
-    this.events = new EventStream((event) => this.notify('onEvent', () => callbacks.onEvent(event)))
+    this.activity = new CodexActivity((activity) => {
+      const onActivity = callbacks.onActivity
+      if (onActivity) this.notify('onActivity', () => onActivity(activity))
+    })
+    this.events = new EventStream((event) => {
+      this.notify('onEvent', () => callbacks.onEvent(event))
+      this.activity.event(event)
+    })
     this.lifecycle = new DriverLifecycle({ continuations: new Set(['steer']), ...(callbacks.onState ? { onState: callbacks.onState } : {}) })
     const persist = callbacks.onCheckpoint && ((checkpoint: Parameters<NonNullable<typeof callbacks.onCheckpoint>>[0]) => callbacks.onCheckpoint!(checkpoint))
     const failed = () => {
@@ -326,6 +339,7 @@ export class CodexSession {
       return typeof raw?.id === 'string' ? this.turnCompleted(raw as never) : undefined
     }
     const turn = this.turnFor(params)
+    if (turn) this.activity.notification(method, params)
     this.facts.notification(method, params, turn)
   }
 

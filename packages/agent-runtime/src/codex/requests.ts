@@ -112,7 +112,8 @@ function validate(questions: AgentQuestion[], answers: QuestionAnswers): { ok: t
     if (!answer || (options.length === 0 && !text)) return { ok: false, error: `Missing answer for "${question.question}"` }
     if (options.length > 1) return { ok: false, error: `"${question.question}" accepts only one choice` }
     if (options.length > 0 && text) return { ok: false, error: `"${question.question}" takes one answer: choose an option or type your own, not both` }
-    if (text && question.isOther === false) return { ok: false, error: `"${question.question}" accepts only an offered choice` }
+    // C3: a question offering no choices takes text; an offered-only one refuses other text.
+    if (text && question.isOther === false && question.options.length > 0) return { ok: false, error: `"${question.question}" accepts only an offered choice` }
     const labels = new Set(question.options.map((o) => o.label))
     for (const label of options) if (!labels.has(label)) return { ok: false, error: `"${label}" is not an offered choice for "${question.question}"` }
     result.push(options.length > 0 ? [...options] : [text])
