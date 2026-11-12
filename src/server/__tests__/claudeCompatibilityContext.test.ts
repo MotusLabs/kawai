@@ -7,7 +7,9 @@
 // process's report threshold is never borrowed. The new process's own
 // readings follow unchanged; a clear forgets the reading; with no window to
 // re-anchor on nothing is published; a failed attach probe and a throwing
-// host callback stay raw owned failures, reported once.
+// host callback stay raw owned failures, reported once. A host that mutates a
+// delivered reading or correction cannot change what a later respawn
+// re-anchors (finding F1).
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { ChatContextUsage } from '../../shared/chat'
 import { compatibilityAdapter, finishAll, initFrame, settle, until, type ContextProbe, type Harness } from './helpers/claudeCompatibilityHarness'
@@ -126,6 +128,56 @@ describe('Claude respawn context correction through the production composition (
     await until(() => h.scripts.length === 2)
     await settle()
     expect(published.slice(before)).toEqual([])
+  })
+
+  /** An adapter whose host records each delivered reading as scalars, then may mutate the view it was given. */
+  function mutatingHost(window: { env: string }, mutate: (usage: ChatContextUsage, index: number) => void) {
+    const seen: Array<{ used: number; threshold: number; persist: boolean }> = []
+    const h = compatibilityAdapter({
+      getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: window.env }),
+      onContextUsage: (usage: ChatContextUsage | null, meta?: { persist?: boolean }) => {
+        if (!usage) return
+        seen.push({ used: usage.usedTokens, threshold: usage.thresholdTokens, persist: meta?.persist === true })
+        mutate(usage, seen.length - 1)
+      },
+    })
+    return { h, seen }
+  }
+
+  // Finding F1 (review findings-6b5befb7), the reviewer's probe on the real composition.
+  test('a host mutation of a delivered reading cannot rewrite the tokens a respawn re-anchors', async () => {
+    const window = { env: '200000' }
+    const { h, seen } = mutatingHost(window, (usage, index) => {
+      if (index === 0) Object.assign(usage, { usedTokens: 1, thresholdTokens: 3, percentage: 0, at: 'mutated' })
+    })
+    await firstProcess(h, 150_000, () => seen.length === 1)
+    window.env = '100000'
+    h.driver.send('next')
+    await until(() => h.scripts.length === 2)
+    expect(seen).toEqual([{ used: 150_000, threshold: 200_000, persist: false }, { used: 150_000, threshold: 100_000, persist: true }])
+  })
+
+  test('a host mutation of a delivered correction cannot rewrite what the next respawn re-anchors', async () => {
+    const window = { env: '200000' }
+    const { h, seen } = mutatingHost(window, (usage, index) => {
+      if (index === 1) Object.assign(usage, { usedTokens: 1, thresholdTokens: 3, percentage: 0, at: 'mutated' })
+    })
+    await firstProcess(h, 150_000, () => seen.length === 1)
+    // The second process is corrected at spawn, then exits before any reading of its own.
+    window.env = '100000'
+    h.driver.send('next')
+    await until(() => h.scripts.length === 2)
+    await until(() => h.scripts[1]!.prompts.length === 1)
+    h.scripts[1]!.exit()
+    await until(() => h.driver.isDead)
+    window.env = '50000'
+    h.driver.send('third')
+    await until(() => h.scripts.length === 3)
+    expect(seen).toEqual([
+      { used: 150_000, threshold: 200_000, persist: false },
+      { used: 150_000, threshold: 100_000, persist: true },
+      { used: 150_000, threshold: 50_000, persist: true },
+    ])
   })
 
   test("a throwing host callback on the correction is reported once by identity; the new process's readings still arrive", async () => {

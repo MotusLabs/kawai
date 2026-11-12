@@ -18,6 +18,11 @@
 // denominator is known (the disclosed limit), or when it equals the last
 // forwarded reading. A respawn inside one package driver is the package's
 // own re-anchor, so only generation 1 of a later driver is corrected here.
+//
+// Ownership: the mirror never keeps an object a host callback receives. It
+// copies each observed reading, keeps its own copy of a correction and hands
+// out another, so a host mutating a delivered view or correction cannot change
+// the measured tokens, time or window a later respawn re-anchors.
 import type { ChatContextUsage } from '../../../shared/chat'
 import { ChatContextTracker, parsePositiveTokens } from '../contextUsage'
 
@@ -34,7 +39,7 @@ export class ClaudeContextMirror {
 
   /** A reading the adapter is about to forward (before the host callback runs). */
   observe(usage: ChatContextUsage | null, meta?: { thresholdSource?: string }): void {
-    this.last = usage
+    this.last = usage === null ? null : snapshot(usage)
     if (usage && meta?.thresholdSource === 'model-window-fallback') this.modelWindow = Math.max(this.modelWindow ?? 0, usage.thresholdTokens)
   }
 
@@ -53,7 +58,10 @@ export class ClaudeContextMirror {
     if (usage.thresholdTokens === last.thresholdTokens && Boolean(usage.thresholdApproximate) === Boolean(last.thresholdApproximate)) return null
     // A fresh tracker holds no report threshold or reserve: a profile window is a stand-in, else the model window is.
     const thresholdSource = tracker.getState().profileWindow !== null ? 'profile-window-fallback' : 'model-window-fallback'
-    this.last = usage
-    return { usage, meta: { persist: true, thresholdSource } }
+    this.last = snapshot(usage)
+    return { usage: snapshot(usage), meta: { persist: true, thresholdSource } }
   }
 }
+
+/** A detached copy of one reading (ChatContextUsage holds only scalars). */
+const snapshot = (usage: ChatContextUsage): ChatContextUsage => ({ ...usage })
