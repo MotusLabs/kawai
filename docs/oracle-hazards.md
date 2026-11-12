@@ -195,6 +195,12 @@ or property that would have caught it, and the source finding.
   fail-fast loop and the swallow-all.
 - **Source finding.** findings-6b5befb7 F2 (task-98101592), fixed in
   c5c67808.
+- **One owner since task-666e5edd.** The package helper and Kawai's
+  `claudeRuntimeHarness.ts` both delegate to the test helper
+  `packages/agent-runtime/__tests__/helpers/ownedCleanup.ts`. Its finite
+  cases and seeded property (`packages/agent-runtime/__tests__/ownedCleanup.test.ts`,
+  `ownedCleanup.properties.test.ts`) hold the join-all and raw-rethrow
+  rules once, against an independent model.
 
 ### A migrated oracle given a new stimulus to pass (task-602c71e9 parent F1)
 
@@ -251,6 +257,12 @@ or property that would have caught it, and the source finding.
   Controls restore the split completion and a release deferred by one
   microtask. Source: findings-7712679a (task-602c71e9 R6 re-review), fixed
   in R7.
+- **One owner since task-666e5edd.** The suite join's reservation, late
+  ownership and one-step completion now live in the shared test helper
+  `packages/agent-runtime/__tests__/helpers/ownedCleanup.ts`, which the
+  package's `claudeCompatibilityCleanup.ts` after-hook uses too. Its seeded
+  property (`0xC1EA2026`, 256 cases) checks barrier identities, late
+  registrations and raw failures against an independent pass model.
 
 ## Cache keys
 
