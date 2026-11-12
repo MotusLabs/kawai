@@ -27,18 +27,21 @@ which holds for the floor version and every newer CLI.
      never ends a turn.
 4. **Interrupts cancel queued prompts.** The CLI advertises
    `interrupt_cancel_queued_v1` in `system/init.capabilities`. When it does,
-   every driver interrupt sends `cancel_queued`: Stop, archive, kill, and
-   urgent mail. The SDK's runtime `interrupt({ cancelQueued })` supports the
+   every cooperative interrupt sends `cancel_queued`: Stop, archive and
+   urgent mail. The package driver's kill and shutdown close the query and
+   stop the process without an interrupt. The SDK's runtime `interrupt({ cancelQueued })` supports the
    option, but its type declaration omits it, so `interruptQuery` is the one
    typed call site. The receipt's `cancelled` list says which prompts will
    never run.
-   Until the driver's first `system/init`, the capability counts as present,
-   so every interrupt sends `cancel_queued` (older CLIs ignore the field).
-   Each later init that reports `capabilities` replaces the answer, including
-   the init after a respawn. After an init without the capability, every
-   interrupt is plain. Stop, archive, and urgent mail also log
-   `chat_cli_contract_violation` with `interrupt-cancel-queued-unsupported`;
-   kill and shutdown do not.
+   Each process generation starts with the capability counted as present, so
+   every interrupt sends `cancel_queued` (older CLIs ignore the field). A
+   respawn starts again from present. Each later init that reports a
+   `capabilities` array replaces the answer; an absent or non-array field
+   keeps it. After an init without the capability, every interrupt is plain.
+   Stop, archive and urgent mail then also log
+   `interrupt-cancel-queued-unsupported`, as `claude_cli_contract_violation`
+   from the package driver (`chat_cli_contract_violation` from the legacy
+   in-tree driver). Kill and shutdown never log it.
 5. `command_lifecycle` frames are logged at debug level only. No rule reads
    them.
 
