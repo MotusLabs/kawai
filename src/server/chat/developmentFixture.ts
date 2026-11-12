@@ -13,7 +13,7 @@ import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ChatQueryFactory } from './ChatSessionDriver'
+import type { ChatQueryFactory } from './provider/claudeDriverTypes'
 
 export const chatFixtureEnabled =
   process.env.NODE_ENV === 'development' && process.env.AGENTBOARD_CHAT_FIXTURE === '1'

@@ -1,9 +1,8 @@
 // The runtime-neutral chat driver contract (openspec codex-chat-sessions
 // design D1): the slice of the Claude driver's public surface that the
 // session manager, mailbox, and staffing depend on, plus the output
-// callbacks every driver reports through. ChatSessionDriver implements this
-// interface unchanged; the Codex driver arrives with the change that wires
-// it. No SDK type appears here — the Claude-only extras stay behind the
+// callbacks every driver reports through. The Claude and Codex adapters
+// over the package (claudeRuntime.ts, codexRuntime.ts) implement it. No SDK type appears here — the Claude-only extras stay behind the
 // optional capability method the manager probes for.
 import type {
   ChatActivity,

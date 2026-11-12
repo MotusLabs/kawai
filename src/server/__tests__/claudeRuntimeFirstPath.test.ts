@@ -11,29 +11,26 @@ import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import { assistantText, flush, result } from './fixtures/chatDriverHarness'
-import { createRuntimeHarness, type RuntimeHarness } from './fixtures/claudeRuntimeHarness'
+import { cleanupHarnesses, createRuntimeHarness, type RuntimeHarness } from './fixtures/claudeRuntimeHarness'
 
 let tempHome: string
 const originalHome = process.env.HOME
-const open: RuntimeHarness[] = []
 beforeEach(() => {
   tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdriver-'))
   process.env.HOME = tempHome
 })
 afterEach(async () => {
   try {
-    await Promise.all(open.splice(0).map((h) => h.cleanup()))
+    // The shared join: every harness since the last case, a failure no case
+    // took through failure() reported once.
+    await cleanupHarnesses()
   } finally {
     if (originalHome !== undefined) process.env.HOME = originalHome
     else delete process.env.HOME
     fs.rmSync(tempHome, { recursive: true, force: true })
   }
 })
-const harness = (overrides?: Parameters<typeof createRuntimeHarness>[0]) => {
-  const h = createRuntimeHarness(overrides)
-  open.push(h)
-  return h
-}
+const harness = (overrides?: Parameters<typeof createRuntimeHarness>[0]) => createRuntimeHarness(overrides)
 
 test('error result leaves the session usable and reports the failure', async () => {
   const h = harness()
@@ -120,6 +117,8 @@ test('a rejected identity persistence reaches the joined cleanup raw, once', asy
   expect(fake.closed).toBe(true)
   // The same join answers later; nothing is reported twice.
   expect(await h.cleanup().then(() => null, (caught: unknown) => caught)).toBe(error)
+  // Asserting that exact cause marks it reported, so the shared join does not report it again.
+  await h.expectFailures(boom)
 })
 
 test('the legacy driver knobs the adapter never reads are refused, never dropped', () => {

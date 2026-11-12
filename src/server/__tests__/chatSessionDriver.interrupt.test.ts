@@ -8,7 +8,7 @@ import path from 'node:path'
 import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent } from '../../shared/chat'
 import { logger } from '../logger'
-import { assistantText, createHarness, flush, result, type Harness } from './fixtures/chatDriverHarness'
+import { assistantText, cleanupHarnesses, createHarness, flush, result, type Harness } from './fixtures/chatDriverHarness'
 
 const CAPS = ['interrupt_receipt_v1', 'interrupt_cancel_queued_v1']
 const PEER = { messageId: 'mail-urgent', senderSession: 'lead', senderGroup: null, priority: 'urgent' as const, originPath: '/repo', tags: [], threadId: 'mail-urgent', body: 'Stop and do this', possibleDuplicate: false }
@@ -27,34 +27,97 @@ const own = (...prompts: Array<SDKUserMessage | null>) => answer(prompts, 'succe
 const completed = (h: Harness) => h.events
   .filter((event): event is Extract<ChatEvent, { type: 'turn_completed' }> => event.type === 'turn_completed')
   .map(event => ({ turnId: event.turnId, subtype: event.subtype, input: event.usage?.inputTokens }))
-const OWN_TURN_2 = [{ turnId: 'turn-2', subtype: 'success', input: 5 }]
+/** The delivered mail's turn, named by the caller's envelope. */
+const DELIVERED: Anchor = { peer: PEER.messageId }
+const ownTurnTwo = (r: Roles) => [{ turnId: r.two, subtype: 'success', input: 5 }]
+
+/**
+ * Scenario roles (task-602c71e9 R2, A8). The retired harness injected
+ * createTurnId → turn-1, turn-2…; the package mints opaque turn ids, so each
+ * case names its turns by roles it declares before it drives anything, each
+ * tied to an anchor independent of the driver's output order: the prompt the
+ * package wrote for a caller send (that prompt's uuid on its user_message
+ * event), the caller's delivered envelope (its messageId on the peer_message
+ * event), or — for the one agent-started or queued turn a case opens — the
+ * single turn_started that no prompt or envelope names.
+ * Roles resolve when asserted; distinct roles must bind distinct turn ids, and
+ * the full turn_started sequences the cases assert admit no other id. Lost on
+ * purpose: the literal injected labels and any proof about mints the old
+ * class made but never showed.
+ */
+type Anchor = { prompt: () => SDKUserMessage | null | undefined } | { peer: string } | 'unnamed'
+type Roles = Record<'one' | 'two', string>
+function roles<R extends string>(h: Harness, anchors: Record<R, Anchor>): Record<R, string> {
+  const prompted = (uuid: string | undefined) => h.events.filter(event => event.type === 'user_message' && event.messageUuid === uuid)
+  const ids = Object.fromEntries(Object.entries<Anchor>(anchors).map(([role, anchor]) => {
+    if (anchor === 'unnamed') {
+      const named = new Set(h.events.flatMap(event => event.type === 'user_message' || event.type === 'peer_message' ? [event.turnId] : []))
+      const unnamed = h.events.filter(event => event.type === 'turn_started' && !named.has(event.turnId))
+      expect(unnamed).toHaveLength(1)
+      return [role, (unnamed[0] as { turnId: string }).turnId]
+    }
+    if ('peer' in anchor) {
+      const shown = h.events.filter(event => event.type === 'peer_message' && event.messageId === anchor.peer)
+      expect(shown).toHaveLength(1)
+      return [role, (shown[0] as { turnId: string }).turnId]
+    }
+    const uuid = anchor.prompt()?.uuid
+    expect(typeof uuid).toBe('string')
+    const shown = prompted(uuid)
+    expect(shown).toHaveLength(1)
+    return [role, (shown[0] as { turnId: string }).turnId]
+  })) as Record<R, string>
+  expect(new Set(Object.values(ids)).size).toBe(Object.keys(ids).length)
+  return ids
+}
+const pulled = new WeakMap<Harness, number>()
+/** The next prompt, once the package actually wrote it (its async boot precedes the write). */
+async function pull(h: Harness, fake = 0): Promise<SDKUserMessage | null> {
+  const count = (pulled.get(h) ?? 0) + 1
+  pulled.set(h, count)
+  await h.admitted(count)
+  return h.fakes[fake]!.pullPrompt()
+}
 
 let warn: Mock<typeof logger.warn>
 const warned = (event: string) => warn.mock.calls.filter(([name]) => name === event).map(([, data]) => (data as { reason?: string; uuid?: string }))
-const violations = () => warned('chat_cli_contract_violation').map(data => data.reason)
+// The package logs the pinned contract's deviations under its own event
+// names (packages/agent-runtime/src/claude/session.ts: claude_cli_contract_violation,
+// claude_unknown_result_uuid); the retired class logged them as chat_*.
+const VIOLATION = 'claude_cli_contract_violation'
+const UNKNOWN_UUID = 'claude_unknown_result_uuid'
+const violations = () => warned(VIOLATION).map(data => data.reason)
 beforeEach(() => { warn = spyOn(logger, 'warn') })
-afterEach(() => { warn.mockRestore() })
+afterEach(async () => {
+  // Every harness's driver is killed and joined (settled()) before the spy is restored.
+  try {
+    await cleanupHarnesses()
+  } finally {
+    warn.mockRestore()
+  }
+})
 
-/** A busy turn-1 the CLI is working on; returns its prompt. */
+/** A busy first turn the CLI is working on; returns its prompt. */
 async function busy(h: Harness, capabilities: string[] = CAPS) {
   h.driver.send('long job')
-  const prompt = await h.fakes[0]!.pullPrompt()
+  const prompt = await pull(h)
   h.fakes[0]!.push(init(capabilities))
   h.fakes[0]!.push(assistantText('working on it'))
   await flush()
   return prompt
 }
 
-/** turn-2 runs on its own init, frames, and result. */
-async function turnTwoRuns(h: Harness, prompt: SDKUserMessage | null, withInit = true) {
+/** The second turn runs on its own init, frames, and result. */
+async function turnTwoRuns(h: Harness, prompt: SDKUserMessage | null, first: Anchor, second: Anchor, withInit = true) {
   if (withInit) h.fakes[0]!.push(init())
   h.fakes[0]!.push(assistantText('on it', 'msg_2'))
   h.fakes[0]!.push(own(prompt))
   await flush()
-  expect(completed(h)).toEqual(OWN_TURN_2)
-  expect(h.events.find(event => event.type === 'assistant_text' && event.turnId === 'turn-2')).toMatchObject({ text: 'on it' })
-  expect(h.events.some(event => event.type === 'assistant_text' && event.turnId !== 'turn-2' && event.text === 'on it')).toBe(false)
-  expect(h.events.filter(event => event.type === 'turn_started').map(event => event.turnId)).toEqual(['turn-1', 'turn-2'])
+  const r = roles(h, { one: first, two: second })
+  expect(completed(h)).toEqual(ownTurnTwo(r))
+  expect(h.events.find(event => event.type === 'assistant_text' && event.turnId === r.two)).toMatchObject({ text: 'on it' })
+  expect(h.events.some(event => event.type === 'assistant_text' && event.turnId !== r.two && event.text === 'on it')).toBe(false)
+  expect(h.events.filter(event => event.type === 'turn_started').map(event => event.turnId)).toEqual([r.one, r.two])
   expect(h.statuses.at(-1)).toBe('waiting')
 }
 
@@ -63,8 +126,8 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
     const h = createHarness()
     h.driver.send('first')
     h.driver.send('second')
-    const a = await h.fakes[0]!.pullPrompt()
-    const b = await h.fakes[0]!.pullPrompt()
+    const a = await pull(h)
+    const b = await pull(h)
     expect(a?.uuid).toBeString()
     expect(b?.uuid).toBeString()
     expect(a?.uuid).not.toBe(b?.uuid)
@@ -74,11 +137,11 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
     const h = createHarness()
     const a = await busy(h)
     await h.driver.interrupt()
-    expect(h.events.at(-1)).toMatchObject({ type: 'turn_interrupted', turnId: 'turn-1' })
+    expect(h.events.at(-1)).toMatchObject({ type: 'turn_interrupted', turnId: roles(h, { one: { prompt: () => a } }).one })
     h.driver.deliver(PEER)
-    const b = await h.fakes[0]!.pullPrompt()
+    const b = await pull(h)
     h.fakes[0]!.push(aborted(a))
-    await turnTwoRuns(h, b)
+    await turnTwoRuns(h, b, { prompt: () => a }, DELIVERED)
     expect(h.events.some(event => event.type === 'error')).toBe(false)
     expect(violations()).toEqual([])
   })
@@ -88,25 +151,26 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
     const a = await busy(h)
     await h.driver.interrupt()
     h.driver.deliver(PEER)
-    const b = await h.fakes[0]!.pullPrompt()
+    const b = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(aborted(a))
-    await turnTwoRuns(h, b, false)
+    await turnTwoRuns(h, b, { prompt: () => a }, DELIVERED, false)
     expect(violations()).toEqual(['init-before-owed-result'])
   })
 
   test('GUARD (2b1f56bf) an interrupted agent-started turn: its uuid-less tail never ends the delivered turn', async () => {
     const h = createHarness()
     h.driver.start()
-    h.fakes[0]!.push(init())
-    h.fakes[0]!.push(assistantText('counting'))
+    const fake = await h.spawned()
+    fake.push(init())
+    fake.push(assistantText('counting'))
     await flush()
-    expect(h.events.find(event => event.type === 'turn_started')).toMatchObject({ turnId: 'turn-1', trigger: { kind: 'resumed' } })
+    expect(h.events.find(event => event.type === 'turn_started')).toMatchObject({ turnId: roles(h, { one: 'unnamed' }).one, trigger: { kind: 'resumed' } })
     await h.driver.interrupt()
     h.driver.deliver(PEER)
-    const b = await h.fakes[0]!.pullPrompt()
+    const b = await pull(h)
     h.fakes[0]!.push(aborted())
-    await turnTwoRuns(h, b)
+    await turnTwoRuns(h, b, 'unnamed', DELIVERED)
     expect(violations()).toEqual([])
   })
 
@@ -115,10 +179,10 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
     const a = await busy(h)
     await h.driver.interrupt()
     h.driver.send('do this instead')
-    const b = await h.fakes[0]!.pullPrompt()
-    expect(h.events.at(-1)).toMatchObject({ type: 'user_message', turnId: 'turn-2' })
+    const b = await pull(h)
+    expect(h.events.at(-1)).toMatchObject({ type: 'user_message', turnId: roles(h, { one: { prompt: () => a }, two: { prompt: () => b } }).two })
     h.fakes[0]!.push(aborted(a))
-    await turnTwoRuns(h, b)
+    await turnTwoRuns(h, b, { prompt: () => a }, { prompt: () => b })
   })
 
   test('GUARD (2b1f56bf) an interrupt during a pending approval: the delivered turn ends on its own result', async () => {
@@ -132,32 +196,32 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
     await h.driver.interrupt()
     expect(await decision).toMatchObject({ behavior: 'deny' })
     h.driver.deliver(PEER)
-    const b = await h.fakes[0]!.pullPrompt()
+    const b = await pull(h)
     h.fakes[0]!.push(aborted(a))
-    await turnTwoRuns(h, b)
+    await turnTwoRuns(h, b, { prompt: () => a }, DELIVERED)
   })
 
   test('GUARD (2b1f56bf) an interrupt before the turn\'s init: pins the pre-init cancel_queued default; that init opens nothing, the next turn runs on its own', async () => {
     const h = createHarness()
     h.driver.send('long job')
-    const a = await h.fakes[0]!.pullPrompt()
+    const a = await pull(h)
     await h.driver.interrupt()
     expect(h.fakes[0]!.interruptOptions).toEqual([{ cancelQueued: true }])
     h.driver.deliver(PEER)
-    const b = await h.fakes[0]!.pullPrompt()
+    const b = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(aborted(a))
-    await turnTwoRuns(h, b)
+    await turnTwoRuns(h, b, { prompt: () => a }, DELIVERED)
     expect(violations()).toEqual([])
   })
 
   test('NIT no tail: the delivered turn runs; the missing result is logged', async () => {
     const h = createHarness()
-    await busy(h)
+    const a = await busy(h)
     await h.driver.interrupt()
     h.driver.deliver(PEER)
-    const b = await h.fakes[0]!.pullPrompt()
-    await turnTwoRuns(h, b)
+    const b = await pull(h)
+    await turnTwoRuns(h, b, { prompt: () => a }, DELIVERED)
     expect(violations()).toEqual(['init-before-owed-result'])
   })
 
@@ -168,11 +232,12 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(assistantText('a monitor fired', 'msg_2'))
     h.fakes[0]!.push(result('success', { usage: { input_tokens: 4, output_tokens: 1 } }))
-    // The late tail names turn-1: dropped.
+    // The late tail names the first turn: dropped.
     h.fakes[0]!.push(aborted(a))
     await flush()
-    expect(completed(h)).toEqual([{ turnId: 'turn-2', subtype: 'success', input: 4 }])
-    expect(h.events.find(event => event.type === 'assistant_text' && event.turnId === 'turn-2')).toMatchObject({ text: 'a monitor fired' })
+    const r = roles(h, { one: { prompt: () => a }, two: 'unnamed' })
+    expect(completed(h)).toEqual([{ turnId: r.two, subtype: 'success', input: 4 }])
+    expect(h.events.find(event => event.type === 'assistant_text' && event.turnId === r.two)).toMatchObject({ text: 'a monitor fired' })
     expect(violations()).toEqual(['init-before-owed-result'])
     expect(h.statuses.at(-1)).toBe('waiting')
   })
@@ -180,45 +245,46 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
   test('GUARD (2b1f56bf) (i) a late or duplicate result naming a completed turn never closes the current one', async () => {
     const h = createHarness()
     h.driver.send('first')
-    const a = await h.fakes[0]!.pullPrompt()
+    const a = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(answer([a], 'success', 3))
     await flush()
     h.driver.send('second')
-    const b = await h.fakes[0]!.pullPrompt()
+    const b = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(answer([a], 'success', 3))
     await flush()
     expect(h.statuses.at(-1)).toBe('working')
     h.fakes[0]!.push(own(b))
     await flush()
-    expect(completed(h)).toEqual([{ turnId: 'turn-1', subtype: 'success', input: 3 }, { turnId: 'turn-2', subtype: 'success', input: 5 }])
+    const r = roles(h, { one: { prompt: () => a }, two: { prompt: () => b } })
+    expect(completed(h)).toEqual([{ turnId: r.one, subtype: 'success', input: 3 }, { turnId: r.two, subtype: 'success', input: 5 }])
   })
 
   test('GUARD (2b1f56bf) (ii) a never-sent uuid is logged and dropped', async () => {
     const h = createHarness()
     h.driver.send('first')
-    const a = await h.fakes[0]!.pullPrompt()
+    const a = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(result('success', { user_message_uuid: 'never-sent', user_message_uuids: ['never-sent'] }))
     await flush()
     expect(completed(h)).toEqual([])
-    expect(warned('chat_unknown_result_uuid').map(data => data.uuid)).toEqual(['never-sent'])
+    expect(warned(UNKNOWN_UUID).map(data => data.uuid)).toEqual(['never-sent'])
     h.fakes[0]!.push(own(a))
     await flush()
-    expect(completed(h)).toEqual([{ turnId: 'turn-1', subtype: 'success', input: 5 }])
+    expect(completed(h)).toEqual([{ turnId: roles(h, { one: { prompt: () => a } }).one, subtype: 'success', input: 5 }])
   })
 
   test('NIT (iv) one result with two uuids closes the one joined turn', async () => {
     const h = createHarness()
     h.driver.send('first')
     h.driver.send('and also this')
-    const a = await h.fakes[0]!.pullPrompt()
-    const b = await h.fakes[0]!.pullPrompt()
+    const a = await pull(h)
+    const b = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(answer([a, b], 'success', 5))
     await flush()
-    expect(completed(h)).toEqual([{ turnId: 'turn-1', subtype: 'success', input: 5 }])
+    expect(completed(h)).toEqual([{ turnId: roles(h, { one: { prompt: () => a } }).one, subtype: 'success', input: 5 }])
     expect(h.events.filter(event => event.type === 'turn_started')).toHaveLength(1)
     expect(h.statuses.at(-1)).toBe('waiting')
   })
@@ -227,14 +293,17 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
     const h = createHarness()
     h.driver.send('first')
     h.driver.send('and also this')
-    const a = await h.fakes[0]!.pullPrompt()
-    const b = await h.fakes[0]!.pullPrompt()
+    const a = await pull(h)
+    const b = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(answer([a], 'success', 3, { queued_turn_count: 1 }))
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(own(b))
     await flush()
-    expect(completed(h)).toEqual([{ turnId: 'turn-1', subtype: 'success', input: 3 }, { turnId: 'turn-2', subtype: 'success', input: 5 }])
+    // The queued send's own turn: shown under the active turn while queued
+    // (queuedEchoes.ts), its prompt names no turn of its own.
+    const r = roles(h, { one: { prompt: () => a }, two: 'unnamed' })
+    expect(completed(h)).toEqual([{ turnId: r.one, subtype: 'success', input: 3 }, { turnId: r.two, subtype: 'success', input: 5 }])
     expect(h.statuses.at(-1)).toBe('waiting')
     expect(violations()).toEqual([])
   })
@@ -259,42 +328,43 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
     const h = createHarness()
     const a = await busy(h)
     h.driver.send('and also this')
-    const b = await h.fakes[0]!.pullPrompt()
+    const b = await pull(h)
     h.fakes[0]!.interruptReceipt = { still_queued: [], cancelled: [b!.uuid!] }
     await h.driver.interrupt()
     h.fakes[0]!.push(aborted(a))
     await flush()
     h.driver.deliver(PEER)
-    const c = await h.fakes[0]!.pullPrompt()
-    await turnTwoRuns(h, c)
+    const c = await pull(h)
+    await turnTwoRuns(h, c, { prompt: () => a }, DELIVERED)
     expect(violations()).toEqual([])
   })
 
   test('NIT an interrupt with no active turn interrupts nothing; the next turn runs', async () => {
     const h = createHarness()
     h.driver.send('first')
-    const a = await h.fakes[0]!.pullPrompt()
+    const a = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(answer([a], 'success', 3))
     await flush()
     await h.driver.interrupt()
     expect(h.events.some(event => event.type === 'turn_interrupted')).toBe(false)
     h.driver.deliver(PEER)
-    const b = await h.fakes[0]!.pullPrompt()
+    const b = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(own(b))
     await flush()
-    expect(completed(h)).toEqual([{ turnId: 'turn-1', subtype: 'success', input: 3 }, { turnId: 'turn-2', subtype: 'success', input: 5 }])
+    const r = roles(h, { one: { prompt: () => a }, two: DELIVERED })
+    expect(completed(h)).toEqual([{ turnId: r.one, subtype: 'success', input: 3 }, { turnId: r.two, subtype: 'success', input: 5 }])
     expect(violations()).toEqual([])
   })
 
   test('NIT (e) a setup failure\'s uuid-less result ends the prompted turn, logged', async () => {
     const h = createHarness()
     h.driver.send('first')
-    await h.fakes[0]!.pullPrompt()
+    const a = await pull(h)
     h.fakes[0]!.push(result('error_during_execution', { errors: ['startup failed'], total_cost_usd: 0 }))
     await flush()
-    expect(completed(h)).toEqual([{ turnId: 'turn-1', subtype: 'error_during_execution', input: 1 }])
+    expect(completed(h)).toEqual([{ turnId: roles(h, { one: { prompt: () => a } }).one, subtype: 'error_during_execution', input: 1 }])
     expect(h.events.at(-1)).toMatchObject({ type: 'error', message: 'startup failed' })
     expect(violations()).toEqual(['prompted-result-without-uuid'])
     expect(h.statuses.at(-1)).toBe('waiting')
@@ -302,24 +372,24 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
 
   test('NIT process death after an interrupt: the respawned process runs the next turn', async () => {
     const h = createHarness()
-    await busy(h)
+    const a = await busy(h)
     await h.driver.interrupt()
     h.fakes[0]!.exit()
     await flush()
     expect(h.events.at(-1)).toMatchObject({ type: 'error' })
     h.driver.send('again')
-    const b = await h.fakes[1]!.pullPrompt()
+    const b = await pull(h, 1)
     h.fakes[1]!.push(init())
     h.fakes[1]!.push(own(b))
     await flush()
-    expect(completed(h)).toEqual(OWN_TURN_2)
+    expect(completed(h)).toEqual(ownTurnTwo(roles(h, { one: { prompt: () => a }, two: { prompt: () => b } })))
     expect(h.statuses.at(-1)).toBe('waiting')
   })
 
   test('NIT a background task whose queued notification Stop cancels keeps its outcome in the roster', async () => {
     const h = createHarness()
     h.driver.send('start the server')
-    const a = await h.fakes[0]!.pullPrompt()
+    const a = await pull(h)
     h.fakes[0]!.push(init())
     h.fakes[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'bquick', tool_use_id: 'call_quick', task_type: 'local_bash', description: 'marker', is_backgrounded: true, uuid: 'u', session_id: 's' } as unknown as SDKMessage)
     h.fakes[0]!.push(answer([a], 'success', 3))
@@ -343,16 +413,20 @@ describe('ChatSessionDriver recorded CLI contract (2.1.289 probes)', () => {
   const rows = (name: string): Row[] => fs.readFileSync(path.join(import.meta.dir, 'fixtures', 'cliContract', `${name}.jsonl`), 'utf8')
     .trim().split('\n').map(line => JSON.parse(line) as Row)
 
-  async function replay(name: string): Promise<Harness> {
+  /** The replayed harness and each probe prompt the package wrote, by its recorded label. */
+  async function replay(name: string): Promise<{ h: Harness; sent: Map<string, SDKUserMessage | null> }> {
     const h = createHarness()
     const uuids = new Map<string, string>()
+    const sent = new Map<string, SDKUserMessage | null>()
     const uuidOf = (label: unknown) => typeof label === 'string' ? uuids.get(label) ?? `unsent-${label}` : undefined
     let toolId = ''
     const recorded = rows(name)
     for (const [index, row] of recorded.entries()) {
       if (row.action === 'send') {
         h.driver.send(`prompt ${String(row.prompt)}`)
-        uuids.set(String(row.prompt), (await h.fakes[0]!.pullPrompt())!.uuid!)
+        const prompt = await pull(h)
+        sent.set(String(row.prompt), prompt)
+        uuids.set(String(row.prompt), prompt!.uuid!)
       } else if (row.action === 'interrupt') {
         const receipt = recorded.slice(index).find(next => next.action === 'receipt')
         h.fakes[0]!.interruptReceipt = receipt
@@ -366,7 +440,7 @@ describe('ChatSessionDriver recorded CLI contract (2.1.289 probes)', () => {
       }
     }
     await flush()
-    return h
+    return { h, sent }
   }
 
   function toFrame(row: Row, index: number, uuidOf: (label: unknown) => string | undefined, lastTool: () => string, setTool: (id: string) => void): SDKMessage | null {
@@ -410,22 +484,25 @@ describe('ChatSessionDriver recorded CLI contract (2.1.289 probes)', () => {
   }
 
   test('GUARD (2b1f56bf) prompt probe: interrupt, then a send — the send runs on its own result', async () => {
-    const h = await replay('prompt')
-    expect(outcomes(h)).toEqual({ 'turn-1': 'interrupted', 'turn-2': 'success' })
+    const { h, sent } = await replay('prompt')
+    const r = roles(h, { one: { prompt: () => sent.get('A') }, two: { prompt: () => sent.get('B') } })
+    expect(outcomes(h)).toEqual({ [r.one]: 'interrupted', [r.two]: 'success' })
     expect(h.fakes[0]!.interruptOptions).toEqual([{ cancelQueued: true }])
-    expect(h.events.some(event => event.type === 'assistant_text' && event.turnId === 'turn-2')).toBe(true)
+    expect(h.events.some(event => event.type === 'assistant_text' && event.turnId === r.two)).toBe(true)
   })
 
   test('GUARD (2b1f56bf) task probe: an interrupted agent-started turn, then a send', async () => {
-    const h = await replay('task')
-    expect(outcomes(h)).toEqual({ 'turn-1': 'success', 'turn-2': 'interrupted', 'turn-3': 'success' })
-    expect(h.events.find(event => event.type === 'turn_started' && event.turnId === 'turn-2')).toMatchObject({ trigger: { kind: 'resumed' } })
-    expect(h.events.some(event => event.type === 'assistant_text' && event.turnId === 'turn-3')).toBe(true)
+    const { h, sent } = await replay('task')
+    const r = roles(h, { one: { prompt: () => sent.get('A') }, two: 'unnamed', three: { prompt: () => sent.get('B') } })
+    expect(outcomes(h)).toEqual({ [r.one]: 'success', [r.two]: 'interrupted', [r.three]: 'success' })
+    expect(h.events.find(event => event.type === 'turn_started' && event.turnId === r.two)).toMatchObject({ trigger: { kind: 'resumed' } })
+    expect(h.events.some(event => event.type === 'assistant_text' && event.turnId === r.three)).toBe(true)
   })
 
   test('NIT cancel probe: Stop cancels the joined send; the next send runs on its own result', async () => {
-    const h = await replay('cancel')
-    expect(outcomes(h)).toEqual({ 'turn-1': 'interrupted', 'turn-2': 'success' })
-    expect(h.events.some(event => event.type === 'assistant_text' && event.turnId === 'turn-2')).toBe(true)
+    const { h, sent } = await replay('cancel')
+    const r = roles(h, { one: { prompt: () => sent.get('A') }, two: { prompt: () => sent.get('C') } })
+    expect(outcomes(h)).toEqual({ [r.one]: 'interrupted', [r.two]: 'success' })
+    expect(h.events.some(event => event.type === 'assistant_text' && event.turnId === r.two)).toBe(true)
   })
 })

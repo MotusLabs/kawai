@@ -176,6 +176,26 @@ or property that would have caught it, and the source finding.
   control bypasses the tracker's turn-start dedup guard only.
 - **Source finding.** findings-d2f9140b F1 (compact-observation-detail).
 
+### A per-file cleanup loop that stops at the first rejection or swallows it (task-98101592 F2)
+
+- **Hazard.** A fixture's after-hook stops its drivers one by one with
+  `await` in a loop, so the first stop that rejects skips every later driver.
+  A sibling file instead catches every stop error, so a raw failure no test
+  asserted disappears. Fixing one shared harness does not fix separate
+  owners that roll their own loops.
+- **Oracle that catches it.** Every fixture owner goes through one cleanup
+  helper. The helper stores each stop before its effects and joins every
+  driver whatever rejects. It then rethrows each unasserted original, and
+  suppresses a failure only after an exact identity, order and count match.
+  Regressions drive real drivers through that same helper
+  (`packages/agent-runtime/__tests__/claudeCompatibilityCleanup.test.ts` ›
+  "a first rejecting stop does not keep the after-hook from stopping the next
+  driver; the original is rethrown", "two rejecting stops are both joined and
+  rethrown together as their originals"). The controls restore the
+  fail-fast loop and the swallow-all.
+- **Source finding.** findings-6b5befb7 F2 (task-98101592), fixed in
+  c5c67808.
+
 ## Cache keys
 
 ### A key input no fixture varies (findings-f4b1ebad B4)
@@ -226,6 +246,22 @@ or property that would have caught it, and the source finding.
   gets its own table row over that shared derivation.
 - **Source finding.** RC E seed (no finding record — cataloged at rule
   adoption).
+
+### Retained state that aliases a view handed to a host callback (task-98101592 F1)
+
+- **Hazard.** A mirror keeps the very object it passes to a host callback,
+  as the retained reading for later use. A host that mutates its delivered
+  view, or the correction it was given, then rewrites the facts a later step
+  derives from: here the tokens a respawn re-anchors.
+- **Oracle that catches it.** Through the production composition, the host
+  mutates the delivered reading, and separately a delivered correction. A
+  later respawn must still use the measured values
+  (`src/server/__tests__/claudeCompatibilityContext.test.ts` › "a host
+  mutation of a delivered reading cannot rewrite the tokens a respawn
+  re-anchors", "a host mutation of a delivered correction cannot rewrite what
+  the next respawn re-anchors"). The controls restore each alias.
+- **Source finding.** findings-6b5befb7 F1 (task-98101592), fixed in
+  e995fabc.
 
 ## Launch composition
 

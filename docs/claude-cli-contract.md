@@ -1,8 +1,8 @@
 # Claude Code CLI contract for chat turns
 
-The chat driver (`src/server/chat/ChatSessionDriver.ts`) matches its turns to
-the Claude Code CLI's turns by identity, not by frame order. The binding rules
-live in `src/server/chat/cliTurnBinding.ts`. They rely on the contract below,
+The chat driver (the package core, `packages/agent-runtime/src/claude/session.ts`)
+matches its turns to the Claude Code CLI's turns by identity, not by frame
+order. The binding rules live in `packages/agent-runtime/src/claude/turnBinder.ts`. They rely on the contract below,
 which holds for the floor version and every newer CLI.
 
 ## Floor
@@ -23,7 +23,7 @@ which holds for the floor version and every newer CLI.
 3. **A result ends only the turn its uuid names.**
    - A result naming a turn that already ended is dropped: an interrupted
      turn's late tail, or a duplicate.
-   - A uuid the driver never sent is logged as `chat_unknown_result_uuid` and
+   - A uuid the driver never sent is logged as `claude_unknown_result_uuid` and
      never ends a turn.
 4. **Interrupts cancel queued prompts.** The CLI advertises
    `interrupt_cancel_queued_v1` in `system/init.capabilities`. When it does,
@@ -39,15 +39,14 @@ which holds for the floor version and every newer CLI.
    `capabilities` array replaces the answer; an absent or non-array field
    keeps it. After an init without the capability, every interrupt is plain.
    Stop, archive and urgent mail then also log
-   `interrupt-cancel-queued-unsupported`, as `claude_cli_contract_violation`
-   from the package driver (`chat_cli_contract_violation` from the legacy
-   in-tree driver). Kill and shutdown never log it.
+   `interrupt-cancel-queued-unsupported` as `claude_cli_contract_violation`.
+   Kill and shutdown never log it.
 5. `command_lifecycle` frames are logged at debug level only. No rule reads
    them.
 
 ## Out of contract
 
-A deviation is logged as `chat_cli_contract_violation`. It never strands a
+A deviation is logged as `claude_cli_contract_violation`. It never strands a
 turn. The logged reasons are:
 
 - `init-before-owed-result`

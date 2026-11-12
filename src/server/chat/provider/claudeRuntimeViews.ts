@@ -7,7 +7,7 @@ import type { AgentEvent, BackgroundTask, ClaudeDriverOptions, PromptEnvelope, S
 import type { ChatBackgroundTask, ChatPeerMessage, ChatQuestionAnswer, ChatWorker } from '../../../shared/chat'
 import { workspaceContextBlock, type WorkspaceMessageContext } from '../../../shared/planWorkspace'
 import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
-import type { ChatSessionDriverOptions } from '../ChatSessionDriver'
+import type { ChatSessionDriverOptions } from './claudeDriverTypes'
 import type { ChatDriverCallbacks } from './driver'
 import { chatLimitSignal, chatNotification, chatUsageReport, type ChatEventDraft } from './runtimeEvents'
 

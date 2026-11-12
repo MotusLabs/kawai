@@ -17,7 +17,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import type { Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import type { ChatEvent } from '../../shared/chat'
-import type { ChatQueryFactory } from '../chat/ChatSessionDriver'
+import type { ChatQueryFactory } from '../chat/provider/claudeDriverTypes'
 import { createChatDriver } from '../chat/provider/createChatDriver'
 import type { ChatAgentDriver } from '../chat/provider/driver'
 

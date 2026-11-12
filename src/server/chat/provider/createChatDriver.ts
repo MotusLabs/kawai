@@ -5,7 +5,7 @@
 // codexRuntime.ts, extract-agent-runtime task 6.1). A runtime
 // with no wired driver throws — a chat must never silently start as
 // something it is not.
-import type { ChatSessionDriverOptions } from '../ChatSessionDriver'
+import type { ChatSessionDriverOptions } from './claudeDriverTypes'
 import { createClaudeChatDriver, type ClaudeChatDriverOptions } from './claudeRuntime'
 import { createCodexChatDriver } from './codexRuntime'
 import type { CodexSessionDriverOptions } from '../codex/codexThread'

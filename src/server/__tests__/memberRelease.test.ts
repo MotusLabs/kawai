@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ChatSessionRecord } from '../db'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import { cleanGitEnv } from '../git/gitCommand'
 import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
@@ -83,7 +83,7 @@ const makeRuntime = () => {
       records.get(id)!.status = 'working'
       received.push({ session: id, messageId: envelope.messageId, thread: envelope.thread?.length ?? 0, task: envelope.task?.id ?? null })
     },
-  }) as unknown as ChatSessionDriver,
+  }) as unknown as ChatAgentDriver,
   available: rec => rec.archivedAt == null,
   prepare: async () => {},
   restore: () => {},

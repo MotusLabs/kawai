@@ -1,8 +1,9 @@
 // I9 (extract-agent-runtime design §8, task 6.1): Kawai and a packed-style
 // consumer reach ONE driver implementation with equivalent policy behavior.
 // - Export graph: the public package-name factories Kawai imports are the
-//   very functions of the package source (no copied core), and Kawai's
-//   production composition is never the old in-tree driver.
+//   very functions of the package source (no copied core), and every query
+//   Kawai's production composition builds is the package's (its owned
+//   spawner and resolved launch executable).
 // - Equivalence: seed 0xA609, 128 cases. Each case drives the same scripted
 //   CLI through Kawai's production Claude composition (createChatDriver) and
 //   through a direct package consumer built from the public options Kawai
@@ -21,7 +22,6 @@ import { createClaudeDriver as publicClaude } from '@motuslabs/agent-runtime/cla
 import { createCodexDriver as publicCodex } from '@motuslabs/agent-runtime/codex'
 import type { AgentEvent, ClaudeAgentDriver } from '@motuslabs/agent-runtime'
 import type { ChatEvent } from '../../shared/chat'
-import { ChatSessionDriver } from '../chat/ChatSessionDriver'
 import { createChatDriver } from '../chat/provider/createChatDriver'
 import type { ChatAgentDriver } from '../chat/provider/driver'
 import { createClaudeDriver as sourceClaude, createClaudeDriverWith } from '../../../packages/agent-runtime/src/claude/driver'
@@ -153,14 +153,12 @@ async function kawaiCase(index: number, tool: string, input: Record<string, unkn
       ...(resume ? { resumeSessionId: resume } : {}),
     },
   }) as Adapter
-  // Production composition: never the old in-tree driver.
-  expect(driver).not.toBeInstanceOf(ChatSessionDriver)
   stops.push(async () => {
     driver.kill()
     await driver.settled()
   })
   driver.start()
-  return drive(
+  const facts = await drive(
     scripts,
     () => events.flatMap((e) => (e.type === 'approval_request' ? [{ requestId: e.requestId, tool: e.tool, input: e.input }] : [])),
     () => events.flatMap((e) => (e.type === 'request_resolved' ? [{ requestId: e.requestId, outcome: e.outcome, decidedBy: e.decidedBy }] : [])),
@@ -172,6 +170,14 @@ async function kawaiCase(index: number, tool: string, input: Record<string, unkn
     input,
     sessionId,
   )
+  // Production composition: every query is the package's (owned spawner,
+  // resolved launch executable), never a bare SDK option set.
+  expect(scripts.length).toBeGreaterThan(0)
+  for (const script of scripts) {
+    expect(script.options.spawnClaudeCodeProcess).toBeTypeOf('function')
+    expect(script.options.pathToClaudeCodeExecutable).toBe(process.execPath)
+  }
+  return facts
 }
 
 async function packageCase(index: number, tool: string, input: Record<string, unknown>, decision: Decision, resume: string | null): Promise<Facts> {

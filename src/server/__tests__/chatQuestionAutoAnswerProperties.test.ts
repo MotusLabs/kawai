@@ -2,15 +2,19 @@
 // design "Properties"): QA-P1..P4 over the driver's manual-clock seam and the
 // public entry points, plain generators with no new dependency. Fixed seed
 // 20261024 for every property; the design pins the case counts.
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent, ChatPendingRequest, ChatQuestion } from '../../shared/chat'
 import { recommendationCases } from './fixtures/recommendationCases'
 import {
   createHarness,
   flush,
+  cleanupHarnesses,
 } from './fixtures/chatDriverHarness'
 import { ManualClock } from './fixtures/manualClock'
+
+// Every harness's driver is killed and joined (settled()) after each case.
+afterEach(cleanupHarnesses)
 
 const WAIT_MS = 60_000
 const SEED = 20261024
@@ -117,6 +121,7 @@ async function runP1Case(sequence: Attempt[], timerLast: boolean): Promise<void>
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askRaw(harness, MARKED, 'q-p1')
   try {
     await flush()
@@ -218,6 +223,7 @@ test('QA-P2: a held question never auto-answers, at any hold instant (200 seeded
       timerScheduler: clock,
     })
     harness.driver.send('ask')
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const ask = askRaw(harness, MARKED, `q-p2-${i}`)
     try {
       await flush()
@@ -274,6 +280,7 @@ test('QA-P3: a deadline exists iff a full recommendation and a positive wait (30
       timerScheduler: clock,
     })
     harness.driver.send('ask')
+    await harness.admitted(1) // the package writes the prompt after its async boot
     try {
       void askRaw(harness, specs, `q-p3-${i}`).promise
       await flush()
@@ -301,6 +308,7 @@ test('QA-P4: a setting change never moves a pending deadline (200 seeded triples
       timerScheduler: clock,
     })
     harness.driver.send('ask')
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const first = askRaw(harness, MARKED, `q-p4a-${i}`)
     let second: ReturnType<typeof askRaw> | null = null
     try {

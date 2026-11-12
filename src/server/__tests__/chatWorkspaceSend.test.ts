@@ -2,12 +2,15 @@
 // mint → record → open → emit → enqueue order on the shared fake-query
 // harness, and the I1 failure rule — a refused record opens no turn, emits
 // no event, and enqueues nothing.
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { workspaceContextBlock, type WorkspaceMessageContext } from '../../shared/planWorkspace'
 import type { ChatEvent } from '../../shared/chat'
 import type { WorkspaceContextOutcome } from '../plans/workspace/workspaceContext'
-import { createHarness, flush, result, typesOf } from './fixtures/chatDriverHarness'
+import { createHarness, flush, result, typesOf, cleanupHarnesses } from './fixtures/chatDriverHarness'
+
+// Every harness's driver is killed and joined (settled()) after each case.
+afterEach(cleanupHarnesses)
 
 const context: WorkspaceMessageContext = {
   teamId: '/repo/example/main',
@@ -22,26 +25,25 @@ const context: WorkspaceMessageContext = {
 describe('chatWorkspaceSend', () => {
   test('a contextual send records, then opens, emits, and enqueues with the context pasted', async () => {
     const recorded: Array<{ sessionId: string; messageUuid: string; turnId: string; context: WorkspaceMessageContext }> = []
+    const box: { harness?: ReturnType<typeof createHarness> } = {}
     const harness = createHarness({
       recordWorkspaceContext: input => {
         recorded.push(input)
-        order.push('record')
+        // What the record seam sees when it runs: no turn opened or emitted, nothing enqueued.
+        order.push(`record events=${box.harness!.events.length} prompts=${box.harness!.prompts.length}`)
         return { ok: true, recorded: true }
       },
     })
-    // Direct order evidence: the real startTurn, wrapped on the instance,
-    // logs beside the record seam (S4 before S5 — I1's ordering, stated).
+    box.harness = harness
+    // Direct order evidence (S4 before S5 — I1's ordering, stated): the
+    // package's turn opening is observable as its turn_started emission and
+    // the prompt write; the retired class's private startTurn is gone.
     const order: string[] = []
-    const driver = harness.driver as unknown as { startTurn: (...args: unknown[]) => unknown }
-    const realStartTurn = driver.startTurn.bind(harness.driver)
-    driver.startTurn = (...args: unknown[]) => {
-      order.push('startTurn')
-      return realStartTurn(...args)
-    }
-    expect(harness.driver.sendWorkspaceContext('Ship the checklist', context)).toEqual({ ok: true })
+    expect(await harness.driver.sendWorkspaceContext('Ship the checklist', context)).toEqual({ ok: true })
     await flush()
+    order.push(`after events=${harness.events.length} prompts=${harness.prompts.length}`)
     // The context row committed before the turn opened.
-    expect(order).toEqual(['record', 'startTurn'])
+    expect(order).toEqual(['record events=0 prompts=0', 'after events=2 prompts=1'])
     // One row, keyed by the minted uuid, naming the turn that then opened.
     expect(recorded).toHaveLength(1)
     expect(typesOf(harness.events)).toEqual(['turn_started', 'user_message'])
@@ -68,11 +70,12 @@ describe('chatWorkspaceSend', () => {
     ]
     for (const refused of refusals) {
       const harness = createHarness({ recordWorkspaceContext: () => refused })
-      const outcome = harness.driver.sendWorkspaceContext('Hello there', context)
+      const outcome = await harness.driver.sendWorkspaceContext('Hello there', context)
       expect(outcome.ok).toBe(false)
       await flush()
       expect(harness.events).toEqual([])
-      expect(await harness.fakes[0]!.pullPrompt()).toBeNull()
+      expect(await (await harness.spawned()).pullPrompt()).toBeNull()
+      expect(harness.prompts).toEqual([])
     }
   })
 
@@ -82,16 +85,18 @@ describe('chatWorkspaceSend', () => {
         throw new Error('disk gone')
       },
     })
-    const outcome = harness.driver.sendWorkspaceContext('Hello there', context)
+    const outcome = await harness.driver.sendWorkspaceContext('Hello there', context)
     expect(outcome.ok).toBe(false)
     await flush()
     expect(harness.events).toEqual([])
-    expect(await harness.fakes[0]!.pullPrompt()).toBeNull()
+    expect(await (await harness.spawned()).pullPrompt()).toBeNull()
+    expect(harness.prompts).toEqual([])
   })
 
   test('B1 a uuid-preserving echo whose text differs from the submitted text renders one bubble and leaves no text token', async () => {
     const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
-    harness.driver.sendWorkspaceContext('mine', context)
+    expect(await harness.driver.sendWorkspaceContext('mine', context)).toEqual({ ok: true })
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const fake = harness.fakes[0]!
     const prompt = await fake.pullPrompt()
     const sentUuid = String(prompt!.uuid)
@@ -110,7 +115,8 @@ describe('chatWorkspaceSend', () => {
 
   test('B1 a foreign same-text user frame after a uuid-suppressed echo is kept', async () => {
     const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
-    harness.driver.sendWorkspaceContext('mine', context)
+    expect(await harness.driver.sendWorkspaceContext('mine', context)).toEqual({ ok: true })
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const fake = harness.fakes[0]!
     const prompt = await fake.pullPrompt()
     fake.push(echoFrame(String(prompt!.uuid), 'mine'))
@@ -123,7 +129,8 @@ describe('chatWorkspaceSend', () => {
 
   test('B1 one uuid match suppresses every text block of the echoed message', async () => {
     const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
-    harness.driver.sendWorkspaceContext('mine', context)
+    expect(await harness.driver.sendWorkspaceContext('mine', context)).toEqual({ ok: true })
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const fake = harness.fakes[0]!
     const prompt = await fake.pullPrompt()
     // A block-form echo carries the typed text and the appended context as
@@ -151,7 +158,8 @@ describe('chatWorkspaceSend', () => {
 
   test('B2 a contextual send whose result names its uuid ends the turn', async () => {
     const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
-    harness.driver.sendWorkspaceContext('Ship the checklist', context)
+    expect(await harness.driver.sendWorkspaceContext('Ship the checklist', context)).toEqual({ ok: true })
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const fake = harness.fakes[0]!
     const prompt = await fake.pullPrompt()
     expect(prompt).not.toBeNull()
@@ -212,7 +220,8 @@ describe('chatWorkspaceSend', () => {
 
   test('I3 a slash command keeps its literal text and still dispatches with the context pasted', async () => {
     const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
-    harness.driver.sendWorkspaceContext('/context verbose', context)
+    expect(await harness.driver.sendWorkspaceContext('/context verbose', context)).toEqual({ ok: true })
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const fake = harness.fakes[0]!
     const prompt = await fake.pullPrompt()
     // I3: the typed text is exactly the command; the context rides only
@@ -236,6 +245,7 @@ describe('chatWorkspaceSend', () => {
       },
     })
     harness.driver.send('Hello there')
+    await harness.admitted(1) // the package writes the prompt after its async boot
     await flush()
     const fake = harness.fakes[0]!
     const prompt = await fake.pullPrompt()
@@ -254,7 +264,8 @@ describe('chatWorkspaceSend', () => {
 
   test('LC-D3 a UUID-preserving echo renders one bubble', async () => {
     const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
-    harness.driver.sendWorkspaceContext('ship it', context)
+    expect(await harness.driver.sendWorkspaceContext('ship it', context)).toEqual({ ok: true })
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const fake = harness.fakes[0]!
     const prompt = await fake.pullPrompt()
     fake.push(echoFrame(String(prompt!.uuid), `ship it\n${workspaceContextBlock(context)}`))
@@ -264,7 +275,8 @@ describe('chatWorkspaceSend', () => {
 
   test("LC-D3 an echo without the UUID takes today's text path", async () => {
     const harness = createHarness({ recordWorkspaceContext: () => ({ ok: true, recorded: true }) })
-    harness.driver.sendWorkspaceContext('ship it', context)
+    expect(await harness.driver.sendWorkspaceContext('ship it', context)).toEqual({ ok: true })
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const fake = harness.fakes[0]!
     await fake.pullPrompt()
     // Equal text without the uuid: suppressed, exactly today.
@@ -292,15 +304,16 @@ describe('chatWorkspaceSend', () => {
         return { ok: true, recorded: true }
       },
     })
-    const first = harness.driver.sendWorkspaceContext('retry me', context)
+    const first = await harness.driver.sendWorkspaceContext('retry me', context)
     expect(first.ok).toBe(false)
     await flush()
     expect(harness.events).toEqual([])
     // The retry revalidates and enqueues under a fresh uuid. (One pull only:
     // a timed-out pull orphans the pending iterator and would swallow the
     // next pushed prompt.)
-    const second = harness.driver.sendWorkspaceContext('retry me', context)
+    const second = await harness.driver.sendWorkspaceContext('retry me', context)
     expect(second.ok).toBe(true)
+    await harness.admitted(1) // the package writes the prompt after its async boot
     await flush()
     expect(accepted).not.toBeNull()
     expect(accepted).not.toBe(refused[0])

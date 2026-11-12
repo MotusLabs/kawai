@@ -6,7 +6,7 @@
 // `reply` tool and the human composer call.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import { DecisionStore } from '../plans/decisions/decisionStore'
 import { decisionReplyGuard, QUESTION_TAG } from '../plans/decisions/decisionReplyGuard'
 import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
@@ -96,7 +96,7 @@ test('the production mailbox (SessionMailbox) carries the guard', async () => {
   const runtime = new SessionMailbox(bench.db.db, {
     ownership: NULL_OWNERSHIP, onTaskResultWrite: () => {},
     teams, records: () => bench.records.values(), getRecord: id => bench.records.get(id), available: record => !record.archivedAt,
-    getDriver: () => ({ getPendingRequests: () => [], deliver: () => {} }) as unknown as ChatSessionDriver,
+    getDriver: () => ({ getPendingRequests: () => [], deliver: () => {} }) as unknown as ChatAgentDriver,
     prepare: async () => {}, restore: () => {}, watchReceipt: () => {}, archive: () => ({ ok: true }), hasLiveWorkers: () => false,
     hasRunningBackgroundTasks: () => false, transcriptFor: () => null, homeDir: world.home, onError: error => { throw error },
   })

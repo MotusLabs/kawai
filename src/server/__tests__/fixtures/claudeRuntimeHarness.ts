@@ -28,7 +28,21 @@
 //   without one (packages/agent-runtime/src/claude/resultFrames.ts, task 4.1
 //   correction A1). The shared builders predate that requirement; a frame
 //   that already carries a uuid, and every non-result frame, pass unchanged.
-import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+//   The id is allocated once per object, so pushing the same object again is
+//   a replay of the same frame. Identity-fault cases (missing, empty,
+//   unknown, stale or duplicate frame ids) push through `pushRaw`, which
+//   reaches the package unchanged.
+// - Every harness joins at `cleanupHarnesses()` (each suite's afterEach). A
+//   case that expects the driver's settled() to fail asserts it through
+//   `expectFailures(...causes)`: the stop's causes must be exactly those
+//   original objects, each once, by identity. Only that assertion marks the
+//   rejection reported, so the join does not report it again; `failure()`
+//   merely retrieves the rejection and marks nothing (r4 A6).
+// - `launches` records any call the fake made to the package's owned
+//   spawner; the fake model never calls it, so a case can prove the
+//   injected query launched no process (r4 A10).
+import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import type {
   ChatActivity,
   ChatBackgroundTask,
@@ -40,7 +54,7 @@ import type {
   ChatWorker,
 } from '../../../shared/chat'
 import type { SessionStatus } from '../../../shared/types'
-import type { ChatQueryFactory } from '../../chat/ChatSessionDriver'
+import type { ChatQueryFactory } from '../../chat/provider/claudeDriverTypes'
 import type { ClaudeChatDriverOptions } from '../../chat/provider/claudeRuntime'
 import { createChatDriver } from '../../chat/provider/createChatDriver'
 import type { ChatAgentDriver } from '../../chat/provider/driver'
@@ -53,7 +67,11 @@ import {
 } from './chatDriverHarness'
 
 /** Kawai's production Claude composition, as createChatDriver returns it. */
-export type RuntimeDriver = ChatAgentDriver & { settled(): Promise<void> }
+export type RuntimeDriver = ChatAgentDriver & {
+  settled(): Promise<void>
+  /** The Claude adapter always has the workspace-context send (checked at construction). */
+  sendWorkspaceContext: NonNullable<ChatAgentDriver['sendWorkspaceContext']>
+}
 
 /** The legacy-class knobs the production adapter never reads. */
 const LEGACY_KNOBS = ['createTurnId', 'deterministicTurnIds'] as const
@@ -66,6 +84,9 @@ export type RuntimeHarnessOverrides = Partial<Omit<ClaudeChatDriverOptions, 'cre
   /** Commands the fake queries' initializationResult() reports. */
   initializationCommands?: Array<Record<string, unknown>>
 }
+
+/** The shared fake, plus the unfilled push for frame-identity fault cases. */
+export type RuntimeFake = FakeQueryHandle & { pushRaw(message: SDKMessage): void }
 
 export interface RuntimeHarness {
   driver: RuntimeDriver
@@ -82,19 +103,59 @@ export interface RuntimeHarness {
   contextCorrections: boolean[]
   noData: number[]
   cwds: string[]
-  fakes: FakeQueryHandle[]
+  fakes: RuntimeFake[]
   sdkSessionIds: string[]
   factoryWires: Array<ChatWireRecorder | undefined>
+  /**
+   * Every call the fake made to the package's owned spawner, per query, in
+   * order. The fake model never calls it: a case reads this to prove the
+   * injected query launched no process (A10).
+   */
+  launches: number[]
   commandStates: ChatCommandState[]
   models: string[]
   /** Every prompt the package wrote, across spawns, in order. */
   prompts: SDKUserMessage[]
   /** Resolves once the package has written `count` prompts in total. */
   admitted(count?: number): Promise<void>
+  /**
+   * admitted(n) for the next write this case awaits: n counts the writes the
+   * case already awaited through nextWrite() (or pulled), plus one.
+   */
+  nextWrite(): Promise<void>
   /** The factory's n-th (0-based) query, once the package actually built it. */
-  spawned(index?: number): Promise<FakeQueryHandle>
+  spawned(index?: number): Promise<RuntimeFake>
   /** Kill, join settled(), then finalize; one shared promise (see the header). */
   cleanup(): Promise<void>
+  /** The cleanup's rejection, retrieved only (never marked reported); throws when it resolves. */
+  failure(): Promise<unknown>
+  /**
+   * Assert the cleanup rejected with exactly these original causes, each
+   * once by identity (the package stop's causes, or the raw rejection), and
+   * only then mark that rejection reported.
+   */
+  expectFailures(...causes: unknown[]): Promise<void>
+}
+
+/** The suites' names for the same harness. */
+export type Harness = RuntimeHarness
+export const createHarness = (overrides?: RuntimeHarnessOverrides): RuntimeHarness => createRuntimeHarness(overrides)
+
+const live = new Set<{ harness: RuntimeHarness; asserted: { error: unknown } | null }>()
+
+/**
+ * Join every harness created since the last call (each suite's afterEach):
+ * a failure no case took through failure() rejects once, raw (one) or as an
+ * AggregateError (several).
+ */
+export async function cleanupHarnesses(): Promise<void> {
+  const entries = [...live]
+  live.clear()
+  const outcomes = await Promise.allSettled(entries.map((entry) => entry.harness.cleanup()))
+  const failures = outcomes.flatMap((outcome, index) =>
+    outcome.status === 'rejected' && entries[index]!.asserted?.error !== outcome.reason ? [outcome.reason as unknown] : [])
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) throw new AggregateError(failures, 'Claude harness cleanups failed')
 }
 
 export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): RuntimeHarness {
@@ -104,9 +165,9 @@ export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): R
   const h = {
     events: [], statuses: [], activities: [], notifications: [], processEnds: [], workers: [], backgroundTasks: [],
     rateLimits: [], usageReports: [], contextUsage: [], contextCorrections: [], noData: [], cwds: [], fakes: [],
-    sdkSessionIds: [], factoryWires: [], commandStates: [], models: [],
+    sdkSessionIds: [], factoryWires: [], launches: [], commandStates: [], models: [],
   } as unknown as Omit<RuntimeHarness, 'driver' | 'spawned' | 'cleanup'>
-  const waiters = new Map<number, Array<(fake: FakeQueryHandle) => void>>()
+  const waiters = new Map<number, Array<(fake: RuntimeFake) => void>>()
   const prompts: SDKUserMessage[] = []
   const admissions: Array<{ count: number; wake: () => void }> = []
   const readers: Promise<void>[] = []
@@ -126,6 +187,15 @@ export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): R
   const { usageImpl, contextImpl, initializationCommands, ...driverOverrides } = overrides
   const factory: ChatQueryFactory = ({ prompt, options, wire }) => {
     h.factoryWires.push(wire)
+    // Record any call to the package's owned spawner (forwarded unchanged).
+    const query = h.factoryWires.length - 1
+    const spawn = (options as Options).spawnClaudeCodeProcess
+    if (spawn) {
+      ;(options as Options).spawnClaudeCodeProcess = (spawnOptions) => {
+        h.launches.push(query)
+        return spawn(spawnOptions)
+      }
+    }
     const handle = createFakeQuery(prompt, options as Options, usageImpl, contextImpl)
     if (initializationCommands) {
       ;(handle.query as { initializationResult?: () => Promise<unknown> }).initializationResult =
@@ -152,13 +222,15 @@ export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): R
       }),
     }
     const push = handle.push
+    const fake = handle as RuntimeFake
+    fake.pushRaw = push
     handle.push = (message) => {
       const frame = message as { type?: unknown; uuid?: unknown }
       if (frame.type === 'result' && (typeof frame.uuid !== 'string' || frame.uuid === '')) frame.uuid = crypto.randomUUID()
       push(message)
     }
-    const index = h.fakes.push(handle) - 1
-    for (const wake of waiters.get(index) ?? []) wake(handle)
+    const index = h.fakes.push(fake) - 1
+    for (const wake of waiters.get(index) ?? []) wake(fake)
     waiters.delete(index)
     return handle.query
   }
@@ -187,6 +259,9 @@ export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): R
     ...driverOverrides,
   }
   const driver = createChatDriver({ runtime: 'claude', options }) as RuntimeDriver
+  if (typeof driver.sendWorkspaceContext !== 'function' || typeof driver.settled !== 'function') {
+    throw new Error('createRuntimeHarness: the Claude adapter lost sendWorkspaceContext or settled')
+  }
 
   let cleaning: Promise<void> | null = null
   const body = async (): Promise<void> => {
@@ -209,22 +284,48 @@ export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): R
     return cleaning
   }
 
-  return {
+  const failure = async (): Promise<unknown> => {
+    try {
+      await cleanup()
+    } catch (error) {
+      return error
+    }
+    throw new Error('expected the driver cleanup to fail')
+  }
+
+  const admitted = (count = 1): Promise<void> => prompts.length >= count
+    ? Promise.resolve()
+    : new Promise<void>((wake) => admissions.push({ count, wake }))
+  let awaitedWrites = 0
+  const entry: { harness: RuntimeHarness; asserted: { error: unknown } | null } = { harness: undefined as never, asserted: null }
+  const harness: RuntimeHarness = {
     ...h,
     driver,
     prompts,
-    admitted: (count = 1) => prompts.length >= count
-      ? Promise.resolve()
-      : new Promise<void>((wake) => admissions.push({ count, wake })),
+    admitted,
+    nextWrite: () => admitted(++awaitedWrites),
     spawned: (index = 0) => {
       const ready = h.fakes[index]
       if (ready) return Promise.resolve(ready)
-      return new Promise<FakeQueryHandle>((resolve) => {
+      return new Promise<RuntimeFake>((resolve) => {
         const list = waiters.get(index) ?? []
         list.push(resolve)
         waiters.set(index, list)
       })
     },
     cleanup,
+    failure,
+    expectFailures: async (...expected: unknown[]) => {
+      const error = await failure()
+      const causes = error instanceof AgentRuntimeError ? [...error.causes] : [error]
+      const once = expected.every((cause) => causes.filter((seen) => seen === cause).length === 1)
+      if (!once || causes.length !== expected.length) {
+        throw new Error(`expectFailures: expected exactly ${expected.length} original cause(s) once each, got ${causes.length}: ${causes.map(String).join(' | ')}`)
+      }
+      entry.asserted = { error }
+    },
   }
+  entry.harness = harness
+  live.add(entry)
+  return harness
 }
