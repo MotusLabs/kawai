@@ -68,7 +68,7 @@ export type FakeContextControl = (opts: {
   detail?: string
 }) => Promise<unknown>
 
-function createFakeQuery(
+export function createFakeQuery(
   prompt: AsyncIterable<SDKUserMessage>,
   options: Options,
   usageImpl?: FakeUsageControl,
