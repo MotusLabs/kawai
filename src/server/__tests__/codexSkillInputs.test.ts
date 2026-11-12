@@ -1,10 +1,11 @@
 // @reads: packages/agent-runtime/__tests__/fixtures/**
 // Submission table S: assertions inspect actual turn/start inputs through
 // Kawai's production Codex composition and the scripted app-server as a real
-// child (task-5906f19c); P2 exercises the resolver and, through the same
-// adapter over the package's in-process protocol model, every send's input.
+// child (task-5906f19c); P2 exercises, through the same adapter over the
+// package's in-process protocol model, every send's input. P2's direct
+// resolver checks moved to the package with the resolver (task-ce05430a R2):
+// packages/agent-runtime/__tests__/codexSkillCatalog.test.ts.
 import { afterEach, expect, test } from 'bun:test'
-import { codexCommandCatalog, codexSkillInputs } from '../chat/codex/codexCommands'
 import { Script, startHarness, tempDirs, THREAD_ID, until, type Harness } from './codexDriverHarness'
 import { formatEnvelope } from '../team/envelope'
 import type { ChatEvent, ChatPeerMessage } from '../../shared/chat'
@@ -105,7 +106,6 @@ test('S1/S7: peer text never attaches skills; active-turn human inputs keep thei
 test('P2: 1000 seeded messages preserve text and attach only exact accepted identities', async () => {
   let state = 0xC0DE02
   const random = () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state }
-  const catalog = codexCommandCatalog(response('/project'), '/project')!
   const words = ['/explore', '/review', '/off', '/missing', '/explore,', 'x/explore', '/Explore', '/explore/more']
   // Kawai's Codex adapter (codexRuntime.ts) over the package core and its real
   // JSON-RPC client, with the package's asynchronous protocol model behind
@@ -149,8 +149,6 @@ test('P2: 1000 seeded messages preserve text and attach only exact accepted iden
     for (let i = 0; i < 1000; i++) {
       const message = Array.from({ length: 1 + random() % 12 }, () => words[random() % words.length]!).join(i % 2 ? '\n' : ' ')
       const expected = [...new Set(message.split(/\s+/).filter(word => word === '/explore' || word === '/review'))].map(word => native(word.slice(1)))
-      expect(codexSkillInputs(message, catalog)).toEqual(expected)
-      expect(codexSkillInputs(message, null)).toEqual([])
       const peer: ChatPeerMessage = { messageId: `mail-${i}`, senderSession: 'sender', senderGroup: null,
         priority: 'normal', possibleDuplicate: false, originPath: '/project', threadId: 'peer-thread', tags: [], body: message }
       const isPeer = i % 3 === 0
