@@ -23,8 +23,10 @@
 // - Quota. One optional rate-limit read per driver, or per ready generation its claim permits.
 // - Skills. The generation's own skills/list catalog (skills.ts) publishes
 //   onCommandState, and a new turn's input appends the typed skill inputs
-//   its text names unless the send chose codexSkills 'none' (R9); a steer
-//   carries text only, as before. setSkillDirectory (R11) moves the live
+//   its text names unless the send chose codexSkills 'none' (R9); they are
+//   taken from the catalog when send() is called, before any wait, so a later
+//   move or skills/changed cannot change an accepted send's inputs
+//   (task-752c9e4c C2); a steer carries text only, as before. setSkillDirectory (R11) moves the live
 //   generation's catalog to another directory.
 // - Activity. The in-tree driver's rules (activity.ts) publish onActivity
 //   from the published events and the open turn's notifications; a settled,
@@ -55,7 +57,7 @@ import { accountGenerations, CAPABILITIES, CLIENT_INFO, newGeneration, rpcError,
 import { codexTurnStartParams, composeCodexPermissions, type CodexPermissionComposition } from './permissions.js'
 import { cancelReply, CodexRequests } from './requests.js'
 import type { CodexSessionOptions } from './sessionOptions.js'
-import { CodexSkillDiscovery } from './skills.js'
+import { CodexSkillDiscovery, type CodexSkillInput } from './skills.js'
 import { CodexActivity } from './activity.js'
 import { dispatchCodexToolCall, type CodexDynamicToolCall } from './tools.js'
 import { completionOutcome, decideTurn, INTERRUPTED, newCodexTurn, type CodexTurnState } from './turns.js'
@@ -65,8 +67,8 @@ interface Prepared {
   messageUuid: string
   turnId: string
   text: string
-  /** R9: whether a new turn appends the catalog's skill inputs (codexSkills auto/omitted), captured at send(). */
-  skills: boolean
+  /** R9/C2: the catalog's skill inputs a new turn appends, captured at send() (none for codexSkills 'none'). */
+  skills: CodexSkillInput[]
   /** The active turn a steer was prepared against, else null. */
   steers: CodexTurnState | null
 }
@@ -430,7 +432,8 @@ export class CodexSession {
     if (mode !== undefined && mode !== 'auto' && mode !== 'none') {
       return Promise.reject(new AgentRuntimeError({ category: 'unsupported', message: "codexSkills must be 'auto' or 'none'" }))
     }
-    const skills = mode !== 'none'
+    // C2: the catalog this send saw, before the admission wait lets a move or skills/changed clear it.
+    const skills = mode === 'none' ? [] : this.skills.inputs(text)
     return this.checkpoints.admit(submit.continuation, {
       prepare: (): Prepared => {
         const steers = submit.continuation === 'steer' && this.turn && !this.turn.settled ? this.turn : null
@@ -464,7 +467,7 @@ export class CodexSession {
     const turn = newCodexTurn(prepared.turnId, prepared.messageUuid, prepared.text, this.facts.model)
     // A numeric effort has no Codex equivalent and is omitted, as before.
     const effort = typeof chosen === 'string' ? { effort: chosen } : {}
-    const params = codexTurnStartParams({ threadId: generation.threadId, input: [...this.input(prepared.text), ...(prepared.skills ? this.skills.inputs(prepared.text) : [])], clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions)
+    const params = codexTurnStartParams({ threadId: generation.threadId, input: [...this.input(prepared.text), ...prepared.skills], clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions)
     this.turn = turn
     this.unbound.push(turn)
     let write!: (reply: Promise<unknown>) => void

@@ -22,7 +22,12 @@
 //   its message id. Mail and question answers send codexSkills 'none'
 //   (text only, R9); a human send keeps the catalog's skill inputs, and a
 //   project move lists the new directory's skills on the live process
-//   (setSkillDirectory, R11). Every
+//   (setSkillDirectory, R11). C2 (task-752c9e4c): a send to a ready driver
+//   with no send waiting before it is handed to the package at once, before
+//   getEffort or onStatus run, so the package takes the catalog it saw then
+//   and a move or a send those callbacks make comes after it; a send that
+//   waits for its driver had no ready catalog and goes text only, after every
+//   earlier waiting send. Every
 //   package promise, and every promise a host callback returns (the
 //   direct onEvent/onStatus publications included), is owned (runtimeOwnership.ts); settled() joins them
 //   and reports their raw failures once.
@@ -73,6 +78,9 @@ class CodexChatDriver implements ChatAgentDriver {
   private readonly owned: OwnedWork
   private activeTurnId: string | null = null
   private sending = 0
+  /** Sends waiting for their driver, and the point the newest of them is handed to it (FIFO). */
+  private waiting = 0
+  private handed: Promise<void> = Promise.resolve()
   private lastStatus: SessionStatus | null = null
   private commandState: ChatCommandState = { status: 'unavailable', commands: [] }
   private readonly efforts = new Map<string, Effort | undefined>()
@@ -245,33 +253,45 @@ class CodexChatDriver implements ChatAgentDriver {
 
   // ---------------------------------------------------------------- internals
 
-  /** One submission; settles true once the package accepted it (never rejects). */
   /**
+   * One submission; settles true once the package accepted it (never rejects).
    * `codexSkills` 'none' (R9) keeps a peer delivery or an internal answer
    * text-only, as the source driver's deliver and answer paths were; a human
    * send omits it and keeps the catalog's skill inputs.
    */
   private submit(text: string, messageUuid: string, codexSkills?: 'none'): Promise<boolean> {
-    // A spawn refusal (a registered CODEX_HOME) throws here, before anything is accepted.
-    const ready = this.ensure()
-    // The effort of this send, read when Kawai accepted it (root driver order).
-    if (this.options.getEffort) this.efforts.set(messageUuid, this.options.getEffort())
     const epoch = this.interrupts
-    this.sending += 1
-    this.refreshStatus()
-    const job = ready.then(async (inner) => {
-      // A send still waiting for its driver when an interrupt landed is withdrawn.
-      if (!inner || this.killed || epoch !== this.interrupts) return false
-      const steer = inner.state === 'active'
-      const mode = codexSkills ? { codexSkills } : {}
-      const handle = await inner.send(text, { messageUuid, ...mode, ...(steer ? { continuation: 'steer' as const } : {}) }).catch((error: unknown) => {
-        // A steer prepared for a turn that ended meanwhile goes as a new turn, with the same skill mode.
-        if (steer && (error as { code?: unknown } | null)?.code === 'turn-ended') return inner.send(text, { messageUuid, ...mode })
+    const live = this.boot.booting || this.waiting > 0 ? null : this.boot.live
+    let job: Promise<boolean>
+    if (live) {
+      // C2: handed over before any host callback below can move the project or send again.
+      job = this.forward(live, text, messageUuid, codexSkills, epoch)
+    } else {
+      // A spawn refusal (a registered CODEX_HOME) throws here, before anything is accepted.
+      const ready = this.ensure()
+      this.waiting += 1
+      const previous = this.handed
+      let handed!: () => void
+      this.handed = new Promise<void>((resolve) => (handed = resolve))
+      const release = () => {
+        this.waiting -= 1
+        handed()
+      }
+      job = ready.then(async (inner) => {
+        await previous
+        // A send still waiting for its driver when an interrupt landed is withdrawn.
+        const forwarded = inner && !this.killed && epoch === this.interrupts ? this.forward(inner, text, messageUuid, 'none', epoch) : null
+        release()
+        return forwarded ? forwarded : false
+      }, (error: unknown) => {
+        release()
         throw error
       })
-      void this.owned.track('turn', handle.result)
-      return true
-    })
+    }
+    // The effort of this send, read when Kawai accepted it (root driver order), before the package's beforeSubmit.
+    if (this.options.getEffort) this.efforts.set(messageUuid, this.options.getEffort())
+    this.sending += 1
+    this.refreshStatus()
     const sent = job.catch((error: unknown) => {
       this.emit({ type: 'error', message: `Codex refused the turn: ${error instanceof Error ? error.message : String(error)}` })
       throw error
@@ -282,6 +302,25 @@ class CodexChatDriver implements ChatAgentDriver {
     })
     void this.owned.track('send', sent)
     return sent.then((accepted) => accepted, () => false)
+  }
+
+  /** Calls the package's send now (it captures its skill inputs there); settles true once accepted. */
+  private async forward(inner: CodexAgentDriver, text: string, messageUuid: string, codexSkills: 'none' | undefined, epoch: number): Promise<boolean> {
+    const steer = inner.state === 'active'
+    const mode = codexSkills ? { codexSkills } : {}
+    try {
+      const handle = await inner.send(text, { messageUuid, ...mode, ...(steer ? { continuation: 'steer' as const } : {}) }).catch((error: unknown) => {
+        // A steer prepared for a turn that ended meanwhile goes as a new turn, with the same skill mode.
+        if (steer && (error as { code?: unknown } | null)?.code === 'turn-ended') return inner.send(text, { messageUuid, ...mode })
+        throw error
+      })
+      void this.owned.track('turn', handle.result)
+      return true
+    } catch (error) {
+      // An interrupt the package found this send still waiting for withdraws it, as one waiting for its driver is.
+      if (epoch !== this.interrupts && (error as { code?: unknown } | null)?.code === 'interrupted') return false
+      throw error
+    }
   }
 
   /**
