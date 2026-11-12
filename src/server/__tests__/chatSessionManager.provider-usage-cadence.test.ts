@@ -160,6 +160,25 @@ describe('ChatSessionManager provider usage pull', () => {
     return { manager, handles, usage, fetchCalls }
   }
 
+  /**
+   * The package creates its query only after its SDK module loads (a dynamic
+   * import that settles on a later event-loop turn), and the first provider
+   * pull starts from that query's initialization, so no microtask drain
+   * reaches it. Wait for the observed outcome itself, one event-loop turn at
+   * a time (fake timers leave setImmediate real); never observing it fails.
+   */
+  async function untilObserved(done: () => boolean, what: string): Promise<void> {
+    for (let turn = 0; turn < 1_000 && !done(); turn++) await new Promise<void>(resolve => setImmediate(resolve))
+    if (!done()) throw new Error(`never observed: ${what}`)
+  }
+
+  /** Stop the manager the test created and join every driver it retired; a raw failure fails the test. */
+  async function shutDown(manager: ChatSessionManager | undefined): Promise<void> {
+    if (!manager) return
+    manager.shutdown()
+    expect(await manager.retiredSettled()).toEqual([])
+  }
+
   function startOpenRouterSession(manager: ChatSessionManager): string {
     const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'openrouter-sonnet' })
     if (!created.ok) throw new Error(created.error)
@@ -168,15 +187,17 @@ describe('ChatSessionManager provider usage pull', () => {
 
   test('archiving the last live session stops the OpenRouter pulls', async () => {
     jest.useFakeTimers()
+    let created: ChatSessionManager | undefined
     try {
       const { manager, usage, fetchCalls } = await createOpenRouterHarness(
         { '/api/v1/key': () => jsonResponse(OR_KEY_BODY) },
         false,
         600_000
       )
+      created = manager
       const id = startOpenRouterSession(manager)
       expect(await manager.start(id)).toEqual({ ok: true })
-      await drainNow()
+      await untilObserved(() => usage.length === 1, 'the first pull recorded')
       // One cadence tick pulls (and records); archiving stops every later one.
       jest.advanceTimersByTime(600_000)
       await drainNow()
@@ -193,12 +214,14 @@ describe('ChatSessionManager provider usage pull', () => {
       expect(manager.getSnapshot(id)!.usage?.source).toBe('provider')
     } finally {
       jest.useRealTimers()
+      await shutDown(created)
     }
   })
 
   test('a failed first pull still arms the cadence; the next tick shows the meters', async () => {
     jest.useFakeTimers()
     const warnings: Array<{ event: string; data?: Record<string, unknown> }> = []
+    let created: ChatSessionManager | undefined
     logger.warn = (event: string, data?: Record<string, unknown>) => {
       warnings.push({ event, data })
     }
@@ -212,9 +235,10 @@ describe('ChatSessionManager provider usage pull', () => {
         false,
         600_000
       )
+      created = manager
       const id = startOpenRouterSession(manager)
       expect(await manager.start(id)).toEqual({ ok: true })
-      await drainNow()
+      await untilObserved(() => usage.length === 1, 'the failed first pull recorded')
       // The transient failure records no data and is logged once…
       expect(fetchCalls).toHaveLength(1)
       expect(usage).toEqual([{ providerId: 'openrouter', report: null }])
@@ -231,15 +255,17 @@ describe('ChatSessionManager provider usage pull', () => {
     } finally {
       logger.warn = orOriginalWarn
       jest.useRealTimers()
+      await shutDown(created)
     }
   })
 
   test('a pull whose credits meter dropped out does not end a credit cooldown (probe B)', async () => {
     jest.useFakeTimers()
+    let created: ChatSessionManager | undefined
     try {
       let creditsStatus = 200
       let creditsUsed = 39.99
-      const { manager, fetchCalls } = await createOpenRouterHarness(
+      const { manager, usage, fetchCalls } = await createOpenRouterHarness(
         {
           '/api/v1/key': () => jsonResponse(OR_KEY_BODY),
           '/api/v1/credits': () =>
@@ -250,6 +276,7 @@ describe('ChatSessionManager provider usage pull', () => {
         true,
         600_000
       )
+      created = manager
       manager.limitEvents.record({
         profileId: 'openrouter-sonnet',
         sessionId: 'sdk-or',
@@ -268,7 +295,7 @@ describe('ChatSessionManager provider usage pull', () => {
       jest.advanceTimersByTime(1)
       const id = startOpenRouterSession(manager)
       expect(await manager.start(id)).toEqual({ ok: true })
-      await drainNow()
+      await untilObserved(() => usage.length === 1, 'the complete first pull recorded')
       // The complete first pull (key $0.04, credits $0.01 left) only sets the overlay's baseline.
       expect(manager.limitEvents.cooldownFor('openrouter-sonnet', 'openrouter').until).not.toBeNull()
       // The credits meter drops out: the key's larger $0.04 must not read as credit returning.
@@ -286,6 +313,7 @@ describe('ChatSessionManager provider usage pull', () => {
       expect(manager.limitEvents.cooldownFor('openrouter-sonnet', 'openrouter').until).toBeNull()
     } finally {
       jest.useRealTimers()
+      await shutDown(created)
     }
   })
 
