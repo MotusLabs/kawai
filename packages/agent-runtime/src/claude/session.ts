@@ -18,7 +18,9 @@
 // - A result frame binds once per session: every frame id is kept for the
 //   session's life, and a frame without one is refused.
 // - Agent-started turns. An init that no submission opened starts an
-//   agent-started turn (L24), but only while idle.
+//   agent-started turn (L24), but only while idle. With
+//   joinAgentStartedTurns, a queued send while it is the only open turn
+//   joins it (send/join below) instead of queueing a turn of its own.
 // - Checkpoints. A new session id is persisted before later sends are
 //   acknowledged, and an interrupt refuses every send still waiting
 //   (lifecycle/checkpoints.ts). State publications are held while a turn
@@ -397,8 +399,10 @@ export class ClaudeSession {
       // P12/P13: the host decides before anything is enqueued or emitted, and
       // an accepted submission keeps the identity the host recorded.
       prepare: () => {
+        // Opt-in join (eighth exception): the live agent-started turn is chosen before the host sees the identity.
+        const joining = this.joinTarget(submit.continuation)
         const messageUuid = submit.messageUuid ?? crypto.randomUUID()
-        const turnId = crypto.randomUUID()
+        const turnId = joining?.turn.turnId ?? crypto.randomUUID()
         checkSubmission(this.options.beforeSubmit, { messageUuid, turnId, text, context: submit.context })
         // R4: the host's additions to this prompt, on the same identities;
         // the admission decides again after it, as after beforeSubmit.
@@ -407,10 +411,42 @@ export class ClaudeSession {
         })
         const turn = newTurn(turnId, messageUuid, text)
         turn.envelope = envelope
-        return turn
+        return { turn, joining }
       },
-      commit: (admission, turn) => this.accept(turn, admission),
+      commit: (admission, { turn, joining }) => (joining ? this.join(turn, joining, admission) : this.accept(turn, admission)),
     })
+  }
+
+  /** The agent-started turn a queued send would join: opted in, and that turn is the only open one. */
+  private joinTarget(continuation: SubmitOptions['continuation']): { turn: Turn; generation: Generation } | null {
+    if (this.options.joinAgentStartedTurns !== true || continuation !== 'queue') return null
+    const turn = this.open.only()
+    const generation = this.current()
+    if (!turn || !generation || !turn.opened || turn.settled || turn.messageUuid !== null) return null
+    return { turn, generation }
+  }
+
+  /**
+   * Commit a joining send (eighth exception). After the host callbacks, the
+   * same agent-started turn must still be the only open turn on the same
+   * generation, and the send still a queue admission. Otherwise it is
+   * refused before anything is enqueued, because the host recorded that
+   * turn's id. Joined, the prompt is the turn's own: no second turn, no
+   * queued lifecycle entry, and the handle shares the turn's one result.
+   */
+  private join(prompt: Turn, joining: { turn: Turn; generation: Generation }, admission: Admission): TurnHandle {
+    const { turn, generation } = joining
+    if (admission !== 'queue' || this.open.only() !== turn || turn.settled || generation !== this.current() || generation.retired) {
+      throw new AgentRuntimeError({ category: 'busy', message: 'the agent-started turn this send was joining ended or changed before it was sent' })
+    }
+    const messageUuid = prompt.messageUuid!
+    const pushed = generation.input.push(promptMessage(prompt.text, messageUuid, prompt.envelope))
+    if (!pushed) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
+    this.lifecycle.withdraw('queue')
+    this.frames.sent(messageUuid, prompt.text)
+    this.binder.promptSent(messageUuid, turn.turnId)
+    this.emit({ type: 'user_message', turnId: turn.turnId, text: prompt.text, messageUuid })
+    return { turnId: turn.turnId, messageUuid, result: turn.result }
   }
 
   /**

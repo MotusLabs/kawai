@@ -43,6 +43,11 @@ export class OpenTurns {
     return this.turns[0] ?? null
   }
 
+  /** The open turn when it is the only one, else null. */
+  only(): Turn | null {
+    return this.turns.length === 1 ? this.turns[0]! : null
+  }
+
   push(turn: Turn): void {
     this.turns.push(turn)
   }
