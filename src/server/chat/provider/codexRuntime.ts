@@ -22,7 +22,14 @@
 //   its message id. Mail and question answers send codexSkills 'none'
 //   (text only, R9); a human send keeps the catalog's skill inputs, and a
 //   project move lists the new directory's skills on the live process
-//   (setSkillDirectory, R11). Every
+//   (setSkillDirectory, R11). C2 (task-752c9e4c): a send to a ready driver
+//   with no send waiting before it is handed to the package at once, before
+//   getEffort or onStatus run, so the package takes the catalog it saw then
+//   and a move or a send those callbacks make comes after it; a send that
+//   waits for its driver had no ready catalog and goes text only, after every
+//   earlier waiting send. F1: the send and its cleanup are owned before those
+//   callbacks run; if one throws, the caller gets that error and beforeSubmit
+//   refuses the send before any native write. Every
 //   package promise, and every promise a host callback returns (the
 //   direct onEvent/onStatus publications included), is owned (runtimeOwnership.ts); settled() joins them
 //   and reports their raw failures once.
@@ -73,6 +80,11 @@ class CodexChatDriver implements ChatAgentDriver {
   private readonly owned: OwnedWork
   private activeTurnId: string | null = null
   private sending = 0
+  /** Sends waiting for their driver, and the point the newest of them is handed to it (FIFO). */
+  private waiting = 0
+  private handed: Promise<void> = Promise.resolve()
+  /** Sends whose own getEffort or onStatus threw: beforeSubmit refuses them before any native write (F1). */
+  private readonly refused = new Set<string>()
   private lastStatus: SessionStatus | null = null
   private commandState: ChatCommandState = { status: 'unavailable', commands: [] }
   private readonly efforts = new Map<string, Effort | undefined>()
@@ -144,7 +156,13 @@ class CodexChatDriver implements ChatAgentDriver {
     if (this.activeTurnId || this.sending > 0 || this.pendingCount() > 0) throw new Error('Recipient is not idle')
     const messageUuid = UUID.test(envelope.messageId) ? envelope.messageId : crypto.randomUUID()
     this.peers.set(messageUuid, envelope)
-    const sent = this.submit(formatEnvelope(envelope), messageUuid, 'none')
+    let sent: Promise<boolean>
+    try {
+      sent = this.submit(formatEnvelope(envelope), messageUuid, 'none')
+    } catch (error) {
+      this.peers.delete(messageUuid)
+      throw error
+    }
     const turnId = (this.activeTurnId = this.delivered.open(envelope))
     void sent.then((accepted) => {
       if (!accepted && this.delivered.abandon() === turnId && this.activeTurnId === turnId) this.activeTurnId = null
@@ -202,7 +220,12 @@ class CodexChatDriver implements ChatAgentDriver {
       // The answer is turn input on the thread, shown as no user message.
       const messageUuid = crypto.randomUUID()
       this.silent.add(messageUuid)
-      this.submit(own.questions.map((question, i) => `${question.question}: ${validated.answers[i]!.join(', ')}`).join('\n'), messageUuid, 'none')
+      try {
+        this.submit(own.questions.map((question, i) => `${question.question}: ${validated.answers[i]!.join(', ')}`).join('\n'), messageUuid, 'none')
+      } catch (error) {
+        this.silent.delete(messageUuid)
+        throw error
+      }
       return { ok: true }
     }
     return requestOutcome(this.boot.current?.answerQuestion(requestId, answers), 'question', requestId)
@@ -245,25 +268,70 @@ class CodexChatDriver implements ChatAgentDriver {
 
   // ---------------------------------------------------------------- internals
 
-  /** One submission; settles true once the package accepted it (never rejects). */
   /**
+   * One submission; settles true once the package accepted it (never rejects).
    * `codexSkills` 'none' (R9) keeps a peer delivery or an internal answer
    * text-only, as the source driver's deliver and answer paths were; a human
    * send omits it and keeps the catalog's skill inputs.
    */
   private submit(text: string, messageUuid: string, codexSkills?: 'none'): Promise<boolean> {
-    // A spawn refusal (a registered CODEX_HOME) throws here, before anything is accepted.
-    const ready = this.ensure()
-    // The effort of this send, read when Kawai accepted it (root driver order).
-    if (this.options.getEffort) this.efforts.set(messageUuid, this.options.getEffort())
     const epoch = this.interrupts
+    const live = this.boot.booting || this.waiting > 0 ? null : this.boot.live
+    let job: Promise<boolean>
+    if (live) {
+      // C2: handed over before any host callback below can move the project or send again.
+      job = this.forward(live, text, messageUuid, codexSkills, epoch)
+    } else {
+      // A spawn refusal (a registered CODEX_HOME) throws here, before anything is accepted.
+      const ready = this.ensure()
+      this.waiting += 1
+      const previous = this.handed
+      let handed!: () => void
+      this.handed = new Promise<void>((resolve) => (handed = resolve))
+      const release = () => {
+        this.waiting -= 1
+        handed()
+      }
+      job = ready.then(async (inner) => {
+        await previous
+        // A send still waiting for its driver when an interrupt landed, or whose preparation threw, is withdrawn.
+        const forwarded = inner && !this.killed && epoch === this.interrupts && !this.refused.has(messageUuid) ? this.forward(inner, text, messageUuid, 'none', epoch) : null
+        release()
+        return forwarded ? forwarded : false
+      }, (error: unknown) => {
+        release()
+        throw error
+      })
+    }
+    // F1: the send is owned, with its cleanup, before any host callback below runs.
     this.sending += 1
-    this.refreshStatus()
-    const job = ready.then(async (inner) => {
-      // A send still waiting for its driver when an interrupt landed is withdrawn.
-      if (!inner || this.killed || epoch !== this.interrupts) return false
-      const steer = inner.state === 'active'
-      const mode = codexSkills ? { codexSkills } : {}
+    const sent = job.catch((error: unknown) => {
+      this.emit({ type: 'error', message: `Codex refused the turn: ${error instanceof Error ? error.message : String(error)}` })
+      throw error
+    }).finally(() => {
+      this.efforts.delete(messageUuid)
+      this.refused.delete(messageUuid)
+      this.sending -= 1
+      this.refreshStatus()
+    })
+    void this.owned.track('send', sent)
+    try {
+      // The effort of this send, read when Kawai accepted it (root driver order), before the package's beforeSubmit.
+      if (this.options.getEffort) this.efforts.set(messageUuid, this.options.getEffort())
+      this.refreshStatus()
+    } catch (error) {
+      // The caller gets its callback's own error; the package refuses this send in beforeSubmit, before any native write.
+      this.refused.add(messageUuid)
+      throw error
+    }
+    return sent.then((accepted) => accepted, () => false)
+  }
+
+  /** Calls the package's send now (it captures its skill inputs there); settles true once accepted. */
+  private async forward(inner: CodexAgentDriver, text: string, messageUuid: string, codexSkills: 'none' | undefined, epoch: number): Promise<boolean> {
+    const steer = inner.state === 'active'
+    const mode = codexSkills ? { codexSkills } : {}
+    try {
       const handle = await inner.send(text, { messageUuid, ...mode, ...(steer ? { continuation: 'steer' as const } : {}) }).catch((error: unknown) => {
         // A steer prepared for a turn that ended meanwhile goes as a new turn, with the same skill mode.
         if (steer && (error as { code?: unknown } | null)?.code === 'turn-ended') return inner.send(text, { messageUuid, ...mode })
@@ -271,17 +339,13 @@ class CodexChatDriver implements ChatAgentDriver {
       })
       void this.owned.track('turn', handle.result)
       return true
-    })
-    const sent = job.catch((error: unknown) => {
-      this.emit({ type: 'error', message: `Codex refused the turn: ${error instanceof Error ? error.message : String(error)}` })
+    } catch (error) {
+      // An interrupt the package found this send still waiting for withdraws it, as one waiting for its driver is.
+      if (epoch !== this.interrupts && (error as { code?: unknown } | null)?.code === 'interrupted') return false
+      // The refusal our beforeSubmit gave a send whose preparation threw: the caller already has that error.
+      if (this.refused.has(messageUuid) && error instanceof AgentRuntimeError && error.category === 'context') return false
       throw error
-    }).finally(() => {
-      this.efforts.delete(messageUuid)
-      this.sending -= 1
-      this.refreshStatus()
-    })
-    void this.owned.track('send', sent)
-    return sent.then((accepted) => accepted, () => false)
+    }
   }
 
   /**
@@ -328,6 +392,7 @@ class CodexChatDriver implements ChatAgentDriver {
       ...(tools ? { tools } : {}),
       ...(options.getEffort ? { getEffort: () => this.turnEffort } : {}),
       beforeSubmit: (submission) => {
+        if (this.refused.has(submission.messageUuid)) return { accepted: false, reason: 'its preparation threw' }
         this.turnEffort = this.efforts.get(submission.messageUuid)
         return { accepted: true }
       },
