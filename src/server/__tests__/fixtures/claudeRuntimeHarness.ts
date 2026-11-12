@@ -156,22 +156,36 @@ let joining: Promise<void> | null = null
  * promise and never settles while a harness it owns is still joining. An
  * entry leaves `live` only after its cleanup settled, and a harness created
  * during the join is joined by it too.
+ *
+ * The final observation that `live` is empty, the release of `joining` and
+ * the settlement of the reserved promise are one synchronous step inside
+ * the drain's own continuation (task-602c71e9 R7, findings-7712679a): no
+ * await or later reaction separates them, so a harness registered at any
+ * point is either joined by the pending join or, once that join has
+ * settled, owned by the next one a later call starts.
  */
 export function cleanupHarnesses(): Promise<void> {
   if (joining) return joining
-  let settle!: { resolve(): void; reject(error: unknown): void }
+  let settle!: Settle
   const reserved = new Promise<void>((resolve, reject) => (settle = { resolve, reject }))
   joining = reserved
-  joinLive().then(
-    () => ((joining = null), settle.resolve()),
-    (error: unknown) => ((joining = null), settle.reject(error)),
-  )
+  void drainLive(settle)
   return reserved
 }
 
-async function joinLive(): Promise<void> {
+type Settle = { resolve(): void; reject(error: unknown): void }
+
+async function drainLive(settle: Settle): Promise<void> {
   const failures: unknown[] = []
-  while (live.size > 0) {
+  for (;;) {
+    if (live.size === 0) {
+      // One synchronous completion step: empty decision, slot release, settlement.
+      joining = null
+      if (failures.length === 0) settle.resolve()
+      else if (failures.length === 1) settle.reject(failures[0])
+      else settle.reject(new AggregateError(failures, 'Claude harness cleanups failed'))
+      return
+    }
     const entries = [...live]
     const outcomes = await Promise.allSettled(entries.map((entry) => entry.harness.cleanup()))
     for (const entry of entries) live.delete(entry)
@@ -179,8 +193,6 @@ async function joinLive(): Promise<void> {
       if (outcome.status === 'rejected' && entries[index]!.asserted?.error !== outcome.reason) failures.push(outcome.reason)
     })
   }
-  if (failures.length === 1) throw failures[0]
-  if (failures.length > 1) throw new AggregateError(failures, 'Claude harness cleanups failed')
 }
 
 export function createRuntimeHarness(overrides: RuntimeHarnessOverrides = {}): RuntimeHarness {

@@ -171,3 +171,113 @@ test('a failure asserted exactly before the suite join is not reported again by 
     await h.cleanup().catch(() => {})
   }
 })
+
+/** Whether `promise` has already settled: its reaction is queued before the probe's. */
+async function settledNow(promise: Promise<unknown>): Promise<boolean> {
+  const mark = promise.then(() => true, () => true)
+  return Promise.race([mark, Promise.resolve().then(() => false)])
+}
+
+// Reviewer reproduction /tmp/k602-r6-review-finalize-gap.test.ts (SHA a681127c,
+// findings-7712679a), committed with current imports. The first join's last
+// harness settles; a microtask queued by that settlement registers a new
+// harness, sends to it and calls the suite join. Under the R6 split completion
+// that call got back the first join, which settled without ever joining the
+// new harness (whose turn then started and held its actual callback). Now the
+// first join has settled in the same step that saw its set empty, so the call
+// starts a new join that owns and joins the new harness: it stops it before
+// its turn opens, so no callback is ever entered or left held.
+test('a cleanup call during aggregate finalization joins a newly tracked held harness', async () => {
+  let release!: () => void
+  const held = new Promise<void>((r) => { release = r })
+  const a = createRuntimeHarness()
+  let late: RuntimeHarness | undefined
+  let second: Promise<void> | undefined
+  let scheduled: Promise<void> | undefined
+  let first: Promise<void> | undefined
+  let lateEntered = false
+  try {
+    a.driver.send('first')
+    await a.admitted(1)
+    first = cleanupHarnesses()
+    scheduled = a.cleanup().then(() => {
+      // The original stop has settled. Register in the next microtask,
+      // while the suite's reserved promise may still be its in-flight join.
+      queueMicrotask(() => {
+        late = createRuntimeHarness({ onEvent: (event) => {
+          if (event.type === 'turn_started') { lateEntered = true; return held }
+        } })
+        late.driver.send('late')
+        second = cleanupHarnesses()
+      })
+    })
+    await scheduled
+    await tick()
+    expect(late).toBeDefined()
+    expect(second).toBeDefined()
+    // Never the older join that omits the live late harness.
+    expect(second).not.toBe(first)
+    await second
+    // The join that settled had joined the late harness: its cleanup had already settled.
+    expect(await settledNow(late!.cleanup())).toBe(true)
+    await tick()
+    expect(lateEntered).toBe(false)
+  } finally {
+    release()
+    await Promise.allSettled([first, second, scheduled, a.cleanup(), late?.cleanup()])
+    await cleanupHarnesses()
+  }
+})
+
+test('on the rejection path the finalizing join reports its raw failure once and a call during finalization owns the late harness', async () => {
+  const boom = new Error('first harness callback rejected')
+  const ga = gate()
+  const rejecting = ga.held.then(() => {
+    throw boom
+  })
+  void rejecting.catch(() => {})
+  const a = heldHarness(rejecting)
+  let late: RuntimeHarness | undefined
+  let first: Promise<void> | undefined
+  let second: Promise<void> | undefined
+  let scheduled: Promise<void> | undefined
+  try {
+    await enter(a.h, a.entered)
+    first = cleanupHarnesses()
+    const firstOutcome = first.then(() => null, (error: unknown) => error)
+    scheduled = a.h.cleanup().then(
+      () => undefined,
+      () => {
+        queueMicrotask(() => {
+          late = createRuntimeHarness()
+          late.driver.send('late')
+          second = cleanupHarnesses()
+        })
+      },
+    )
+    ga.release()
+    await scheduled
+    const reported = await firstOutcome
+    expect(rawCauses(reported).length).toBe(1)
+    expect(rawCauses(reported)[0]).toBe(boom)
+    await tick()
+    expect(late).toBeDefined()
+    expect(second).toBeDefined()
+    expect(second).not.toBe(first)
+    // The late harness fails nothing: its own join resolves, and the raw failure is not reported again.
+    await second
+    expect(await settledNow(late!.cleanup())).toBe(true)
+    await cleanupHarnesses()
+  } finally {
+    ga.release()
+    await Promise.allSettled([first, second, scheduled, a.h.cleanup(), late?.cleanup()])
+  }
+})
+
+test('a join over an empty set settles in the call itself and the next call starts a new one', async () => {
+  const first = cleanupHarnesses()
+  expect(await settledNow(first)).toBe(true)
+  const second = cleanupHarnesses()
+  expect(second).not.toBe(first)
+  await Promise.all([first, second])
+})
