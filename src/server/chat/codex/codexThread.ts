@@ -5,8 +5,10 @@
 // prompt append as developerInstructions — the effort mapping for
 // turn/start, and the context reading a token-usage update yields. The
 // driver's observational side-reports live here too (spawn provenance,
-// compaction facts, an async question's answer), so CodexSessionDriver stays
-// the state machine.
+// compaction facts, an async question's answer). Production Codex chats run
+// Kawai's adapter over the package (provider/codexRuntime.ts); the in-tree
+// state machine these served is deleted (task-5906f19c), and the helpers stay
+// with their own tests as deferred extract-agent-runtime 6.2/6.3 families.
 import type { ChatApprovalPolicy, ChatContextUsage } from '../../../shared/chat'
 import { logger } from '../../logger'
 import type { OutboundAuditSink } from '../../outbound/observer'
