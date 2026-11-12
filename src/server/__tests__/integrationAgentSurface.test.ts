@@ -113,7 +113,7 @@ describe('instructions and the plan note name the integration branch (7.1, D12)'
   test('the implement and fix instructions name the base and forbid pushing to it; direct landing names none', () => {
     const line = 'Base: the integration branch wave/c — your branch starts from it and lands on it. Kawai alone writes wave/c (it fast-forwards it and promotes it into the default branch); never push to it.'
     expect(implementInstruction({ ...base, integrationBranch: 'wave/c' })).toContain(line)
-    expect(fixInstruction({ ...base, integrationBranch: 'wave/c', failingChecks: [], findings: [], fixRounds: 0, continueFrom: sha('1') })).toContain(line)
+    expect(fixInstruction({ ...base, integrationBranch: 'wave/c', failingChecks: [], findings: { blocking: [], blockingText: '', others: 0, legacyTexts: [] }, fixRounds: 0, fixRoundLimit: 5, continueFrom: sha('1') })).toContain(line)
     expect(implementInstruction({ ...base, integrationBranch: null })).not.toContain('integration branch')
     expect(implementInstruction(base)).not.toContain('integration branch')
   })

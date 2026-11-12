@@ -19,7 +19,7 @@ import type { MessageRouterDeps } from '../protocol/types'
 
 // A decided card with its supervision and usage views, as the server's detail carries them (plan-supervision D15).
 const card: DecisionCard = {
-  id: 'card-1', teamId: '/repo/.git', planId: 'p1', revision: 1, change: 'api', taskId: 'task-1',
+  id: 'card-1', kind: 'question', teamId: '/repo/.git', planId: 'p1', revision: 1, change: 'api', taskId: 'task-1',
   question: 'Keep the v1 endpoint?', options: ['keep', 'drop'], context: null,
   askedBy: { session: 'dev-1', group: 'middle-devs', profile: 'glm' },
   addressedTo: 'lead', addressedGroup: 'lead', messageId: null, createdAt: '2026-10-14T00:00:00.000Z',

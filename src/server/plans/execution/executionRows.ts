@@ -16,6 +16,7 @@ import type {
   StopDetail,
   StopReason,
 } from '../../../shared/planExecution'
+import { DEFAULT_MAX_FAILED_FIX_ROUNDS } from '../../../shared/planExecutionProgress'
 
 export interface ExecutionRow {
   id: string
@@ -30,6 +31,8 @@ export interface ExecutionRow {
   baseCommit: string
   floor: { version: number; map: FloorMap }
   maxParallel: number
+  /** The backstop recorded at Start (review-convergence decision 3). */
+  maxFailedFixRounds: number
   mergeMethod: MergeMethod
   state: ExecutionState
   outcome: ExecutionOutcome | null
@@ -57,6 +60,8 @@ export interface ChangeRow {
   prOpenedByKawai: boolean | null
   /** Consecutive failed fix rounds (D12). */
   fixRounds: number
+  /** The group a Reassign outcome sent the change's fixes to; null for the plan revision's group (review-convergence decision 7). */
+  groupOverride: string | null
   /** Whether this row holds the team's ownership of the change (D3). */
   owns: boolean
   passedAt: string | null
@@ -120,6 +125,9 @@ export interface RoundRow {
   extra: Array<{ name: string; description: string; command: string | null; by: 'ci' | 'reviewer'; outcome: string | null }> | null
   outcome: 'pass' | 'fail' | 'superseded' | null
   decidedAt: string | null
+  /** review-findings-ledger D8: the failed round this one re-gated, and the finding ids a failed round failed on (null before the upgrade or for CI). */
+  regateOf: string | null
+  blockingIds: string[] | null
 }
 
 /** One recorded external step (D14): written before it runs, inspected before it repeats. */
@@ -161,6 +169,7 @@ export function mapExecution(row: Row): ExecutionRow {
     baseCommit: String(row.base_commit),
     floor: json<ExecutionRow['floor']>(row.floor_json)!,
     maxParallel: Number(row.max_parallel),
+    maxFailedFixRounds: row.max_failed_fix_rounds === undefined || row.max_failed_fix_rounds === null ? DEFAULT_MAX_FAILED_FIX_ROUNDS : Number(row.max_failed_fix_rounds),
     mergeMethod: String(row.merge_method) as MergeMethod,
     state: String(row.state) as ExecutionState,
     outcome: text(row.outcome) as ExecutionOutcome | null,
@@ -188,6 +197,7 @@ export function mapChange(row: Row): ChangeRow {
     prUrl: text(row.pr_url),
     prOpenedByKawai: flag(row.pr_opened_by_kawai),
     fixRounds: Number(row.fix_rounds),
+    groupOverride: row.group_override === undefined || row.group_override === null ? null : String(row.group_override),
     owns: Number(row.owns) === 1,
     passedAt: text(row.passed_at),
     generation: Number(row.generation),
@@ -254,6 +264,8 @@ export function mapRound(row: Row): RoundRow {
     extra: json<RoundRow['extra']>(row.extra_json),
     outcome: text(row.outcome) as RoundRow['outcome'],
     decidedAt: text(row.decided_at),
+    regateOf: text(row.regate_of),
+    blockingIds: json<string[]>(row.blocking_ids),
   }
 }
 

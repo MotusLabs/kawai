@@ -67,6 +67,7 @@ import type { SupervisionRuntime } from './supervision/supervisionRead'
 import { composeSupervisionMonitor, type MonitorCompositionOptions } from './supervision/monitorComposition'
 import type { SupervisionMonitor } from './supervision/SupervisionMonitor'
 import type { TaskStore } from '../team/taskStore'
+import { connectFindingCards } from './decisions/findingCards'
 import type { PlanExecutionSettings } from '../team/teamCaps'
 
 /** What capacity evidence reads: staffing's counts and the cooldown ends (D3). */
@@ -472,6 +473,13 @@ export function composePlanServices(options: PlanServicesOptions): {
     tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, mailbox: team.teamMailbox, getSession: options.getSession,
     ...(options.homeDir ? { homeDir: options.homeDir } : {}), onChange: planId => options.plans.announce(planId),
   }) : null
+  // Dispute cards (review-findings-ledger D6): raised with their dispute, decided into the ledger, replayed at startup.
+  if (decisions && team) {
+    connectFindingCards({
+      findings: team.results.findingsLedger, decisions, decisionStore, taskStore: team.taskStore, mailbox: team.mailbox,
+      identityOf: teamId => identityOrBare(team, teamId),
+    })
+  }
   // Holds (revision-control 3.1): the owner's place, release (whole, by
   // changes, or narrowed with retain), and extend — one transaction with the
   // D3 event, the executor wake after the commit.

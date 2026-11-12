@@ -1,3 +1,4 @@
+// @exercises: src/server/routes/**, src/server/ws/**, src/server/tmux*.ts, src/server/SessionManager.ts, src/server/SessionRegistry.ts
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import net from 'node:net'

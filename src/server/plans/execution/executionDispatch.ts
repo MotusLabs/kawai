@@ -5,7 +5,9 @@
 // pieces are: the task exists or is created, the attempt row exists or is
 // inserted, and the dispatch replays by its request key
 // `exec:<execution>:<change>:attempt:<n>:<generation>` — a restart between
-// the pieces resumes without a second instruction.
+// the pieces resumes without a second instruction. The task's revision 1
+// carries the contract read from the change's design.md at the baseline
+// commit (implementation-contract D4), or is journaled as having none.
 import { createHash } from 'node:crypto'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { TaskCaller, TaskService } from '../../team/TaskService'
@@ -13,13 +15,17 @@ import type { AssignmentService } from '../../team/AssignmentService'
 import type { TaskResultService } from '../../team/TaskResultService'
 import { runGitAsync } from '../../git/gitCommand'
 import { manifestHashInput, type AttemptManifest } from '../../../shared/planExecution'
+import { dispatchOwedFix } from './owedFix'
 import { attemptStatus } from './attemptStatus'
 import type { AttemptRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
-import { fixInstruction, implementInstruction } from './instructions'
+import { fixInstruction, implementInstruction, instructionContract, updateInstruction } from './instructions'
+import { fixFindings, type FixFindings } from './fixFindings'
 import { refusable } from './stepRefusal'
 import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
+import { renderContract } from '../../../shared/implementationContract'
+import { gitShowFile, snapshotContract, type ShowFile } from './contractSnapshot'
 
 /** The system caller (D2): minted only inside this module. */
 function kawaiCaller(team: TeamIdentity, executionId: string): TaskCaller {
@@ -34,6 +40,8 @@ export interface DispatchDeps {
   assignments: AssignmentService
   /** Fix and review stages dispatch as handoffs, superseding the prior stage (D7). */
   results: TaskResultService
+  /** The contract snapshot's git read (implementation-contract D4); the real `git show` by default. */
+  showFile?: ShowFile
 }
 
 /** sha256 of `git show <startCommit>:<path>` for each validated file (D8's digest). */
@@ -65,6 +73,8 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
   // The task (D7): title, direction, acceptance, worktree, openspec link, plan link.
   let taskId = changeRow.taskId
   if (taskId === null) {
+    // The contract at the baseline, read once (implementation-contract D4, E1–E5); never re-derived.
+    const snapshot = await snapshotContract(deps.showFile ?? gitShowFile, changeRow.worktree, changeRow.baselineCommit, input.change)
     const task = await refusable('implement', () => deps.tasks.create(kawaiCaller(deps.team, input.executionId), {
       title: `${input.change} — ${deps.plans.get(execution.planId)?.title ?? execution.planId}`,
       direction: `The OpenSpec change "${input.change}" is the authoritative direction for this task; its proposal, design, and tasks under openspec/changes/${input.change}/ govern the work.\n\n${entry.guidance}`.trim(),
@@ -73,7 +83,9 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
       openspec_change: input.change,
       plan_id: execution.planId,
       plan_change: input.change,
+      ...(snapshot.contract ? { contract: renderContract(snapshot.contract) } : {}),
     }))
+    if (snapshot.journal !== null) deps.tasks.store.appendJournal(task.id, { kind: 'system', sessionId: null }, snapshot.journal)
     taskId = task.id
     deps.executions.transition(input.executionId, input.change, { state: changeRow.state, generation: changeRow.generation }, { taskId })
   }
@@ -126,6 +138,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
       taskId,
       manifestHash,
       integrationBranch: integrationBranchOf(execution),
+      contract: instructionContract(deps.tasks.store.get(taskId)),
     }),
     requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
@@ -140,9 +153,12 @@ export interface FixAttemptInput {
   group: string
   failingChecks: Array<{ name: string; conclusion: string; link: string | null }>
   findingsIds: string[]
-  findingsTexts: string[]
+  /** review-findings-ledger D7: built by fixFindings from the fold. */
+  findings: FixFindings
   continueFrom: string
   fixRounds: number
+  /** A diagnosis outcome's rationale, which the fix handoff carries (review-convergence decision 7). */
+  diagnosis?: string | null
   /** When set, the attempt is an update attempt (revision-control PR E, A1): its manifest records the failed branch update. */
   update?: { base: string; files: string[] }
 }
@@ -256,9 +272,12 @@ export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, at
     taskId,
     manifestHash: attempt.manifestHash,
     integrationBranch: integrationBranchOf(execution),
+    contract: instructionContract(deps.tasks.store.get(taskId)),
     failingChecks: input.failingChecks,
-    findings: input.findingsTexts,
+    findings: input.findings,
     fixRounds: input.fixRounds,
+    fixRoundLimit: execution.maxFailedFixRounds,
+    diagnosis: input.diagnosis ?? null,
     continueFrom: input.continueFrom,
   })
   // A fix is a handoff (D7): it supersedes the outstanding review through
@@ -269,17 +288,6 @@ export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, at
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
   }))
   deps.executions.setAttemptAssignment(attempt.id, outcome.assignment.id)
-}
-
-/** The update attempt's instruction (D13): what failed and how to continue. The dispatch and the owed re-send build it from the manifest's `update` fact. */
-export function updateInstruction(update: { base: string; files: string[] }): string {
-  return [
-    'Bring the branch up to date with the base branch.',
-    update.files.length > 0
-      ? `The merge conflicts with the base${update.base ? ` (base head ${update.base})` : ''} in: ${update.files.join(', ')}. Resolve the conflicts and commit the merge.`
-      : `GitHub's branch update did not produce a clean merge. Merge the base branch yourself and push.`,
-    'Then submit a new result with task_submit_result.',
-  ].join('\n\n')
 }
 
 /**
@@ -302,12 +310,12 @@ export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
   const changeRow = deps.executions.change(input.executionId, input.change)
   if (changeRow === null || changeRow.worktree === null || changeRow.branch === null || changeRow.baselineCommit === null || changeRow.taskId === null) return
   const revision = deps.plans.revision(execution.planId, execution.revision)
-  const group = revision?.content.changes.find(entry => entry.change === input.change)?.group ?? null
+  const group = changeRow.groupOverride ?? revision?.content.changes.find(entry => entry.change === input.change)?.group ?? null
   if (group === null) return
   const roleProfiles = revision?.content.roles.find(role => role.group === group)?.profiles ?? []
   const attempt = await ensureFixAttempt(deps, {
     executionId: input.executionId, change: input.change, group,
-    failingChecks: [], findingsIds: [], findingsTexts: [],
+    failingChecks: [], findingsIds: [], findings: { blocking: [], blockingText: '', others: 0, legacyTexts: [] },
     continueFrom: input.round.commitSha, fixRounds: changeRow.fixRounds,
     update: input.update,
   })
@@ -371,6 +379,7 @@ async function dispatchOwedImplement(deps: DispatchDeps, input: { executionId: s
       taskId: changeRow.taskId!,
       manifestHash: newest.manifestHash,
       integrationBranch: integrationBranchOf(execution),
+      contract: instructionContract(deps.tasks.store.get(changeRow.taskId!)),
     }),
     requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
@@ -389,41 +398,6 @@ async function dispatchOwedUpdate(deps: DispatchDeps, input: { executionId: stri
   })
 }
 
-/** The fix attempt's re-send, texts rebuilt at send time from the round the attempt answers — the manifest keeps only ids. */
-async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: string; change: string; group: string }, newest: AttemptRow): Promise<void> {
-  const changeRow = deps.executions.change(input.executionId, input.change)
-  if (changeRow === null) return
-  const round = newest.manifest.answers !== undefined
-    ? deps.executions.round(newest.manifest.answers.roundId) ?? null
-    : null
-  let failingChecks: FixAttemptInput['failingChecks'] = []
-  let findingsIds: string[] = []
-  let findingsTexts: string[] = []
-  // The texts are rebuilt at send time from the round the attempt answers —
-  // the manifest keeps only ids. A superseded round's owed fix names the
-  // task's CURRENT revision (a second republish after the attempt was minted
-  // is still the round's answer), a failed round its failing checks and the
-  // verdict's findings.
-  if (round?.outcome === 'superseded') {
-    const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
-    const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
-    findingsTexts = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
-  } else if (round !== null && round.outcome === 'fail') {
-    failingChecks = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'failure')
-      .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
-    const all = changeRow.taskId === null ? [] : deps.tasks.store.results.findingsFor(round.resultId)
-    const findings = round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all
-    findingsIds = findings.map(row => row.id)
-    findingsTexts = findings.map(row => row.findings)
-  }
-  await dispatchFix(deps, {
-    executionId: input.executionId, change: input.change, group: input.group,
-    failingChecks, findingsIds, findingsTexts,
-    continueFrom: round?.commitSha ?? changeRow.baselineCommit ?? '',
-    fixRounds: changeRow.fixRounds,
-  }, { id: newest.id, number: newest.number, manifestHash: newest.manifestHash })
-}
-
 /**
  * Retry of a failed or closed stage (D12): the stage's instruction is sent
  * again, in A3's order (revision-control PR E). An owed newest row is the
@@ -438,7 +412,7 @@ async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: string;
  * with no linked row dispatches its implement attempt (a no-op behind H4's
  * guard when rows exist). The step clears once the decision is applied.
  */
-export async function redispatchStage(deps: DispatchDeps, row: { executionId: string; change: string; taskId: string | null; generation: number }): Promise<void> {
+export async function redispatchStage(deps: DispatchDeps, row: { executionId: string; change: string; taskId: string | null; generation: number; groupOverride: string | null }): Promise<void> {
   const execution = deps.executions.execution(row.executionId)
   if (execution === null) return
   const revision = deps.plans.revision(execution.planId, execution.revision)
@@ -484,7 +458,7 @@ export async function redispatchStage(deps: DispatchDeps, row: { executionId: st
         }))
       }
     } else {
-      const group = revision?.content.changes.find(entry => entry.change === row.change)?.group ?? null
+      const group = row.groupOverride ?? revision?.content.changes.find(entry => entry.change === row.change)?.group ?? null
       if (group !== null) await dispatchImplementAttempt(deps, { executionId: row.executionId, change: row.change, group })
     }
   }

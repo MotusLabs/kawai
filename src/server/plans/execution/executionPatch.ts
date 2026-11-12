@@ -26,6 +26,8 @@ export interface NewExecution {
   floor: { version: number; map: FloorMap }
   maxParallel: number
   mergeMethod: MergeMethod
+  /** The backstop recorded at Start; the default when unset. */
+  maxFailedFixRounds?: number
   /** In content order; a change with a landing fact starts `landed` and owns nothing (D4). */
   changes: Array<{ change: string; landed: boolean }>
 }
@@ -45,6 +47,8 @@ export interface ChangePatch {
   prOpenedByKawai?: boolean | null
   fixRounds?: number
   passedAt?: string | null
+  /** A Reassign outcome's group (review-convergence decision 7). */
+  groupOverride?: string | null
 }
 
 export interface ChangeGuard { state: ChangeState; generation: number }
@@ -52,7 +56,7 @@ export interface ChangeGuard { state: ChangeState; generation: number }
 const PATCH_COLUMNS: Record<keyof ChangePatch, string> = {
   state: 'state', step: 'step', stopReason: 'stop_reason', stopDetail: 'stop_detail_json', taskId: 'task_id',
   worktree: 'worktree', branch: 'branch', baselineCommit: 'baseline_commit', prNumber: 'pr_number', prUrl: 'pr_url',
-  prOpenedByKawai: 'pr_opened_by_kawai', fixRounds: 'fix_rounds', passedAt: 'passed_at',
+  prOpenedByKawai: 'pr_opened_by_kawai', fixRounds: 'fix_rounds', passedAt: 'passed_at', groupOverride: 'group_override',
 }
 
 function columnValue(key: keyof ChangePatch, value: unknown): string | number | null {

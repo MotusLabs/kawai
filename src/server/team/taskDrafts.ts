@@ -1,6 +1,7 @@
 // The human's task drafts (task-revision-publication design D1): one per
 // task, an unpublished edit of direction, acceptance, and rationale based on
-// a named published revision. A draft is never a revision — it changes
+// a named published revision, plus its raw contract text (implementation-
+// contract D3), which may not parse yet. A draft is never a revision — it changes
 // neither `team_tasks.revision` nor `updated_at`, writes no mail, and is
 // never read by agent paths (`TaskStore.get/list/detail`, `buildTaskContext`).
 // Its own listeners refresh the human's task view only: `TaskStore.changed`
@@ -14,6 +15,8 @@ export interface DraftInput {
   direction: string
   acceptance: string | null
   rationale: string | null
+  /** Raw contract text (implementation-contract D3): null = the base revision's contract, unedited; '' = cleared. */
+  contractText?: string | null
 }
 
 const nowIso = () => new Date().toISOString()
@@ -38,14 +41,15 @@ export class TaskDraftStore {
       direction: String(row.direction),
       acceptance: row.acceptance === null ? null : String(row.acceptance),
       rationale: row.rationale === null ? null : String(row.rationale),
+      contractText: row.contract_text === null || row.contract_text === undefined ? null : String(row.contract_text),
       updatedAt: String(row.updated_at),
     }
   }
 
   /** Save (overwrite) the task's one draft. */
   save(taskId: string, input: DraftInput, now = nowIso()): TaskDraft {
-    this.db.prepare(`INSERT OR REPLACE INTO team_task_drafts (task_id, base_revision, direction, acceptance, rationale, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)`).run(taskId, input.baseRevision, input.direction, input.acceptance, input.rationale, now)
+    this.db.prepare(`INSERT OR REPLACE INTO team_task_drafts (task_id, base_revision, direction, acceptance, rationale, contract_text, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(taskId, input.baseRevision, input.direction, input.acceptance, input.rationale, input.contractText ?? null, now)
     this.changed(taskId)
     return this.get(taskId)!
   }

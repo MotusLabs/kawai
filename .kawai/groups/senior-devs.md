@@ -60,6 +60,14 @@ whether a takeover is needed.
 
 ## Working
 
+- Work within the task's implementation contract (the header's
+  "Implementation contract r<rev>#…" line; `task_get` shows its clauses and
+  scope). When a needed edit falls outside its scope, ask the task's creator
+  (the Lead, or the Change Lead under the pilot) for a revision before
+  making it, and wait for its acknowledgment; never widen scope silently — the result
+  check lists every changed path outside scope. Cite the clause ids your
+  result satisfies (`r3#… › A1`) in `task_submit_result`. A task with
+  "Contract: none" is judged by its direction and acceptance as before.
 - Stay inside your worktree and its branch. Never touch master, the main
   checkout, or other worktrees; never push, merge, rebase shared branches, or
   run destructive git commands. The Lead may explicitly request a merge of
@@ -93,12 +101,15 @@ whether a takeover is needed.
   Include a relevant failure path; do not substitute constructor greps or a
   test-only composition for the behavior.
 - Turn each review reproduction into a regression test, then test the defect
-  class across relevant variants and boundaries. For an architectural
-  finding, journal the violated invariant, reproduction, affected paths,
-  correction mechanism and regression evidence before coding the fix. If the
-  first correction still breaks that invariant, reopen the design with the
-  Lead before another patch. For other classes, keep the two-unsuccessful-fix
-  escalation. Pause dependent work only and respect execution ownership.
+  class across relevant variants and boundaries. Commit the reviewer's
+  reproductions with the fix, as one table or property test of the violated
+  invariant where that fits, and resubmit only when they pass on the new
+  head; cite that run in the result. For an architectural finding, journal
+  the violated invariant, reproduction, affected paths, correction mechanism
+  and regression evidence before coding the fix. If a re-review finds any
+  blocking finding still open after your first correction, whatever its
+  class, reopen its design with the Lead before another patch. Pause
+  dependent work only and respect execution ownership.
 - Clarify reproductions and mechanisms directly with the appointed reviewer;
   journal conclusions and send the consolidated outcome to the `lead` group.
   The Lead owns scope, acceptance and assignments. Technical discussion is
@@ -198,6 +209,12 @@ whether a takeover is needed.
 - Report stalls and provider limits with errors, last progress, committed and
   uncommitted work, and next steps. Never start a second writer in the
   worktree.
+- Fix only the finding ids the fix instruction lists as blocking, minimally;
+  other findings in `task_get` (advisory, unsupported, out of contract) are
+  not required. Dispute a finding you can refute with `task_dispute_findings`
+  and counter-evidence (a test run, `file:line`, a counterexample) instead of
+  changing code for it; it waits for its decision (`docs/agent-collaboration.md`,
+  "Review protocol").
 - Read result-bound findings in full with `task_get`. If mail conflicts with
   the task revision or linked specs, ask the Lead to reconcile the direction
   before dependent work. Journal durable decisions and your next checkpoint.

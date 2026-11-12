@@ -2,6 +2,9 @@
 // timeouts, bounded output, missing-root handling, and defensive parsing of
 // optional fields. Results belong only to the worktree whose filesystem they
 // were read from; a missing OpenSpec root is an empty, non-error result.
+// With a cache (bounded-openspec-discovery D2), a worktree whose stat
+// fingerprint is unchanged reuses its last successful result for up to ten
+// minutes instead of starting the CLI.
 
 import type {
   OpenSpecChangeSummary,
@@ -10,6 +13,8 @@ import type {
   WorkspaceSnapshot,
 } from '../../shared/workspace'
 import { resolveChangeRegistry } from './changeRegistry'
+import { shouldRunOpenSpec, type OpenSpecDiscoveryCache } from './openspecDiscoveryCache'
+import { fingerprintOpenSpecInputs, type OpenSpecFingerprintFn } from './openspecFingerprint'
 
 export const OPENSPEC_TIMEOUT_MS = 15_000
 export const OPENSPEC_MAX_OUTPUT_BYTES = 512 * 1024
@@ -169,6 +174,47 @@ export async function discoverWorktreeOpenSpec(
   return { changes: [], stale: true, error: reason }
 }
 
+export interface OpenSpecRefreshOptions {
+  runner?: OpenspecCommandRunner
+  timeoutMs?: number
+  /**
+   * Reuse memory (bounded-openspec-discovery D2). Without it every worktree
+   * runs the CLI, as before.
+   */
+  cache?: OpenSpecDiscoveryCache
+  fingerprint?: OpenSpecFingerprintFn
+  now?: () => number
+}
+
+/**
+ * Discover one worktree through the cache: reuse the stored result when the
+ * fingerprint taken now matches it and it is young enough (table RD), else
+ * run the CLI and store the result with the fingerprint taken *before* the
+ * run, so a write during the run changes the next fingerprint. A stale
+ * result is never stored, and it clears the entry.
+ */
+async function discoverWithCache(
+  worktreePath: string,
+  cache: OpenSpecDiscoveryCache,
+  options: OpenSpecRefreshOptions
+): Promise<WorktreeOpenSpecState> {
+  const fingerprint = await (options.fingerprint ?? fingerprintOpenSpecInputs)(worktreePath)
+  const startedAt = (options.now ?? Date.now)()
+  const previous = cache.get(worktreePath)
+  if (previous && !shouldRunOpenSpec(previous, fingerprint, startedAt)) {
+    cache.countReuse()
+    return previous.state
+  }
+  cache.countRun()
+  const discovered = await discoverWorktreeOpenSpec(worktreePath, options)
+  if (!discovered.stale && fingerprint !== null) {
+    cache.set(worktreePath, { fingerprint, discoveredAt: startedAt, state: discovered })
+  } else {
+    cache.delete(worktreePath)
+  }
+  return discovered
+}
+
 /**
  * Refresh OpenSpec state for every worktree in one repository. `previous`
  * holds last-known repositories (any snapshot) for last-valid retention.
@@ -177,7 +223,7 @@ export async function discoverWorktreeOpenSpec(
 export async function refreshRepositoryOpenSpec(
   repository: WorkspaceRepository,
   previous: WorkspaceRepository[] | undefined,
-  options: { runner?: OpenspecCommandRunner; timeoutMs?: number } = {}
+  options: OpenSpecRefreshOptions = {}
 ): Promise<WorkspaceRepository> {
   const previousOpenSpecByWorktreeId = new Map<string, WorktreeOpenSpecState>()
   for (const previousRepository of previous ?? []) {
@@ -187,11 +233,16 @@ export async function refreshRepositoryOpenSpec(
     }
   }
 
-  // One CLI invocation per worktree, all in flight at once.
+  // At most one CLI invocation per worktree; the runner (in production the
+  // server-wide pool) bounds how many run at once, and the cache skips the
+  // worktrees whose inputs are unchanged.
+  const { cache } = options
   const discoveredByPath = new Map(
     await Promise.all(
       repository.worktrees.map(async (worktree) => {
-        const discovered = await discoverWorktreeOpenSpec(worktree.path, options)
+        const discovered = cache
+          ? await discoverWithCache(worktree.path, cache, options)
+          : await discoverWorktreeOpenSpec(worktree.path, options)
         return [worktree.id, discovered] as const
       })
     )
@@ -230,7 +281,7 @@ export async function refreshRepositoryOpenSpec(
 export async function refreshSnapshotOpenSpec(
   snapshot: WorkspaceSnapshot,
   previous: WorkspaceSnapshot | null | undefined,
-  options: { runner?: OpenspecCommandRunner; timeoutMs?: number } = {}
+  options: OpenSpecRefreshOptions = {}
 ): Promise<WorkspaceSnapshot> {
   return {
     ...snapshot,

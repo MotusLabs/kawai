@@ -906,8 +906,6 @@ describe('server message handlers', () => {
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
     }
   })
-  // Transitional (unify-approval-defaults): annotated until the change archives.
-  // @covers: chat-sessions › Users configure the default approval policy for new chat sessions › Unspecified policy creates a manual session
   // @covers: chat-sessions › New chats start from their team's default approval policy › A create request without a policy stays manual
   test('chat creation applies the requested approval policy and defaults to manual', async () => {
     const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
@@ -1315,7 +1313,14 @@ describe('server message handlers', () => {
     registryInstance.replaceSessions([
       { ...baseSession, id: 'ws-1', projectPath: '/wstest/repo' },
     ])
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Discovery fingerprints the worktree and queues its OpenSpec run in the
+    // server-wide pool (bounded-openspec-discovery), so it publishes after
+    // several async hops, not within one tick.
+    await waitForSent(
+      firstSent,
+      (message) => message.type === 'workspace-snapshot' && message.snapshot.repositories.length === 1,
+      'the discovered repository snapshot'
+    )
     const discovered = firstSent
       .filter((message) => message.type === 'workspace-snapshot')
       .at(-1)
@@ -1343,7 +1348,11 @@ describe('server message handlers', () => {
 
     // Path removal: the session disappears, so its repository is dropped.
     registryInstance.replaceSessions([])
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await waitForSent(
+      secondSent,
+      (message) => message.type === 'workspace-snapshot' && message.snapshot.repositories.length === 0,
+      'the snapshot after removal'
+    )
     const afterRemoval = secondSent
       .filter((message) => message.type === 'workspace-snapshot')
       .at(-1)
@@ -1613,7 +1622,17 @@ describe('server message handlers', () => {
     registryInstance.replaceSessions([
       { ...baseSession, id: 'ws-stale', projectPath: '/wstest/repo' },
     ])
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Discovery is asynchronous (fingerprint, pooled openspec run), so wait
+    // for the snapshot that knows the worktree rather than a fixed tick.
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'workspace-snapshot' &&
+        message.snapshot.repositories.some((repository) =>
+          repository.worktrees.some((worktree) => worktree.path === '/wstest/repo')
+        ),
+      'a workspace snapshot listing /wstest/repo'
+    )
 
     const revParseBefore = revParseCwds.length
     websocket.message?.(
@@ -1635,7 +1654,10 @@ describe('server message handlers', () => {
 
     // A scoped workspace refresh of the missing path was requested (its seed
     // resolution re-runs git against exactly that directory).
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    const refreshDeadline = Date.now() + 2000
+    while (!revParseCwds.slice(revParseBefore).includes('/wstest/repo/gone') && Date.now() < refreshDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
     expect(revParseCwds.slice(revParseBefore)).toContain('/wstest/repo/gone')
 
     // A missing path outside any known worktree keeps the generic message.

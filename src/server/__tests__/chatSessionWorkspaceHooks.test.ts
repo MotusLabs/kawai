@@ -10,10 +10,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { logger } from '../logger'
 import { SessionRegistry } from '../SessionRegistry'
 import { resolveTeam } from '../team/teamIdentity'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 let tempDir: string
 let project: string
@@ -27,7 +28,7 @@ beforeEach(() => {
   home = path.join(tempDir, 'home')
   fs.mkdirSync(path.join(project, '.kawai', 'groups'), { recursive: true })
   fs.writeFileSync(path.join(project, '.kawai', 'groups', 'devs.md'), 'Build.')
-  db = initDatabase({ path: path.join(tempDir, 'test.db') })
+  db = freshTestDatabase(path.join(tempDir, 'test.db'))
   process.env.ANTHROPIC_API_KEY = 'sk-test-key'
 })
 

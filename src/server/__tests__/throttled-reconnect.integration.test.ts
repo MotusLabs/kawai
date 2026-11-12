@@ -1,3 +1,4 @@
+// @exercises: src/server/ws/**, src/server/terminal/**, src/server/tmux*.ts, src/server/SessionManager.ts
 /**
  * throttled-reconnect.integration.test.ts
  *
@@ -26,7 +27,11 @@
  *   2. Time from attach to terminal-output (latency improvement)
  *
  * The fix halves the data, which through a throttled pipe means measurably
- * faster time-to-first-output.
+ * faster time-to-first-output. Only the bytes are asserted: the proxy
+ * releases data at a fixed rate, so bytes are the controlled quantity, while
+ * wall-clock times also depend on CPU contention between the two arms and
+ * failed this test under load with the dedup intact (2026-11-10). Times stay
+ * in the printed report as diagnostics.
  *
  * Only the attach may cross the pipe while the clock runs. Every connection
  * first receives snapshot messages (sessions, agent-sessions, and a
@@ -531,8 +536,9 @@ if (!tmuxAvailable || !localhostBindable) {
     // The actual test
     // ----------------------------------------------------------------
 
+    // @covers: dev-checks › Real-tmux tests do not fail on machine speed › Throttled reconnect under load
     test(
-      'single-attach receives terminal-output faster than double-attach through throttled proxy',
+      'single-attach sends under 75% of double-attach\'s bytes through the throttled proxy',
       async () => {
         // 8KB/s bandwidth + 100ms latency: simulates 5G + Tailscale.
         // With chunking (12KB chunks), the first chunk fits in the initial
@@ -621,15 +627,11 @@ if (!tmuxAvailable || !localhostBindable) {
             `\n    Data reduction: ${((1 - meanSingleBytes / meanDoubleBytes) * 100).toFixed(1)}%\n`
         )
 
-        // The single-attach path should send roughly half the output data
+        // The single-attach path should send roughly half the output data.
+        // A path that stopped deduplicating would land near 1.0 and fail.
+        // No wall-clock assertion: under CPU contention the times vary with
+        // scheduling, not with the bytes the dedup saves (see the header).
         expect(meanSingleBytes).toBeLessThan(meanDoubleBytes * 0.75)
-
-        // The single-attach path should be at least 25% faster through the
-        // throttled pipe. Half the data buys ~43% in the clean case; 25%
-        // still absorbs a full timing-mode slip in one arm (~3104ms vs
-        // ~4340ms = 0.72) while a path that stopped saving data would land
-        // near 1.0 and fail.
-        expect(meanSingle).toBeLessThan(meanDouble * 0.75)
       },
       120000
     )

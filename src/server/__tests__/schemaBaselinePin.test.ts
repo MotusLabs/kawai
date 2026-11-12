@@ -34,7 +34,7 @@
 // tables; migration 18 (`worker-choice`) the nullable `worker_choice` on
 // `team_messages` and `team_task_assignments`; migration 19
 // (`plan-workspace`) the bindings, document references, turn-context
-// snapshots, and command-ledger tables; migration 23 (`task-affinity`) the
+// snapshots, and command-ledger tables; migration 27 (`task-affinity`) the
 // nullable `affinity_task` on `team_messages` and `owner_session` on
 // `team_tasks`.
 import { expect, test } from 'bun:test'
@@ -518,9 +518,65 @@ const migration22: SchemaShape['tables'] = {
   team_approval_defaults: { columns: [column('team_id', 0, 1), column('policy'), column('updated_at')], indexes: [] },
 }
 
+// Migration 24's delta (review-findings-ledger D3): finding items, ledger
+// events, and dispute cards; UNIQUE keys are autoindexes the shape skips.
+// It also adds five columns to team_task_findings and the uniquely indexed
+// `regate_of` and `blocking_ids` to plan_execution_rounds, applied in the test below.
+const migration24: SchemaShape['tables'] = {
+  team_task_finding_items: {
+    columns: [
+      id, ...['submission_id', 'task_id', 'finding_id', 'item_kind', 'level'].map(name => column(name)),
+      ...['clause', 'clause_id', 'evidence', 'impact', 'reproduction'].map(optional),
+      { name: 'locus', type: 'TEXT', notnull: 1, dflt_value: "''", pk: 0 },
+      ...['class', 'reason', 'disposition'].map(optional), counter('regressed', '0'), integer('position'), column('created_at'),
+    ],
+    indexes: [{ name: 'team_task_finding_items_task', unique: 0, columns: ['task_id', 'finding_id'] }],
+  },
+  team_task_finding_events: {
+    columns: [
+      id, column('task_id'), column('finding_id'), integer('ledger_seq'), column('kind'),
+      ...['result_id', 'card_id', 'decision_id'].map(optional), optionalInteger('revision'),
+      ...['contract_identity', 'clause'].map(optional), column('actor_kind'), ...['actor_session', 'text', 'source_key'].map(optional),
+      column('created_at'),
+    ],
+    indexes: [{ name: 'team_task_finding_events_task', unique: 0, columns: ['task_id', 'ledger_seq'] }],
+  },
+  team_task_finding_cards: {
+    columns: [column('card_id', 0, 1), column('task_id'), column('finding_id'), column('dispute_event_id')],
+    indexes: [],
+  },
+}
+
+// Migration 25's delta (review-convergence decisions 3, 4, 6, 7, 10): the
+// diagnoses and the manual tasks' convergence notices; its three added
+// columns are applied in the test below.
+const migration25: SchemaShape['tables'] = {
+  plan_execution_diagnoses: {
+    columns: [
+      id, column('execution_id'), column('change'), column('round_id'), optional('review_submission_id'), column('signals_json'),
+      column('card_id'), optional('message_id'), column('opened_at'), ...['outcome', 'decision_id', 'closed_at', 'close_reason'].map(optional),
+    ],
+    indexes: [{ name: 'plan_execution_diagnoses_change', unique: 0, columns: ['execution_id', 'change'] }],
+  },
+  team_task_convergence_notices: {
+    columns: [column('submission_id', 0, 1), column('task_id'), column('signals_json'), column('created_at')],
+    indexes: [{ name: 'team_task_convergence_notices_task', unique: 0, columns: ['task_id'] }],
+  },
+}
+
+// Migration 26's delta (manual-task-stall-alerts D3): the manual tasks'
+// stall notices, keyed by task and anchor.
+const migration26: SchemaShape['tables'] = {
+  team_task_stall_notices: {
+    columns: [column('task_id', 1, 1), column('anchor_at', 1, 2), column('anchor_kind'), integer('message_count'), optional('message_id'), column('created_at')],
+    // The composite primary key's autoindex is skipped by the shape.
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25, ...migration26 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   // Migration 20's: the submitter's nullable coverage map (independent-
   // verification D4), appended after the baseline columns.
@@ -528,13 +584,19 @@ test('a fresh database opened by this build has the same shape plus each migrati
   const withCoverage = { ...results, columns: [...results.columns, optional('coverage')] }
   const messages = expected.tables.team_messages!
   // Migration 18's: the sender's worker choice (dispatch-worker-choice D1);
-  // migration 23's: the affinity task (group-mail-task-affinity D1).
+  // migration 27's: the affinity task (group-mail-task-affinity D1).
   const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles'), optional('worker_choice'), optional('affinity_task')] }
-  // Migration 23's: the task owner (group-mail-task-affinity D7), after the plan link.
+  // Migration 27's: the task owner (group-mail-task-affinity D7), after the plan link.
   const tasks = expected.tables.team_tasks!
   const withOwner = { ...tasks, columns: [...tasks.columns, optional('owner_session')] }
   const assignments = expected.tables.team_task_assignments!
   const withChoice = { ...assignments, columns: [...assignments.columns, optional('worker_choice')] }
+  // Migration 23's: a revision's contract and hash, and a draft's raw
+  // contract text (implementation-contract D3), all nullable.
+  const revisions = expected.tables.team_task_revisions!
+  const withContract = { ...revisions, columns: [...revisions.columns, optional('contract'), optional('contract_hash')] }
+  const drafts = expected.tables.team_task_drafts!
+  const withContractText = { ...drafts, columns: [...drafts.columns, optional('contract_text')] }
   // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both
@@ -560,8 +622,21 @@ test('a fresh database opened by this build has the same shape plus each migrati
     columns: [...limitEvents.columns, optional('provider_id'), optional('limit_window')],
     indexes: [{ name: 'profile_limit_events_at', unique: 0, columns: ['at'] }, ...limitEvents.indexes],
   }
+  // Migration 24's: structured findings' columns and the rounds' regate_of.
+  const findings = expected.tables.team_task_findings!
+  const flag = (name: string) => ({ name, type: 'INTEGER', notnull: 1, dflt_value: '0', pk: 0 })
+  const withLedger = { ...findings, columns: [...findings.columns, flag('structured'), flag('counted'), optional('contract_identity'), optionalInteger('ledger_seq'), optional('replaced_by')] }
+  const rounds = migration8.plan_execution_rounds!
+  const withRegate = { columns: [...rounds.columns, optional('regate_of'), optional('blocking_ids')], indexes: [...rounds.indexes, { name: 'plan_execution_rounds_regate', unique: 1, columns: ['regate_of'] }] }
+  // Migration 25's: the backstop at Start, a Reassign's group, a card's kind.
+  const appended = (table: SchemaShape['tables'][string], ...columns: SchemaShape['tables'][string]['columns']) => ({ ...table, columns: [...table.columns, ...columns] })
+  const convergence = {
+    plan_executions: appended(migration8.plan_executions!, counter('max_failed_fix_rounds', '5')),
+    plan_execution_changes: appended(migration8.plan_execution_changes!, optional('group_override')),
+    plan_decision_cards: appended(migration16.plan_decision_cards!, { name: 'kind', type: 'TEXT', notnull: 1, dflt_value: "'question'", pk: 0 }),
+  }
   expect(schemaShape(session.db)).toEqual({
-    tables: { ...expected.tables, ...added, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage, team_tasks: withOwner },
+    tables: { ...expected.tables, ...added, ...convergence, team_messages: withProfiles, team_task_assignments: withChoice, chat_sessions: withFlag, profile_limit_events: withLimitContext, team_task_results: withCoverage, team_task_revisions: withContract, team_task_drafts: withContractText, team_task_findings: withLedger, plan_execution_rounds: withRegate, team_tasks: withOwner },
   })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })

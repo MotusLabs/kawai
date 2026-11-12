@@ -6,6 +6,7 @@
 // **Notify** reaches holders without a notice; **Retry notification** resends
 // after a failure — one keyed command, never a new revision. Uncertain
 // notices are the mailbox's to resolve (Retry or Discard), so they link there.
+// Each publication names its revision's identity (implementation-contract D7).
 import type { Session } from '@shared/types'
 import type { RevisionRecipient, TaskAcknowledgement, TaskPublication, TeamTaskSummary } from '@shared/teamTasks'
 import type { TaskActFn } from './TaskDirectionEditor'
@@ -20,8 +21,10 @@ export function noticeLabel(recipient: RevisionRecipient): string {
   return recipient.noticeState === 'failed' && recipient.reason ? `${label} (${recipient.reason})` : label
 }
 
-export default function TaskPublications({ task, publications, acknowledgements, sessions, disabled, act, onOpenMailbox }: {
+export default function TaskPublications({ task, publications, acknowledgements, sessions, disabled, act, onOpenMailbox, identities = {} }: {
   task: TeamTaskSummary
+  /** Each revision's identity (`r<revision>#<hash>`), by revision number. */
+  identities?: Record<number, string>
   publications: TaskPublication[]
   acknowledgements: TaskAcknowledgement[]
   sessions: Session[]
@@ -42,7 +45,8 @@ export default function TaskPublications({ task, publications, acknowledgements,
       const missing = publication.recipients.some(recipient => recipient.noticeState === 'not-notified')
       const failed = publication.recipients.some(recipient => recipient.noticeState === 'failed')
       return <article key={publication.revision} className="mt-2 border border-border p-2" data-testid="task-publication" data-revision={publication.revision}>
-        <p className="text-chat-meta text-secondary">Revision {publication.revision} · published by {actorLabel(publication.author, sessions)} · {new Date(publication.publishedAt).toLocaleString()}
+        <p className="text-chat-meta text-secondary">Revision {publication.revision}
+          {identities[publication.revision] ? <> · <code data-testid="publication-identity">{identities[publication.revision]}</code></> : null} · published by {actorLabel(publication.author, sessions)} · {new Date(publication.publishedAt).toLocaleString()}
           {publication.notify === null ? ' · published before notifications' : ''}</p>
         <p className="text-chat-body" data-testid="task-publication-rationale">{publication.rationale ?? 'No rationale given'}</p>
         {publication.recipients.length === 0

@@ -28,6 +28,8 @@ export interface PlanChangeFact {
   /** The row's generation: a re-stop after a retry is a new item identity. */
   generation: number
   supervision: ChangeSupervision
+  /** After Amend on the change's open diagnosis (review-convergence decision 8): the decision's rationale. */
+  amendRationale?: string | null
 }
 
 /** One open fix or correction task with its derived status (D13). */
@@ -111,6 +113,8 @@ export function planAttentionFacts(reads: PlanAttentionReads, teamId: string, no
         taskId: byChange.get(supervision.change)?.taskId ?? null,
         generation: byChange.get(supervision.change)?.generation ?? 0,
         supervision,
+        amendRationale: supervision.stall?.kind === 'convergence' && supervision.stall.awaitingRevision !== null
+          ? reads.decisions.decisionsOfCard(teamId, supervision.stall.cardId).at(-1)?.rationale ?? '' : null,
       })),
       openCards: reads.decisions.cardsOfPlan(teamId, plan.id)
         .filter(card => cardState(reads.decisions.decisionsOfCard(teamId, card.id)) === 'open'),
@@ -145,10 +149,33 @@ export const planStopItems: AttentionSource = ({ plans, taskTitle }: AttentionIn
       }
     }))
 
-/** A stall: the plan's Lead role unblocks the holder, else the human (D13). */
-export const planStallItems: AttentionSource = ({ plans, taskTitle }: AttentionInput) =>
+/**
+ * A stall: the plan's Lead role unblocks the holder, else the human (D13).
+ * A convergence stall is its diagnosis card's item while the card is open,
+ * so it adds none (review-convergence decision 8); after Amend it is the
+ * human's **Publish a task revision**, linking to the task.
+ */
+export const planStallItems: AttentionSource = (input: AttentionInput) => [...stallItems(input), ...amendItems(input)]
+
+const amendItems = ({ plans, taskTitle }: AttentionInput) =>
+  (plans ?? []).flatMap(fact => fact.changes.flatMap(change => {
+    const stall = change.supervision.stall
+    if (change.supervision.outcome !== 'stalled' || stall?.kind !== 'convergence' || stall.awaitingRevision === null || change.taskId === null) return []
+    return [{
+      id: attentionItemId('plan-stall', `${fact.executionId}:${change.supervision.change}:${stall.episodeKey}:amend`),
+      kind: 'plan-stall' as const,
+      cause: `Change ${change.supervision.change} of plan "${fact.planTitle}" waits for an amended contract (revision ${stall.awaitingRevision}): ${change.amendRationale || 'no rationale given'}`,
+      owner: humanOwner,
+      impact: taskImpact(change.taskId, taskTitle),
+      nextAction: 'Publish a task revision',
+      link: { kind: 'task' as const, id: change.taskId },
+      requiresHuman: true,
+    }]
+  }))
+
+const stallItems = ({ plans, taskTitle }: AttentionInput) =>
   (plans ?? []).flatMap(fact => fact.changes
-    .filter(change => change.supervision.outcome === 'stalled' && change.supervision.stall !== null)
+    .filter(change => change.supervision.outcome === 'stalled' && change.supervision.stall !== null && change.supervision.stall.kind !== 'convergence')
     .map(change => ({
       id: attentionItemId('plan-stall', `${fact.executionId}:${change.supervision.change}:${change.supervision.stall!.episodeKey}`),
       kind: 'plan-stall' as const,

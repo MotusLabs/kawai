@@ -220,3 +220,48 @@ The Plans view SHALL show each card beside its change, and cards without a chang
 #### Scenario: Plan note
 - **WHEN** an agent of a team with plans starts
 - **THEN** its plan note names `decision_ask` for questions on plan work and `decision_record` for the Lead role
+
+### Requirement: Kawai raises a card for each disputed finding
+When a finding of a plan change's task is disputed, Kawai SHALL raise one decision card for it, asked on the disputing session's behalf and addressed like its own questions. The card SHALL name the finding, its level, clause, evidence, and the counter-evidence, with the options `Uphold F<n>` and `Reject F<n>`. The card's decision SHALL decide the dispute, and a later decision on the card by the owner SHALL replace it.
+
+#### Scenario: The Lead decides a dispute
+- **WHEN** the developer of a plan change disputes F3, and the plan names a Lead role
+- **THEN** the Lead role receives one card for F3 with the options `Uphold F3` and `Reject F3`, and recording `Reject F3` makes F3 read rejected
+
+#### Scenario: No Lead role
+- **WHEN** the developer disputes F3 on a plan with no Lead role
+- **THEN** the card is addressed to the owner
+
+#### Scenario: The owner overrides a rejection
+- **WHEN** the Lead rejected the dispute of F3, and the owner overrides the card with `Uphold F3`
+- **THEN** F3 reads as it was before the dispute, the override is journaled, and the override creates its forward-fix task as for any card
+
+#### Scenario: A superseded finding's card
+- **WHEN** F3's card is still open and a new task revision supersedes F3
+- **THEN** a later decision on the card is journaled and leaves F3 superseded
+
+### Requirement: Kawai raises a diagnosis card in its own name
+When a diagnosis opens, Kawai SHALL raise one decision card for it, asked by Kawai and scoped to the change's task. It SHALL go as Kawai's mail to the plan's Lead role, tagged `decision-question` and `plan-stall`, or to the owner when the plan has no Lead role. The card SHALL name the signals or the backstop, the findings involved with their clauses, and the open blocking count after each review of the window.
+
+#### Scenario: The Lead receives a diagnosis
+- **WHEN** a change of a plan whose Lead role is `lead` opens a diagnosis on S2
+- **THEN** group `lead` receives one message from Kawai, tagged `decision-question` and `plan-stall`, naming the card, S2's clause and findings, the counts by review, and the options
+
+#### Scenario: No Lead role
+- **WHEN** a change of a plan with no Lead role opens a diagnosis
+- **THEN** the card is addressed to the owner, shows in the attention queue as needing the human, and no mail is sent
+
+### Requirement: A diagnosis card offers the outcomes that apply
+A diagnosis card SHALL offer, in order: `Fix round`; `Reject` with the blocking findings the signals name, at most ten, when there are any; `Amend the contract`; `Reassign to <group>` for each other group the execution's plan revision names for a change, at most four; and `Escalate`. A decision SHALL choose one of them, and Kawai SHALL send no answer mail; the outcome is the reply.
+
+#### Scenario: Options of a stagnating change
+- **WHEN** the change `api`, implemented by `middle-devs`, opens a diagnosis on S4 with F3 and F4 blocking, and the plan names `senior-devs` for another change
+- **THEN** the card offers `Fix round`, `Reject F3, F4`, `Amend the contract`, `Reassign to senior-devs`, and `Escalate`
+
+#### Scenario: Scope pressure names nothing to reject
+- **WHEN** a diagnosis opens on S5 alone, whose findings are out of contract and do not block
+- **THEN** the card offers no `Reject` option
+
+#### Scenario: A free-text choice is refused
+- **WHEN** the Lead records a decision on a diagnosis card with the choice "try harder"
+- **THEN** the decision is refused naming the options, and nothing is recorded

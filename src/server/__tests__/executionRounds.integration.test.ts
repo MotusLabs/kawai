@@ -7,6 +7,7 @@
 // supersedes the open round; a closed pull request stops as pr-closed; a
 // failing CI asks for the round's one rerun; an author claiming the review
 // stops it as review-unavailable.
+import { structuredReview } from './structuredReview'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -14,6 +15,7 @@ import {
   approvedExecution, bench, closeExecutor, commitAll, deliverToReviewer, executor, executions, ghStub, git,
   implementStage, mail, origin, passCi, results, setupBench, setupWorld, tasks, teardownWorld, world,
 } from './executionRoundsFixture'
+import { openDiagnosis } from './diagnosisTestKit'
 
 beforeAll(setupWorld)
 afterAll(teardownWorld)
@@ -40,7 +42,7 @@ describe('the round pipeline (§12)', () => {
     // An independent reviewer claims and passes it.
     const assignment = tasks.store.assignmentsOf(change.taskId!).find(a => a.id === round.reviewAssignmentId)!
     deliverToReviewer(assignment.messageId!, 'rev1')
-    await results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'pass', findings: 'clean' })
+    await results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, change.taskId!, 'pass', 'clean') })
     executor.wake(world.team.teamId)
     await executor.idle()
 
@@ -128,7 +130,7 @@ describe('the round pipeline (§12)', () => {
       { id: 't', name: 'ci', source: 'actions', conclusion: 'success', link: 'l', runId: 11, startedAt: '2026-10-17T00:00:00.000Z', completedAt: '2026-10-17T00:01:00.000Z' },
       { id: 'e', name: 'e2e', source: 'status', conclusion: 'failure', link: null, startedAt: null, completedAt: null },
     ])
-    await results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', verdict: 'fail', findings: 'the e2e test fails on the settings page' })
+    await results.submitFindings(bench.agent('rev1'), change.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(results, change.taskId!, 'fail', 'the e2e test fails on the settings page') })
     executor.wake(world.team.teamId)
     await executor.idle()
 
@@ -141,17 +143,18 @@ describe('the round pipeline (§12)', () => {
     expect(fixAttempt.manifest.answers?.findingsIds).toHaveLength(1)
     const fixAssignment = tasks.store.assignmentsOf(change.taskId!).at(-1)!
     const fixMail = mail.get(fixAssignment.messageId!)!
-    expect(fixMail.body).toContain('fix round 1 of 3')
+    expect(fixMail.body).toContain('fix round 1 of 5')
     expect(fixMail.body).toContain('the e2e test fails on the settings page')
     expect(fixMail.body).toContain(round.commitSha)
   })
 
-  test('the third failed fix round stops the change as round-limit', async () => {
+  // @covers: plan-execution › Failed fix rounds count toward the backstop › The fifth failed fix round opens a diagnosis
+  test('the fifth failed fix round opens a backstop diagnosis instead of a sixth fix', async () => {
     const executionId = await approvedExecution('fix-b')
     await implementStage(executionId, 'fix-b', 'x')
     const row = executions.change(executionId, 'fix-b')!
-    // Two failed fix rounds already counted: the next failure is the third.
-    executions.transition(executionId, 'fix-b', row, { fixRounds: 2 })
+    // Four failed fix rounds already counted: the next failure is the fifth.
+    executions.transition(executionId, 'fix-b', row, { fixRounds: 4 })
     ghStub.pulls = '[]'
     ghStub.checkRuns = '[]'
     ghStub.statuses = JSON.stringify([{ name: 'e2e', source: 'status', conclusion: 'failure', link: null, startedAt: null, completedAt: null }])
@@ -167,9 +170,15 @@ describe('the round pipeline (§12)', () => {
     await results.submit(bench.agent('dev'), change.taskId!, { summary: 'fixed', commit: git(['rev-parse', 'HEAD'], worktree).trim() })
     executor.wake(world.team.teamId)
     await executor.idle()
-    const stopped = executions.change(executionId, 'fix-b')!
-    expect(stopped).toMatchObject({ state: 'stopped', stopReason: 'round-limit' })
-    expect(stopped.stopDetail?.checks).toContain('e2e')
+    const attempts = executions.attempts(executionId, 'fix-b').length
+    expect(executions.change(executionId, 'fix-b')).toMatchObject({ state: 'gating', step: 'diagnosing', fixRounds: 4 })
+    const diagnosis = openDiagnosis(bench.db.db, executionId, 'fix-b')!
+    expect(diagnosis.signals).toEqual([{ kind: 'backstop', count: 5, limit: 5 }])
+    expect(diagnosis.roundId).toBe(executions.rounds(executionId, 'fix-b').at(-1)!.id)
+    // No sixth fix until the card is decided.
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(executions.attempts(executionId, 'fix-b')).toHaveLength(attempts)
   })
 
   test('a failed instruction and a hand-closed task stop the change', async () => {
@@ -217,6 +226,33 @@ describe('the round pipeline (§12)', () => {
     expect(fixMail.body).toContain('revision 2')
     expect(fixMail.body).toContain('scope changed')
     expect(executions.attempts(executionId, 'rev-a').at(-1)!.kind).toBe('fix')
+  })
+
+  // @covers: plan-execution › Artifact edits never change an execution task's contract › Human publishes a new contract
+  test('a new revision replacing the contract carries it and returns the change for re-evaluation like any revision', async () => {
+    const executionId = await approvedExecution('rev-c')
+    await implementStage(executionId, 'rev-c', 'x')
+    ghStub.pulls = '[]'
+    passCi()
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const change = executions.change(executionId, 'rev-c')!
+    expect(change.state).toBe('gating')
+
+    const contract = ['## Implementation contract', '### Acceptance', '- A1: Works another way', '### Invariants', '### Scope', '- `src/**`',
+      '### Verification', '- V1: check passes', '### Excluded', '- X1: The client'].join('\n')
+    await tasks.amend(bench.human, change.taskId!, { contract, rationale: 'contract replaced' })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+
+    const task = tasks.store.get(change.taskId!)!
+    expect(task.revision).toBe(2)
+    expect(task.contract!.excluded.map(clause => clause.id)).toEqual(['X1'])
+    expect(executions.rounds(executionId, 'rev-c').map(round => round.outcome)).toEqual(['superseded'])
+    expect(executions.change(executionId, 'rev-c')!.state).toBe('implementing')
+    const fixMail = mail.get(tasks.store.assignmentsOf(change.taskId!).at(-1)!.messageId!)!
+    expect(fixMail.body).toContain('revision 2')
+    expect(executions.attempts(executionId, 'rev-c').at(-1)!.kind).toBe('fix')
   })
 
   test('a failed round keeps its fix under a later revision: no stop, no new assignment, the round stays fail (H2)', async () => {

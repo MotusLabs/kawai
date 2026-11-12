@@ -1,7 +1,7 @@
 // The affinity task on stored group mail (group-mail-task-affinity D1, task
 // 1.2): it round-trips through enqueue and the due group queue without
 // touching `task_id`; a row without one reads as before (no key, a NULL
-// column); a release keeps it; a store on a database before migration 23
+// column); a release keeps it; a store on a database before migration 27
 // still enqueues ordinary mail and reads no affinity task; and a limit
 // forward keeps it, since the forward is the same message about the same task.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -59,7 +59,7 @@ describe('team_messages.affinity_task', () => {
   })
 })
 
-test('a database before migration 23 opens, enqueues ordinary mail, and reads no affinity task', () => {
+test('a database before migration 27 opens, enqueues ordinary mail, and reads no affinity task', () => {
   const session = initDatabase({ path: ':memory:', migrations: MIGRATIONS.filter(migration => migration.version < TASK_AFFINITY_MIGRATION_VERSION) })
   const store = new MailboxStore(session.db)
   const sent = store.enqueue({ teamId: TEAM, toKind: 'group', toId: 'lead', fromSession: null, fromGroup: null, originPath: '/repo', body: 'Old build' })

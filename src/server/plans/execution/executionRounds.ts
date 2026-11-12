@@ -15,6 +15,7 @@ import { effectiveExtraChecks, evaluateCi, reviewVerdict, splitExtraChecks } fro
 import type { CiCheck, StopDetail, StopReason } from '../../../shared/planExecution'
 import type { PlanCheck } from '../../../shared/plans'
 import type { RoundRow } from './executionRows'
+import type { ChangePatch } from './executionPatch'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { lsRemoteHead, pushToRemote } from '../landing/gitRemote'
@@ -24,6 +25,11 @@ import type { AssignmentService } from '../../team/AssignmentService'
 import { dispatchFix, ensureFixAttempt } from './executionDispatch'
 import { refusable } from './stepRefusal'
 import type { EffectAdapter } from './effects'
+import { blocking, foldLedger, roundReview } from '../../../shared/findingsLedger'
+import { fixFindings, reviewAsk } from './fixFindings'
+import { raiseReviewP0Alerts } from '../supervision/reviewAlerts'
+import type { MailboxStore } from '../../team/mailboxStore'
+import type { Database } from 'bun:sqlite'
 
 /** The gh/git surface the pipeline uses; injectable for tests. */
 export interface RoundAdapters {
@@ -75,6 +81,10 @@ export interface RoundDeps {
   gate?: (change: string) => boolean
   /** The owed review-restart stage's dispatch (revision-control 4.5 LC1), wired by the composition from the pause side's stores. */
   reviewRestart?: ReviewRestartSeam
+  /** The team's mailbox: review-p0 alerts (review-findings-ledger D10); none without it. */
+  mail?: Pick<MailboxStore, 'enqueue'>
+  /** The database the alerts and the plan events are written to. */
+  db?: Database
 }
 
 /**
@@ -168,18 +178,24 @@ export function revisionPending(deps: Pick<RoundDeps, 'tasks'>, taskId: string |
  * names the base head and the conflicting files too, so one attempt answers
  * both and no update attempt follows. False when no revision is pending.
  */
-export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update?: { base: string; files: string[] }): Promise<boolean> {
+export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update?: { base: string; files: string[] }, close?: { patch: ChangePatch; within: () => void }): Promise<boolean> {
   const store = deps.executions
   if (!revisionPending(deps, changeRow.taskId, round)) return false
   const task = deps.tasks.store.get(changeRow.taskId!)!
   const change = store.change(changeRow.executionId, changeRow.change)
   const execution = store.execution(changeRow.executionId)
   if (change === null || execution === null) return false
-  store.supersedeRound(round.id)
-  // A7: the superseded round's live round-effect rows never run after it.
-  store.cancelLiveRoundEffects(changeRow.executionId, round.id)
-  store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null })
-  const group = deps.plans.revision(execution.planId, execution.revision)?.content.changes.find(entry => entry.change === changeRow.change)?.group
+  // A diagnosis closed by the revision (review-convergence DX1) closes in
+  // the same transaction, with its patch (the count back at 0).
+  store.db.transaction(() => {
+    store.supersedeRound(round.id)
+    // A7: the superseded round's live round-effect rows never run after it.
+    store.cancelLiveRoundEffects(changeRow.executionId, round.id)
+    store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null, ...close?.patch })
+    close?.within()
+  })()
+  const fixRounds = close?.patch.fixRounds ?? change.fixRounds
+  const group = change.groupOverride ?? deps.plans.revision(execution.planId, execution.revision)?.content.changes.find(entry => entry.change === changeRow.change)?.group
   if (group === null || group === undefined) return true
   const revisionRow = deps.tasks.store.revisions(task.id).at(-1)
   const texts = [`The task's direction was republished as revision ${task.revision}${revisionRow?.rationale ? ` (${revisionRow.rationale})` : ''}. Re-apply your work on top of the new direction.`]
@@ -193,8 +209,8 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
     { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
     {
       executionId: changeRow.executionId, change: changeRow.change, group,
-      failingChecks: [], findingsIds: [], findingsTexts: texts,
-      continueFrom: round.commitSha, fixRounds: change.fixRounds,
+      failingChecks: [], findingsIds: [], findings: fixFindings(deps.tasks.store, task.id, null, texts),
+      continueFrom: round.commitSha, fixRounds,
     },
   )
   if (attempt === null || deps.gate?.(changeRow.change) === true) return true
@@ -202,8 +218,8 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
     { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
     {
       executionId: changeRow.executionId, change: changeRow.change, group,
-      failingChecks: [], findingsIds: [], findingsTexts: texts,
-      continueFrom: round.commitSha, fixRounds: change.fixRounds,
+      failingChecks: [], findingsIds: [], findings: fixFindings(deps.tasks.store, task.id, null, texts),
+      continueFrom: round.commitSha, fixRounds,
     },
     attempt,
   )
@@ -403,16 +419,34 @@ async function decideVerdict(deps: RoundDeps, changeRow: { executionId: string; 
   const claimants = assignment?.claimedBy ? [assignment.claimedBy] : []
   const authors = deps.tasks.store.results.listByTask(change.taskId)
     .map(result => result.submittedBy.sessionId).filter((id): id is string => id !== null)
-  const findings = deps.tasks.store.results.findingsFor(round.resultId)
+  const rows = deps.tasks.store.results.findingsFor(round.resultId)
+  const findings = rows
     .map(row => ({ id: row.id, resultId: row.resultId, handoffId: row.handoffId, author: row.author.kind === 'agent' ? row.author.sessionId! : '', verdict: row.verdict, createdAt: row.createdAt }))
   const verdict = reviewVerdict(round, findings, claimants, authors)
   if (verdict.kind === 'pending') return
   if (verdict.kind === 'author-claimant') {
     return stopChange(deps, changeRow, 'review-unavailable', { message: `Session ${verdict.session} claimed the review of its own work.`, session: verdict.session })
   }
-  const counted = verdict.kind === 'pass' ? verdict.findingsId : verdict.kind === 'fail' ? verdict.findingsId : null
-  if (verdict.kind === 'fail') {
-    store.decideRound(round.id, 'fail', { verdictFindingsId: counted ?? undefined })
+  const counted = verdict.findingsId
+  // Table RD (review-findings-ledger D8): a structured review is judged by
+  // the ledger's fold now, so a dispute holds the round and its decision
+  // moves it; a text row (decided before the upgrade) keeps its verdict.
+  const ledger = rows.find(row => row.id === counted)?.structured
+    ? foldLedger(deps.tasks.store.findings.countedSubmissions(change.taskId), deps.tasks.store.findings.events(change.taskId))
+    : null
+  const outcome = ledger !== null ? roundReview(ledger) : verdict.kind
+  if (outcome === 'pending-dispute') return
+  if (outcome === 'fail') {
+    // D10: accepted P0s alert the Lead role first; the alert's row is its
+    // replay key, so a tick that re-decides after a crash sends nothing new.
+    const submission = ledger !== null ? rows.find(row => row.id === counted) : undefined
+    if (submission && deps.mail && deps.db) {
+      raiseReviewP0Alerts({ db: deps.db, mail: deps.mail, plans: deps.plans, executions: store }, deps.team,
+        { executionId: changeRow.executionId, change: changeRow.change, taskId: change.taskId }, round, submission.items)
+    }
+    // The failed round's blocking set, recorded now so the re-gate never
+    // re-derives it from a later fold (D8).
+    store.decideRound(round.id, 'fail', { verdictFindingsId: counted ?? undefined, ...(ledger !== null ? { blockingIds: blocking(ledger).map(row => row.id) } : {}) })
     return
   }
   // Pass: the extra checks CI decides must be green; the attested ones ride
@@ -460,7 +494,7 @@ function reviewInstruction(deps: RoundDeps, change: string, round: RoundRow, ext
     `CI: ${checks || 'none reported'}`,
     acceptance.length > 0 ? `Acceptance rules:\n${acceptance.map(rule => `- ${rule}`).join('\n')}` : null,
     extraLines !== '' ? `Extra checks to attest:\n${extraLines}` : null,
-    `Submit your verdict with task_submit_findings on task ${changeRow.taskId} for result ${round.resultId}: pass or fail, with what you checked.`,
+    ...reviewAsk(deps.tasks.store, changeRow.taskId!, round.resultId),
     'You are the independent reviewer: if you authored one of this change\'s results, do not review it — say so in a message to the Lead group instead.',
   ].filter(line => line !== null).join('\n\n') + `\n\nExecution ${execution.id} of plan ${execution.planId} at revision ${execution.revision}.`
 }

@@ -26,6 +26,7 @@ import { planInput } from '../../shared/__tests__/planFixtures'
 import { benchGhStub, benchOpenspecStub } from './planExecutionBenchStubs'
 import { PromotionRunner } from '../plans/landing/integration/promotionRunner'
 import { PromotionService } from '../plans/landing/integration/PromotionService'
+import { writeContractDesign } from './planHarness'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 const GITHUB_URL = 'https://github.com/acme/app.git'
@@ -82,6 +83,7 @@ beforeAll(async () => {
   for (const change of CHANGES) {
     fs.mkdirSync(path.join(repo, 'openspec', 'changes', change), { recursive: true })
     fs.writeFileSync(path.join(repo, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
+    writeContractDesign(repo, change)
   }
   commitAll(repo, 'changes')
   git(['init', '-q', '--bare', '-b', 'master', origin])
@@ -206,7 +208,7 @@ async function implementAndPass(executionId: string, change: string): Promise<st
   const reviewer = manager.mailbox.store.get(review()!.messageId!)!.claimedBy!
   await waitFor(() => manager.getSnapshot(reviewer)?.status === 'waiting', `${change}: reviewer idle`)
   await taskHandlers(manager.tasks, reviewer, manager.results).task_submit_findings!({
-    task_id: row.taskId!, result_id: result.id, kind: 'review', verdict: 'pass', findings: 'Looks right.',
+    task_id: row.taskId!, result_id: result.id, kind: 'review', verdict: 'pass', items: [], findings: 'Looks right.',
   })
   return commit
 }

@@ -5,7 +5,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
+import { createPlanBench, createPlanWorld, writeContractDesign, type PlanBench, type PlanWorld } from './planHarness'
 import { planInput } from '../../shared/__tests__/planFixtures'
 import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
@@ -23,6 +23,7 @@ beforeAll(async () => {
   for (const change of ['api', 'ui']) {
     fs.mkdirSync(path.join(world.repo, 'openspec', 'changes', change, 'specs', 'chat'), { recursive: true })
     fs.writeFileSync(path.join(world.repo, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
+    writeContractDesign(world.repo, change)
     fs.writeFileSync(path.join(world.repo, 'openspec', 'changes', change, 'specs', 'chat', 'spec.md'), '## ADDED Requirements\n### Requirement: X\n')
   }
   fs.writeFileSync(path.join(world.repo, '.kawai', 'groups', 'reviewers.md'), 'Review.')
@@ -139,6 +140,35 @@ describe('ValidationService.validate (D8)', () => {
     expect(after).toMatchObject({ ok: true, stored: true })
     expect(after.ok && after.report.seq).toBe(2)
     expect(b.validationStore.reports(planId, revision).map(report => report.seq)).toEqual([1, 2])
+  })
+
+  // The contract check reads design.md under the digests' own policy: a
+  // symlink is neither hashed nor read, so retargeting it can never change a
+  // finding behind an unchanged input hash (a current report stays true).
+  test('a symlinked design.md reads as no design.md, and retargeting it changes neither the inputs nor the finding', async () => {
+    const design = path.join(world.repo, 'openspec', 'changes', 'api', 'design.md')
+    const original = fs.readFileSync(design, 'utf8')
+    const target = path.join(world.root, 'linked-design.md')
+    try {
+      fs.writeFileSync(target, original)
+      fs.rmSync(design)
+      fs.symlinkSync(target, design)
+      const b = use(fakeAdapter())
+      const { planId, revision } = await b.draftInReview()
+      const first = await b.validation.validate(b.human, { planId, revision })
+      expect(first.ok).toBe(true)
+      const contractFinding = (report: typeof first) => report.ok
+        ? report.report.findings.find(finding => finding.key === 'implementation-contract:api') : undefined
+      expect(contractFinding(first)).toMatchObject({ severity: 'error', message: 'api has no design.md, so no Implementation contract section.' })
+      fs.writeFileSync(target, '# Design\n\nNo contract.\n')
+      const again = await b.validation.validate(b.human, { planId, revision })
+      expect(again).toMatchObject({ ok: true, stored: false })
+      expect(contractFinding(again)).toMatchObject({ severity: 'error', message: 'api has no design.md, so no Implementation contract section.' })
+    } finally {
+      fs.rmSync(design, { force: true })
+      fs.writeFileSync(design, original)
+      fs.rmSync(target, { force: true })
+    }
   })
 
   test('a conflicting unordered pair blocks the report; a decision makes the newest report out of date', async () => {

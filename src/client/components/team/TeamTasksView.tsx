@@ -24,6 +24,7 @@ import { openParticipantChat } from '../chat/openParticipant'
 import TaskListFilters, { queryFromFilters } from './TaskListFilters'
 import { TaskRow, buildTaskTree, filterTree } from './TaskTree'
 import { usePlanTargetsRefresh } from './usePlanTargetsRefresh'
+import { parseContract } from '@shared/implementationContract'
 
 export default function TeamTasksView({ teamPath, projectPath, view, rows, sendMessage, connected, connectionEpoch = 0, onSelectedTask, onOpenThread, onCreateWorktree, onOpenMailbox, onOpenSession }: {
   teamPath: string
@@ -145,14 +146,14 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
     // the flow armed, so clicking again replays instead of re-arming. The
     // busy guard makes a double click a single request; a same-key replay
     // would be safe besides.
-    if (busy) return
+    if (busy || contractProblems.length > 0) return
     const mode = assign ? 'create-and-assign' : 'create'
     // An edit after a lost result is a changed intent: the armed key would
     // be refused for a different payload, so re-arm a fresh one. An
     // unchanged resubmit keeps the key and the server replays.
     const payload: TaskCreatePayload = {
       title: draft.title.trim(), direction: draft.direction.trim(),
-      acceptance: draft.acceptance.trim() || null, parentId: draft.parentId || null,
+      acceptance: draft.acceptance.trim() || null, contract: draft.contract.trim() ? draft.contract : null, parentId: draft.parentId || null,
       worktree: draft.worktree.trim() || null, openspecChange: draft.openspecChange.trim() || null,
       planId: draft.planId || null, planChange: draft.planId ? draft.planChange || null : null,
     }
@@ -169,6 +170,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
       type: 'team-task-create', teamPath, requestId, requestKey: armed.requestKey,
       title: draft.title.trim(), direction: draft.direction.trim(),
       ...(draft.acceptance.trim() ? { acceptance: draft.acceptance.trim() } : {}),
+      ...(payload.contract ? { contract: payload.contract } : {}),
       ...(draft.parentId ? { parentId: draft.parentId } : {}),
       ...(draft.worktree.trim() ? { worktree: draft.worktree.trim() } : {}),
       ...(draft.openspecChange.trim() ? { openspecChange: draft.openspecChange.trim() } : {}),
@@ -196,6 +198,8 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
   const targetReady = draft.targetKind !== '' && draft.targetId !== ''
   // A plan link names both halves; a chosen plan waits for its change.
   const planIncomplete = draft.planId !== '' && draft.planChange === ''
+  // Live parser problems (implementation-contract D3): a malformed contract never leaves the form.
+  const contractProblems = draft.contract.trim() ? parseContract(draft.contract).problems : []
   const createCommitted = flow?.taskId != null
   return <div data-testid="team-tasks" className="flex h-full min-h-0 flex-col">
     {!connected && <p role="status" className="p-3 text-secondary">Disconnected — reconnect to update tasks.</p>}
@@ -223,6 +227,12 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
               disabled={!connected} onChange={event => setDraft({ direction: event.target.value })} />
             <textarea className="input min-h-12" aria-label="Acceptance criteria" placeholder="Acceptance criteria (optional)" value={draft.acceptance}
               disabled={!connected} onChange={event => setDraft({ acceptance: event.target.value })} />
+            <textarea className="input min-h-16 font-mono text-sm" aria-label="Implementation contract" value={draft.contract}
+              placeholder="Implementation contract (optional): ## Implementation contract, then ### Acceptance, Invariants, Scope, Verification, Excluded"
+              disabled={!connected} onChange={event => setDraft({ contract: event.target.value })} />
+            {contractProblems.length > 0 && <ul role="alert" className="text-sm" data-testid="task-create-contract-problems">
+              {contractProblems.map(problem => <li key={`${problem.line}:${problem.message}`}>Line {problem.line}: {problem.message}</li>)}
+            </ul>}
             <select className="input" aria-label="Parent task" value={draft.parentId}
               disabled={!connected} onChange={event => setDraft({ parentId: event.target.value })}>
               <option value="">No parent task</option>
@@ -271,9 +281,9 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
               ? <button type="button" className="btn btn-primary self-start" disabled={!connected || busy || !flow.assignFailed || !draft.instruction.trim()}
                 onClick={retryAssign} data-testid="task-retry-assign">Retry assignment</button>
               : <>
-                <button type="submit" className="btn self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || planIncomplete}
+                <button type="submit" className="btn self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || planIncomplete || contractProblems.length > 0}
                   data-testid="task-create-button">Create task</button>
-                <button type="button" className="btn btn-primary self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || planIncomplete || !targetReady || !draft.instruction.trim()}
+                <button type="button" className="btn btn-primary self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || planIncomplete || contractProblems.length > 0 || !targetReady || !draft.instruction.trim()}
                   onClick={() => create(true)} data-testid="task-create-assign-button">Create and assign</button>
               </>}
           </form>

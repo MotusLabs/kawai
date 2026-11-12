@@ -16,7 +16,7 @@ import type { SessionDirectoryEntry } from '@shared/team'
 import type { HumanTaskDetail, TaskDispatchPreview, TaskTargetOptions, TeamTaskSummary } from '@shared/teamTasks'
 import type { TeamCapacityAnswer } from '@shared/teamCapacity'
 
-export type TaskAction = 'create' | 'create-assign' | 'assign' | 'draft' | 'publish' | 'notify' | 'note' | 'status' | 'handoff' | 'accept' | 'release' | 'recheck'
+export type TaskAction = 'create' | 'create-assign' | 'assign' | 'draft' | 'publish' | 'notify' | 'note' | 'status' | 'handoff' | 'accept' | 'release' | 'recheck' | 'decide-dispute'
 
 /** An armed publish or notify command: its key and the payload it names. */
 export interface ArmedCommand {
@@ -29,6 +29,8 @@ export interface TaskFormDraft {
   title: string
   direction: string
   acceptance: string
+  /** Optional implementation contract text (implementation-contract D3); '' = none. */
+  contract: string
   parentId: string
   worktree: string
   openspecChange: string
@@ -44,7 +46,7 @@ export interface TaskFormDraft {
 }
 
 export const emptyDraft = (): TaskFormDraft => ({
-  title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', planId: '', planChange: '',
+  title: '', direction: '', acceptance: '', contract: '', parentId: '', worktree: '', openspecChange: '', planId: '', planChange: '',
   targetKind: '', targetId: '', worker: '', instruction: '',
 })
 
@@ -73,6 +75,7 @@ export interface TaskCreatePayload {
   title: string
   direction: string
   acceptance: string | null
+  contract: string | null
   parentId: string | null
   worktree: string | null
   openspecChange: string | null

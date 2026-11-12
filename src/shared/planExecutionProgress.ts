@@ -17,8 +17,13 @@ import type {
   WaitingReason,
 } from './planExecution'
 
-/** Three consecutive failed fix rounds stop the change (D12). */
-export const ROUND_LIMIT = 3
+/**
+ * The backstop (review-convergence decision 3): consecutive failed fix rounds
+ * at which a diagnosis opens. The team's `planExecution.maxFailedFixRounds`
+ * sets it, from 2 to 20; Start records it on the execution.
+ */
+export const DEFAULT_MAX_FAILED_FIX_ROUNDS = 5
+export const MAX_FAILED_FIX_ROUNDS_RANGE = { min: 2, max: 20 } as const
 
 /** A decided round as the count reads it. */
 export interface CountedRound {
@@ -30,16 +35,17 @@ export interface CountedRound {
 }
 
 /**
- * D12: a failed fix round raises the count and stops the change at the
- * limit; a pass resets it; the implementation round, superseded rounds, and
- * CI stops leave it unchanged. Retry resets it separately.
+ * D12 under review-convergence: a failed fix round raises the count, and at
+ * the execution's limit the backstop opens a diagnosis (never a stop); a
+ * pass resets it; the implementation round, superseded rounds, and CI stops
+ * leave it unchanged. Retry and a closed diagnosis reset it separately.
  */
-export function fixRoundOutcome(count: number, round: CountedRound): { count: number; stop: boolean } {
-  if (round.ciStop || round.outcome === 'superseded') return { count, stop: false }
-  if (round.outcome === 'pass') return { count: 0, stop: false }
-  if (!round.fixRound) return { count, stop: false }
+export function fixRoundOutcome(count: number, round: CountedRound, limit: number): { count: number; backstop: boolean } {
+  if (round.ciStop || round.outcome === 'superseded') return { count, backstop: false }
+  if (round.outcome === 'pass') return { count: 0, backstop: false }
+  if (!round.fixRound) return { count, backstop: false }
   const next = count + 1
-  return { count: next, stop: next >= ROUND_LIMIT }
+  return { count: next, backstop: next >= limit }
 }
 
 export const CHANGE_STATE_LABELS: Record<ChangeState, string> = {
@@ -66,6 +72,7 @@ export const CHANGE_STEP_LABELS: Record<ChangeStep, string> = {
   updating: 'updating the branch from its base',
   merging: 'merging',
   redispatch: 'sending the instruction again',
+  diagnosing: 'waiting on a diagnosis of its review rounds',
 }
 
 export const STOP_REASON_LABELS: Record<StopReason, string> = {
@@ -80,6 +87,7 @@ export const STOP_REASON_LABELS: Record<StopReason, string> = {
   'ci-timeout': 'CI did not finish in time',
   'pr-closed': 'the pull request was closed',
   'integration-rewritten': 'the integration branch was rewritten',
+  'diagnosis-escalated': 'a diagnosis of its review rounds was escalated',
 }
 
 const list = (items: readonly string[]) => items.join(', ')

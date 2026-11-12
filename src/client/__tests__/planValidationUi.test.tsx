@@ -108,12 +108,14 @@ test('the report is grouped by the four rows', () => {
     report: report([
       finding('strategy-impact:gate', 'error', 'alignment'),
       finding('openspec-valid:api', 'error', 'intent'),
+      finding('implementation-contract:api', 'error', 'intent'),
       finding('relations:overlap:a+b:chat', 'warning', 'scope'),
       finding('capacity:middle-devs', 'evidence', 'readiness'),
     ]),
   })])
   expect(textOf(byId('plan-validation-1-row-alignment'))).toContain('strategy-impact')
   expect(textOf(byId('plan-validation-1-row-intent'))).toContain('openspec-valid')
+  expect(textOf(byId('plan-validation-1-row-intent'))).toContain('implementation-contract')
   expect(textOf(byId('plan-validation-1-row-scope'))).toContain('relations')
   expect(textOf(byId('plan-validation-1-row-readiness'))).toContain('capacity')
 })

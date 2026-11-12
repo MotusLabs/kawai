@@ -84,7 +84,8 @@ export default function TaskResultsSection({ detail, groups, sessions, connected
     {ownedByExecution && <p className="text-chat-meta text-secondary" data-testid="task-execution-owned-note">
       A running execution owns this change: Kawai accepts this task when the change lands. To stop the change, use the Plans view.
     </p>}
-    {results.map(result => <TaskResultCard key={result.id} result={result} sessions={sessions}>
+    {results.map(result => <TaskResultCard key={result.id} result={result} sessions={sessions}
+      reviewVerdict={task.outstandingResult?.id === result.id ? task.outstandingResult.reviewVerdict : undefined}>
       <div className="mt-2 flex flex-wrap gap-2">
         {!ownedByExecution && <button type="button" className="btn text-chat-meta" data-testid="task-accept" disabled={disabled || result.acceptedAt !== null}
           title={!connected ? 'Reconnect to accept' : result.acceptedAt !== null ? 'Already accepted' : undefined}

@@ -70,7 +70,7 @@ const conditioned = (where: 'cause' | 'also'): PlanChangeFact => {
 }
 
 const card = (overrides: Partial<DecisionCard> = {}): DecisionCard => ({
-  id: 'card-1', teamId: 'team', planId: 'plan-1', revision: 2, change: 'api', taskId: 'task-api',
+  id: 'card-1', kind: 'question', teamId: 'team', planId: 'plan-1', revision: 2, change: 'api', taskId: 'task-api',
   question: 'Which schema?', options: ['A', 'B'], context: null,
   askedBy: { session: 'chat-dev', group: 'middle-devs', profile: 'glm' },
   addressedTo: 'owner', addressedGroup: null, messageId: null, createdAt: '2026-10-20T09:00:00.000Z',
@@ -101,6 +101,7 @@ const items = (facts: PlanAttentionFact[]): AttentionItem[] =>
 const byKind = (items: AttentionItem[], kind: string) => items.filter(item => item.kind === kind)
 
 describe('plan-stop (D13)', () => {
+  // @covers: plan-supervision › Plan stops, stalls, and conditions need attention › A stop needs the owner
   test('a stopped change is the human\'s item, naming the reason, linked to its plan and change', () => {
     const [item] = items([fact({ changes: [stopped()] })]).filter(item => item.kind === 'plan-stop')
     expect(item).toMatchObject({
@@ -113,6 +114,7 @@ describe('plan-stop (D13)', () => {
     expect(item!.link).toEqual({ kind: 'plan', id: 'plan-1', planId: 'plan-1', change: 'api' })
   })
 
+  // @covers: plan-supervision › Plan stops, stalls, and conditions need attention › Retry clears the item
   test('retrying or landing the change clears the item (the outcome is no longer stopped)', () => {
     expect(byKind(items([fact({ changes: [stopped()] })]), 'plan-stop')).toHaveLength(1)
     expect(byKind(items([fact({
@@ -144,7 +146,42 @@ describe('plan-stall (D13)', () => {
   })
 })
 
+// review-convergence decision 8: a convergence stall is its card's item, then the owner's revision.
+describe('plan-stall: convergence', () => {
+  const converging = (awaitingRevision: number | null, amendRationale: string | null = null): PlanChangeFact =>
+    change({
+      amendRationale,
+      supervision: supervision({
+        change: 'api', outcome: 'stalled', stage: 'kawai',
+        cause: { kind: 'stall', stall: 'convergence', signals: ['S4'] },
+        stall: { kind: 'convergence', episodeKey: 'diagnosis-1', signals: [{ kind: 'S4', counts: [2, 2, 2] }], cardId: 'card-d', awaitingRevision },
+      }),
+    })
+  const diagnosisCard = card({ id: 'card-d', kind: 'diagnosis', addressedTo: 'lead', addressedGroup: 'lead', question: 'Kawai: change api needs a diagnosis' })
+
+  test('while the card is open, the card is the only item (kills "a stall item beside the card item")', () => {
+    const all = items([fact({ changes: [converging(null)], openCards: [diagnosisCard] })])
+    expect(byKind(all, 'plan-stall')).toEqual([])
+    expect(byKind(all, 'decision-question').map(item => item.id)).toEqual(['decision-question:card-d'])
+  })
+
+  // @covers: plan-supervision › Plan stops, stalls, and conditions need attention › The amended contract needs the owner
+  test('after Amend, the human publishes a task revision, with the rationale and a link to the task', () => {
+    const all = items([fact({ changes: [converging(3, 'the contract asks for two things at once')] })])
+    expect(byKind(all, 'decision-question')).toEqual([])
+    const [item, ...rest] = byKind(all, 'plan-stall')
+    expect(rest).toEqual([])
+    expect(item).toMatchObject({
+      id: 'plan-stall:exec-1:api:diagnosis-1:amend',
+      owner: { kind: 'human' }, nextAction: 'Publish a task revision', requiresHuman: true,
+      cause: 'Change api of plan "Wave D" waits for an amended contract (revision 3): the contract asks for two things at once',
+    })
+    expect(item!.link).toEqual({ kind: 'task', id: 'task-api' })
+  })
+})
+
 describe('decision-question (D13)', () => {
+  // @covers: plan-supervision › A stall alerts the Lead role once per episode › No Lead role
   test('an owner-addressed card is the human\'s item, linked to the card', () => {
     const [item] = byKind(items([fact({ openCards: [card()] })]), 'decision-question')
     expect(item).toMatchObject({

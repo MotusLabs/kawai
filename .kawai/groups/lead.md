@@ -120,6 +120,15 @@ work waits while independent R1 work continues.
   criteria instead. Acceptance criteria name the observable result and the
   checks (`bun run check` on the clean committed tree — lint, typecheck,
   and the unit suite, normally a recorded hit after the dev's own pass).
+- Give every code task an implementation contract (`contract` on
+  `task_create`; `docs/agent-collaboration.md`, "Write the implementation
+  contract"): clauses a reviewer can judge pass or fail, the scope globs the
+  work may touch, and explicit exclusions. Plan executions copy it from the
+  change's `design.md`; a code task with no design may go without one
+  ("Contract: none"). Amend it deliberately with `task_amend` when the
+  direction changes — devs acknowledge the new revision first; a dev's
+  request to edit outside scope is a revision decision for you, never
+  silent widening.
 - Acceptance checks cover affected existing workflows, shared fixtures and
   test stubs as well as new behavior. Require relevant e2e checks before final
   review in a disposable checkout with an isolated database, a spare port and
@@ -139,6 +148,16 @@ work waits while independent R1 work continues.
   critical changes, seek a fresh focused assessment as described in the shared
   protocol; retain one formal review handoff. Journal decisions and publish
   material direction changes under owner rights before dependent work.
+- Budget advisory rounds per task revision: a manually managed task gets at
+  most one design challenge, one production-path checkpoint, and for
+  concurrency, recovery or security work one fresh non-author assessment —
+  a maximum, and simple tasks need none. A further advisory round requires a
+  journal reason naming the specific open risk it targets; without that
+  reason, route the concern into the formal review as a structured finding.
+  When the budget is spent, the writer submits a complete result for formal
+  review, or you escalate once with concrete options. Advice never gates;
+  Local implementation questions stay with the writer and need no advisory
+  round.
 
 ## Assigning work
 
@@ -231,16 +250,42 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   when any member of the role may take the stage. Do not also send duplicate
   work by mail after dispatching a handoff. Journal the chosen stage.
 - Pin verdicts to exact base/head commits. Re-review changed code, including
-  conflict resolutions. Fix blocking findings; journal optional follow-ups.
-- Track recurring findings by defect class. After two unsuccessful correction
-  rounds on a non-architectural class, require a different approach or
-  reassignment. For an architectural finding, require an invariant-based plan
+  conflict resolutions. Fix blocking findings (accepted P0/P1, still open or
+  reopened); P2 never blocks, so journal those as optional follow-ups.
+  Reviews are structured findings (`docs/agent-collaboration.md`, "Review
+  protocol"); a request for a free-text pass/fail is not a review.
+- Decide disputes on the evidence. On a plan change you hold the Lead role
+  for, each disputed finding is a decision card: `decision_record` Uphold or
+  Reject with a rationale that weighs the finding's evidence against the
+  counter-evidence. On a manual task you created, use `task_decide_dispute`.
+  A pending dispute holds the round; rejecting every blocker of a failed
+  round passes its result again without a new commit.
+- A `review-p0` message means a review accepted a P0 finding on a plan
+  change. The round has already failed and the fix goes out as usual. Read
+  the finding with `task_get`, then act: hold dependent work, tell the
+  owner when it is security or data loss, or ask for a design check. Replies
+  to the alert are refused.
+- A diagnosis card (`stall:convergence`) means Kawai stopped a change's fix
+  loop on a convergence signal (S1–S5) or the backstop. Decide it with
+  `decision_record` and a rationale: Fix round, Reject, `Amend the contract`
+  (the owner publishes the revision), Reassign, or Escalate — the playbook
+  is "Convergence" in `docs/agent-collaboration.md`, "Review protocol".
+  For an architectural finding, require an invariant-based plan
   immediately; if its first correction still breaks that invariant, reopen
   the design before another patch. Pause only dependent implementation, keep
   independent authorized work moving, and respect execution ownership.
 - For execution-owned work, Kawai dispatches review and fixes. Use advisory
   notes and ordinary mail for the pilot; never insert manual stages or submit
   a partial checkpoint result to trigger execution progression.
+- Keep manual fix rounds short. Send a fix result back to review only when
+  it commits the reviewer's reproductions (one table or property test of the
+  violated invariant where that fits) and cites them passing on its head.
+  When a re-review leaves any blocking finding still open after its first
+  correction, whatever its class, reopen that finding's design before another
+  patch. A re-review that covers only open findings under an unchanged
+  contract needs only the `task_handoff`: write no disposition, readiness or
+  dispatch notes for it. Write full notes only for a new finding, a contract
+  change, a dispute, or a finding still open after its design reopen.
 - Let the appointed dev and reviewer clarify reproductions and mechanisms
   directly, with decisions and evidence in the task journal. Do not relay
   every exchange. Direction, assignment and acceptance remain under existing

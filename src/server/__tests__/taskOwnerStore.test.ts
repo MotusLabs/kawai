@@ -1,6 +1,6 @@
 // The task owner on stored tasks (group-mail-task-affinity D7, task 2.1): an
 // agent's task starts owned by its creator, a human or Kawai task has none,
-// migration 23 backfills existing agent tasks from their creator and leaves
+// migration 27 backfills existing agent tasks from their creator and leaves
 // human and Kawai tasks ownerless, and a store on a database before the
 // migration still creates human tasks.
 import { afterEach, expect, test } from 'bun:test'
@@ -38,7 +38,7 @@ test('human and Kawai tasks have no owner', () => {
   db.close()
 })
 
-test('migration 23 backfills agent tasks with their creator and leaves human and Kawai tasks ownerless', () => {
+test('migration 27 backfills agent tasks with their creator and leaves human and Kawai tasks ownerless', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-task-owner-'))
   dirs.push(dir)
   const file = path.join(dir, 'sessions.db')

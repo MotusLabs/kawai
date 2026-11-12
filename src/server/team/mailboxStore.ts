@@ -37,6 +37,19 @@ export class MailboxStore {
     return () => this.listeners.delete(listener)
   }
 
+  private readonly enqueuedListeners = new Set<(message: TeamMessage) => void>()
+
+  /**
+   * New messages only (manual-task-stall-alerts D2): called from `enqueue`
+   * with the inserted row, never for a claim, push, delivery, or any other
+   * transition. It runs inside the caller's transaction, before commit, so
+   * a listener must defer its work and re-read the row.
+   */
+  subscribeEnqueued(listener: (message: TeamMessage) => void): () => void {
+    this.enqueuedListeners.add(listener)
+    return () => this.enqueuedListeners.delete(listener)
+  }
+
   private changed(id: string, changed: boolean): boolean {
     if (changed) {
       const message = this.get(id)
@@ -120,7 +133,7 @@ export class MailboxStore {
     // The choice is written at call time, never in the eagerly prepared
     // insert, so a store opened on a database before migration 18 (`worker-choice`) still
     // prepares (D1); with the insert in one transaction.
-    // The affinity task likewise (migration 23, `task-affinity`).
+    // The affinity task likewise (migration 27, `task-affinity`).
     if (input.workerChoice || input.affinityTask) {
       const choice = input.workerChoice
       const affinityTask = input.affinityTask
@@ -132,6 +145,7 @@ export class MailboxStore {
     } else insert()
     this.changed(id, true)
     const message = this.get(id)!
+    for (const listener of this.enqueuedListeners) listener(message)
     // A new row: nothing was overwritten; the hop-limit reason is the one written.
     this.events.record({
       messageId: id, teamId: message.teamId, kind: overLimit ? 'dead-lettered' : 'sent',

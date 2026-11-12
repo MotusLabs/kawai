@@ -8,6 +8,7 @@
 // move the base or the head at the exact moment a race needs. A settable
 // clock drives the CI windows.
 import { spawnSync } from 'node:child_process'
+import { blocking } from '../../shared/findingsLedger'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -35,6 +36,7 @@ import type { CiCheck, MergeMethod } from '../../shared/planExecution'
 import type { PlanCheck } from '../../shared/plans'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 import { neutralExecutorSeams } from './executorTestSeams'
+import { structuredReview } from './structuredReview'
 
 export const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 
@@ -279,7 +281,7 @@ export function createMatrixBench(matrix: MatrixWorld): MatrixBench {
 }
 
 /** One approved plan of the given changes and its running execution (not yet ticked). */
-export async function startedExecution(h: MatrixBench, changes: Array<{ change: string; dependsOn?: string[]; acceptance?: string[]; extraChecks?: PlanCheck[]; reviewGroup?: string }>, options: { mergeMethod?: MergeMethod; maxParallel?: number; acceptanceRules?: string[]; extraChecks?: PlanCheck[]; roles?: Array<{ group: string; profiles: string[] }>; reviewGroup?: string } = {}): Promise<string> {
+export async function startedExecution(h: MatrixBench, changes: Array<{ change: string; dependsOn?: string[]; acceptance?: string[]; extraChecks?: PlanCheck[]; reviewGroup?: string; group?: string }>, options: { mergeMethod?: MergeMethod; maxParallel?: number; acceptanceRules?: string[]; extraChecks?: PlanCheck[]; roles?: Array<{ group: string; profiles: string[] }>; reviewGroup?: string; leadGroup?: string } = {}): Promise<string> {
   const { world } = h.matrix
   // Earlier tests may have moved origin's base: catch up first.
   git(['pull', '-q', '--ff-only', 'origin', 'master'], world.repo)
@@ -290,11 +292,12 @@ export async function startedExecution(h: MatrixBench, changes: Array<{ change: 
   commitAll(world.repo, `changes ${changes.map(entry => entry.change).join(' ')}`)
   git(['push', '-q', 'origin', 'master'], world.repo)
   const { planId, revision, hash } = await h.bench.draftInReview({
-    changes: changes.map(entry => ({ change: entry.change, dependsOn: entry.dependsOn ?? [], group: 'middle-devs', acceptance: entry.acceptance ?? [], extraChecks: entry.extraChecks ?? [], guidance: '', ...(entry.reviewGroup ? { reviewGroup: entry.reviewGroup } : {}) })),
+    changes: changes.map(entry => ({ change: entry.change, dependsOn: entry.dependsOn ?? [], group: entry.group ?? 'middle-devs', acceptance: entry.acceptance ?? [], extraChecks: entry.extraChecks ?? [], guidance: '', ...(entry.reviewGroup ? { reviewGroup: entry.reviewGroup } : {}) })),
     reviewGroup: options.reviewGroup ?? 'reviewers',
     ...(options.acceptanceRules ? { acceptanceRules: options.acceptanceRules } : {}),
     ...(options.extraChecks ? { extraChecks: options.extraChecks } : {}),
     ...(options.roles ? { roles: options.roles } : {}),
+    ...(options.leadGroup ? { leadGroup: options.leadGroup } : {}),
   })
   await h.bench.approve(planId, revision)
   return h.executions.insertExecution({
@@ -324,7 +327,31 @@ export async function review(h: MatrixBench, executionId: string, change: string
   h.mail.claim(assignment.messageId!, reviewer)
   h.mail.markPushed(assignment.messageId!)
   h.mail.markDelivered(assignment.messageId!)
-  await h.results.submitFindings(h.bench.agent(reviewer), row.taskId!, { resultId: round.resultId, kind: 'review', verdict, findings })
+  await h.results.submitFindings(h.bench.agent(reviewer), row.taskId!, { resultId: round.resultId, kind: 'review', ...structuredReview(h.results, row.taskId!, verdict, findings) })
+}
+
+/**
+ * A structured review shaped by the test: `raise` new P1 findings, and
+ * resolve the `resolve` oldest open blocking findings, leaving the rest
+ * still-open — so a test picks the open counts the convergence signals read.
+ */
+export async function shapedReview(h: MatrixBench, executionId: string, change: string, verdict: 'pass' | 'fail', shape: { raise: string[]; resolve: number }, reviewer = 'rev1'): Promise<void> {
+  const row = h.executions.change(executionId, change)!
+  const round = h.executions.rounds(executionId, change).at(-1)!
+  const assignment = h.tasks.store.assignmentsOf(row.taskId!).find(entry => entry.id === round.reviewAssignmentId)!
+  h.mail.claim(assignment.messageId!, reviewer)
+  h.mail.markPushed(assignment.messageId!)
+  h.mail.markDelivered(assignment.messageId!)
+  const task = h.tasks.store.get(row.taskId!)!
+  const clause = task.contract?.acceptance[0]?.id ?? task.identity!
+  const open = blocking(h.results.findingsLedger.ledger(task.id))
+  await h.results.submitFindings(h.bench.agent(reviewer), task.id, {
+    resultId: round.resultId, kind: 'review', verdict, findings: shape.raise.join('; ') || 'checked',
+    items: shape.raise.map(text => ({ level: 'P1' as const, clause, evidence: text, impact: text })),
+    dispositions: open.map((entry, index) => index < shape.resolve
+      ? { id: entry.id, disposition: 'resolved' as const }
+      : { id: entry.id, disposition: 'still-open' as const, evidence: 'still wrong' }),
+  })
 }
 
 /** Provision, implement, push, CI, review pass — the change waits passed in gating. */

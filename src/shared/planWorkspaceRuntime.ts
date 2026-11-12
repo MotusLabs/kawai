@@ -54,7 +54,7 @@ export type WorkspaceRuntimeState =
   | { kind: 'stopped'; reason: string }
   | { kind: 'cancelled' }
   | { kind: 'not-started' }
-  | { kind: 'stalled'; stall: 'no-progress' | 'repeating-failure' }
+  | { kind: 'stalled'; stall: 'no-progress' | 'repeating-failure' | 'convergence' }
   | { kind: 'in-review'; reviewer: string | null }
   | { kind: 'ready-for-qa' }
   | { kind: 'fixes-requested' }

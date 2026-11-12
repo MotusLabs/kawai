@@ -39,6 +39,13 @@ describe('parseRunArgs', () => {
     expect(parseRunArgs(['--skip-slow']).skipSlowTier).toBe(true)
     expect(parseRunArgs([]).skipSlowTier).toBe(false)
   })
+
+  test('recognizes --all-real-tmux and keeps it out of the passthrough (check-time-optimization D6)', () => {
+    const parsed = parseRunArgs(['--all-real-tmux'])
+    expect(parsed.allRealTmux).toBe(true)
+    expect(parsed.passthrough).toEqual([])
+    expect(parseRunArgs([]).allRealTmux).toBe(false)
+  })
 })
 
 describe('hasTestNameFilter', () => {

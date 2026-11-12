@@ -153,7 +153,8 @@ function submitRound(root: string, mode: 'result' | 'findings', implementer: str
         }
         const result = db.prepare('SELECT id FROM team_task_results WHERE task_id = ? ORDER BY rowid DESC').get(taskId);
         if (!result) throw new Error('no result yet');
-        await taskHandlers(tasks, claimant, results).task_submit_findings({ task_id: taskId, result_id: result.id, kind: 'review', verdict: 'pass', findings: 'Clean.' });
+        // A plan change's review is structured; nothing found derives a pass.
+        await taskHandlers(tasks, claimant, results).task_submit_findings({ task_id: taskId, result_id: result.id, kind: 'review', items: [], findings: 'Clean.' });
         console.log('FINDINGS:ok:' + claimant);
       }
       sessions.close();

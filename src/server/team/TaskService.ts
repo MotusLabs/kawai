@@ -31,15 +31,19 @@ import { TeamWorktrees } from './worktreeRoots'
 import type { PlanStore } from '../plans/planStore'
 import { resolvePlanLink } from '../plans/planLink'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
+import { remapFindings } from './findingRemap'
 import { executionOf, refuseSystem, type SystemCaller } from './systemCaller'
 import { originStatusRefusal, ownerLabel, statusRefusal, taskOwner } from './taskStatusRights'
 import { TaskOwnership } from './taskOwnership'
+import { contractInput } from './taskContractRows'
 export { statusRefusal } from './taskStatusRights'
 
 export interface TaskCreateInput {
   title: string
   direction: string
   acceptance?: string | null
+  /** Revision 1's contract text (implementation-contract D3); blank or omitted = none. */
+  contract?: string | null
   parent_id?: string | null
   worktree?: string | null
   openspec_change?: string | null
@@ -53,6 +57,12 @@ export interface TaskCreateInput {
 export interface TaskAmendInput {
   direction?: string
   acceptance?: string | null
+  /**
+   * Contract text (implementation-contract D3, C1–C7): omitted carries the
+   * current contract; an agent's blank text is omitted; the human's blank
+   * text clears it, refused once a revision carried one.
+   */
+  contract?: string | null
   /** Why (task-revision-publication D2); required by the human form, optional for agents. */
   rationale?: string | null
   /** Publish and notify (D3): direct notices to the outstanding assignment's claimant. */
@@ -89,6 +99,8 @@ export interface TaskDraftInput {
   direction: string
   acceptance?: string | null
   rationale?: string | null
+  /** Raw contract text, kept unparsed so a half-edited draft survives restart. */
+  contract?: string | null
 }
 
 /**
@@ -155,6 +167,7 @@ export class TaskService {
       if (!target.ok) throw new Error(target.error)
       worktree = target.root
     }
+    const contract = contractInput(input.contract, false) ?? null
     const openspecChange = input.openspec_change ? this.validateChange(team, input.openspec_change, worktree) : null
     const ownership = this.options.ownership ?? NULL_OWNERSHIP
     let linkRevision: number | null | undefined
@@ -181,7 +194,7 @@ export class TaskService {
     }
     const link = resolvePlanLink(this.options.plans, team.teamId, input.plan_id, input.plan_change, linkRevision)
     return this.store.create({
-      teamId: team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), creator: actor,
+      teamId: team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), contract, creator: actor,
       parentId: input.parent_id || null, worktree, openspecChange,
       ...(link ? { planId: link.planId, planChange: link.planChange } : {}),
       ...(input.requestKey ? { requestKey: input.requestKey } : {}),
@@ -233,8 +246,12 @@ export class TaskService {
     if (actor.kind === 'agent' && taskOwner(task) !== actor.sessionId) {
       throw new Error(`Only the task's owner or the human can amend its direction. Add a journal note with task_note, or message ${ownerLabel(task)} instead.`)
     }
-    if (input.direction === undefined && input.acceptance === undefined) throw new Error('Nothing to amend: give a direction or acceptance criteria')
     if (input.direction !== undefined && !input.direction.trim()) throw new Error('A task needs a direction')
+    // Parsed before anything is written (C5); only the human's blank text clears (C6, C7).
+    const contract = contractInput(input.contract, actor.kind === 'human')
+    if (input.direction === undefined && input.acceptance === undefined && contract === undefined) {
+      throw new Error('Nothing to amend: give a direction, acceptance criteria, or a contract')
+    }
     // Refused before anything is written, as notify() refuses: never a notify revision without its notices.
     if (input.notify && !this.store.notices) throw new Error('Revision notices are not available')
     const sender = this.noticeSender(team, actor)
@@ -243,20 +260,23 @@ export class TaskService {
     const outcome = this.store.publish(taskId, {
       ...(input.direction !== undefined ? { direction: input.direction.trim() } : {}),
       ...(input.acceptance !== undefined ? { acceptance: emptyToNull(input.acceptance) } : {}),
+      ...(contract !== undefined ? { contract } : {}),
       rationale: emptyToNull(input.rationale),
       ...(input.baseRevision !== undefined ? { baseRevision: input.baseRevision } : {}),
       ...(input.requestKey?.trim() ? { requestKey: input.requestKey.trim() } : {}),
       notify: input.notify === true,
       // Only the publication that came from the draft discards it (D2).
       discardDraft: actor.kind === 'human' && input.fromDraft === true,
-      // Publish and notify (D3): the notices commit or roll back with the revision.
-      ...(input.notify && this.store.notices ? {
-        within: (revision, current) => {
-          sent = this.store.notices!.write(current, revision, {
+      // Publish, re-map open findings (review-findings-ledger D9), and notify
+      // (D3): the events and notices commit or roll back with the revision.
+      within: (revision, current) => {
+        remapFindings(this.store, taskId, revision)
+        if (input.notify && this.store.notices) {
+          sent = this.store.notices.write(current, revision, {
             sender, requestKey: requestKey ?? `publish-r${revision.revision}`, sessionExists: id => !!this.options.getSession(id),
           })
-        },
-      } : {}),
+        }
+      },
     }, actor)
     if (!outcome) throw new Error(`Task not found in this team: ${taskId}`)
     if (!outcome.replay) this.announce(outcome)
@@ -353,6 +373,7 @@ export class TaskService {
     }
     return this.store.drafts.save(taskId, {
       baseRevision, direction, acceptance: emptyToNull(input.acceptance), rationale: emptyToNull(input.rationale),
+      contractText: input.contract ?? null,
     })
   }
 

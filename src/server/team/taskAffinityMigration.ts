@@ -11,7 +11,7 @@
 import type { Database } from 'bun:sqlite'
 import type { Migration } from '../dbSafety/migrations'
 
-export const TASK_AFFINITY_MIGRATION_VERSION = 23
+export const TASK_AFFINITY_MIGRATION_VERSION = 27
 
 const hasColumn = (db: Database, table: string, column: string) =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(row => row.name === column)

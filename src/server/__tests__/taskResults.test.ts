@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
-import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
+import { type ChatSessionRecord, type SessionDatabase } from '../db'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
@@ -17,6 +17,7 @@ import { TaskService, type TaskCaller } from '../team/TaskService'
 import { TaskResultService } from '../team/TaskResultService'
 import { taskHandlers } from '../team/taskTools'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -65,7 +66,7 @@ beforeEach(() => {
     ['stranger', row('stranger', 'leads', other)],
   ])
   db?.close()
-  db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(root, 'db-')), 'tasks.db') })
+  db = freshTestDatabase(path.join(fs.mkdtempSync(path.join(root, 'db-')), 'tasks.db'))
   const mail = new MailboxStore(db.db)
   const store = new TaskStore(db.db, mail, new AssignmentStore(db.db, mail))
   tasks = new TaskService(store, { getSession: id => records.get(id) })
@@ -150,6 +151,8 @@ test('task_get carries each result its newest check and earlier count: unchecked
 })
 
 // Findings (4.1/4.2, D4): bound to the examined result, never inherited.
+// @covers: task-results › Findings are bound to the result examined › Findings name the examined result
+// @covers: task-results › Findings are bound to the result examined › A newer commit inherits no approval
 test('findings attach to the named result with author and verdict; a newer result has none until its own are submitted', async () => {
   const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
   const first = await results.submit(agent('dev'), task.id, submission)
@@ -158,6 +161,9 @@ test('findings attach to the named result with author and verdict; a newer resul
   expect(findings).toMatchObject({ resultId: first.id, kind: 'review', verdict: 'fail', author: { kind: 'agent', sessionId: 'reviewer' }, handoffId: null })
   const second = await results.submit(agent('dev'), task.id, { ...submission, summary: 'CSV export, header fixed' })
   expect(tasks.store.results.get(second.id)!.findings).toEqual([])
+  expect(findings.createdAt).toBeTruthy()
+  // The newer result is unreviewed: the earlier verdict neither approves nor fails it.
+  expect(tasks.store.summary(tasks.store.get(task.id)!).outstandingResult).toMatchObject({ id: second.id, reviewVerdict: null })
   // The earlier result keeps its findings, readable beside it.
   expect(tasks.store.results.get(first.id)!.findings).toMatchObject([{ findings: 'Header row missing' }])
   await reviewer.task_submit_findings!({ task_id: task.id, result_id: second.id, kind: 'review', verdict: 'pass', findings: 'Looks right' })

@@ -8,8 +8,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatQueryFactory } from '../chat/ChatSessionDriver'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 let tempDir: string
 let project: string
@@ -30,7 +31,7 @@ beforeEach(() => {
   codexHome = path.join(tempDir, 'server-codex-home')
   fs.mkdirSync(project, { recursive: true })
   fs.mkdirSync(codexHome, { recursive: true })
-  db = initDatabase({ path: path.join(tempDir, 'test.db') })
+  db = freshTestDatabase(path.join(tempDir, 'test.db'))
   // A fixture executable at the exact baseline: hermetic, never the host's
   // codex; resolution is absolute so the per-test path keys the cache.
   codexExe = path.join(tempDir, 'codex')

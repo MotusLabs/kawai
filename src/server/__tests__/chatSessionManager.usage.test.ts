@@ -6,6 +6,7 @@ import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
 import { anyDirectory, closeDispatchers, createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
 
@@ -17,7 +18,7 @@ describe('ChatSessionManager usage', () => {
   const originalHome = process.env.HOME
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-usage-'))
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    db = freshTestDatabase(path.join(tempDir, 'test.db'))
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
     process.env.HOME = tempDir
@@ -314,7 +315,7 @@ describe('ChatSessionManager usage', () => {
 
   test('usage does not survive a manager restart (memory only)', async () => {
     const dbPath = path.join(tempDir, 'usage-restart.db')
-    const dbA = initDatabase({ path: dbPath })
+    const dbA = freshTestDatabase(dbPath)
     const harnessA = await createHarness(dbA, anyDirectory, async () => FULL_PULL)
     const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')

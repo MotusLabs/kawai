@@ -29,7 +29,7 @@ export class DecisionConflict extends Error {
   }
 }
 
-export type NewCard = Omit<DecisionCard, 'id' | 'createdAt'> & { id?: string }
+export type NewCard = Omit<DecisionCard, 'id' | 'createdAt' | 'kind'> & { id?: string; kind?: DecisionCard['kind'] }
 
 export interface NewDecision {
   id?: string
@@ -56,6 +56,7 @@ const int = (value: unknown): number | null => (typeof value === 'number' ? valu
 export function mapCard(row: Row): DecisionCard {
   return {
     id: String(row.id),
+    kind: row.kind === 'diagnosis' ? 'diagnosis' : 'question',
     teamId: String(row.team_id),
     planId: String(row.plan_id),
     revision: int(row.revision),
@@ -123,11 +124,11 @@ export class DecisionStore {
   insertCard(input: NewCard): DecisionCard {
     const id = input.id ?? `card-${crypto.randomUUID()}`
     this.db.prepare(`INSERT INTO plan_decision_cards (id, team_id, plan_id, revision, change, task_id, question, options_json, context,
-      asked_by_session, asked_by_group, asked_by_profile, addressed_to, addressed_group, message_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      asked_by_session, asked_by_group, asked_by_profile, addressed_to, addressed_group, message_id, created_at, kind)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, input.teamId, input.planId, input.revision, input.change, input.taskId, input.question, JSON.stringify(input.options),
       input.context, input.askedBy.session, input.askedBy.group, input.askedBy.profile, input.addressedTo, input.addressedGroup,
-      input.messageId, this.iso(),
+      input.messageId, this.iso(), input.kind ?? 'question',
     )
     return this.card(input.teamId, id)!
   }

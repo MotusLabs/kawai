@@ -1,3 +1,4 @@
+// @exercises: src/server/ws/**, src/server/terminal/**, src/server/tmux*.ts, src/server/SessionManager.ts
 /**
  * output-coalescing.integration.test.ts
  *
@@ -46,6 +47,12 @@ if (!tmuxAvailable || !localhostBindable) {
     () => {}
   )
 } else {
+  // Waits are liveness bounds, not oracles: each allows half of the 60 s test
+  // timeout, so a slow machine delays the test instead of failing it. The
+  // assertions on ordering and content are what the tests check. A 10 s
+  // terminal-ready wait failed under load on 2026-11-10 with the order intact.
+  const LIVENESS_MS = 30_000
+
   describe('terminal output coalescing integration', () => {
     const sessionName = `agentboard-coalesce-${Date.now()}-${Math.random()
       .toString(36)
@@ -181,6 +188,7 @@ if (!tmuxAvailable || !localhostBindable) {
         .map((m) => m.data ?? '')
         .join('')
 
+    // @covers: dev-checks › Real-tmux tests do not fail on machine speed › Slow terminal-ready
     test(
       'ordered markers arrive in order, history precedes ready, pane renders all',
       async () => {
@@ -188,7 +196,7 @@ if (!tmuxAvailable || !localhostBindable) {
         await waitForOpen(ws)
         await waitUntil(
           () => messages.some((m) => m.type === 'sessions'),
-          5000,
+          LIVENESS_MS,
           'sessions message'
         )
         messages.length = 0
@@ -199,7 +207,7 @@ if (!tmuxAvailable || !localhostBindable) {
             messages.some(
               (m) => m.type === 'terminal-ready' && m.sessionId === sessionId
             ),
-          10000,
+          LIVENESS_MS,
           'terminal-ready'
         )
 
@@ -240,7 +248,7 @@ if (!tmuxAvailable || !localhostBindable) {
 
         await waitUntil(
           () => markers.every((m) => outputData(messages).includes(m)),
-          15000,
+          LIVENESS_MS,
           'all markers in output stream'
         )
 
@@ -259,7 +267,7 @@ if (!tmuxAvailable || !localhostBindable) {
             const pane = capturePaneText(windowTarget, tmuxEnv())
             return markers.every((m) => pane.includes(m))
           },
-          10000,
+          LIVENESS_MS,
           'all markers rendered in pane'
         )
         const pane = capturePaneText(windowTarget, tmuxEnv())
@@ -282,7 +290,7 @@ if (!tmuxAvailable || !localhostBindable) {
         await waitForOpen(ws)
         await waitUntil(
           () => messages.some((m) => m.type === 'sessions'),
-          5000,
+          LIVENESS_MS,
           'sessions message'
         )
         messages.length = 0
@@ -294,7 +302,7 @@ if (!tmuxAvailable || !localhostBindable) {
               (m) =>
                 m.type === 'terminal-ready' && m.sessionId === sessionId
             ),
-          10000,
+          LIVENESS_MS,
           'first terminal-ready'
         )
         // Some live output before detaching.
@@ -307,7 +315,7 @@ if (!tmuxAvailable || !localhostBindable) {
         )
         await waitUntil(
           () => outputData(messages).includes('before-detach'),
-          10000,
+          LIVENESS_MS,
           'output before detach'
         )
 
@@ -324,7 +332,7 @@ if (!tmuxAvailable || !localhostBindable) {
               (m) =>
                 m.type === 'terminal-ready' && m.sessionId === sessionId
             ).length >= 1,
-          10000,
+          LIVENESS_MS,
           'terminal-ready after re-attach'
         )
 
@@ -350,7 +358,7 @@ if (!tmuxAvailable || !localhostBindable) {
         )
         await waitUntil(
           () => outputData(messages).includes(marker),
-          10000,
+          LIVENESS_MS,
           'output after re-attach'
         )
 
@@ -405,7 +413,7 @@ async function waitForHealth(
 
 async function waitForOpen(
   ws: WebSocket,
-  timeoutMs = 5000
+  timeoutMs = 30_000
 ): Promise<void> {
   if (ws.readyState === WebSocket.OPEN) return
   return new Promise((resolve, reject) => {

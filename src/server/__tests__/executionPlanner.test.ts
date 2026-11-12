@@ -26,7 +26,7 @@ const snapshot = (changes: PlannedChange[], over: Partial<ExecutionSnapshot> = {
     row: {
       id: 'e1', teamId: 'team', planId: 'p1', revision: 1, contentHash: 'h', reportId: 'r', inputHash: 'i',
       landingMode: 'direct', baseBranch: 'master', baseCommit: 'base', floor: { version: 1, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } },
-      maxParallel: 1, mergeMethod: 'merge', state: 'running', outcome: null, stopReason: null, startedAt: '', finishedAt: null,
+      maxParallel: 1, mergeMethod: 'merge', maxFailedFixRounds: 5, state: 'running', outcome: null, stopReason: null, startedAt: '', finishedAt: null,
     },
     changes, finished: false, holds: [], openTargets: [],
   }],
@@ -121,7 +121,7 @@ describe('the resumed landing windows (A2\'s fallback; effect lifecycle)', () =>
   const round = (): RoundRow => ({
     id: 'r1', executionId: 'e1', change: 'api', attemptId: 'a1', number: 1, resultId: 'res-1', commitSha: 'c1',
     fixRound: false, carriedFrom: null, pushedAt: 't', ciWindowFrom: null, ci: null, rerunAt: null,
-    reviewAssignmentId: null, verdictFindingsId: null, extra: null, outcome: 'pass', decidedAt: 't',
+    reviewAssignmentId: null, verdictFindingsId: null, extra: null, outcome: 'pass', decidedAt: 't', regateOf: null, blockingIds: null,
   })
   const effect = (over: Partial<EffectRow>): EffectRow => ({
     id: 'fx1', executionId: 'e1', change: 'api', roundId: 'r1', kind: 'merge', effectKey: 'k', command: {},
@@ -317,7 +317,7 @@ describe('the owed review-restart stage (revision-control 4.5 LC1)', () => {
   const round = (reviewAssignmentId: string | null): RoundRow => ({
     id: 'r1', executionId: 'e1', change: 'api', attemptId: 'a1', number: 1, resultId: 'res-1', commitSha: 'c1',
     fixRound: false, carriedFrom: null, pushedAt: 't', ciWindowFrom: null, ci: null, rerunAt: null,
-    reviewAssignmentId, verdictFindingsId: null, extra: null, outcome: null, decidedAt: null,
+    reviewAssignmentId, verdictFindingsId: null, extra: null, outcome: null, decidedAt: null, regateOf: null, blockingIds: null,
   })
   const reviewing = (step: 'reviewing' | 'review-restart', reviewAssignmentId: string | null): PlannedChange =>
     change('api', 'gating', {

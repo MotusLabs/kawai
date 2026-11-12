@@ -17,6 +17,7 @@ import { changeSupervision, type ChangeSupervision, type HolderFacts, type Super
 import { AssignmentStore, outstandingOf } from '../../team/assignmentStore'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { TaskResultStore } from '../../team/taskResultStore'
+import { FindingStore } from '../../team/findingStore'
 import type { DecisionStore } from '../decisions/decisionStore'
 import type { ExecutionRow, RoundRow } from '../execution/executionRows'
 import type { ExecutionStore } from '../execution/executionStore'
@@ -24,6 +25,7 @@ import type { IntegrationStore } from '../landing/integration/integrationStore'
 import type { PlanStore } from '../planStore'
 import type { PlanRevision } from '../../../shared/plans'
 import { agentHeldStage, attemptStatus } from '../execution/attemptStatus'
+import { DiagnosisStore, type DiagnosisRow } from '../execution/diagnosisStore'
 
 /** The runtime facts the session and mailbox modules expose (D10). */
 export interface SupervisionRuntime {
@@ -63,10 +65,20 @@ function ciPassedAt(round: RoundRow, reviewCreatedAt: string | null): string | n
   return completed ?? reviewCreatedAt
 }
 
+/** Decision 8's input: the open diagnosis, and after Amend the task revision the owner is asked to publish (the next one). */
+function diagnosisOf(db: Database, diagnosis: DiagnosisRow | null, taskId: string | null): SupervisionInput['diagnosis'] {
+  if (diagnosis === null) return null
+  const task = taskId === null ? null : db.prepare('SELECT revision FROM team_tasks WHERE id = ?').get(taskId) as { revision: number } | null
+  return {
+    id: diagnosis.id, signals: diagnosis.signals, cardId: diagnosis.cardId, taskId,
+    awaitingRevision: diagnosis.outcome === 'amend' && task ? task.revision + 1 : null,
+  }
+}
+
 function notStarted(change: string, dependsOn: string[]): SupervisionInput {
   return {
     change, dependsOn, state: null, step: null, stopReason: null, stopDetail: null, landing: null, dependencies: [], parallelLimit: null, attempt: null,
-    rounds: [], effects: [], instruction: null, openCards: [], conditions: [], memberRelease: null, slotHolder: null, candidates: [], results: [], waitEndedAt: null,
+    rounds: [], effects: [], instruction: null, openCards: [], conditions: [], memberRelease: null, slotHolder: null, candidates: [], results: [], waitEndedAt: null, diagnosis: null,
   }
 }
 
@@ -98,11 +110,13 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
     return { executionId: null, revision: revision.revision, inputs }
   }
   const assignments = new AssignmentStore(reads.db, reads.mail)
+  const disputeCards = new FindingStore(reads.db)
   const results = new TaskResultStore(reads.db)
   const rows = new Map(reads.executions.changes(execution.id).map(row => [row.change, row]))
   const effects = reads.executions.effectsOf(execution.id)
   const slot = reads.executions.slot(teamId)
   const cards = reads.decisions.cardsOfPlan(teamId, planId)
+  const diagnoses = new DiagnosisStore(reads.db)
   const conditions = reads.conditionsOf(execution.id)
   const candidates = reads.integration?.candidates(teamId, execution.baseBranch).filter(row => row.executionId === execution.id) ?? []
   try {
@@ -124,6 +138,7 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
           id: round.id, number: round.number, outcome: round.outcome, decidedAt: round.decidedAt, carriedFrom: round.carriedFrom, ci: round.ci,
           ciPassedAt: ciPassedAt(round, round.reviewAssignmentId ? created.get(round.reviewAssignmentId) ?? null : null),
           verdict: verdict?.verdict ?? null, verdictAt: verdict?.createdAt ?? null, findingsSummary: verdict?.findings ?? null,
+          structuredReview: round.blockingIds !== null,
         }
       })
       // O3′ (revision-control PR E): the one agent-held predicate. An owed
@@ -161,7 +176,11 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
           holder: holderId ? reads.runtime.holder(holderId, row.taskId) : null,
         },
         openCards: row.taskId === null ? [] : cards.filter(card => card.taskId === row.taskId && !decided(card.id))
-          .map(card => ({ cardId: card.id, addressedTo: card.addressedTo, addressedGroup: card.addressedGroup })),
+          .map(card => {
+            // A dispute card names its finding (review-findings-ledger D8); other cards keep their shape.
+            const findingId = disputeCards.cardLink(card.id)?.findingId
+            return { cardId: card.id, addressedTo: card.addressedTo, addressedGroup: card.addressedGroup, ...(findingId ? { findingId } : {}) }
+          }),
         conditions,
         memberRelease: row.step === 'releasing' && row.stopDetail?.session
           ? { member: row.stopDetail.session, reason: row.stopDetail.message ?? 'a member is not ready to release' } : null,
@@ -169,6 +188,7 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
         candidates: candidates.filter(candidate => candidate.change === entry.change).map(candidate => ({ state: candidate.state, createdAt: candidate.createdAt, decidedAt: candidate.decidedAt })),
         results: row.taskId === null ? [] : results.listByTask(row.taskId).map(result => ({ createdAt: result.createdAt })),
         waitEndedAt: reads.waitEndedAt?.(execution.id, entry.change) ?? null,
+        diagnosis: diagnosisOf(reads.db, diagnoses.open(execution.id, entry.change), row.taskId),
       }
     })
     return { executionId: execution.id, revision: revision.revision, inputs }

@@ -16,6 +16,8 @@ import { loadGroupCatalog } from '../../team/groupCatalog'
 import type { PlanRevision } from '../../../shared/plans'
 import type { ImpactGate } from '../../../shared/strategyImpact'
 import { FLOOR_VERSION } from '../../../shared/planExecution'
+import { DiagnosisStore } from './diagnosisStore'
+import { DEFAULT_MAX_FAILED_FIX_ROUNDS } from '../../../shared/planExecutionProgress'
 import type { EffectKind } from '../../../shared/planExecution'
 import type { ActiveHold } from '../../../shared/planRevisionControl'
 import type { ChangeRow, ExecutionRow } from './executionRows'
@@ -136,6 +138,7 @@ export class ExecutionService {
         landingMode: ctx.landingMode, baseBranch: gather.probe.base!.branch, baseCommit: gather.probe.base!.head,
         floor: { version: FLOOR_VERSION, map: settings.floorChecks! },
         maxParallel: settings.maxParallelChanges, mergeMethod: settings.mergeMethod,
+        maxFailedFixRounds: settings.maxFailedFixRounds ?? DEFAULT_MAX_FAILED_FIX_ROUNDS,
         changes: ctx.changes.map(change => ({ change, landed: gather.landed.has(change) })),
       })
       // revision-control D2: seq 1 is the revision Start recorded, from the
@@ -326,6 +329,11 @@ export class ExecutionService {
           to.state = 'landing'
           to.step = step
         }
+      }
+      // Closing a task suspends its open diagnosis too. After reopening,
+      // resume that diagnosis rather than re-sending the old review handoff.
+      if (to.state === 'gating' && new DiagnosisStore(this.deps.store.db).open(input.executionId, input.change) !== null) {
+        to.step = 'diagnosing'
       }
       let moved: ChangeRow | null
       try {

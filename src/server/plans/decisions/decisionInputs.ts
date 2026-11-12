@@ -35,8 +35,12 @@ export function askInput(input: { question: string; options?: string[]; context?
   return { question, options, context }
 }
 
-/** D5: a 1-based option index naming the option's text, or new choice text; never both. */
-export function resolveChoice(options: readonly string[], input: { choice?: string | null; option_index?: number | null }): { choice: string; optionIndex: number | null } {
+/**
+ * D5: a 1-based option index naming the option's text, or new choice text;
+ * never both. A `closed` card (a diagnosis, review-convergence decision 6)
+ * takes only its options: a text choice must equal one of them.
+ */
+export function resolveChoice(options: readonly string[], input: { choice?: string | null; option_index?: number | null }, closed = false): { choice: string; optionIndex: number | null } {
   const text = input.choice?.trim() ?? ''
   const index = input.option_index ?? null
   if (index !== null && text) throw invalid('Give option_index or choice, not both.')
@@ -47,6 +51,11 @@ export function resolveChoice(options: readonly string[], input: { choice?: stri
     return { choice: options[index - 1]!, optionIndex: index }
   }
   if (text.length < 1 || text.length > CHOICE_MAX) throw invalid(`A choice needs option_index or 1–${CHOICE_MAX} characters of text.`)
+  if (closed) {
+    const at = options.indexOf(text)
+    if (at < 0) throw invalid(`This card takes one of its options: ${options.map((option, i) => `${i + 1}. ${option}`).join('; ')}.`)
+    return { choice: text, optionIndex: at + 1 }
+  }
   return { choice: text, optionIndex: null }
 }
 

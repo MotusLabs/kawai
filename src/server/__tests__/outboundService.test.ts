@@ -15,6 +15,7 @@ import { OutboundService } from '../outbound/service'
 import { resolveTeam, type TeamIdentity } from '../team/teamIdentity'
 import { cleanGitEnv } from '../git/gitCommand'
 import { spawnSync } from 'node:child_process'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 let dir: string
 let dbPath: string
@@ -41,7 +42,7 @@ afterEach(() => {
 })
 
 function harness() {
-  const db = initDatabase({ path: dbPath })
+  const db = freshTestDatabase(dbPath)
   opened.push(db)
   const store = new OutboundStore(db.db)
   const commits: string[] = []

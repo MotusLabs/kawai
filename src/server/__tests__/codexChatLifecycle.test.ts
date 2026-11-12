@@ -14,10 +14,11 @@ import { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatWireLogs } from '../chat/ChatWireLogs'
 import { resetCodexExecutableCache } from '../chat/codex/codexExecutable'
 import { providerOf } from '../chat/profileCatalog'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { SECURITY_NOTE_BODY } from '../team/teamPrompt'
 import { FAKE_CODEX, Script, THREAD_ID, until } from './codexDriverHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 const ENV_KEYS = [
   'CODEX_HOME', 'KAWAI_CODEX_PATH', 'FAKE_TRANSCRIPT', 'FAKE_RUN', 'FAKE_ENV_NAMES', 'ANTHROPIC_API_KEY',
@@ -50,7 +51,7 @@ beforeEach(() => {
     codex: { label: 'Codex', runtime: 'codex' },
     'codex-fast': { label: 'Codex Fast', runtime: 'codex' },
   }))
-  db = initDatabase({ path: path.join(tempDir, 'test.db') })
+  db = freshTestDatabase(path.join(tempDir, 'test.db'))
   process.env.CODEX_HOME = codexHome
   process.env.KAWAI_CODEX_PATH = FAKE_CODEX
   process.env.ANTHROPIC_API_KEY = 'sk-test-key'

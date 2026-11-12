@@ -57,6 +57,13 @@ export function writeGroup(world: PlanWorld, id: string, content: string, repo =
   fs.writeFileSync(path.join(repo, '.kawai', 'groups', `${id}.md`), content)
 }
 
+/** A change's design.md with a well-formed Implementation contract section, which validation requires (implementation-contract D5). */
+export function writeContractDesign(repo: string, change: string) {
+  fs.mkdirSync(path.join(repo, 'openspec', 'changes', change), { recursive: true })
+  fs.writeFileSync(path.join(repo, 'openspec', 'changes', change, 'design.md'), ['## Implementation contract', '### Acceptance', `- A1: ${change} works`,
+    '### Invariants', '### Scope', '- `src/**`', '### Verification', '- V1: check passes', '### Excluded'].join('\n'))
+}
+
 export const sessionRow = (sessionId: string, groupId: string | null, projectPath: string): ChatSessionRecord => ({
   sessionId, groupId, projectPath, name: sessionId, sdkSessionId: null, status: 'waiting', createdAt: '', lastActivityAt: '',
 })

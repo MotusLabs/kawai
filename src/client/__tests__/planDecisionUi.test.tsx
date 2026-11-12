@@ -65,7 +65,7 @@ function openFromQueue(link: AttentionLink, itemId: string): TeamLocation[] {
 }
 
 const card = (over: Partial<DecisionCard> = {}): DecisionCard => ({
-  id: 'card-1', teamId: 't', planId: 'plan-1', revision: 1, change: 'api', taskId: 'task-1',
+  id: 'card-1', kind: 'question', teamId: 't', planId: 'plan-1', revision: 1, change: 'api', taskId: 'task-1',
   question: 'Keep the v1 endpoint?', options: ['keep v1', 'drop v1'], context: 'Callers may still use it.',
   askedBy: { session: 'dev-1', group: 'middle-devs', profile: 'glm' },
   addressedTo: 'lead', addressedGroup: 'lead', messageId: null, createdAt: '2026-10-14T00:00:00.000Z', ...over,

@@ -12,7 +12,7 @@ import { canonicalJson } from './productStrategy'
 import type { PlanStrategyPin } from './plans'
 
 /** Bumped whenever a check's logic changes, so every stored report goes stale (D2). */
-export const VALIDATION_CHECKS_VERSION = 1
+export const VALIDATION_CHECKS_VERSION = 2
 
 // --- D2: inputs and identity ---
 

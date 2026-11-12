@@ -5,9 +5,14 @@
 // on an older revision says so and offers **Rebase onto revision M**; the
 // server refuses a stale publication and keeps the draft. Publishing needs a
 // rationale. Command keys are armed in the task store per payload, so a
-// double click or a resend after a reconnect publishes once.
+// double click or a resend after a reconnect publishes once. The draft also
+// holds the implementation contract (implementation-contract D3, D7): the
+// textarea starts from the saved draft's raw text, else the base revision's
+// rendered contract; live parser problems disable publishing, and clearing
+// a contract the task already carries is refused before it is sent.
 import { useEffect, useState } from 'react'
 import type { TaskDraft, TeamTaskSummary } from '@shared/teamTasks'
+import { contractHashInput, parseContract, renderContract, type ContractProblem, type ImplementationContract } from '@shared/implementationContract'
 import type { TaskAction } from '../../stores/teamTaskStore'
 
 /** The form an action sent, kept until the server's push shows it landed. */
@@ -16,12 +21,26 @@ interface SentForm {
   direction: string
   acceptance: string
   rationale: string
+  contract: string
 }
+
+/** A contract's canonical form, '' for none: equal keys are the same contract. */
+const contractKey = (contract: ImplementationContract | null | undefined) => (contract ? contractHashInput(contract) : '')
+/** The text's contract key, or null while it does not parse. */
+function textKey(text: string): string | null {
+  if (!text.trim()) return ''
+  const parsed = parseContract(text)
+  return parsed.contract ? contractKey(parsed.contract) : null
+}
+const startText = (task: TeamTaskSummary) => (task.contract ? renderContract(task.contract) : '')
 
 function landed(form: SentForm, task: TeamTaskSummary, draft: TaskDraft | null | undefined): boolean {
   if (form.kind === 'discard') return !draft
-  if (form.kind === 'publish') return task.direction === form.direction && (task.acceptance ?? '') === form.acceptance
+  if (form.kind === 'publish') {
+    return task.direction === form.direction && (task.acceptance ?? '') === form.acceptance && contractKey(task.contract) === textKey(form.contract)
+  }
   return !!draft && draft.direction === form.direction && (draft.acceptance ?? '') === form.acceptance && (draft.rationale ?? '') === form.rationale
+    && (draft.contractText ?? '') === form.contract
 }
 
 /** Send a task action; `command` arms (or reuses) the slot's request key for it. */
@@ -38,6 +57,7 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
   const [direction, setDirection] = useState('')
   const [acceptance, setAcceptance] = useState('')
   const [rationale, setRationale] = useState('')
+  const [contract, setContract] = useState('')
   /** The published revision the form edits; it never moves under unsaved text. */
   const [base, setBase] = useState(task.revision)
   /** Unsent edits: a push (a new revision, a saved draft) must not overwrite them. */
@@ -65,19 +85,27 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
     setDirection(draft?.direction ?? task.direction)
     setAcceptance(draft ? draft.acceptance ?? '' : task.acceptance ?? '')
     setRationale(draft?.rationale ?? '')
+    // A draft saved before contracts has no text: start from the revision's.
+    setContract(draft?.contractText ?? startText(task))
     setBase(draft?.baseRevision ?? task.revision)
-  }, [touched, task.id, task.revision, task.direction, task.acceptance, draft?.updatedAt, draft?.baseRevision, draft?.direction, draft?.acceptance, draft?.rationale])
+  }, [touched, task.id, task.revision, task.direction, task.acceptance, task.contractHash, draft?.updatedAt, draft?.baseRevision, draft?.direction, draft?.acceptance, draft?.rationale, draft?.contractText])
   const edit = (setter: (value: string) => void) => (value: string) => { setTouched(true); setter(value) }
   const sent = (form: SentForm) => { setTouched(true); setSentForm(form) }
 
   const stale = base < task.revision
-  const edited = direction.trim() !== task.direction || acceptance.trim() !== (task.acceptance ?? '')
+  const problems: ContractProblem[] = contract.trim() ? parseContract(contract).problems : []
+  /** Clearing is refused once a revision carried a contract (C6); say so before sending. */
+  const clearsContract = !contract.trim() && !!task.contract
+  const contractEdited = textKey(contract) !== contractKey(task.contract)
+  const edited = direction.trim() !== task.direction || acceptance.trim() !== (task.acceptance ?? '') || contractEdited
   const unsaved = !draft || direction.trim() !== draft.direction || acceptance.trim() !== (draft.acceptance ?? '') ||
-    rationale.trim() !== (draft.rationale ?? '')
-  const canPublish = !disabled && !stale && edited && !!direction.trim() && !!rationale.trim()
+    rationale.trim() !== (draft.rationale ?? '') || contract !== (draft.contractText ?? startText(task))
+  // A task without a contract and a blank field sends none (C1); otherwise the text, which the server parses.
+  const sendsContract = !!contract.trim() || !!task.contract || !!draft?.contractText
+  const canPublish = !disabled && !stale && edited && !!direction.trim() && !!rationale.trim() && problems.length === 0 && !clearsContract
   const publish = (notify: boolean) => {
-    const fields = { baseRevision: base, direction: direction.trim(), acceptance: acceptance.trim(), rationale: rationale.trim(), notify }
-    sent({ kind: 'publish', direction: fields.direction, acceptance: fields.acceptance, rationale: fields.rationale })
+    const fields = { baseRevision: base, direction: direction.trim(), acceptance: acceptance.trim(), ...(sendsContract ? { contract } : {}), rationale: rationale.trim(), notify }
+    sent({ kind: 'publish', direction: fields.direction, acceptance: fields.acceptance, rationale: fields.rationale, contract })
     act('publish', { type: 'team-task-publish', ...fields, fromDraft: !!draft }, { slot: `publish:${task.id}`, payload: JSON.stringify(fields) })
   }
 
@@ -96,6 +124,14 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
       onChange={event => edit(setDirection)(event.target.value)} />
     <textarea className="input min-h-12 text-chat-body" aria-label="Draft acceptance criteria" value={acceptance} disabled={!connected}
       onChange={event => edit(setAcceptance)(event.target.value)} />
+    <textarea className="input min-h-24 font-mono text-chat-meta" aria-label="Draft implementation contract" value={contract} disabled={!connected}
+      placeholder={'## Implementation contract (optional)\n### Acceptance\n- A1: …\n### Invariants\n### Scope\n- src/**\n### Verification\n- V1: …\n### Excluded'}
+      onChange={event => edit(setContract)(event.target.value)} />
+    {problems.length > 0 && <ul role="alert" className="text-chat-meta" data-testid="task-contract-problems">
+      {problems.map(problem => <li key={`${problem.line}:${problem.message}`}>Line {problem.line}: {problem.message}</li>)}
+    </ul>}
+    {clearsContract && <p role="alert" className="text-chat-meta" data-testid="task-contract-clear-refused">
+      This task already has a contract; it can be replaced but not removed.</p>}
     <input className="input text-chat-body" aria-label="Rationale" placeholder="Why this change (required to publish)" value={rationale}
       disabled={!connected} onChange={event => edit(setRationale)(event.target.value)} />
     <p className="text-chat-meta text-secondary">A draft publishes nothing — agents never see it. Publishing records revision {task.revision + 1};
@@ -103,8 +139,8 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
     <div className="flex flex-wrap gap-2">
       <button type="button" className="btn" data-testid="task-save-draft" disabled={disabled || !direction.trim() || !unsaved}
         onClick={() => {
-          const fields = { direction: direction.trim(), acceptance: acceptance.trim(), rationale: rationale.trim() }
-          sent({ kind: 'draft', ...fields })
+          const fields = { direction: direction.trim(), acceptance: acceptance.trim(), rationale: rationale.trim(), ...(sendsContract ? { contract } : {}) }
+          sent({ kind: 'draft', ...fields, contract })
           act('draft', { type: 'team-task-draft', action: 'save', baseRevision: base, ...fields })
         }}>Save draft</button>
       <button type="button" className="btn" data-testid="task-publish" disabled={!canPublish}
@@ -113,7 +149,7 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
         onClick={() => publish(true)}>Publish and notify</button>
       {draft && <button type="button" className="btn text-chat-meta" data-testid="task-discard-draft" disabled={disabled}
         onClick={() => {
-          sent({ kind: 'discard', direction: '', acceptance: '', rationale: '' })
+          sent({ kind: 'discard', direction: '', acceptance: '', rationale: '', contract: '' })
           act('draft', { type: 'team-task-draft', action: 'discard' })
         }}>Discard draft</button>}
     </div>

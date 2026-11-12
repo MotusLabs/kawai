@@ -3,6 +3,10 @@
 // Git/OpenSpec subprocess work), refreshes only affected repositories, and
 // broadcasts only structural changes. Kept outside the tmux refresh worker:
 // Git/OpenSpec discovery is slower and changes less often than tmux status.
+// Coalescing caps passes; the OpenSpec process count is capped by the
+// server-wide pool and the per-worktree reuse cache it owns
+// (bounded-openspec-discovery D2-D4), and each pass logs one
+// `workspace_openspec_pass` debug line.
 
 import {
   type WorkspaceRepository,
@@ -16,10 +20,19 @@ import {
 } from '../git/repositoryResolution'
 import { buildRepositorySnapshot } from '../git/workspaceSnapshot'
 import { deepestWorktreeMatch } from '../git/worktreeStatus'
+import { logger } from '../logger'
 import {
   refreshRepositoryOpenSpec,
   type OpenspecCommandRunner,
 } from './openspecDiscovery'
+import { OpenSpecDiscoveryCache } from './openspecDiscoveryCache'
+import { openspecListPool, pooledOpenspecRunner, type ConcurrencyPool } from './openspecPool'
+
+/** What a pass hands to the OpenSpec refresh: the reuse cache and the clock. */
+export interface OpenSpecRefreshContext {
+  cache: OpenSpecDiscoveryCache
+  now: () => number
+}
 
 export interface WorkspaceDiscoveryApi {
   /** Resolve seed paths to repositories (git rev-parse based). */
@@ -33,7 +46,8 @@ export interface WorkspaceDiscoveryApi {
   /** Refresh OpenSpec state for one repository entry. */
   refreshOpenSpec(
     repository: WorkspaceRepository,
-    previous?: WorkspaceRepository[]
+    previous?: WorkspaceRepository[],
+    context?: OpenSpecRefreshContext
   ): Promise<WorkspaceRepository>
 }
 
@@ -41,7 +55,19 @@ export const defaultDiscoveryApi: WorkspaceDiscoveryApi = {
   resolveSeeds: (seeds) => resolveSeedRepositories(seeds),
   buildRepository: (commonDir, dirs, previous) =>
     buildRepositorySnapshot(commonDir, dirs, previous),
-  refreshOpenSpec: (repository, previous) => refreshRepositoryOpenSpec(repository, previous),
+  refreshOpenSpec: (repository, previous, context) =>
+    refreshRepositoryOpenSpec(repository, previous, {
+      runner: pooledOpenspecRunner,
+      ...(context ? { cache: context.cache, now: context.now } : {}),
+    }),
+}
+
+export interface OpenSpecPassLog {
+  runs: number
+  reused: number
+  worktrees: number
+  poolPeak: number
+  durationMs: number
 }
 
 export interface WorkspaceCoordinatorOptions {
@@ -51,6 +77,12 @@ export interface WorkspaceCoordinatorOptions {
   broadcast(snapshot: WorkspaceSnapshot): void
   discovery?: WorkspaceDiscoveryApi
   openspecRunner?: OpenspecCommandRunner
+  /** Clock for the OpenSpec reuse limit (tests inject a fake). */
+  now?: () => number
+  /** The pool whose peak each pass reports; defaults to the server-wide one. */
+  openspecPool?: ConcurrencyPool
+  /** Per-pass OpenSpec work report; defaults to a debug log line. */
+  logOpenSpecPass?: (fields: OpenSpecPassLog) => void
 }
 
 interface RepositoryCacheEntry {
@@ -69,10 +101,13 @@ export class WorkspaceCoordinator {
   private pendingForced = false
   private pendingScopedPaths = new Set<string>()
   private onDemandPaths = new Set<string>()
+  private readonly openspecCache = new OpenSpecDiscoveryCache()
+  private readonly now: () => number
 
   constructor(options: WorkspaceCoordinatorOptions) {
     this.options = options
     this.discovery = options.discovery ?? defaultDiscoveryApi
+    this.now = options.now ?? Date.now
   }
 
   getSnapshot(): WorkspaceSnapshot | null {
@@ -157,6 +192,8 @@ export class WorkspaceCoordinator {
 
   private async runPass(forceFull: boolean, scopedPaths: string[]): Promise<void> {
     this.lastError = null
+    const passStartedAt = performance.now()
+    const openspecContext: OpenSpecRefreshContext = { cache: this.openspecCache, now: this.now }
     const seeds = [...new Set([...this.options.getSeeds(), ...this.onDemandPaths])]
     const resolved = await this.discovery.resolveSeeds(seeds)
 
@@ -209,7 +246,7 @@ export class WorkspaceCoordinator {
         try {
           const dirs = resolved.repositories.get(commonDir) ?? null
           let entry = await this.discovery.buildRepository(commonDir, dirs, this.snapshot)
-          entry = await this.discovery.refreshOpenSpec(entry, this.snapshot?.repositories)
+          entry = await this.discovery.refreshOpenSpec(entry, this.snapshot?.repositories, openspecContext)
           nextCache.set(commonDir, { repository: entry, seedPaths })
           nextRepositories.set(commonDir, entry)
         } catch (error) {
@@ -236,6 +273,9 @@ export class WorkspaceCoordinator {
       JSON.stringify(repositories) !== JSON.stringify(this.snapshot.repositories)
 
     this.cache = nextCache
+    const listedWorktrees = new Set(repositories.flatMap((repository) => repository.worktrees.map((worktree) => worktree.path)))
+    this.openspecCache.retainOnly(listedWorktrees)
+    this.logOpenSpecPass(listedWorktrees.size, performance.now() - passStartedAt)
     this.snapshot = {
       repositories,
       generatedAt: new Date().toISOString(),
@@ -243,6 +283,18 @@ export class WorkspaceCoordinator {
     if (structuralChange) {
       this.options.broadcast(this.snapshot)
     }
+  }
+
+  private logOpenSpecPass(worktrees: number, durationMs: number): void {
+    const counts = this.openspecCache.takeCounts()
+    const fields: OpenSpecPassLog = {
+      ...counts,
+      worktrees,
+      poolPeak: (this.options.openspecPool ?? openspecListPool).takePeak(),
+      durationMs: Math.round(durationMs),
+    }
+    if (this.options.logOpenSpecPass) this.options.logOpenSpecPass(fields)
+    else logger.debug('workspace_openspec_pass', { ...fields })
   }
 
   private resolveScopedOwners(

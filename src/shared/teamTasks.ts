@@ -1,6 +1,8 @@
 // SDK-free team task records (team-tasks design D1) shared by server and
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
+import type { ImplementationContract } from './implementationContract'
+import type { LedgerItem, LedgerRow } from './findingsLedger'
 import type { ActingParty, TeamActor, TeamMessage } from './team'
 import type { CitationOutcome, CoverageMap, MapComparison, ReviewerCoverageMap, WithheldCoverage } from './coverageMaps'
 
@@ -57,6 +59,12 @@ export interface TeamTask {
   revision: number
   direction: string
   acceptance: string | null
+  /** The current revision's contract (implementation-contract D3); null without one. Always set by the store. */
+  contract?: ImplementationContract | null
+  /** That contract's sha256; null without one. */
+  contractHash?: string | null
+  /** `r<N>#<hash12>`: the contract's identity, else the revision's text identity (D2). */
+  identity?: string
   createdAt: string
   updatedAt: string
 }
@@ -72,6 +80,11 @@ export interface TaskRevision {
   rationale?: string | null
   /** Published with notices; null for rows published before notifications existed. */
   notify?: boolean | null
+  /** The revision's contract (implementation-contract D3); null without one. Always set by the store. */
+  contract?: ImplementationContract | null
+  contractHash?: string | null
+  /** `r<N>#<hash12>`: the contract's identity, else the revision's text identity (D2). */
+  identity?: string
 }
 
 /**
@@ -86,6 +99,8 @@ export interface TaskDraft {
   direction: string
   acceptance: string | null
   rationale: string | null
+  /** The draft's raw contract text, possibly unparsed (D3); null = the base revision's contract, unedited. */
+  contractText?: string | null
   updatedAt: string
 }
 
@@ -262,6 +277,24 @@ export interface TaskTestClaim {
 /** The status of one checked fact (independent-verification D2). */
 export type ResultFactStatus = 'pass' | 'warn' | 'fail' | 'unknown'
 
+/**
+ * The scope fact (implementation-contract D6): changed paths outside the
+ * scope of the pinned revision's contract. `warn` lists them; `no-contract`
+ * when that revision has none. Informational only: it never gates.
+ */
+export interface ResultScopeFact {
+  status: ResultFactStatus | 'no-contract'
+  /** Null when the fact could not judge (no contract, unknown). */
+  withinScope: boolean | null
+  /** The first paths outside scope, at most 20. */
+  outside: string[]
+  /** How many more paths are outside scope past the cap. */
+  more: number
+  /** The pinned revision's identity the paths were judged against. */
+  contractIdentity: string | null
+  note: string | null
+}
+
 /** How a result's commit relates to its worktree's HEAD (D2). */
 export type ResultHeadRelation = 'same' | 'ahead' | 'behind' | 'diverged'
 
@@ -337,6 +370,8 @@ export interface ResultCheckFacts {
     skipped: number
     status: ResultFactStatus
   }
+  /** Absent on facts written before contracts: readers show "not checked" (implementation-contract D6). */
+  scope?: ResultScopeFact
   /**
    * How the check resolved the result's coverage citations (independent-
    * verification D5): per clause, per citation, in the stored map's order —
@@ -372,6 +407,9 @@ export interface TaskResultChecks {
 }
 
 /** Review or QA findings, bound to the exact result examined (D4). */
+/** review-findings-ledger D3: one structured item, and one ledger row. */
+export type { LedgerItem, LedgerRow }
+
 export interface TaskFindings {
   id: string
   taskId: string
@@ -379,10 +417,22 @@ export interface TaskFindings {
   /** The handoff the findings answer, when there was one. */
   handoffId: string | null
   kind: 'review' | 'qa'
+  /** The verdict at submission: given for a text row, derived for a structured one (review-findings-ledger D5). */
   verdict: 'pass' | 'fail'
+  /** The reviewer's text: the whole finding for a text row, notes or a summary for a structured one. */
   findings: string
   author: TaskActor
   createdAt: string
+  /** review-findings-ledger D3: whether the row holds structured items; false for every row written before. */
+  structured: boolean
+  /** Whether the row counts for the ledger (D5); a replaced row no longer does. */
+  counted: boolean
+  contractIdentity: string | null
+  ledgerSeq: number | null
+  /** The counted submission on the same result that replaced this one. */
+  replacedBy: string | null
+  /** The structured items, in submission order; empty for a text row. */
+  items: LedgerItem[]
 }
 
 /**
@@ -447,10 +497,17 @@ export interface TeamTaskDetail {
   acknowledgements?: TaskAcknowledgement[]
   /** Results, outstanding first, then superseded ones newest first (task-results-handoffs D8). */
   results?: TaskResult[]
+  /** The findings ledger, derived now (review-findings-ledger D10): every row for the human's view; the agent's newest 100. */
+  findingsLedger?: LedgerRow[]
 }
 
 /** The agent's bounded detail (bounded-log-reads-and-task-get D4): journal, subtask, and message windows, oldest first, with their bounds; other sections whole. */
-export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal'> { journal: TaskJournalPreview[]; bounds: AgentTaskBounds }
+export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal'> {
+  journal: TaskJournalPreview[]
+  bounds: AgentTaskBounds
+  /** review-findings-ledger D10: whether ledger rows older than the newest 100 were left out. */
+  ledgerOlderRemaining?: boolean
+}
 export interface AgentTaskBounds { journal: { total: number; returned: number; olderRemaining: boolean; nextBefore: string | null }; subtasks: TaskListBound; messages: TaskListBound }
 export interface TaskListBound { total: number; returned: number; truncated: boolean }
 /** A journal entry's preview (D4): at most 2,000 stored bytes; `text` is null when they are not valid UTF-8, and `resumeOffsetBytes` is then 0. */
@@ -504,6 +561,14 @@ export interface ChatPeerTaskContext {
   plan?: { id: string; title: string; revision: number | null; change: string }
   /** The running execution that owns the task, with the revision it runs (plan-execution D7); absent for an unowned task. */
   execution?: { id: string; revision: number }
+  /**
+   * The current revision's identity and contract (implementation-contract
+   * D7); absent from contexts recorded before contracts, whose headers keep
+   * their old bytes.
+   */
+  contract?: { identity: string; contract: ImplementationContract | null }
+  /** The ledger's blocking and disputed ids (review-findings-ledger D10); absent while the task has no structured findings. */
+  findings?: { blocking: string[]; disputed: string[] }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */

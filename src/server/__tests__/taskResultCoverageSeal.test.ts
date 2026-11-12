@@ -24,6 +24,7 @@ import { TeamCaps } from '../team/teamCaps'
 import { TeamWorktrees } from '../team/worktreeRoots'
 import { compareCoverageMaps } from '../../shared/coverageMaps'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
@@ -67,7 +68,7 @@ beforeEach(() => {
     ['second', row('second', 'reviewers')], ['stranger', row('stranger', 'leads', path.join(root, 'other'))]])
   db?.close()
   dbPath = path.join(fs.mkdtempSync(path.join(root, 'db-')), 'tasks.db')
-  db = initDatabase({ path: dbPath })
+  db = freshTestDatabase(dbPath)
   mail = new MailboxStore(db.db)
   const assignmentStore = new AssignmentStore(db.db, mail)
   const store = new TaskStore(db.db, mail, assignmentStore)

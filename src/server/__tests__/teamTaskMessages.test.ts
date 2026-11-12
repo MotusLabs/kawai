@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ChatPeerMessage } from '../../shared/chat'
-import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
+import { type ChatSessionRecord, type SessionDatabase } from '../db'
 import { parseTranscriptContent } from '../chat/transcriptReplay'
 import { MailDispatcher, type MailRecipient } from '../team/dispatcher'
 import { formatEnvelope, parseEnvelope } from '../team/envelope'
@@ -17,6 +17,7 @@ import { buildTaskContext, TASK_CONTEXT_ENTRY_CHARS } from '../team/taskContext'
 import { TaskStore } from '../team/taskStore'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { clearTeamCache, resolveTeam } from '../team/teamIdentity'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 let dir: string
 let project: string
@@ -41,7 +42,7 @@ beforeEach(async () => {
   fs.writeFileSync(path.join(project, '.kawai', 'groups', 'devs.md'), 'Build.')
   fs.mkdirSync(otherProject)
   records = new Map([['lead', row('lead', project)], ['dev', row('dev', project)], ['stranger', row('stranger', otherProject)]])
-  db = initDatabase({ path: path.join(dir, 'db.sqlite') })
+  db = freshTestDatabase(path.join(dir, 'db.sqlite'))
   store = new MailboxStore(db.db)
   tasks = new TaskStore(db.db, store)
   mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir, tasks })
@@ -87,6 +88,8 @@ describe('task ids on mail', () => {
 })
 
 describe('delivery-time context', () => {
+  // @covers: team-tasks › Delivered task messages carry the task context › Task header on delivery
+  // @covers: team-tasks › Delivered task messages carry the task context › Linked change is authoritative
   test('amendments and notes made after enqueue appear at delivery', async () => {
     const task = tasks.create({ teamId, title: 'Export', direction: 'CSV', acceptance: 'File downloads', creator: { kind: 'agent', sessionId: 'lead' }, openspecChange: 'add-export', worktree: '/repo-feature' })
     const mail = await mailboxHandlers(mailbox, 'lead').send_message({ to_kind: 'group', to_id: 'devs', body: 'Build it', task_id: task.id })

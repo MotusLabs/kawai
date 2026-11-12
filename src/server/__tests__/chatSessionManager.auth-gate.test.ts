@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { hasClaudeAuth } from '../chat/ChatSessionManager'
 import { anyDirectory, writeCredentialedProviderCatalog, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
 
@@ -23,7 +24,7 @@ describe('ChatSessionManager', () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-'))
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    db = freshTestDatabase(path.join(tempDir, 'test.db'))
     // Isolate auth from the host: no API key, empty CLI config dir. HOME is
     // pinned so the profile catalog resolves against an empty home — a real
     // ~/.kawai must not leak into these tests.

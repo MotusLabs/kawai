@@ -376,7 +376,8 @@ test('E10: a contributor result stays open; amendment flags it; children never c
 // Kawai's check of a result (independent-verification 2.5): the card shows
 // "Checked by Kawai" for a seeded result on a real commit, and **Recheck**
 // asks the running server's check service for a new check — its settled
-// facts arrive in the open detail without a reload.
+// facts arrive in the open detail without a reload. The scope fact reads not
+// checked on the seeded facts and no contract on the server's own check.
 test('E11: a seeded result on a real commit shows Checked by Kawai; Recheck runs a new check', async ({ page }, info) => {
   test.setTimeout(120_000)
   const { root, worktree } = resultsTeam()
@@ -396,6 +397,8 @@ test('E11: a seeded result on a real commit shows Checked by Kawai; Recheck runs
     await expect(checked).toContainText('Checked by Kawai')
     await expect(checked).toContainText(sha.slice(0, 12))
     await expect(card.getByTestId('result-test')).toContainText('(claimed)')
+    // Seeded facts predate contracts: the scope fact reads not checked, never within scope.
+    await expect(checked.getByTestId('result-check-scope')).toHaveText('Contract scope: not checked')
     await page.getByTestId('task-results').screenshot({ path: info.outputPath('task-check-section.png') })
 
     // Recheck: a new check runs over the same real commit and settles beside
@@ -403,6 +406,8 @@ test('E11: a seeded result on a real commit shows Checked by Kawai; Recheck runs
     await card.getByTestId('task-recheck').click()
     await expect(checked).toContainText('1 earlier check', { timeout: 30_000 })
     await expect(checked).toContainText(sha.slice(0, 12))
+    // The server's own check judges the pinned revision, which has no contract.
+    await expect(checked.getByTestId('result-check-scope')).toHaveText('Contract scope: no contract')
     await page.screenshot({ path: info.outputPath('task-rechecked.png') })
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

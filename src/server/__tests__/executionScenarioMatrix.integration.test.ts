@@ -8,7 +8,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { STOP_REASONS, type CiCheck } from '../../shared/planExecution'
 import {
-  createMatrixBench, createMatrixWorld, greenChecks, passedChange, pushCommit, removeMatrixWorld, review, startedExecution, submitWork,
+  createMatrixBench, createMatrixWorld, greenChecks, passedChange, pushCommit, removeMatrixWorld, review, startedExecution, shapedReview, submitWork,
   type MatrixBench, type MatrixWorld,
 } from './executionMatrixHarness'
 import { CI_TIMEOUT_MS } from '../../shared/planExecutionGates'
@@ -57,6 +57,7 @@ describe('direction changed while implementing (12.1)', () => {
 })
 
 describe('the review and extra checks (12.5)', () => {
+  // @covers: plan-execution › The review follows green CI › The review names what to check
   test('the review names the result, commit, PR, acceptance rules, and only the checks to attest; the verdict labels each', async () => {
     const executionId = await startedExecution(h, [{ change: 'rv-n', acceptance: ['Rows render in order'], extraChecks: [bundleSize, a11y] }], { acceptanceRules: ['No new dependency'] })
     await h.tick()
@@ -120,14 +121,18 @@ describe('the review and extra checks (12.5)', () => {
 })
 
 describe('the fix count (13.1)', () => {
-  test('a passing round resets the count: a failed update round afterwards shows one of three and gets another fix', async () => {
+  // @covers: plan-execution › Failed fix rounds count toward the backstop › A passing round resets the count
+  test('a passing round resets the count: a failed update round afterwards shows one of five and gets another fix', async () => {
     const executionId = await startedExecution(h, [{ change: 'fc-a' }])
     await h.tick()
-    // Implement fails; two fix rounds fail; the third fix passes.
+    // Implement fails; two fix rounds fail; the third fix passes. The open
+    // count falls 3, 2, 1 and no review after the first raises, so no
+    // convergence signal fires and only the count decides.
+    const shapes = [{ raise: ['round 1 a', 'round 1 b', 'round 1 c'], resolve: 0 }, { raise: [], resolve: 1 }, { raise: [], resolve: 1 }]
     for (const [index, content] of ['1', '2', '3'].entries()) {
       await submitWork(h, executionId, 'fc-a', 'seed.txt', `branch ${content}\n`)
       await h.tick()
-      await review(h, executionId, 'fc-a', 'fail', 'rev1', `round ${index + 1} needs work`)
+      await shapedReview(h, executionId, 'fc-a', 'fail', shapes[index]!)
       await h.tick()
     }
     expect(row(executionId, 'fc-a')).toMatchObject({ state: 'implementing', fixRounds: 2 })
@@ -145,10 +150,10 @@ describe('the fix count (13.1)', () => {
     await h.tick()
     await review(h, executionId, 'fc-a', 'fail', 'rev1', 'the merge lost a line')
     await h.tick()
-    // One failed fix round of three: the next instruction is the second.
+    // One failed fix round of five (the default backstop): the next instruction is the second.
     expect(row(executionId, 'fc-a')).toMatchObject({ state: 'implementing', fixRounds: 1, stopReason: null })
     expect(handoffs(executionId, 'fc-a', 'fix').length).toBe(fixesBefore + 1)
-    expect(bodyOf(handoffs(executionId, 'fc-a', 'fix').at(-1)!)).toContain('This is fix round 2 of 3.')
+    expect(bodyOf(handoffs(executionId, 'fc-a', 'fix').at(-1)!)).toContain('This is fix round 2 of 5.')
   })
 })
 

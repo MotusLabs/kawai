@@ -5,11 +5,12 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatUsageReport } from '../../shared/chat'
-import { initDatabase, type SessionDatabase } from '../db'
+import { type SessionDatabase } from '../db'
 import { logger } from '../logger'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, flush, waitForCondition, drainNow, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
 
@@ -27,7 +28,7 @@ describe('ChatSessionManager provider usage pull', () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-zai-'))
-    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    db = freshTestDatabase(path.join(tempDir, 'test.db'))
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
     process.env.HOME = tempDir

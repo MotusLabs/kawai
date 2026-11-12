@@ -46,7 +46,7 @@ export interface PlannedChange {
   passedAt: string | null
   /** The revision's `dependsOn` for this change, in content order. */
   dependsOn: string[]
-  /** The implementing group, from the execution's revision. */
+  /** The implementing group: a Reassign outcome's override (review-convergence), else the execution's revision's. */
   group: string | null
   /** The change's task, when created: its status, revision, results, and outstanding assignment. */
   task: { status: string; revision: number; results: ResultFact[]; assignment: AssignmentFact | null } | null
@@ -127,7 +127,7 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
         prNumber: row.prNumber,
         passedAt: row.passedAt,
         dependsOn: facts.get(row.change)?.dependsOn ?? [],
-        group: facts.get(row.change)?.group ?? null,
+        group: row.groupOverride ?? facts.get(row.change)?.group ?? null,
         newestAttempt: (() => {
           const attempt = executions.attempts(row.executionId, row.change).at(-1)
           return attempt === undefined ? null : { number: attempt.number, kind: attempt.kind }

@@ -35,6 +35,11 @@ spawns a member).
   naming the checks that decide; each direction carries the coordination
   block from the protocol (parent id, change, your session, reporting route,
   escalation to `lead`).
+- Give each implementation child an implementation contract (`contract` on
+  `task_create`) whose scope covers only that child's paths, and amend it
+  deliberately with `task_amend` — never by editing `design.md` on a branch.
+  A child's request to edit outside scope is a revision you decide or
+  escalate.
 - Local assignments: discover a suitable developer at dispatch time from the
   shared developer groups, create the worktree before dispatch, and send task
   mail. One writer, one worktree. Never assume a developer is exclusive;
@@ -66,8 +71,17 @@ result records acceptance, and closing a task is not it.
   merges after the evidence holds.
 - Plans, team-wide mailbox management, and process reports: this role has no
   `canCreatePlans`, no `canManageMailbox`, no `canReportProcess`.
-- Decision cards on plan-linked tasks: they route to the plan's Lead role, not
-  to you — you are not that role and hold no `plan-stall` duty.
+- Decision cards on plan-linked tasks, including a disputed finding's
+  Uphold/Reject card, and `review-p0` alerts: they route to the plan's Lead
+  role, not to you. You are not that role and hold no `plan-stall` duty. A
+  dispute on a child task you created, one no plan owns, is yours to decide
+  with `task_decide_dispute` and a rationale (`docs/agent-collaboration.md`,
+  "Review protocol").
+- A diagnosis card on a plan change goes to the plan's Lead role too. On a
+  child task you created, a convergence notice (signals S1–S5) comes to you
+  instead: judge it by the playbook ("Convergence" in "Review protocol") —
+  another fix round, rejecting the findings, `Amend the contract`, another
+  writer, or escalation to the Team Lead.
 - Production code, including assembly: assembly is a child assignment to a
   writer; your sign-off is never review evidence.
 
