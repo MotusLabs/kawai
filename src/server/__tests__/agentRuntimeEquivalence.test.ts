@@ -16,6 +16,12 @@
 // - Kawai's own host policy grants team tools silently: through Kawai a team
 //   tool shows no card and gets the native result the package gives for an
 //   allow attributed to 'team'.
+// - Cleanup (batch B, sweep 7553f8ac A9): every driver stop and every
+//   scripted prompt reader is one entry of the package's shared
+//   ownedAggregate (helpers/ownedCleanup.ts), registered before the case
+//   acts. A join runs every entry with allSettled, so a rejecting stop never
+//   skips another; raw failures are reported, not discarded; a reader entry
+//   waits for the reader, which the driver's own stop ends.
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { Options, PermissionResult, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { createClaudeDriver as publicClaude } from '@motuslabs/agent-runtime/claude'
@@ -26,6 +32,7 @@ import { createChatDriver } from '../chat/provider/createChatDriver'
 import type { ChatAgentDriver } from '../chat/provider/driver'
 import { createClaudeDriver as sourceClaude, createClaudeDriverWith } from '../../../packages/agent-runtime/src/claude/driver'
 import { createCodexDriver as sourceCodex } from '../../../packages/agent-runtime/src/codex/driver'
+import { ownedAggregate, ownedOnce, type OwnedOnce } from '../../../packages/agent-runtime/__tests__/helpers/ownedCleanup'
 
 type Adapter = ChatAgentDriver & { settled(): Promise<void> }
 
@@ -49,9 +56,11 @@ function scripted(scripts: Script[], sessionId: string) {
       },
     }
     scripts.push(script)
-    void (async () => {
+    const reader = (async () => {
       for await (const _ of prompt) void _
     })()
+    // The driver's own stop (a sibling entry) ends the prompt; this entry waits for the reader.
+    own(() => reader)
     const stream = (async function* () {
       while (!script.closed) {
         if (queue.length === 0) await new Promise<void>((resolve) => (wake = resolve))
@@ -101,10 +110,17 @@ interface Facts {
   resolved: { outcome: unknown; decidedBy: unknown }
 }
 
-const stops: Array<() => Promise<unknown>> = []
-afterEach(async () => {
-  for (const stop of stops.splice(0)) await stop().catch(() => {})
+interface Owned { run: () => Promise<unknown>; closed: OwnedOnce<unknown> }
+const owned = ownedAggregate<Owned, unknown>({
+  join: (entry) => entry.closed.run(entry.run),
+  failures: (_entry, outcome) => (outcome.status === 'rejected' ? [outcome.reason] : []),
+  message: 'I9 cleanups failed',
 })
+/** Register one cleanup (a driver stop or a reader join) before the case acts on it. */
+function own(run: () => Promise<unknown>): void {
+  owned.add({ run, closed: ownedOnce<unknown>() })
+}
+afterEach(() => owned.join())
 
 /** The SDK-facing facts of one case through a driver whose scripted CLI is `scripts[0]`. */
 async function drive(
@@ -153,7 +169,7 @@ async function kawaiCase(index: number, tool: string, input: Record<string, unkn
       ...(resume ? { resumeSessionId: resume } : {}),
     },
   }) as Adapter
-  stops.push(async () => {
+  own(async () => {
     driver.kill()
     await driver.settled()
   })
@@ -196,7 +212,7 @@ async function packageCase(index: number, tool: string, input: Record<string, un
     },
     { queryFactory: scripted(scripts, sessionId) },
   )
-  stops.push(() => driver.kill())
+  own(() => driver.kill())
   void driver.start().catch(() => {})
   return drive(
     scripts,
@@ -217,7 +233,7 @@ async function kawaiTeamTool(input: Record<string, unknown>) {
     runtime: 'claude',
     options: { sessionId: 'chat-i9-team', projectPath: '/tmp', queryFactory: scripted(scripts, 's-team') as never, onEvent: (event) => void events.push(event), onStatus: () => {} },
   }) as Adapter
-  stops.push(async () => {
+  own(async () => {
     driver.kill()
     await driver.settled()
   })
@@ -245,7 +261,7 @@ async function packageTeamTool(input: Record<string, unknown>) {
     },
     { queryFactory: scripted(scripts, 's-team') },
   )
-  stops.push(() => driver.kill())
+  own(() => driver.kill())
   void driver.start().catch(() => {})
   await until(() => scripts.length === 1)
   scripts[0]!.push({ type: 'system', subtype: 'init', model: 'claude-test', tools: [], slash_commands: [] })
@@ -285,7 +301,7 @@ describe('I9: Kawai and a package consumer reach one driver implementation', () 
       expect([context, kawai]).toStrictEqual([context, direct])
       // The card shows, and an allow echoes, the exact original input.
       expect([context, kawai.card.input]).toStrictEqual([context, input])
-      for (const stop of stops.splice(0)) await stop()
+      await owned.join()
       seen.tools.add(tool)
       seen.decisions.add(decision)
       if (resume) seen.resumed += 1

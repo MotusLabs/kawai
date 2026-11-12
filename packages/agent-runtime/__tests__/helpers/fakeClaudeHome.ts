@@ -19,6 +19,8 @@ export interface FakeClaudeHome {
   received(): Array<Record<string, unknown>>
   /** The argv of each process the fake started, in spawn order. */
   argv(): string[][]
+  /** The pid of each process the fake started, in spawn order. */
+  pids(): number[]
 }
 
 function lines(log: string): Array<Record<string, unknown>> {
@@ -45,5 +47,6 @@ export function fakeClaudeHome(): FakeClaudeHome {
     }),
     received: () => lines(log).filter((entry) => !('argv' in entry)),
     argv: () => lines(log).flatMap((entry) => ('argv' in entry ? [entry.argv as string[]] : [])),
+    pids: () => lines(log).flatMap((entry) => ('argv' in entry && typeof entry.pid === 'number' ? [entry.pid] : [])),
   }
 }

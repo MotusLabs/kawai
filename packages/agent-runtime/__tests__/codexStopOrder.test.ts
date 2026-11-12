@@ -9,6 +9,16 @@
 // handler that started has finished, a resolved receipt reports every
 // spawned leader as exited, and afterwards every accepted handle has settled
 // exactly once.
+//
+// Batch B (task 4.2/2.2, U2): the cold-start sequences above issue their
+// operations while the first generation is still booting, and in this
+// environment their stops all land before the fake app-server runs. The
+// second describe replays the same seeds and operations after the first
+// start() resolved, so every sequence drives a booted generation: turns,
+// held handlers, crashes and /child helpers in the group. A helper outlives
+// its leader as a zombie when the container's PID 1 does not reap it;
+// alive() counts a zombie as dead, as the production group check does
+// (zombieLiveness.test.ts).
 import { afterEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { readFileSync } from 'node:fs'
@@ -57,7 +67,17 @@ interface Verdict {
   duplicateResults: string[]
 }
 
-async function run(seed: number): Promise<Verdict> {
+/** What a sequence actually reached on its processes (ready variant reach). */
+interface Reach {
+  leaders: number
+  helpers: number
+  handlers: number
+  rejected: boolean
+  /** A rejected stop's error category and each cause as `category:message`. */
+  failure: { category: unknown; causes: string[] } | null
+}
+
+async function run(seed: number, ready = false): Promise<{ verdict: Verdict; reach: Reach }> {
   const { ops, ticks } = generateOps(seed)
   let started = 0
   let finished = 0
@@ -81,10 +101,12 @@ async function run(seed: number): Promise<Verdict> {
       handles.push(handle)
       void handle.result.then(() => settled.add(`${handle.turnId}:${handle.messageUuid}`))
     }, () => {})
-  void h.driver.start().catch(() => {})
+  if (ready) await h.driver.start()
+  else void h.driver.start().catch(() => {})
   let stop: Promise<unknown> | null = null
   let verdictAtStop: { live: number[]; open: number } | null = null
   let receipt: ProcessExitReceipt | null = null
+  let stopError: unknown = null
   const terminal = (mode: 'kill' | 'shutdown') => {
     const s = h.driver[mode]()
     const observe = () => {
@@ -93,7 +115,10 @@ async function run(seed: number): Promise<Verdict> {
     void s.then((r) => {
       receipt ??= r
       observe()
-    }, observe)
+    }, (error: unknown) => {
+      stopError ??= error
+      observe()
+    })
     stop ??= s.then(() => 'ok', () => 'rejected')
   }
   for (const [i, op] of ops.entries()) {
@@ -117,9 +142,19 @@ async function run(seed: number): Promise<Verdict> {
   terminal(ops.includes('shutdown') && !ops.includes('kill') ? 'shutdown' : 'kill')
   await stop
   await tick(0)
+  const recorded = pids(h.root.home).length
+  const spawned = leaders(h.root.home).length
+  const failed = stopError as { category?: unknown; causes?: readonly { category?: unknown; message?: unknown }[] } | null
+  const reach: Reach = {
+    leaders: spawned,
+    helpers: recorded - spawned,
+    handlers: started,
+    rejected: (await stop) === 'rejected',
+    failure: failed ? { category: failed.category, causes: (failed.causes ?? []).map((c) => `${String(c?.category)}:${String(c?.message)}`) } : null,
+  }
   const counts = new Map<string, number>()
   for (const r of h.results as TurnResult[]) counts.set(r.turnId, (counts.get(r.turnId) ?? 0) + 1)
-  return {
+  const verdict: Verdict = {
     ops,
     liveAtStop: verdictAtStop!.live,
     handlersOpenAtStop: verdictAtStop!.open,
@@ -127,6 +162,7 @@ async function run(seed: number): Promise<Verdict> {
     unsettledHandles: handles.filter((handle) => !settled.has(`${handle.turnId}:${handle.messageUuid}`)).length,
     duplicateResults: [...counts].filter(([, c]) => c > 1).map(([id]) => id),
   }
+  return { verdict, reach }
 }
 
 describe('Codex stop: I1 over fixed-seed operation sequences', () => {
@@ -134,7 +170,7 @@ describe('Codex stop: I1 over fixed-seed operation sequences', () => {
   for (let slice = 0; slice < 20; slice++) {
     test(`I1: the stop settles only after every owned process exited and every admitted handler finished (sequences ${slice * 15}-${slice * 15 + 14})`, async () => {
       for (let i = slice * 15; i < slice * 15 + 15; i++) {
-        const verdict = await run(0xa601 + i * 7919)
+        const { verdict } = await run(0xa601 + i * 7919)
         await stopDrivers()
         expect({ i, ...verdict }).toEqual({ i, ops: verdict.ops, liveAtStop: [], handlersOpenAtStop: 0, unreported: [], unsettledHandles: 0, duplicateResults: [] })
       }
@@ -145,5 +181,34 @@ describe('Codex stop: I1 over fixed-seed operation sequences', () => {
     const seen = new Set<Op>()
     for (let i = 0; i < 300; i++) for (const op of generateOps(0xa601 + i * 7919).ops) seen.add(op)
     expect(OPS.filter((op) => !seen.has(op))).toEqual([])
+  })
+})
+
+describe('Codex stop: I1 after readiness over the same fixed-seed sequences', () => {
+  const reached: Reach[] = []
+  // 0xA601, the same 300 sequences, in sixty slices of five.
+  for (let slice = 0; slice < 60; slice++) {
+    test(`I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences ${slice * 5}-${slice * 5 + 4})`, async () => {
+      for (let i = slice * 5; i < slice * 5 + 5; i++) {
+        const { verdict, reach } = await run(0xa601 + i * 7919, true)
+        await stopDrivers()
+        reached[i] = reach
+        expect({ i, ...verdict }).toEqual({ i, ops: verdict.ops, liveAtStop: [], handlersOpenAtStop: 0, unreported: [], unsettledHandles: 0, duplicateResults: [] })
+        // A rejected stop is expected only from a crash: its one retained native exit, nothing else.
+        expect(reach.rejected).toBe(reach.failure !== null)
+        if (reach.failure) {
+          expect({ i, crashed: verdict.ops.includes('crash'), category: reach.failure.category, causes: reach.failure.causes.length }).toEqual({ i, crashed: true, category: 'stop', causes: 1 })
+          expect(reach.failure.causes[0]).toMatch(/^transport:agent process generation 1 exited with code 5 (before the stop|after the stop began)$/)
+        }
+      }
+    })
+  }
+
+  test('I1 after readiness: every sequence booted its app-server, and the sequences reached helpers, handlers and a crash-caused rejection', () => {
+    expect(reached.filter(Boolean)).toHaveLength(300)
+    expect(reached.filter((r) => r.leaders < 1)).toEqual([])
+    expect(reached.some((r) => r.helpers > 0)).toBe(true)
+    expect(reached.some((r) => r.handlers > 0)).toBe(true)
+    expect(reached.some((r) => r.rejected)).toBe(true)
   })
 })

@@ -41,7 +41,7 @@
 // it exits with that code after the frames, mid-turn. Anything else is
 // echoed. Stdin EOF exits 0. The get_usage control request (the usage pull)
 // answers $HOME/.claude/usage.json verbatim, else rate_limits_available false.
-// Every received frame, and first the process argv as {"argv": [...]},
+// Every received frame, and first the process argv as {"argv": [...], "pid": n},
 // is appended to $FAKE_CLAUDE_LOG when set.
 //
 // Sessions (FAKE_CLAUDE_SESSIONS=1): conversations persist as transcripts
@@ -99,7 +99,7 @@ let history: string[] = []
 const resumeTarget = sessions ? flag('--resume') : undefined
 if (process.env.FAKE_CLAUDE_EARLY_EXIT !== undefined) {
   // A startup failure that is not (or not only) a resume refusal: the text on stderr, no frame, exit 1 before stdin.
-  if (log) fs.appendFileSync(log, `${JSON.stringify({ argv })}\n`)
+  if (log) fs.appendFileSync(log, `${JSON.stringify({ argv, pid: process.pid })}\n`)
   fs.writeSync(2, `${process.env.FAKE_CLAUDE_EARLY_EXIT}\n`)
   process.exit(1)
 }
@@ -108,7 +108,7 @@ if (resumeTarget !== undefined) {
     sessionId = resumeTarget
     history = fs.readFileSync(transcriptOf(resumeTarget), 'utf8').split('\n').filter(Boolean).map((line) => (JSON.parse(line) as { text: string }).text)
   } else if (process.env.FAKE_CLAUDE_RESUME !== 'fresh') {
-    if (log) fs.appendFileSync(log, `${JSON.stringify({ argv })}\n`)
+    if (log) fs.appendFileSync(log, `${JSON.stringify({ argv, pid: process.pid })}\n`)
     const line = `No conversation found with session ID: ${resumeTarget}`
     fs.writeSync(2, `${line}\n`)
     write({
@@ -235,7 +235,7 @@ async function listMcp(uuid: string, server: string) {
   assistant(text)
   result(uuid, 'success', text)
 }
-if (log) fs.appendFileSync(log, `${JSON.stringify({ argv: process.argv.slice(2) })}\n`)
+if (log) fs.appendFileSync(log, `${JSON.stringify({ argv: process.argv.slice(2), pid: process.pid })}\n`)
 let holdOnEof = false
 
 function result(uuid: string, subtype: string, text: string | null, isError = false, turnUsage: unknown = usage, errors?: string[]) {
