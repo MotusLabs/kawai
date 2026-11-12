@@ -2,7 +2,9 @@
 // production composition, createChatDriver -> claudeRuntime.ts -> the
 // accepted package, over one scripted CLI per spawn. Each script records the
 // prompts it read, the argument of every interrupt call, and its close; its
-// interrupt answers with what the test queued (a receipt or a rejection).
+// interrupt answers with what the test queued (a receipt or a rejection), its
+// optional context probe with what the test's function returns, and exit()
+// ends its stream as a CLI exit would.
 // Cleanup is reserved once per adapter at creation: kill, the adapter's
 // settled() outcome, then every script's prompt reader (outside work the
 // fixture started) — a test that asserts the outcome awaits the same promise
@@ -25,6 +27,8 @@ export interface Script {
   /** What the next interrupt calls answer, oldest first; empty = an empty receipt. */
   answers: Array<{ cancelled: string[] } | Error>
   closed: boolean
+  /** End the stream as the CLI's own exit would (the scripted query owns no process). */
+  exit(): void
   /** The script's prompt reader: ends when the package ends this generation's input. */
   reader: Promise<void>
 }
@@ -35,7 +39,10 @@ export interface Outcome {
   error?: unknown
 }
 
-function scripted(scripts: Script[]): ChatQueryFactory {
+/** The scripted CLI's getContextUsage answer for script `index`'s `call`-th probe (1-based); omitted = no probe control. */
+export type ContextProbe = (index: number, call: number) => Promise<unknown>
+
+function scripted(scripts: Script[], probe?: ContextProbe): ChatQueryFactory {
   return ({ prompt, options }) => {
     const queue: SDKMessage[] = []
     let wake: (() => void) | null = null
@@ -46,12 +53,17 @@ function scripted(scripts: Script[]): ChatQueryFactory {
       answers: [],
       closed: false,
       reader: Promise.resolve(),
+      exit: () => {
+        script.closed = true
+        wake?.()
+      },
       push: (message) => {
         queue.push({ uuid: crypto.randomUUID(), session_id: 's-1', ...message } as unknown as SDKMessage)
         wake?.()
       },
     }
-    scripts.push(script)
+    const index = scripts.push(script) - 1
+    let probes = 0
     script.reader = (async () => {
       for await (const message of prompt) script.prompts.push(message)
     })()
@@ -71,6 +83,7 @@ function scripted(scripts: Script[]): ChatQueryFactory {
         script.closed = true
         wake?.()
       },
+      ...(probe ? { getContextUsage: () => probe(index, (probes += 1)) } : {}),
     }) as unknown as Query
   }
 }
@@ -83,7 +96,7 @@ export async function finishAll(): Promise<void> {
   for (const finish of reserved.splice(0)) await finish()
 }
 
-export function compatibilityAdapter(extra: Record<string, unknown> = {}) {
+export function compatibilityAdapter(extra: Record<string, unknown> = {}, probe?: ContextProbe) {
   const scripts: Script[] = []
   const events: ChatEvent[] = []
   const statuses: string[] = []
@@ -92,7 +105,7 @@ export function compatibilityAdapter(extra: Record<string, unknown> = {}) {
     options: {
       sessionId: 'chat-claude-compatibility',
       projectPath: '/tmp',
-      queryFactory: scripted(scripts),
+      queryFactory: scripted(scripts, probe),
       onEvent: (event: ChatEvent) => void events.push(event),
       onStatus: (status: string) => void statuses.push(status),
       ...extra,
@@ -132,6 +145,12 @@ export const settle = (ms = 30) => new Promise((resolve) => setTimeout(resolve, 
 
 /** The package stop's nested causes (the original objects), else none. */
 export const causes = (error: unknown): readonly unknown[] => (error instanceof AgentRuntimeError ? error.causes : [])
+
+/** Every object nested in a settled() rejection: AgentRuntimeError causes and AggregateError errors, depth first. */
+export function allCauses(error: unknown): unknown[] {
+  const nested = error instanceof AgentRuntimeError ? error.causes : error instanceof AggregateError ? error.errors : []
+  return [error, ...nested.flatMap((cause) => allCauses(cause))]
+}
 
 export const CAPS = ['interrupt_receipt_v1', 'interrupt_cancel_queued_v1']
 

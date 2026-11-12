@@ -77,6 +77,49 @@ describe('Claude interrupt capability through the production composition (GAP7)'
     expect(violations()).toEqual([UNSUPPORTED, UNSUPPORTED, UNSUPPORTED, UNSUPPORTED])
   })
 
+  test('a respawned process starts supported again: its first Stop sends cancelQueued', async () => {
+    const h = compatibilityAdapter()
+    await busy(h, ['interrupt_receipt_v1'])
+    h.scripts[0]!.exit()
+    await until(() => h.driver.isDead)
+    h.driver.send('again')
+    await until(() => h.scripts[1]?.prompts.length === 1)
+    await until(() => h.events.filter((e) => e.type === 'turn_started').length === 2)
+    await h.driver.interrupt()
+    await until(() => h.scripts[1]!.interrupts.length === 1)
+    expect([h.scripts[0]!.interrupts, h.scripts[1]!.interrupts]).toEqual([[], [{ cancelQueued: true }]])
+    expect(violations()).toEqual([])
+  })
+
+  test("a plain interrupt's receipt still withdraws the prompts it cancelled", async () => {
+    const h = compatibilityAdapter()
+    const done = (uuid: string, tokens: number) => ({ type: 'result', subtype: 'success', is_error: false, result: 'r', num_turns: 1, total_cost_usd: 0, duration_ms: 1, duration_api_ms: 1, usage: { input_tokens: tokens, output_tokens: 1 }, user_message_uuid: uuid, user_message_uuids: [uuid] })
+    // Turn 0 tells this generation the capability is missing, then ends.
+    const zero = await busy(h, ['interrupt_receipt_v1'])
+    h.scripts[0]!.push(done(String(zero.uuid), 3))
+    await until(() => h.events.some((e) => e.type === 'turn_completed'))
+    // A: read by the CLI, interrupted before its init; the plain interrupt's receipt cancels it.
+    h.driver.send('cancel me')
+    await until(() => h.scripts[0]!.prompts.length === 2)
+    h.scripts[0]!.answers.push({ cancelled: [String(h.scripts[0]!.prompts[1]!.uuid)] })
+    await h.driver.interrupt()
+    await until(() => h.scripts[0]!.interrupts.length === 1)
+    await settle()
+    // A never ran, so it owes no result: C's init and frames are C's own.
+    h.driver.send('fresh')
+    await until(() => h.scripts[0]!.prompts.length === 3)
+    const c = String(h.scripts[0]!.prompts[2]!.uuid)
+    const turnC = (h.events.filter((e) => e.type === 'turn_started').at(-1) as { turnId: string }).turnId
+    h.scripts[0]!.push(initFrame(['interrupt_receipt_v1']))
+    h.scripts[0]!.push({ type: 'assistant', message: { id: 'msg_c', role: 'assistant', model: 'claude-test', content: [{ type: 'text', text: 'answer for C' }] } })
+    h.scripts[0]!.push(done(c, 5))
+    await until(() => h.events.filter((e) => e.type === 'turn_completed').length === 2)
+    const texts = h.events.flatMap((e) => (e.type === 'assistant_text' ? [[(e as { turnId?: string }).turnId, (e as { text?: string }).text]] : []))
+    expect(texts.filter(([turnId]) => turnId === turnC).length > 0).toBe(true)
+    expect(h.scripts[0]!.interrupts).toEqual([undefined])
+    expect(violations()).toEqual([UNSUPPORTED])
+  })
+
   test('kill after an unsupported init sends no interrupt and logs nothing', async () => {
     const h = compatibilityAdapter()
     await busy(h, ['interrupt_receipt_v1'])
