@@ -1,0 +1,75 @@
+name: Agent runtime release
+on:
+  push:
+    tags: ['agent-runtime-v*']
+permissions:
+  contents: read
+concurrency:
+  group: agent-runtime-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run check --full-properties --no-retry
+      - run: bun run --cwd packages/agent-runtime build
+      - run: bun run build
+  minimum-consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: Retain the check pin
+        run: mkdir -p "$RUNNER_TEMP/check-pin" && cp "$(command -v bun)" "$RUNNER_TEMP/check-pin/bun"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.3.0'
+      - name: Exercise minimum Bun consumers under the pinned check runner
+        run: |
+          export CONSUMER_BUN="$(command -v bun)"
+          export PATH="$RUNNER_TEMP/check-pin:$PATH"
+          bun run test packages/agent-runtime/__tests__/consumerInstall.test.ts
+  publish:
+    needs: [verify, minimum-consumer]
+    if: github.event_name == 'push' && needs.verify.result == 'success' && needs.minimum-consumer.result == 'success' && startsWith(github.ref, 'refs/tags/agent-runtime-v') && vars.AGENT_RUNTIME_ACCEPTED_SHA == github.sha && vars.AGENT_RUNTIME_NATIVE_SHA == github.sha && vars.AGENT_RUNTIME_AUTHORIZED_SHA == github.sha
+    runs-on: ubuntu-latest
+    environment: agent-runtime-release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: .bun-version
+      - name: Require exact owner acceptance and native evidence pins
+        env:
+          REQUIRED_CHECKS: ${{ needs.verify.result }}
+          ACCEPTED_SHA: ${{ vars.AGENT_RUNTIME_ACCEPTED_SHA }}
+          NATIVE_SHA: ${{ vars.AGENT_RUNTIME_NATIVE_SHA }}
+          AUTHORIZED_SHA: ${{ vars.AGENT_RUNTIME_AUTHORIZED_SHA }}
+        run: bun scripts/agent-runtime-release.ts
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd packages/agent-runtime build
+      - name: Publish immutable companion then runtime
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '@motuslabs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n' > "$RUNNER_TEMP/agent-runtime.npmrc"
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/agent-runtime.npmrc"
+          npm publish ./packages/claude-agent-sdk-no-cli --ignore-scripts
+          npm publish ./packages/agent-runtime --ignore-scripts

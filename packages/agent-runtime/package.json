@@ -49,7 +49,10 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "examples/headless.ts",
+    "examples/headless-codex.ts",
+    "examples/inline-requests.ts"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",

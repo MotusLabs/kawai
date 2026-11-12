@@ -74,7 +74,7 @@
     },
     "packages/claude-agent-sdk-no-cli": {
       "name": "@motuslabs/claude-agent-sdk-no-cli",
-      "version": "0.0.0",
+      "version": "0.1.0",
     },
   },
   "overrides": {
