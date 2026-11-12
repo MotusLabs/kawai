@@ -2,14 +2,27 @@
 // reading lifecycle — first request, compaction drops, the three threshold
 // sources and their approximation labels, conversation resets, and the
 // reserve that must not outlive a report that no longer carries one.
+//
+// The tracker is the public package's (@motuslabs/agent-runtime/usage).
+// Kawai's reading shape leaves `thresholdApproximate` optional, so these
+// cases read a measured threshold's explicit `false` as the absent flag the
+// former in-tree tracker produced (`view`); every other field is unchanged.
 import { describe, expect, test } from 'bun:test'
 import {
-  ChatContextTracker,
+  ContextTracker as ChatContextTracker,
   EMPTY_REQUEST_USAGE,
   mergeRequestUsage,
   parsePositiveTokens,
   sumRequestUsage,
-} from '../chat/contextUsage'
+} from '@motuslabs/agent-runtime/usage'
+import type { ChatContextUsage } from '../../shared/chat'
+
+/** A package reading in Kawai's shape: a false approximation flag is absent. */
+function view(usage: ChatContextUsage | null): ChatContextUsage | null {
+  if (usage === null || usage.thresholdApproximate) return usage
+  const { thresholdApproximate: _measured, ...rest } = usage
+  return rest
+}
 
 const AT = '2026-10-10T12:00:00.000Z'
 
@@ -52,7 +65,7 @@ describe('ChatContextTracker', () => {
     expect(
       tracker.applyReport({ autoCompactThreshold: 167_000 }).kind
     ).toBe('none')
-    expect(tracker.currentReading()).toBeNull()
+    expect(view(tracker.current())).toBeNull()
   })
 
   test('the reading is the latest request, not a sum', () => {
@@ -66,7 +79,7 @@ describe('ChatContextTracker', () => {
     const second = tracker.readRequest(120_000, AT)
     if (second.kind !== 'reading') throw new Error('expected a reading')
     expect(second.usage.usedTokens).toBe(120_000)
-    expect(tracker.currentReading()?.usedTokens).toBe(120_000)
+    expect(view(tracker.current())?.usedTokens).toBe(120_000)
   })
 
   test('identical re-publications are suppressed', () => {
@@ -95,7 +108,7 @@ describe('ChatContextTracker', () => {
     expect(tracker.compact(null, AT).kind).toBe('none')
     expect(tracker.compact(0, AT).kind).toBe('none')
     expect(tracker.compact(Number.NaN, AT).kind).toBe('none')
-    expect(tracker.currentReading()?.usedTokens).toBe(157_900)
+    expect(view(tracker.current())?.usedTokens).toBe(157_900)
   })
 
   test('a conversation reset clears the reading, not just the used count', () => {
@@ -103,7 +116,7 @@ describe('ChatContextTracker', () => {
     tracker.setProfileWindow(200_000)
     tracker.readRequest(157_900, AT)
     expect(tracker.resetConversation()).toEqual({ kind: 'clear' })
-    expect(tracker.currentReading()).toBeNull()
+    expect(view(tracker.current())).toBeNull()
     // Nothing measured again: a second reset is a no-op.
     expect(tracker.resetConversation().kind).toBe('none')
   })
@@ -119,7 +132,7 @@ describe('ChatContextTracker', () => {
       usedTokens: 60_000,
       thresholdTokens: 167_000,
     })
-    expect(step.usage.thresholdApproximate).toBeUndefined()
+    expect(view(step.usage)?.thresholdApproximate).toBeUndefined()
   })
 
   test('the pinned real-report fixture: 200k window, 33k buffer, 157.9k used', () => {
@@ -133,7 +146,7 @@ describe('ChatContextTracker', () => {
       categories: [{ kind: 'buffer', tokens: 33_000 }],
     })
     tracker.readRequest(157_900, AT)
-    expect(tracker.currentReading()).toMatchObject({
+    expect(view(tracker.current())).toMatchObject({
       usedTokens: 157_900,
       thresholdTokens: 167_000,
       percentage: 94.6,
@@ -150,7 +163,7 @@ describe('ChatContextTracker', () => {
       ],
     })
     tracker.readRequest(157_900, AT)
-    const reading = tracker.currentReading()
+    const reading = view(tracker.current())
     expect(reading).toMatchObject({
       thresholdTokens: 167_000,
       percentage: 94.6,
@@ -163,7 +176,7 @@ describe('ChatContextTracker', () => {
     const tracker = new ChatContextTracker()
     tracker.applyReport({ rawMaxTokens: 200_000, categories: [] })
     tracker.readRequest(157_900, AT)
-    expect(tracker.currentReading()).toMatchObject({
+    expect(view(tracker.current())).toMatchObject({
       thresholdTokens: 200_000,
       thresholdApproximate: true,
     })
@@ -173,7 +186,7 @@ describe('ChatContextTracker', () => {
     const tracker = new ChatContextTracker()
     tracker.setProfileWindow(100_000)
     tracker.readRequest(50_000, AT)
-    expect(tracker.currentReading()).toMatchObject({
+    expect(view(tracker.current())).toMatchObject({
       thresholdTokens: 100_000,
       thresholdApproximate: true,
     })
@@ -182,10 +195,10 @@ describe('ChatContextTracker', () => {
       rawMaxTokens: 0,
       categories: [{ kind: 'buffer', tokens: 20_000 }],
     })
-    expect(tracker.currentReading()).toMatchObject({
+    expect(view(tracker.current())).toMatchObject({
       thresholdTokens: 80_000,
     })
-    expect(tracker.currentReading()?.thresholdApproximate).toBeUndefined()
+    expect(view(tracker.current())?.thresholdApproximate).toBeUndefined()
   })
 
   test('a larger profile override stands above the model window', () => {
@@ -193,7 +206,7 @@ describe('ChatContextTracker', () => {
     tracker.noteModelWindow(200_000)
     tracker.setProfileWindow(1_000_000)
     tracker.readRequest(150_000, AT)
-    expect(tracker.currentReading()).toMatchObject({
+    expect(view(tracker.current())).toMatchObject({
       thresholdTokens: 1_000_000,
       percentage: 15,
       thresholdApproximate: true,
@@ -204,7 +217,7 @@ describe('ChatContextTracker', () => {
     const tracker = new ChatContextTracker()
     tracker.noteModelWindow(200_000)
     tracker.readRequest(157_900, AT)
-    expect(tracker.currentReading()).toMatchObject({
+    expect(view(tracker.current())).toMatchObject({
       thresholdTokens: 200_000,
       percentage: 79,
       thresholdApproximate: true,
@@ -218,15 +231,15 @@ describe('ChatContextTracker', () => {
       rawMaxTokens: 0,
       categories: [{ kind: 'buffer', tokens: 20_000 }],
     })
-    expect(tracker.currentReading()).toBeNull()
+    expect(view(tracker.current())).toBeNull()
 
     tracker.readRequest(50_000, AT)
-    expect(tracker.currentReading()?.thresholdTokens).toBe(80_000)
+    expect(view(tracker.current())?.thresholdTokens).toBe(80_000)
 
     // Auto-compact off: the same report shape minus the buffer row. The old
     // 20k reserve must not keep shrinking the denominator.
     tracker.applyReport({ rawMaxTokens: 0, categories: [{ kind: 'used', tokens: 50_000 }] })
-    expect(tracker.currentReading()).toMatchObject({
+    expect(view(tracker.current())).toMatchObject({
       thresholdTokens: 100_000,
       thresholdApproximate: true,
     })
@@ -243,14 +256,14 @@ describe('ChatContextTracker', () => {
     // A summary that simply did not enumerate categories is not evidence the
     // reserve is gone.
     tracker.applyReport({ autoCompactThreshold: undefined, categories: [] })
-    expect(tracker.currentReading()?.thresholdTokens).toBe(80_000)
+    expect(view(tracker.current())?.thresholdTokens).toBe(80_000)
   })
 
   test('a spawn re-read drops the dead process report and re-anchors at once', () => {
     const tracker = new ChatContextTracker()
     tracker.applyReport({ autoCompactThreshold: 167_000 })
     tracker.readRequest(157_900, AT)
-    expect(tracker.currentReading()?.thresholdTokens).toBe(167_000)
+    expect(view(tracker.current())?.thresholdTokens).toBe(167_000)
 
     const step = tracker.setProfileWindow(100_000)
     if (step.kind !== 'reading') throw new Error('expected a re-anchor')
@@ -267,7 +280,7 @@ describe('ChatContextTracker', () => {
     const tracker = new ChatContextTracker()
     tracker.setProfileWindow(100_000)
     tracker.readRequest(120_000, AT)
-    expect(tracker.currentReading()?.percentage).toBe(120)
+    expect(view(tracker.current())?.percentage).toBe(120)
   })
 })
 

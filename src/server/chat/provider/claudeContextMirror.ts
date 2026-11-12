@@ -11,10 +11,11 @@
 // window when a reading was derived from it — the only window a forwarded
 // reading proves. A report threshold, a profile window and a reserve are
 // process facts and are never kept. At the first spawn of a later package
-// driver it rebuilds the reading in a fresh ChatContextTracker (the retained
-// pure helper, unchanged): the new profile window, else the kept model
-// window, then the kept used tokens. That one reading is the correction
-// (persist true). Nothing is published when nothing was retained, when no
+// driver it rebuilds the reading in a fresh public ContextTracker (the
+// package's own, from @motuslabs/agent-runtime/usage): the new profile window,
+// else the kept model window, then the kept used tokens. That one reading is
+// the correction (persist true), labelled with the tracker's own threshold
+// derivation. Nothing is published when nothing was retained, when no
 // denominator is known (the disclosed limit), or when it equals the last
 // forwarded reading. A respawn inside one package driver is the package's
 // own re-anchor, so only generation 1 of a later driver is corrected here.
@@ -24,7 +25,7 @@
 // out another, so a host mutating a delivered view or correction cannot change
 // the measured tokens, time or window a later respawn re-anchors.
 import type { ChatContextUsage } from '../../../shared/chat'
-import { ChatContextTracker, parsePositiveTokens } from '../contextUsage'
+import { ContextTracker, parsePositiveTokens } from '@motuslabs/agent-runtime/usage'
 
 export interface ContextCorrection {
   usage: ChatContextUsage
@@ -49,7 +50,7 @@ export class ClaudeContextMirror {
     this.spawnedBefore = true
     const last = this.last
     if (!respawn || !last) return null
-    const tracker = new ChatContextTracker()
+    const tracker = new ContextTracker()
     if (this.modelWindow !== null) tracker.noteModelWindow(this.modelWindow)
     tracker.setProfileWindow(parsePositiveTokens(childEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW))
     const step = tracker.readRequest(last.usedTokens, last.at)
@@ -57,7 +58,7 @@ export class ClaudeContextMirror {
     const usage = step.usage
     if (usage.thresholdTokens === last.thresholdTokens && Boolean(usage.thresholdApproximate) === Boolean(last.thresholdApproximate)) return null
     // A fresh tracker holds no report threshold or reserve: a profile window is a stand-in, else the model window is.
-    const thresholdSource = tracker.getState().profileWindow !== null ? 'profile-window-fallback' : 'model-window-fallback'
+    const thresholdSource = tracker.thresholdLabel(usage)
     this.last = snapshot(usage)
     return { usage: snapshot(usage), meta: { persist: true, thresholdSource } }
   }
