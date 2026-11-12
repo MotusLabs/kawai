@@ -37,7 +37,9 @@
 //   `expectFailures(...causes)`: the stop's causes must be exactly those
 //   original objects, each once, by identity. Only that assertion marks the
 //   rejection reported, so the join does not report it again; `failure()`
-//   merely retrieves the rejection and marks nothing (r4 A6).
+//   merely retrieves the rejection and marks nothing (r4 A6). The suite
+//   join is one shared in-flight promise: an overlapping call joins it and
+//   never settles early (R6, parent review findings-74686a77 F2).
 // - `launches` records any call the fake made to the package's owned
 //   spawner; the fake model never calls it, so a case can prove the
 //   injected query launched no process (r4 A10).
@@ -141,19 +143,42 @@ export interface RuntimeHarness {
 export type Harness = RuntimeHarness
 export const createHarness = (overrides?: RuntimeHarnessOverrides): RuntimeHarness => createRuntimeHarness(overrides)
 
-const live = new Set<{ harness: RuntimeHarness; asserted: { error: unknown } | null }>()
+type LiveEntry = { harness: RuntimeHarness; asserted: { error: unknown } | null }
+const live = new Set<LiveEntry>()
+/** The one suite-level join in flight, shared by every overlapping caller (parent review F2). */
+let joining: Promise<void> | null = null
 
 /**
  * Join every harness created since the last call (each suite's afterEach):
  * a failure no case took through failure() rejects once, raw (one) or as an
- * AggregateError (several).
+ * AggregateError (several). The join is reserved before any harness cleanup
+ * runs or any entry leaves `live`, so an overlapping call gets the same
+ * promise and never settles while a harness it owns is still joining. An
+ * entry leaves `live` only after its cleanup settled, and a harness created
+ * during the join is joined by it too.
  */
-export async function cleanupHarnesses(): Promise<void> {
-  const entries = [...live]
-  live.clear()
-  const outcomes = await Promise.allSettled(entries.map((entry) => entry.harness.cleanup()))
-  const failures = outcomes.flatMap((outcome, index) =>
-    outcome.status === 'rejected' && entries[index]!.asserted?.error !== outcome.reason ? [outcome.reason as unknown] : [])
+export function cleanupHarnesses(): Promise<void> {
+  if (joining) return joining
+  let settle!: { resolve(): void; reject(error: unknown): void }
+  const reserved = new Promise<void>((resolve, reject) => (settle = { resolve, reject }))
+  joining = reserved
+  joinLive().then(
+    () => ((joining = null), settle.resolve()),
+    (error: unknown) => ((joining = null), settle.reject(error)),
+  )
+  return reserved
+}
+
+async function joinLive(): Promise<void> {
+  const failures: unknown[] = []
+  while (live.size > 0) {
+    const entries = [...live]
+    const outcomes = await Promise.allSettled(entries.map((entry) => entry.harness.cleanup()))
+    for (const entry of entries) live.delete(entry)
+    outcomes.forEach((outcome, index) => {
+      if (outcome.status === 'rejected' && entries[index]!.asserted?.error !== outcome.reason) failures.push(outcome.reason)
+    })
+  }
   if (failures.length === 1) throw failures[0]
   if (failures.length > 1) throw new AggregateError(failures, 'Claude harness cleanups failed')
 }
