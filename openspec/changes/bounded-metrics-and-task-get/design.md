@@ -249,9 +249,13 @@ is the established agent read size.
 ### D7 — Revisions: a window of rows, and a `revision` argument
 
 Each revision becomes
-`{ revision, author, createdAt, notify, directionBytes, acceptanceBytes, rationale, rationaleBytes, rationaleCut }`.
-The byte lengths come from SQL, so the direction and acceptance text never
-reaches JavaScript for rows. `rationale` is a 2,000-byte preview, projected
+`{ revision, identity, contractHash, author, createdAt, notify, directionBytes, acceptanceBytes, rationale, rationaleBytes, rationaleCut }`.
+The byte lengths come from SQL. `identity` is the `r<N>#<hash12>` the store
+already reports (`contractHash.ts`: the contract hash, else the text hash),
+so an agent can tell whether an older revision changed the text without
+reading it. SQLite cannot hash, so the statement selects direction and
+acceptance for the windowed rows only (after `LIMIT`); JavaScript hashes
+them and drops them, and no row carries text. `rationale` is a 2,000-byte preview, projected
 in SQL like a journal entry (`substr(CAST(rationale AS BLOB), 1, 2000)`) and
 passed through `journalPreview`. Rationales have no length limit at
 submission (`taskTools.ts:41`), so they cannot be assumed short.
@@ -431,7 +435,7 @@ acknowledgements.
 | G5a | `full_messages: true` on the G3 task | body all 6,000 bytes, `bodyCut` false, `bodyBytes` 6,000; every other section deep-equal to the default read's |
 | G5b | `full_messages: true` with `messages_before` walk | same message ids per page as the walk without it; each body equals the stored body |
 | G5c | `full_messages` `"yes"`, `1`, `null` | refused, naming `full_messages` as a boolean |
-| G6 | default | 8 revision rows with no `direction`/`acceptance` keys; byte lengths equal the stored ones |
+| G6 | default | 8 revision rows with no `direction`/`acceptance` keys; byte lengths equal the stored ones; each row's `identity` and `contractHash` equal the store's `TaskRevision` for that revision (a contract revision and a text-only revision both present) |
 | G6a | a 70-revision task, default | newest 50 rows (21–70) oldest first, total 70, truncated, `nextBefore` 21 |
 | G6b | `revisions_before: 21` on the same task | rows 1–20, not truncated, `nextBefore` null |
 | G6c | `revisions_before` 0, 1, 71, 1.5 | refused `Unknown revision of this task: <n>` |

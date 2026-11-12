@@ -48,11 +48,11 @@ Each message in `task_get` SHALL carry a body of at most its first 2,000 UTF-8 b
 - **THEN** the call is refused, through either tool runtime
 
 ### Requirement: task_get revisions are rows
-`task_get` SHALL return the newest 50 revisions as rows, oldest first: number, author, time, notify flag, the byte lengths of direction and acceptance without their text, and a rationale preview of at most 2,000 UTF-8 bytes with its byte length and cut flag. An optional `revisions_before`, a revision number of the task, SHALL return the 50 rows older than it. The list SHALL carry its total and next anchor.
+`task_get` SHALL return the newest 50 revisions as rows, oldest first: number, identity `r<N>#<hash12>`, contract hash, author, time, notify flag, direction and acceptance byte lengths without their text, and a rationale preview of at most 2,000 UTF-8 bytes with its length and cut flag. An optional `revisions_before`, a revision number of the task, SHALL return the 50 rows older than it. The list SHALL carry its total and next anchor.
 
 #### Scenario: Eight revisions
 - **WHEN** an agent calls `task_get` on a task with 8 revisions of up to 27 KB each
-- **THEN** it receives 8 revision rows without text, and the current direction once, in `task`
+- **THEN** it receives 8 revision rows without text, each with the identity a whole read of that revision reports, and the current direction once, in `task`
 
 #### Scenario: Long revision history
 - **WHEN** a task has 70 revisions and the agent pages with each result's revisions anchor until none remains
