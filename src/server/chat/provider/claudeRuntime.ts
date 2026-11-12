@@ -409,7 +409,8 @@ class ClaudeChatDriver implements ChatAgentDriver {
   private onRuntimeEvent(event: AgentEvent): void {
     switch (event.type) {
       case 'approval_request': {
-        const toolCallId = this.toolCalls.get(callKey(event.tool, event.input)) ?? ''
+        // The request's native tool-call ID first; the stream's tool_use map only when the runtime gave none.
+        const toolCallId = event.toolCallId ?? this.toolCalls.get(callKey(event.tool, event.input)) ?? ''
         this.cards.set(event.requestId, { tool: event.tool, input: event.input, toolCallId })
         if (TEAM_ALLOWED_TOOLS.includes(event.tool)) this.granted.set(event.requestId, 'silent')
         else if (decideApproval(this.options.getApprovalPolicy?.() ?? 'manual', event.tool) === 'allow') this.granted.set(event.requestId, 'policy')

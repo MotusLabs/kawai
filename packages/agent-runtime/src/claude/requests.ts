@@ -11,7 +11,10 @@
 // interrupting denials, so a cancelled tool never runs. The SDK input and the
 // parsed questions are kept as private detached copies: every event, callback
 // and list view gets its own copy, so a host or SDK-side mutation never changes
-// what an allow executes or how an answer is validated. Nothing here waits for
+// what an allow executes or how an answer is validated. The SDK's own tool-use
+// ID, when it is a nonempty string, is copied unchanged onto the request
+// before it is registered, so every view and event carries it (never
+// derived; requestId alone settles). Nothing here waits for
 // a UI or arms a timer.
 import type { CanUseTool, PermissionResult } from '@anthropic-ai/claude-agent-sdk'
 import type { AnswerOptions, AnswerOutcome } from '../contract.js'
@@ -62,7 +65,7 @@ export class ClaudeRequests {
     return [...this.pending.values()].map((entry) => detached(entry.request))
   }
 
-  readonly canUseTool: CanUseTool = (tool, sdkInput, { signal }) => {
+  readonly canUseTool: CanUseTool = (tool, sdkInput, { signal, toolUseID }) => {
     if (this.closed) return Promise.resolve({ behavior: 'deny', message: 'The session is stopping', interrupt: true })
     if (signal.aborted) return Promise.resolve(cancelled('cancelled'))
     const requestId = `req-${crypto.randomUUID()}`
@@ -70,9 +73,11 @@ export class ClaudeRequests {
     const at = new Date().toISOString()
     const input = detached(sdkInput)
     const questions = tool === ASK_USER_QUESTION_TOOL ? parseQuestions(input) : null
+    // The runtime's own tool-call ID, exactly as given; anything but a nonempty string is omitted.
+    const native = typeof toolUseID === 'string' && toolUseID.length > 0 ? { toolCallId: toolUseID } : {}
     const request: PendingRequest = questions
-      ? { kind: 'question', requestId, turnId, questions: detached(questions as AgentQuestion[]), at }
-      : { kind: 'approval', requestId, turnId, tool, input: detached(input) as JsonValue, at }
+      ? { kind: 'question', requestId, turnId, questions: detached(questions as AgentQuestion[]), at, ...native }
+      : { kind: 'approval', requestId, turnId, tool, input: detached(input) as JsonValue, at, ...native }
     // Registered with its abort listener before anything can reenter.
     const abort = () => this.cancel(requestId, 'cancelled')
     const answer = new Promise<PermissionResult>((resolve) => {
@@ -81,8 +86,8 @@ export class ClaudeRequests {
     signal.addEventListener('abort', abort, { once: true })
     this.host.emit(
       request.kind === 'question'
-        ? { type: 'question_request', turnId, requestId, questions: detached(request.questions) }
-        : { type: 'approval_request', turnId, requestId, tool, input: detached(request.input) },
+        ? { type: 'question_request', turnId, requestId, questions: detached(request.questions), ...native }
+        : { type: 'approval_request', turnId, requestId, tool, input: detached(request.input), ...native },
     )
     this.host.changed?.()
     const onRequest = this.host.onRequest

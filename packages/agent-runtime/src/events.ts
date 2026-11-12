@@ -55,9 +55,14 @@ export interface TurnTriggerTask {
 export type TurnTrigger = { kind: 'task'; tasks: TurnTriggerTask[] } | { kind: 'resumed' }
 
 /** A pending approval or question, as passed to onRequest. */
+/**
+ * `toolCallId` is the runtime's own tool-call ID when it supplied one (Claude:
+ * the exact nonempty `canUseTool` `toolUseID`); never derived, else absent.
+ * `requestId` alone settles the request.
+ */
 export type PendingRequest =
-  | { kind: 'approval'; requestId: string; turnId: string; tool: string; input: JsonValue; at: string }
-  | { kind: 'question'; requestId: string; turnId: string; questions: AgentQuestion[]; at: string }
+  | { kind: 'approval'; requestId: string; turnId: string; tool: string; input: JsonValue; at: string; toolCallId?: string }
+  | { kind: 'question'; requestId: string; turnId: string; questions: AgentQuestion[]; at: string; toolCallId?: string }
 
 export type AgentEvent =
   | (AgentTurnEventBase & { type: 'turn_started'; trigger?: TurnTrigger })
@@ -67,8 +72,8 @@ export type AgentEvent =
   | (AgentTurnEventBase & { type: 'assistant_delta'; messageId: string; delta: string })
   | (AgentTurnEventBase & { type: 'tool_call'; toolCallId: string; tool: string; input: JsonValue })
   | (AgentTurnEventBase & { type: 'tool_result'; toolCallId: string; output: string; isError: boolean })
-  | (AgentTurnEventBase & { type: 'approval_request'; requestId: string; tool: string; input: JsonValue })
-  | (AgentTurnEventBase & { type: 'question_request'; requestId: string; questions: AgentQuestion[] })
+  | (AgentTurnEventBase & { type: 'approval_request'; requestId: string; tool: string; input: JsonValue; toolCallId?: string })
+  | (AgentTurnEventBase & { type: 'question_request'; requestId: string; questions: AgentQuestion[]; toolCallId?: string })
   | (AgentEventBase & {
       type: 'request_resolved'
       requestId: string
