@@ -45,9 +45,9 @@ async function agentTurn(f: Driver): Promise<string> {
 const count = (f: Driver, type: string) => f.events.filter((e) => e.type === type).length
 
 describe('Claude joinAgentStartedTurns (GAP9)', () => {
-  for (const named of [true, false]) {
-    // @covers: agent-runtime › Agent-started turns are reported › Opt-in queued send joins the agent-started turn
-    test(`a joined send names the agent-started turn and shares its one result (result ${named ? 'names the prompt' : 'names none'})`, async () => {
+  /** One joined send; the turn's result names the prompt or none. */
+  async function joined(named: boolean): Promise<void> {
+    {
       const submitted: Array<{ messageUuid: string; turnId: string }> = []
       const beforeSubmit: BeforeSubmit = (s) => (submitted.push({ messageUuid: s.messageUuid, turnId: s.turnId }), { accepted: true })
       const f = await idle(true, { beforeSubmit })
@@ -65,8 +65,14 @@ describe('Claude joinAgentStartedTurns (GAP9)', () => {
       expect(f.results).toEqual([result])
       expect([count(f, 'turn_started'), count(f, 'turn_completed')]).toEqual([1, 1])
       expect(f.d.state).toBe('idle')
-    })
+    }
   }
+
+  // @covers: agent-runtime › Agent-started turns are reported › Opt-in queued send joins the agent-started turn
+  test('a joined send names the agent-started turn and shares its one result named by the prompt', () => joined(true))
+
+  // @covers: agent-runtime › Agent-started turns are reported › Opt-in queued send joins the agent-started turn
+  test('a joined send names the agent-started turn and shares its one UUID-less result', () => joined(false))
 
   // @covers: agent-runtime › Agent-started turns are reported › Join defaults and stale owners
   test('omitted, false, and a user-started active turn keep the queue: the send is its own queued turn', async () => {

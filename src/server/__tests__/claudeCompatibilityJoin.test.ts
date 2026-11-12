@@ -19,9 +19,9 @@ const success = (uuids: string[]) => ({
 })
 
 describe('Claude agent-started turns join a racing send through the production composition (GAP9)', () => {
-  for (const named of [false, true]) {
-    // The parent's original oracle: a send racing the self-start joins the open turn (its result UUID-less, then naming the prompt).
-    test(`a send racing the self-start joins the open turn (result ${named ? 'names the prompt' : 'names none'})`, async () => {
+  /** The parent's original oracle, its result naming the prompt or (as the source's result did) none. */
+  async function racingSend(named: boolean): Promise<void> {
+    {
       const h = compatibilityAdapter()
       h.driver.start()
       await until(() => h.scripts.length === 1)
@@ -44,6 +44,11 @@ describe('Claude agent-started turns join a racing send through the production c
       expect(h.events.filter((e) => e.type === 'user_message').map((e) => [(e as { turnId: string }).turnId, (e as { messageUuid: string }).messageUuid])).toEqual([[turnId, uuid]])
       expect(h.events.filter((e) => e.type === 'turn_completed').map((e) => (e as { turnId: string }).turnId)).toEqual([turnId])
       expect(h.statuses.at(-1)).toBe('waiting')
-    })
+    }
   }
+
+  // The parent's original oracle: a send racing the self-start joins the open turn.
+  test('a send racing the self-start joins the open turn', () => racingSend(false))
+
+  test('a send racing the self-start joins the open turn when its result names the prompt', () => racingSend(true))
 })
