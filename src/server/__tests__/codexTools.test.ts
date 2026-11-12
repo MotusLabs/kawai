@@ -14,11 +14,11 @@
 // `dynamicTools` the driver's thread/start carried. Expected values come
 // from this file's table. A18 D-T1: the package refuses invalid arguments as
 // 'Refused: invalid arguments for <tool>: …' where the deleted root dispatch
-// wrote 'Invalid arguments for <tool>: …'.
+// wrote 'Invalid arguments for <tool>: …'. A20: explicit null params get the
+// transport's JSON-RPC -32602 (see that case).
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { createMailboxServer, teamToolTable, type MailboxServerServices, type TeamToolSpec } from '../team/mailboxTools'
-import { dispatchTeamToolCall } from '../chat/codex/codexTools'
 import { ROLLOUT, Script, sentRequest, startHarness, THREAD_ID, until } from './codexDriverHarness'
 
 const THREAD = THREAD_ID
@@ -49,6 +49,16 @@ type Call = Record<string, unknown> | null
  * thread is open. Ids are 900, 901, … in that order.
  */
 async function serve(tools: readonly TeamToolSpec[], after: Call[], before: Call[] = []): Promise<Answer[]> {
+  const replies = await serveRaw(tools, after, before)
+  // A refusal is an answer, never a JSON-RPC error.
+  for (const reply of replies) expect(reply).not.toHaveProperty('error')
+  return replies.map(reply => reply.result as Answer)
+}
+
+type Reply = { jsonrpc?: string; id?: number; result?: unknown; error?: unknown }
+
+/** serve's replies as written, JSON-RPC errors included; no card is ever raised. */
+async function serveRaw(tools: readonly TeamToolSpec[], after: Call[], before: Call[] = []): Promise<Reply[]> {
   const script = new Script().request('initialize', { userAgent: 'fake' })
   script.lines.push({ dir: 'out', line: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'thread/start', params: {} }) })
   const ids = [...before, ...after].map((_, n) => 900 + n)
@@ -61,10 +71,9 @@ async function serve(tools: readonly TeamToolSpec[], after: Call[], before: Call
     harness.driver.start()
     const reply = (id: number) => harness.sent.find(message => message.id === id && message.method === undefined)
     await until(() => ids.every(id => reply(id) !== undefined))
-    // A refusal is an answer, never a JSON-RPC error, and raises no card.
-    for (const id of ids) expect(reply(id)).not.toHaveProperty('error')
     expect(harness.events.filter(event => event.type === 'approval_request' || event.type === 'question_request')).toEqual([])
-    return ids.map(id => reply(id)!.result as Answer)
+    expect(harness.driver.isDead).toBe(false)
+    return ids.map(id => reply(id) as Reply)
   } finally {
     await harness.cleanup()
   }
@@ -120,12 +129,18 @@ test('a thrown handler answers success:false with the message, not a JSON-RPC er
   expect(failed).not.toHaveProperty('error')
 })
 
-// HELD (task-ce05430a gap E4, Lead decision pending): on the production path
-// the package's RPC layer answers `params: null` with JSON-RPC -32602 before
-// dispatch, so this case still reads the root dispatcher until the Lead rules.
+// A20 (task-ce05430a R4): explicit `params: null` is a malformed request. The
+// transport answers it with its existing JSON-RPC -32602 under the same id,
+// where the deleted root dispatch answered success:false 'Refused: the call
+// carries no parameters.'; no handler or card runs, the driver lives on, and
+// the next valid call is served.
 test('null params are refused instead of crashing', async () => {
-  expect(await dispatchTeamToolCall(table, THREAD, null))
-    .toMatchObject({ success: false, contentItems: [{ text: expect.stringContaining('Refused') }] })
+  let ran = 0
+  const spy: TeamToolSpec[] = [{ ...table[1]!, handler: () => { ran += 1; return { pong: true } } }]
+  const [malformed, next] = await serveRaw(spy, [null, call({ namespace: 'kawai-team', tool: 'team_ping', arguments: {} })])
+  expect(malformed).toEqual({ jsonrpc: '2.0', id: 900, error: { code: -32602, message: 'invalid params for item/tool/call' } })
+  expect(ran).toBe(1)
+  expect(next).toEqual({ jsonrpc: '2.0', id: 901, result: { success: true, contentItems: [{ type: 'inputText', text: '{"pong":true}' }] } })
 })
 
 describe('the drift test (6.1)', () => {
