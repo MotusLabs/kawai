@@ -11,6 +11,7 @@ SmartFactory needs Kawai's proven Claude and Codex drivers in a headless Bun dae
 - Inject logger, tools (including an empty set), prompt append, optional context and wire/audit hooks, executable paths and the complete child environment. Resolve Kawai catalogs, secrets, team envelopes and plan context in Kawai adapters.
 - Add explicit per-session Claude and Codex permissions. The first restricted Claude profile denies Bash entirely; bypass mode alone is not a tool allow-list.
 - Retain the no-CLI SDK override. Publish the existing empty stub as a companion package and document consumer-root overrides; dependency overrides do not propagate from this library.
+- Restore the Claude behaviors the legacy-driver retirement exposed, through two owner-approved optional additions: `joinAgentStartedTurns` and native `toolCallId` on requests (design §2, eighth exception).
 - Make Kawai import the package by name through its workspace dependency, with no second driver implementation. Verify a packed artifact independently of the workspace.
 - Add an independent semver/changelog and GitHub Packages release workflow, plus clean-install and SmartFactory Actions acceptance. Package access and the first publication require actual external receipts.
 - **BREAKING for direct driver consumers:** proposed awaited lifecycle methods and turn handles replace fire-and-forget calls. Kawai retains its existing application behavior through adapters. No existing published runtime package API is assumed.
