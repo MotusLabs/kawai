@@ -30,6 +30,9 @@
 // FAKE_CODEX_RATELIMITS: account/rateLimits/read answers {rateLimits: <json>}; "fail" answers an
 //   error; "hold" never answers; unset: unknown method (-32601), like any other method.
 // FAKE_CODEX_START=agent: an agent turn starts and completes right after thread/start.
+// FAKE_CODEX_EXIT_TRACE=1 (opt-in, codexStopOrder.test.ts): each exit this server itself takes
+//   appends {pid, code} to $CODEX_HOME/exit-intents.jsonl synchronously, just before exiting. It
+//   records the exit INTENT only, not the native exit the owner later observes.
 // skills/list answers {data: [{cwd, skills, errors}]} for each requested cwd
 // (else this process's cwd) from $CODEX_HOME/skills.json ({skills, errors?,
 // byCwd?: {<cwd>: {skills, delayMs?}}}), read at each request: a byCwd entry
@@ -59,6 +62,7 @@ export function serveFakeCodex(io: FakeCodexIo): void {
   const exit = (code: number) => {
     if (exited) return
     exited = true
+    if (env.FAKE_CODEX_EXIT_TRACE === '1') appendFileSync(join(home, 'exit-intents.jsonl'), `${JSON.stringify({ pid: io.pid, code })}\n`)
     io.exit(code)
   }
   mkdirSync(join(home, 'threads'), { recursive: true })

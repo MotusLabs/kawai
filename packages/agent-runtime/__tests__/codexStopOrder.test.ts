@@ -11,9 +11,9 @@
 // exactly once.
 //
 // Batch B (task 4.2/2.2, U2): the cold-start sequences above issue their
-// operations while the first generation is still booting, and in this
-// environment their stops all land before the fake app-server runs. The
-// second describe replays the same seeds and operations after the first
+// operations while the first generation is still booting; a cold stop may
+// land before or after the fake app-server runs, so a cold sequence may boot
+// and crash generations too. The second describe replays the same seeds and operations after the first
 // start() resolved, so every sequence drives a booted generation: turns,
 // held handlers, crashes and /child helpers in the group. A helper outlives
 // its leader as a zombie when the container's PID 1 does not reap it;
@@ -26,13 +26,28 @@
 // before constructing it, asserts its verdict, and only then authorizes the
 // one stop rejection it asserted exactly (by its original value) before
 // closing; any other rejection fails the cleanup with its raw value.
+//
+// Stop oracle (task-3c3e3658 R5, A15-A17): both variants share checkStop().
+// Expected native exits come only from the fixture's opt-in EXIT INTENT trace
+// (FAKE_CODEX_EXIT_TRACE=1: {pid, code} appended just before the server
+// exits itself), on recorded leader pids, in envs.jsonl order. Each launch
+// carries a unique I1_LAUNCH_TOKEN; envs.jsonl maps pid to token and onSpawn
+// maps token to generation, and the mapping must be a bijection. No nonzero
+// intent requires a resolved stop; otherwise the stop rejects with category
+// 'stop' and exactly those NativeExitFailure causes, in order, unflattened.
+// Residual (disclosed): an intent records what the server meant to do, not
+// what the owner observed. A kill landing between the append and io.exit
+// would leave an intent with an owned signal exit and no cause; the check
+// then fails and the design reopens. Mismatches are never filtered.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CodexAgentDriver, ProcessExitReceipt, TurnHandle, TurnResult } from '../src/contract.js'
-import type { ToolSet } from '../src/options.js'
-import { alive, codexDriver, pids } from './helpers/codexDriverHarness.js'
+import { AgentRuntimeError } from '../src/errors.js'
+import type { SpawnInfo, ToolSet } from '../src/options.js'
+import { NativeExitFailure } from '../src/process/nativeVerdict.js'
+import { alive, codexDriver, codexRoot, pids } from './helpers/codexDriverHarness.js'
 import { ownedCodexDrivers } from './helpers/ownedCodexDrivers.js'
 
 const drivers = ownedCodexDrivers()
@@ -64,6 +79,100 @@ const leaders = (home: string): number[] => {
 
 const tick = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
+/** Every record of a JSONL file; a missing file is empty, any other read or parse error throws. */
+function readJsonl(file: string): unknown[] {
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+  return text.split('\n').filter(Boolean).map((line) => JSON.parse(line) as unknown)
+}
+
+/** One native exit the stop must report: a leader's nonzero exit intent at its exact generation. */
+interface Crash {
+  pid: number
+  code: number
+  generation: number
+}
+
+/** A launch the driver reported through onSpawn: its generation and the token its childEnv carried. */
+interface Spawned {
+  generation: number
+  token: unknown
+}
+
+const isInt = (value: unknown): value is number => Number.isInteger(value)
+
+/**
+ * The expected native exits, in leader (envs.jsonl) order. Throws on a
+ * malformed record or a pid/token/generation mapping that is not a bijection.
+ */
+function expectedCrashes(intents: readonly unknown[], leaderRecords: readonly unknown[], spawns: readonly Spawned[]): Crash[] {
+  const leaders = leaderRecords.map((record, k) => {
+    const { pid, env } = (record ?? {}) as { pid?: unknown; env?: { I1_LAUNCH_TOKEN?: unknown } }
+    const token = env?.I1_LAUNCH_TOKEN
+    if (!isInt(pid) || typeof token !== 'string') throw new Error(`malformed leader record ${k}: ${JSON.stringify(record)}`)
+    return { pid, token }
+  })
+  const unique = (values: unknown[], what: string) => {
+    if (new Set(values).size !== values.length) throw new Error(`duplicate ${what}: ${JSON.stringify(values)}`)
+  }
+  unique(leaders.map((l) => l.pid), 'leader pid')
+  unique(leaders.map((l) => l.token), 'leader token')
+  for (const [k, s] of spawns.entries()) if (!isInt(s.generation) || typeof s.token !== 'string') throw new Error(`malformed spawn ${k}: ${JSON.stringify(s)}`)
+  unique(spawns.map((s) => s.token), 'spawn token')
+  unique(spawns.map((s) => s.generation), 'spawn generation')
+  const generationOf = new Map(spawns.map((s) => [s.token as string, s.generation]))
+  const codeOf = new Map<number, number>()
+  for (const [k, record] of intents.entries()) {
+    const { pid, code } = (record ?? {}) as { pid?: unknown; code?: unknown }
+    if (!isInt(pid) || !isInt(code)) throw new Error(`malformed exit intent ${k}: ${JSON.stringify(record)}`)
+    if (!leaders.some((l) => l.pid === pid)) throw new Error(`exit intent ${k} from a pid no leader recorded: ${pid}`)
+    if (codeOf.has(pid)) throw new Error(`duplicate exit intent for pid ${pid}`)
+    codeOf.set(pid, code)
+  }
+  const crashes: Crash[] = []
+  for (const { pid, token } of leaders) {
+    const generation = generationOf.get(token)
+    if (generation === undefined) throw new Error(`leader ${pid} token ${token} has no onSpawn generation`)
+    const code = codeOf.get(pid)
+    if (code !== undefined && code !== 0) crashes.push({ pid, code, generation })
+  }
+  return crashes
+}
+
+/** Every way the stop differs from exactly the expected native exits; empty when it matches. */
+function stopMismatch(expected: readonly Crash[], stop: { rejected: boolean; error: unknown }): string[] {
+  if (expected.length === 0) return stop.rejected ? [`expected a resolved stop, got a rejection: ${String(stop.error)}`] : []
+  if (!stop.rejected) return [`expected a rejected stop with ${expected.length} native exit(s), got a resolved stop`]
+  const error = stop.error
+  if (!(error instanceof AgentRuntimeError) || error.category !== 'stop') return [`expected a stop-category AgentRuntimeError, got ${String(error)}`]
+  const problems: string[] = []
+  if (error.causes.length !== expected.length) problems.push(`expected ${expected.length} cause(s), got ${error.causes.length}`)
+  for (const [k, cause] of error.causes.entries()) {
+    const want = expected[k]
+    if (!want) continue
+    if (!(cause instanceof NativeExitFailure)) {
+      problems.push(`cause ${k} is not a NativeExitFailure: ${String(cause)}`)
+      continue
+    }
+    const { facts } = cause
+    const got: Record<string, unknown> = { category: cause.category, pid: facts.pid, code: facts.code, generation: facts.generation, signal: facts.signal }
+    const wanted: Record<string, unknown> = { category: 'transport', pid: want.pid, code: want.code, generation: want.generation, signal: null }
+    for (const key of Object.keys(wanted)) if (!Object.is(got[key], wanted[key])) problems.push(`cause ${k} ${key}: expected ${String(wanted[key])}, got ${String(got[key])}`)
+    if (typeof facts.observedBeforeStop !== 'boolean') {
+      problems.push(`cause ${k} observedBeforeStop is not a boolean: ${String(facts.observedBeforeStop)}`)
+      continue
+    }
+    const phrase = `agent process generation ${want.generation} exited with code ${want.code}${facts.observedBeforeStop ? ' before the stop' : ' after the stop began'}`
+    if (cause.message !== phrase) problems.push(`cause ${k} message: expected ${JSON.stringify(phrase)}, got ${JSON.stringify(cause.message)}`)
+  }
+  return problems
+}
+
 interface Verdict {
   ops: Op[]
   /** Recorded pids still alive when the stop settled. */
@@ -93,7 +202,14 @@ interface Stop {
   error: unknown
 }
 
-async function run(seed: number, ready = false): Promise<{ verdict: Verdict; reach: Reach; stop: Stop }> {
+/** The raw trace a sequence left: exit intents, leader records and onSpawn launches. */
+interface Trace {
+  intents: unknown[]
+  leaders: unknown[]
+  spawns: Spawned[]
+}
+
+async function run(seed: number, ready = false): Promise<{ verdict: Verdict; reach: Reach; stop: Stop; trace: Trace }> {
   const { ops, ticks } = generateOps(seed)
   let started = 0
   let finished = 0
@@ -113,8 +229,13 @@ async function run(seed: number, ready = false): Promise<{ verdict: Verdict; rea
   drivers.open()
   const admission = drivers.admit()
   let h: ReturnType<typeof codexDriver>
+  const spawns: Spawned[] = []
   try {
-    h = codexDriver({ tools, unansweredRequests: 'wait', enroll: (driver) => admission.enroll(driver) })
+    const root = codexRoot()
+    let launches = 0
+    const launch = () => root.launch({ FAKE_CODEX_EXIT_TRACE: '1', I1_LAUNCH_TOKEN: `${seed}:${ready ? 'ready' : 'cold'}:${++launches}` })
+    const onSpawn = (info: SpawnInfo) => void spawns.push({ generation: info.generation, token: info.childEnv.I1_LAUNCH_TOKEN })
+    h = codexDriver({ root, launch, callbacks: { onSpawn }, tools, unansweredRequests: 'wait', enroll: (driver) => admission.enroll(driver) })
   } catch (error) {
     admission.abandon(error)
     throw error
@@ -191,7 +312,18 @@ async function run(seed: number, ready = false): Promise<{ verdict: Verdict; rea
     unsettledHandles: handles.filter((handle) => !settled.has(`${handle.turnId}:${handle.messageUuid}`)).length,
     duplicateResults: [...counts].filter(([, c]) => c > 1).map(([id]) => id),
   }
-  return { verdict, reach, stop: { driver: h.driver, rejected: stopRejected, error: stopError } }
+  const trace: Trace = { intents: readJsonl(join(h.root.home, 'exit-intents.jsonl')), leaders: readJsonl(join(h.root.home, 'envs.jsonl')), spawns }
+  return { verdict, reach, stop: { driver: h.driver, rejected: stopRejected, error: stopError }, trace }
+}
+
+/**
+ * Both variants: the stop must report exactly the expected native exits;
+ * only then is that one original rejection value authorized.
+ */
+function checkStop(i: number, stop: Stop, trace: Trace): void {
+  const mismatch = stopMismatch(expectedCrashes(trace.intents, trace.leaders, trace.spawns), stop)
+  expect({ i, mismatch }).toEqual({ i, mismatch: [] })
+  if (stop.rejected) drivers.authorize(stop.driver, stop.error)
 }
 
 describe('Codex stop: I1 over fixed-seed operation sequences', () => {
@@ -199,8 +331,9 @@ describe('Codex stop: I1 over fixed-seed operation sequences', () => {
   for (let slice = 0; slice < 20; slice++) {
     test(`I1: the stop settles only after every owned process exited and every admitted handler finished (sequences ${slice * 15}-${slice * 15 + 14})`, async () => {
       for (let i = slice * 15; i < slice * 15 + 15; i++) {
-        const { verdict } = await run(0xa601 + i * 7919)
+        const { verdict, stop, trace } = await run(0xa601 + i * 7919)
         expect({ i, ...verdict }).toEqual({ i, ops: verdict.ops, liveAtStop: [], handlersOpenAtStop: 0, unreported: [], unsettledHandles: 0, duplicateResults: [] })
+        checkStop(i, stop, trace)
         await drivers.close()
       }
     })
@@ -219,17 +352,12 @@ describe('Codex stop: I1 after readiness over the same fixed-seed sequences', ()
   // literal title (so a coverage citation resolves it), in slice order.
   const readySlice = async (n: number) => {
     for (let i = n * 5; i < n * 5 + 5; i++) {
-      const { verdict, reach, stop } = await run(0xa601 + i * 7919, true)
+      const { verdict, reach, stop, trace } = await run(0xa601 + i * 7919, true)
       reached[i] = reach
       expect({ i, ...verdict }).toEqual({ i, ops: verdict.ops, liveAtStop: [], handlersOpenAtStop: 0, unreported: [], unsettledHandles: 0, duplicateResults: [] })
-      // A rejected stop is expected only from a crash: its one retained native exit, nothing else.
       expect(reach.rejected).toBe(reach.failure !== null)
-      if (reach.failure) {
-        expect({ i, crashed: verdict.ops.includes('crash'), category: reach.failure.category, causes: reach.failure.causes.length }).toEqual({ i, crashed: true, category: 'stop', causes: 1 })
-        expect(reach.failure.causes[0]).toMatch(/^transport:agent process generation 1 exited with code 5 (before the stop|after the stop began)$/)
-      }
-      // Only now, after the exact assertions above, may that one original rejection be expected.
-      if (stop.rejected) drivers.authorize(stop.driver, stop.error)
+      // A rejected stop is expected only as exactly its traced native exits; only then is it authorized.
+      checkStop(i, stop, trace)
       await drivers.close()
     }
   }
@@ -300,5 +428,68 @@ describe('Codex stop: I1 after readiness over the same fixed-seed sequences', ()
     expect(reached.some((r) => r.helpers > 0)).toBe(true)
     expect(reached.some((r) => r.handlers > 0)).toBe(true)
     expect(reached.some((r) => r.rejected)).toBe(true)
+  })
+})
+
+describe('Codex stop: the exact native-exit stop oracle', () => {
+  test('I1 stop oracle: zero, one and multiple exact native exits pass; every listed mismatch and malformed trace fails', () => {
+    const exit = (generation: number, pid: number, code: number, observedBeforeStop: boolean | null = true, signal: NodeJS.Signals | null = null) =>
+      new NativeExitFailure({ generation, pid, code, signal, observedBeforeStop }, [])
+    const rejected = (causes: unknown[], category: 'stop' | 'transport' = 'stop') => ({ rejected: true, error: new AgentRuntimeError({ category, message: 'stop failed' }, causes) })
+    const resolved = { rejected: false, error: null }
+    const one: Crash[] = [{ pid: 101, code: 5, generation: 1 }]
+    const two: Crash[] = [{ pid: 101, code: 5, generation: 1 }, { pid: 202, code: 5, generation: 3 }]
+    const rephrased = exit(1, 101, 5)
+    Object.defineProperty(rephrased, 'message', { value: 'agent process generation 1 exited with code 5 after the stop began' })
+    const stops: [string, Crash[], { rejected: boolean; error: unknown }, boolean][] = [
+      ['zero expected, resolved', [], resolved, true],
+      ['one expected, before the stop', one, rejected([exit(1, 101, 5)]), true],
+      ['one expected, after the stop began', one, rejected([exit(1, 101, 5, false)]), true],
+      ['multiple expected, in order', two, rejected([exit(1, 101, 5), exit(3, 202, 5, false)]), true],
+      ['zero expected, rejected', [], rejected([exit(1, 101, 5)]), false],
+      ['one expected, resolved', one, resolved, false],
+      ['missing cause', two, rejected([exit(1, 101, 5)]), false],
+      ['extra cause', one, rejected([exit(1, 101, 5), exit(3, 202, 5)]), false],
+      ['duplicate pid', two, rejected([exit(1, 101, 5), exit(3, 101, 5)]), false],
+      ['wrong pid', one, rejected([exit(1, 102, 5)]), false],
+      ['wrong code', one, rejected([exit(1, 101, 6)]), false],
+      ['wrong generation', one, rejected([exit(2, 101, 5)]), false],
+      ['wrong signal', one, rejected([exit(1, 101, 5, true, 'SIGTERM')]), false],
+      ['wrong order', two, rejected([exit(3, 202, 5), exit(1, 101, 5)]), false],
+      ['non-native cause', one, rejected([new AgentRuntimeError({ category: 'transport', message: 'agent process generation 1 exited with code 5 before the stop' })]), false],
+      ['nested native cause', one, rejected([new AgentRuntimeError({ category: 'stop', message: 'inner' }, [exit(1, 101, 5)])]), false],
+      ['non-stop error category', one, rejected([exit(1, 101, 5)], 'transport'), false],
+      ['no exit evidence', one, rejected([exit(1, 101, 5, null)]), false],
+      ['wrong timing phrase', one, rejected([rephrased]), false],
+    ]
+    const leader = (pid: number, token: string) => ({ pid, cwd: '/w', env: { I1_LAUNCH_TOKEN: token } })
+    const spawns: Spawned[] = [{ generation: 1, token: 'a' }, { generation: 2, token: 'b' }, { generation: 3, token: 'c' }]
+    const ab = [leader(101, 'a'), leader(202, 'c')]
+    const traces: [string, unknown[], unknown[], Spawned[], Crash[] | 'throws'][] = [
+      ['no intents', [], ab, spawns, []],
+      ['one nonzero intent', [{ pid: 101, code: 5 }], ab, spawns, one],
+      ['multiple nonzero intents, leader order', [{ pid: 202, code: 5 }, { pid: 101, code: 5 }], ab, spawns, two],
+      ['a zero intent is no crash', [{ pid: 101, code: 0 }], ab, spawns, []],
+      ['malformed intent', [{ pid: 101, code: '5' }], ab, spawns, 'throws'],
+      ['intent from no leader', [{ pid: 303, code: 5 }], ab, spawns, 'throws'],
+      ['duplicate intent', [{ pid: 101, code: 5 }, { pid: 101, code: 5 }], ab, spawns, 'throws'],
+      ['malformed leader', [], [{ pid: 101, env: {} }], spawns, 'throws'],
+      ['duplicate leader pid', [], [leader(101, 'a'), leader(101, 'c')], spawns, 'throws'],
+      ['duplicate leader token', [], [leader(101, 'a'), leader(202, 'a')], spawns, 'throws'],
+      ['leader token without onSpawn', [], [leader(101, 'z')], spawns, 'throws'],
+      ['token in two spawns', [], ab, [...spawns, { generation: 4, token: 'a' }], 'throws'],
+      ['duplicate generation', [], ab, [...spawns, { generation: 1, token: 'd' }], 'throws'],
+      ['malformed spawn token', [], ab, [...spawns, { generation: 4, token: undefined }], 'throws'],
+    ]
+    const stopOutcomes = stops.map(([name, expected, stop]) => [name, stopMismatch(expected, stop).length === 0])
+    expect(stopOutcomes).toEqual(stops.map(([name, , , passes]) => [name, passes]))
+    const traceOutcomes = traces.map(([name, intents, leaders, s]) => {
+      try {
+        return [name, expectedCrashes(intents, leaders, s)]
+      } catch {
+        return [name, 'throws']
+      }
+    })
+    expect(traceOutcomes).toEqual(traces.map(([name, , , , want]) => [name, want]))
   })
 })
