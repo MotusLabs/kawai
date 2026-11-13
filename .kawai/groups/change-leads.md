@@ -94,8 +94,11 @@ not ask the Team Lead to duplicate your dispatches.
 ## Recovery and withdrawal
 
 If you become unavailable, participants escalate once to `lead` and dispatch
-nothing; prefer compacting your session over replacing it — a replacement
-coordinates new work within its own rights but cannot amend or close your
-children; the original creator or the human does that. On withdrawal you
+nothing; prefer compacting your session over replacing it. A replacement
+coordinates new work within its own rights. Once you are archived, gone, or
+context-exhausted, it may take over your tasks with `task_transfer_owner` and
+`from_session`, which journals each move; while you are live it never takes
+them, and you or the human amend and close them. On withdrawal, hand your open
+tasks to your successor with `task_transfer_owner` and `to_session`,
 coordinate the safe checkpoint, keep the role until dependent work resolves,
 and preserve every journal, result, and reference.

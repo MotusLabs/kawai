@@ -12,7 +12,7 @@
 
 ## 3. Team files
 
-- [ ] 3.1 After the human reviews it, replace the `change-leads.md` recovery paragraph with the D3 text, and assert it in `teamGroupFile.test.ts` under the change-coordination takeover scenarios
+- [x] 3.1 After the human reviews it, replace the `change-leads.md` recovery paragraph with the D3 text, and assert it in `teamGroupFile.test.ts` under the change-coordination takeover scenarios
 - [x] 3.2 Set `lead.md` to `max: 2`
 
 ## 4. Verify
