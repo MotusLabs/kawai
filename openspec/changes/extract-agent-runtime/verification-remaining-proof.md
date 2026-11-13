@@ -83,10 +83,11 @@ With Claude's batch B M-wire (`claudeRuntimeLaunch.ts`), both runtimes' producti
 
 Current merged sources, against the slice results recorded under 6.3 in tasks.md:
 
-- Dead duplicates remain:
-  - `src/server/chat/cliTurnBinding.ts` shares 149 of its 220 lines with the package's `claude/turnBinder.ts`. Only `cliTurnBinding.test.ts` imports it.
-  - `src/server/chat/chatActivity.ts` shares 182 of its 258 lines with `common/activity.ts`. Only `chatActivity.test.ts` imports it.
-  - Removing them and moving their cases to package construction is a production edit outside this task (X1). So 6.2 ("remove duplicate implementations") and 6.3 ("tests through package construction") stay unchecked.
+- Dead duplicates retired (R3 A11, `0f1aec42`):
+  - `src/server/chat/cliTurnBinding.ts` was byte-identical to the package's `claude/turnBinder.ts` apart from the package's provenance header line. `src/server/chat/chatActivity.ts` was byte-identical to `common/activity.ts` apart from that header and one type import: the package aliases its own `Activity`/`ActivityPhase`, which are structurally identical to `src/shared/chat.ts` `ChatActivity`/`ChatActivityPhase`. (R2's "149 of 220" and "182 of 258 shared lines" were miscounts.)
+  - Their only importers were their own tests. Both were moved with `git mv` to `packages/agent-runtime/__tests__/claudeTurnBinder.test.ts` and `activity.test.ts`. The diff is a three-line header plus the import paths, now `../src/claude/turnBinder.js` and `../src/common/activity.js`.
+  - Old/new bijection: identical titles, bodies and order; 20 tests with 71 `expect(` calls, and 15 with 34. There is no semantic gap and no oracle changed.
+  - The current citations in `docs/architecture/chat.md` and `docs/claude-cli-contract.md` name the package files. The `docs/refactor-analysis/` tables and the separate `process-observability` change keep their historical mentions.
 - Retained host modules with package counterparts: `contentBlocks.ts` (transcript replay, approval policy, question deadlines) and `TurnQueue.ts` (the SDK availability probe and development fixture). The usage, Codex helper, transport and driver slices recorded under 6.3 stand.
 - tool-call-metrics has not landed, so 6.3's preservation clause for it does not apply.
 
@@ -95,3 +96,4 @@ Current merged sources, against the slice results recorded under 6.3 in tasks.md
 - Controlled fake CLI and app-server only. Native 7.4, assembly 8.3 and owner 8.4 stay separate gates.
 - The accepted five controls of batch B were not replayed. Only the M-join and M-wire controls ran here.
 - The 2.2 exceptional branch above is argued from source, not executed.
+- Correction to result-18442434: its full record `decceb030c2dce03b307fcdb42e42e80b374a67e3152acd4c6613e3739d79736` (exact head `7895c674` only) does hold per-test outcomes for the package suites. It has 10903 outcomes, all passed, 1048 of them under `packages/agent-runtime/` (including 63 from `claudeStopOrder.test.ts`). The result's claim that package suites are absent from the root record was false.
