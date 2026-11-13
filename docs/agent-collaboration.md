@@ -291,8 +291,9 @@ form still works, but it never enters the ledger.
   `task_dispute_findings`, giving counter-evidence, instead of changing
   code. A finding can be disputed once in each state it enters. On a plan
   change, each dispute raises a decision card for the plan's Lead role (or
-  the owner). On other tasks, the task's creator or the human decides with
-  `task_decide_dispute` and a rationale. Upholding restores the finding's
+  the owner). On other tasks, the task's owner (its creator until ownership
+  moves) or the human decides with `task_decide_dispute` and a rationale,
+  and the dispute's mail goes to that owner. Upholding restores the finding's
   state before the dispute. Rejecting makes it `rejected`, which never
   blocks. A pending dispute holds the round. A failed round whose blockers
   are all rejected passes on its result again, with no new commit.

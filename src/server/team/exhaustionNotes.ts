@@ -4,7 +4,7 @@
 // nothing — and, for a session bound to a task, sends one normal-priority
 // direct note tagged `context-exhausted` to whoever dispatched the work: the
 // dropped message's assignment's dispatcher, else the outstanding
-// assignment's, else the task's creator. Nothing is sent when that is the
+// assignment's, else the task's owner. Nothing is sent when that is the
 // human, a killed, archived, or flagged session; the attention item (D8)
 // then asks the human. The note is self-sent like kawai's resume and handoff
 // notes, so a reply never targets the flagged session. Kawai never compacts.
@@ -18,6 +18,7 @@ import type { ExhaustionOutcome } from './contextExhaustion'
 import type { GroupDefinition } from './groupFile'
 import type { MailboxStore, TeamMessage } from './mailboxStore'
 import type { TaskStore } from './taskStore'
+import { taskOwner } from './taskStatusRights'
 
 export const CONTEXT_EXHAUSTED_TAG = 'context-exhausted'
 
@@ -86,7 +87,7 @@ export class ExhaustionNotes {
     if (!record || !flag || !teamId) return null
     const taskId = record.taskId ?? outcome.dropped?.taskId ?? null
     const task = taskId ? this.options.tasks.get(taskId) : null
-    const recipient = task ? this.recipientFor(task.id, task.creator, outcome.dropped, outcome.sessionId) : null
+    const recipient = task ? this.recipientFor(task.id, taskOwner(task), outcome.dropped, outcome.sessionId) : null
     const inserted = this.db.prepare(`INSERT OR IGNORE INTO team_exhaustion_episodes
       (session_id, flagged_at, team_id, reason, task_id, dropped_id, recipient_session, note_id, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`)
@@ -116,18 +117,18 @@ export class ExhaustionNotes {
 
   /**
    * Who dispatched the work: the dropped message's assignment, else the
-   * outstanding one, else the task's creator. Null when that is the human,
+   * outstanding one, else the task's owner. Null when that is the human,
    * or a killed, archived, or flagged session (or the flagged one itself).
    */
   private recipientFor(
-    taskId: string, creator: { kind: string; sessionId?: string | null },
+    taskId: string, owner: string | null,
     dropped: TeamMessage | null, flaggedId: string,
   ): ChatSessionRecord | null {
     const assignments: TeamTaskAssignment[] = this.options.tasks.assignmentsOf(taskId)
     const assignment = (dropped ? assignments.find(row => row.messageId === dropped.id) : undefined) ?? outstandingOf(assignments)
-    const party = assignment ? assignment.createdBy : creator
-    if (party.kind !== 'agent' || !party.sessionId || party.sessionId === flaggedId) return null
-    return this.eligible(party.sessionId)
+    const party = assignment ? (assignment.createdBy.kind === 'agent' ? assignment.createdBy.sessionId : null) : owner
+    if (!party || party === flaggedId) return null
+    return this.eligible(party)
   }
 
   /** The session's record when it can take the note: live, not archived, not flagged. */

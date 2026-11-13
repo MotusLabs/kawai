@@ -481,4 +481,15 @@ describe('the shipped change-leads group (change-coordination recovery)', () => 
     const recovery = parsed.group.prompt.split('## Recovery and withdrawal')[1]?.split('\n## ')[0] ?? ''
     expect(recovery.replace(/\s+/g, ' ')).toContain('If you become unavailable, participants escalate once to `lead` and dispatch nothing')
   })
+  // @covers: change-coordination › Coordinator recovery respects durable ownership › Replacement takes over a departed coordinator's tasks
+  test('the Change Lead role lets a replacement take over a departed coordinator\'s tasks, never a live one\'s', () => {
+    const text = fs.readFileSync(path.resolve(import.meta.dir, '../../../.kawai/groups/change-leads.md'), 'utf8')
+    const parsed = parseGroupFile('change-leads', text)
+    if (!parsed.ok) throw new Error(parsed.error)
+    const recovery = (parsed.group.prompt.split('## Recovery and withdrawal')[1]?.split('\n## ')[0] ?? '').replace(/\s+/g, ' ')
+    expect(recovery).toContain('Once you are archived, gone, or context-exhausted, it may take over your tasks with `task_transfer_owner` and `from_session`')
+    expect(recovery).toContain('while you are live it never takes them')
+    expect(recovery).toContain('hand your open tasks to your successor with `task_transfer_owner` and `to_session`')
+    expect(recovery).not.toContain('cannot amend or close your children')
+  })
 })

@@ -4,13 +4,15 @@
 // on the author's behalf and committed in one transaction with its
 // `disputed` event and card link; a card's decisions and overrides reach
 // `applyCardDecision` after their commit, and a startup replay repairs any
-// that never did (recovery matrix). On any other task the creator or the
-// human decides with `task_decide_dispute`. Every Kawai-written event carries
+// that never did (recovery matrix). On any other task the task's owner
+// (task-owner-remaining-rights D1) or the human decides with
+// `task_decide_dispute`, and the dispute's mail goes to the owner. Every Kawai-written event carries
 // a replay key (I5); every refusal writes nothing (I3).
 import { decisionApplies, disputeRefusal, type LedgerRow } from '../../shared/findingsLedger'
 import { FINDING_LIMITS } from '../../shared/reviewFindings'
 import type { TaskActor, TeamTask } from '../../shared/teamTasks'
 import type { TaskStore } from './taskStore'
+import { ownerLabel, taskOwner } from './taskStatusRights'
 import type { CardLink } from './findingStore'
 
 export interface DisputeCardPort {
@@ -19,7 +21,7 @@ export interface DisputeCardPort {
 }
 
 export interface FindingMailPort {
-  /** One system message to a session about a task (the creator of a manual task, the implementer after a re-gate). */
+  /** One system message to a session about a task (the owner of a manual task, the implementer after a re-gate). */
   toSession(input: { teamId: string; sessionId: string; taskId: string; body: string; tags: string[] }): void
 }
 
@@ -89,9 +91,10 @@ export class FindingDisputes {
           if (write() === null) throw new Error(`${row.id} was disputed meanwhile; nothing was written`)
           this.store.appendJournal(task.id, actor, journal)
         })
-        if (task.creator.kind === 'agent' && task.creator.sessionId) {
+        const owner = taskOwner(task)
+        if (owner) {
           this.mail?.toSession({
-            teamId: input.teamId, sessionId: task.creator.sessionId, taskId: task.id, tags: ['finding-dispute'],
+            teamId: input.teamId, sessionId: owner, taskId: task.id, tags: ['finding-dispute'],
             body: `Kawai: ${actor.sessionId} disputes ${row.id} on task "${task.title}" (${task.id}). Counter-evidence: ${cut(entry.counterEvidence.trim())}\n\nDecide it with task_decide_dispute (uphold or reject, with a rationale).`,
           })
         }
@@ -102,12 +105,13 @@ export class FindingDisputes {
     return { disputed }
   }
 
-  /** The non-plan path (spec: the creator or the human decides, with a rationale). */
+  /** The non-plan path (spec: the owner or the human decides, with a rationale). */
   decide(input: { task: TeamTask; actor: TaskActor; findingId: string; decision: 'uphold' | 'reject'; rationale: string }): LedgerRow {
     const { task, actor } = input
     if (task.planId) throw new Error(`Task ${task.id} is a plan change's task: its disputes are decided on their decision cards`)
-    const creator = actor.kind === 'human' || (actor.kind === 'agent' && task.creator.kind === 'agent' && task.creator.sessionId === actor.sessionId)
-    if (!creator) throw new Error('Only the task\'s creator or the human decides a dispute; nothing was written')
+    const owner = taskOwner(task)
+    const allowed = actor.kind === 'human' || (actor.kind === 'agent' && owner !== null && actor.sessionId === owner)
+    if (!allowed) throw new Error(`Only ${owner ? `${ownerLabel(task)} or the human` : 'the human'} decides a dispute on this task; nothing was written`)
     const rationale = input.rationale.trim()
     if (!rationale) throw new Error('A dispute decision needs a rationale')
     const row = this.ledger(task.id).find(entry => entry.id === input.findingId)
