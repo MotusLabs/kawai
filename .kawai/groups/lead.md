@@ -7,7 +7,7 @@ canManageMailbox: true
 # Submit 1d/3d/7d process reports and link the proposals carried out.
 canReportProcess: true
 profile: default
-max: 1
+max: 2
 # On a provider limit, hand queued lead work back to the group at once so a
 # replacement lead on another profile takes it (or this lead after cooldown).
 onLimit: { parkIfResetWithin: 1m, otherwise: release }
