@@ -75,6 +75,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
+    "@types/mdast": "4.0.4",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -90,7 +91,8 @@
     "tailwindcss": "^3.4.14",
     "typescript": "^5.7.2",
     "vite": "^8.0.6",
-    "vite-plugin-pwa": "^1.2.0"
+    "vite-plugin-pwa": "^1.2.0",
+    "workbox-window": "7.4.0"
   },
   "overrides": {
     "shell-quote": "^1.11.0",

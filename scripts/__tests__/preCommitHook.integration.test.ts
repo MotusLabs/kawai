@@ -132,9 +132,12 @@ describe('the commit hook in a temporary repository', () => {
     expect(result.output).toContain('check: recorded pass')
   })
 
+  // These two amend createHookRepo's own initial commit, like the R3 case
+  // below: its checked `git commit` already leaves a clean index equal to
+  // HEAD, the precondition a staged lone.ts edit plus a hooked setup commit
+  // used to build here (task-f5001d7f A17).
   test('a message-only amend after a full pass runs lint and typecheck only', () => {
-    stage('src/shared/lone.ts', 'export const lone = 6\n')
-    expect(fixture.commit(['-m', 'lone']).code).toBe(0)
+    const tree = fixture.git(['rev-parse', 'HEAD^{tree}']).trim()
     expect(fixture.check().code).toBe(0)
     const before = fixture.records()
     fixture.takeLog()
@@ -143,11 +146,11 @@ describe('the commit hook in a temporary repository', () => {
     expect(fixture.takeLog()).toEqual(LINT_TYPECHECK)
     expect(result.output).toContain('the index tree has a recorded full pass')
     expect(fixture.records()).toEqual(before)
+    expect(fixture.git(['rev-parse', 'HEAD^{tree}']).trim()).toBe(tree)
   })
 
   test('a message-only amend beside an unstaged bun.lock edit runs the full check (I3)', () => {
-    stage('src/shared/lone.ts', 'export const lone = 9\n')
-    expect(fixture.commit(['-m', 'lone']).code).toBe(0)
+    const tree = fixture.git(['rev-parse', 'HEAD^{tree}']).trim()
     expect(fixture.check().code).toBe(0)
     fixture.takeLog()
     fixture.write('bun.lock', 'lock 9, unstaged\n')
@@ -155,6 +158,7 @@ describe('the commit hook in a temporary repository', () => {
     expect(result.code).toBe(0)
     expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
     expect(result.output).toContain('escape matched bun.lock; running the full check')
+    expect(fixture.git(['rev-parse', 'HEAD^{tree}']).trim()).toBe(tree)
   })
 
   // The amended commit is createHookRepo's own initial commit: the

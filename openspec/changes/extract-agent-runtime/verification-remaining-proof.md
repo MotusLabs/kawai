@@ -122,6 +122,40 @@ Row controls (R4 A14), each run on the final relevant inputs (HEAD `d01a0479`) b
 
 6.2 and 6.3 are checked: no duplicate implementation remains, the slices' moved cases run against package construction or the package modules, and every named control fails on values.
 
+## Merged dependency resolution (R5 A15)
+
+Running the final A8 stages outside the repository's ancestry found a merged-baseline gap.
+
+- Setup: a dist-free `git archive` copy of `ba5a78ad` under /tmp, with this worktree's frozen `node_modules` linked entry by entry, so no ancestor `node_modules` could be reached.
+- Root `tsc --noEmit` failed with TS2307 "Cannot find module 'mdast'" at `src/server/plans/workspace/checklistProjection.ts:18` (/tmp/krp3/root-tc.log, sha256 4e1ab469fff278f8a8e798fd84a6bb1a31de47b8c6714b3013d20fab177dd9c0).
+- Root `bun run build` failed: Rolldown cannot resolve `workbox-window` from `virtual:pwa-register` (/tmp/krp3/root-build.log, 43e90106402cc6f2bab187770009e7d5c1503e208ddc245f2c938b92d71aa5aa).
+- The package typecheck and build passed.
+
+Ancestor masking: in the worktree both stages passed. `--traceResolution` showed `mdast` resolving to `/home/coder/kawai/node_modules/@types/mdast`, the main checkout's install above the worktree, not the worktree's own.
+
+Cause:
+- Master (`72bed5e9`) imports types from `mdast`, and `vite-plugin-pwa` needs `workbox-window`. Neither is a declared root dependency.
+- Accepted `067dd5d0` adds the root `workspaces`, so the merged install uses Bun's isolated layout. There both packages sit only under `node_modules/.bun/` (`@types+mdast@4.0.4`, `workbox-window@7.4.0`).
+- Master's hoisted install exposed them at the top level.
+
+Correction (Lead decision A15):
+- `package.json` gains the root devDependencies `"@types/mdast": "4.0.4"` and `"workbox-window": "7.4.0"`, the versions already locked.
+- `bun install` with Bun 1.4.3 changed `bun.lock` by exactly those two declaration lines in the root workspace block (diff /tmp/krp3/lock.diff, sha256 ba4a3226396fbe0a78e743db3eda39318e7b1a268d35cf1e66296e0aee71b67e). No package entry, resolution, integrity, override or workspace changed.
+- The linker, config and sources are unchanged.
+
+Independent candidate validation (same content: `git archive ba5a78ad` plus the staged `package.json`, `bun.lock` and this file, under /tmp/krp4/cand, `git init`, no ancestor `node_modules`):
+- Bun 1.4.3 `bun install --frozen-lockfile`: 708 packages, `bun.lock` byte-identical after (install.log 5a1346dc).
+- Dist-free `bun run typecheck` (root then package) passed (tc.log c7a55078); root `bun run build` passed (root-build.log 299d0682); package build passed (pkg-build.log d322d355).
+- `@types/mdast` resolves to the copy's own `node_modules/.bun/@types+mdast@4.0.4`.
+
+## Stock-commit failures and the amend fixture precondition (A16, A17)
+
+- First stock commit of the staged A15 tree (a15-commit.log, sha256 3f0784f468970b101f004ce1dbe33106986f7a9c0caa4b5471c557690c996a9a): `checkKey.test.ts:121` key changed after an ignored write, and the I3 amend case timed out (20075 ms). Running the two files alone passed 37/0 (a15-diag.log b1b6b77a); diagnostic only.
+- A16, the one authorized unchanged retry (/tmp/krp4/a16-commit.log, b454b1219f0758b091bae23fb32d40e31477acdc705f0b395e1be58627685401): 10883 pass, 2 fail. Both amend cases timed out (20056 and 20022 ms, nested amend code -1); `checkKey` passed this time, which proves nothing about its shared defect (task 3b3653c9, not adopted). Neither commit landed.
+- The cause of the timeouts is unknown: no load or cause attribution is claimed.
+- A17 changes only the setup of the two amend cases in `scripts/__tests__/preCommitHook.integration.test.ts`. Old: stage an unrelated `src/shared/lone.ts` edit and make a hooked setup commit, then check and amend. New: amend `createHookRepo`'s own initial commit, as the accepted R3 unreadable-record case already does.
+- Equivalence: the constructor's checked `git commit` leaves a clean index equal to HEAD, the precondition the setup commit built. The real `fixture.check()`, record snapshot, amend and every title, message and assertion stay inside the same 20 s case; I3's unstaged `bun.lock` write is unchanged. Each case adds an unchanged `HEAD^{tree}` assertion after the amend. Helpers, hook and the other cases are unchanged.
+
 ## Limits
 
 - Controlled fake CLI and app-server only. Native 7.4, assembly 8.3 and owner 8.4 stay separate gates.
