@@ -156,6 +156,16 @@ Independent candidate validation (same content: `git archive ba5a78ad` plus the 
 - A17 changes only the setup of the two amend cases in `scripts/__tests__/preCommitHook.integration.test.ts`. Old: stage an unrelated `src/shared/lone.ts` edit and make a hooked setup commit, then check and amend. New: amend `createHookRepo`'s own initial commit, as the accepted R3 unreadable-record case already does.
 - Equivalence: the constructor's checked `git commit` leaves a clean index equal to HEAD, the precondition the setup commit built. The real `fixture.check()`, record snapshot, amend and every title, message and assertion stay inside the same 20 s case; I3's unstaged `bun.lock` write is unchanged. Each case adds an unchanged `HEAD^{tree}` assertion after the amend. Helpers, hook and the other cases are unchanged.
 
+Outcome: the A15+A17 stock commit `e34c9038` (tree `c59848f7`; first landed as `de049396`, then a message-only subject amend) passed its hook's full check, 10885 pass / 0 fail (/tmp/krp4/a17-commit.log 873ea6f4). The affected file alone ran 18 pass / 0 fail (a17-tests.log 937017fd); the runner prints no per-case times.
+
+## Isolated CI e2e (A8)
+
+- Where: the /tmp/krp4/cand copy committed in its own scratch repository, with tree `c59848f7` equal to `e34c9038`'s; its own frozen install and the build above. Both CI steps ran with an empty private HOME, CI=1, the config's private tmux/DB, spare ports 47312/47311 and workers=1 (/tmp/krp4/e2e.sh).
+- A first run in an uncommitted `git init` copy is void: specs that branch the suite's own repository failed with "not a valid object name: 'master'" (run1 logs 788494eb, 8294f3cf).
+- Main step: 110 tests, 27 passed, 83 skipped (the chat-fixture specs, as in CI), 0 failed (e2e-main.log 26c8c816).
+- Chat-fixture step (the CI list): 67 tests, 66 passed, 1 failed: `plan-supervision.spec.ts:174` never shows the recorded 'Narrow' decision card (e2e-fixture.log eb71d801).
+- Baseline: the same spec alone in a clone of master `72bed5e9` with its own frozen install and build fails identically (base-supervision.log 49e74729). The failure predates this batch and is not repaired here; its cause is not investigated.
+
 ## Limits
 
 - Controlled fake CLI and app-server only. Native 7.4, assembly 8.3 and owner 8.4 stay separate gates.
