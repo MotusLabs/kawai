@@ -12,6 +12,9 @@
 // `eof-alive` closes the protocol stream and keeps running; `ignore-term`
 // ignores SIGTERM and stdin EOF from then on (only SIGKILL ends it);
 // `trap3` traps SIGTERM and exits 3 on it, ignoring stdin EOF;
+// `child` starts a helper in this process's own group (not detached, no
+// shared pipes) that outlives this process, appends its pid to
+// $HOME/child-pids, and exits on its own after 20 s at most;
 // `stderr-tail <dir>` starts a helper in its own session that shares this
 // stderr, writes the unterminated line `TAIL`, records its pid in
 // <dir>/tail-helper.pid and exits once <dir>/release exists (after 20 s at
@@ -71,6 +74,8 @@ const TAIL_HELPER = "const fs = require('node:fs'); process.stderr.write('TAIL')
  * tries one late stderr line `LATE` before exiting.
  */
 const HOLD_HELPER = "const fs = require('node:fs'); const id = (fd) => { try { const s = fs.fstatSync(fd); return s.dev + ':' + s.ino } catch { return null } }; const dir = process.env.HOLD_DIR; fs.writeFileSync(dir + '/helper-fds.json', JSON.stringify({ fd2: id(2), fd3: id(3) })); fs.writeSync(2, 'HELD\\n'); const started = Date.now(); setInterval(() => { if (fs.existsSync(dir + '/release') || Date.now() - started > 20000) { try { fs.writeSync(2, 'LATE\\n') } catch {} process.exit(0) } }, 20)"
+/** The `child` helper: stays in the CLI's process group, holding no pipe, until a signal (bounded). */
+const CHILD_HELPER = 'setTimeout(() => process.exit(0), 20000)'
 /** A descriptor's pipe identity (dev:ino), or null when it is not open. */
 const fdId = (fd: number): string | null => {
   try {
@@ -344,6 +349,13 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
       assistant('pipes held')
       return result(uuid, 'success', 'pipes held')
     }
+    case 'child': {
+      const helper = spawn(process.execPath, ['-e', CHILD_HELPER], { stdio: 'ignore' })
+      fs.appendFileSync(`${process.env.HOME ?? '.'}/child-pids`, `${helper.pid}\n`)
+      helper.unref()
+      assistant('child started')
+      return result(uuid, 'success', 'child started')
+    }
     case 'ignore-term':
       process.on('SIGTERM', () => {})
       holdOnEof = true
@@ -373,7 +385,9 @@ function onControl(frame: { request_id: string; request: { subtype: string } }) 
       const uuid = running
       running = null
       respond({ cancelled: [], still_queued: [] })
-      if (uuid) result(uuid, 'error_during_execution', null, true)
+      // An error result always carries `errors` (the pinned SDK's SDKResultError
+      // requires it and reads it once a turn has completed on this process).
+      if (uuid) result(uuid, 'error_during_execution', null, true, usage, [])
       return
     }
     default:
