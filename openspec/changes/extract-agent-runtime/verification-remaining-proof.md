@@ -62,7 +62,18 @@ Exceptional generation teardown (task-7cfee843): no counterexample was found.
 - `terminate()` rejects only when a leader survives SIGKILL for `killMs` (5 s), or a group member survives the group SIGKILL for `killMs`. `killMs` is not a public option, and SIGKILL cannot be trapped, so no controlled provider reaches this branch.
 - A respawn needs the previous leader's observed exit. So at most one live leader exists at a stop, beside retired groups that may still hold helpers; the I1's `crash`+`child` sequences exercise exactly that.
 - In the branch, the stop rejects with the raw terminate failure and claims no receipt. Its jobs are still joined.
-- What stays unproved is that a retired group's in-flight termination settles before such a rejected stop does. 2.2 stays unchecked for this one branch. A future correction that preserves the invariant would settle every termination (`allSettled`) and close every query in a `finally` before rejecting with every raw failure. That is a production edit; A7 leaves it to the Lead.
+
+Package-source exception (R4 A12/A13; disclosed here before the edit). R3's A12 ran the actual `terminateGenerations` from package tests. Generation 1's `owned.terminate()` rejected, a contract-valid outcome: a stop error `agent process 101 did not exit after SIGKILL`. Generation 2's terminate was held.
+
+- Old behavior, observed: the function rejected with the raw failure (same identity) while generation 2's termination was still in flight. It closed no query, either at settlement or after the release. The probe is /tmp/krp3/claudeTerminateGenerations.test.ts (sha256 960b0cf14a5cba8c31371df0bfdad73b87c5a0df21be216f449bed761d25921a) and failed 0 pass / 1 fail; log /tmp/krp3/a12-probe.log (bfa104e4380fb96abfb48d0eee074aefa01289b996fdb0f0b37926f377f34ee4); post-release observation /tmp/krp3/a12-post.log (99a8f0bad6123bf366f27f46da5d03701c9f7d4ffa98d5973bd5509f7c50174e).
+- The cause is that `Promise.all` over the owned terminations rejects at the first failure, before the query-close loop runs.
+- A focused read-only assessment (task note f2112c41) found the correction aligned. The Lead published it as A13; it is the batch's only package-source change.
+- New behavior: only `terminateGenerations` and its header change.
+  - Marks, aborts, input ends, shutdown grace and bounds are unchanged.
+  - Every owned termination is started in supplied order, and all of their outcomes settle.
+  - Then `query.close()` is attempted for every generation, including an ownerless one and one whose terminate rejected. The existing catch-and-ignore of a close throw is unchanged.
+  - Outcomes are classified by status, so a rejected `undefined` or `null` still counts as a failure. With no failure, the same facts are returned, sorted by generation. With one failure, the original reason is thrown unchanged. With several, the existing `AgentRuntimeError` (category `stop`) is thrown, its `causes` holding every original reason in supplied order, with duplicates and nested errors intact.
+- `lifecycle.runStop` is unchanged. It keeps the thrown value as one outer cause, then joins jobs and runs the account, as before.
 
 ## 6.1: Codex host composition
 
