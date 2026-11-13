@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { createCodexDriver } from '../../src/codex/index.js'
 import { createCodexDriverWith } from '../../src/codex/driver.js'
 import { inProcessSpawn } from './inProcessCodex.js'
+import { spawnOwned, type OwnedProcess, type OwnedSpawnRequest } from '../../src/process/ownedProcess.js'
 import type { CodexAgentDriver, DriverState, ProcessEndReport, ResumeCheckpoint, TurnResult } from '../../src/contract.js'
 import type { AgentRuntimeError } from '../../src/errors.js'
 import type { AgentEvent } from '../../src/events.js'
@@ -92,6 +93,24 @@ export interface HarnessOptions extends Partial<Omit<CodexDriverOptions, 'callba
   requestTimeoutsMs?: Readonly<Record<string, number>>
   /** Fixture-internal cleanup owner: receives the inert driver instead of the shared stopDrivers registry; never a driver option. */
   enroll?: (driver: CodexAgentDriver) => void
+  /**
+   * Test-only owner collector (task-3c3e3658 R7 A16); never a driver option.
+   * Supplied, the driver goes through createCodexDriverWith with a spawn that
+   * calls the production spawnOwned with the exact original request, once,
+   * pushes the returned OwnedProcess here and returns that same object:
+   * nothing is wrapped or mutated and no listener is attached. Absent, the
+   * spawn path is unchanged. Not combinable with `inProcess`.
+   */
+  owners?: OwnedProcess[]
+}
+
+/** The collecting spawn: spawnOwned(request) once; the same owner is retained and returned. */
+function collectingSpawn(owners: OwnedProcess[]): (request: OwnedSpawnRequest) => OwnedProcess {
+  return (request) => {
+    const owned = spawnOwned(request)
+    owners.push(owned)
+    return owned
+  }
 }
 
 /**
@@ -99,15 +118,18 @@ export interface HarnessOptions extends Partial<Omit<CodexDriverOptions, 'callba
  * process) whose callbacks record everything, then call any supplied hooks.
  * With `inProcess` or `requestTimeoutsMs`, the same options go through
  * createCodexDriverWith's private seams instead (the in-process spawn, the
- * per-method deadlines; the owned process stays the default spawn).
+ * per-method deadlines; the owned process stays the default spawn). With
+ * `owners`, the private spawn is the collecting spawnOwned (A16): a private
+ * factory composition, not the public factory's empty-internal branch.
  */
 export function codexDriver(options: HarnessOptions = {}): Recorded {
-  const { root: given, env, callbacks = {}, launch, inProcess = false, requestTimeoutsMs, enroll, ...rest } = options
+  const { root: given, env, callbacks = {}, launch, inProcess = false, requestTimeoutsMs, enroll, owners, ...rest } = options
+  if (owners && inProcess) throw new Error('the owner collector needs the owned process, not the in-process app-server')
   const root = given ?? codexRoot()
   const recorded = { root, events: [] as AgentEvent[], results: [] as TurnResult[], states: [] as DriverState[], ends: [] as ProcessEndReport[], checkpoints: [] as ResumeCheckpoint[], warnings: [] as unknown[] }
   const logger = { debug() {}, info() {}, warn: (obj: object, msg?: string) => recorded.warnings.push([msg, obj]), error: (obj: object, msg?: string) => recorded.warnings.push([msg, obj]) }
-  const internal = { ...(inProcess ? { spawn: inProcessSpawn } : {}), ...(requestTimeoutsMs ? { requestTimeoutsMs } : {}) }
-  const create = (o: CodexDriverOptions) => (inProcess || requestTimeoutsMs ? createCodexDriverWith(o, internal) : createCodexDriver(o))
+  const internal = { ...(inProcess ? { spawn: inProcessSpawn } : {}), ...(owners ? { spawn: collectingSpawn(owners) } : {}), ...(requestTimeoutsMs ? { requestTimeoutsMs } : {}) }
+  const create = (o: CodexDriverOptions) => (inProcess || requestTimeoutsMs || owners ? createCodexDriverWith(o, internal) : createCodexDriver(o))
   const driver = create({
     logger,
     launch: launch ?? root.launch(env),
@@ -180,7 +202,16 @@ export function pids(home: string): number[] {
   }
 }
 
-/** Whether `pid` runs; a zombie (exited, not yet reaped) counts as dead, as in ownedProcess. */
+/**
+ * Whether a /proc/<pid>/stat line shows a live process: Z (zombie, exited
+ * but unreaped) and X (dead, being reaped) count as dead, matching
+ * processGroup.liveGroupMembers; every other state counts as live.
+ */
+export function statShowsLive(stat: string): boolean {
+  return !/\) [ZX] /.test(stat)
+}
+
+/** Whether `pid` runs; a zombie or a dead (X) process counts as dead, as in ownedProcess. */
 export function alive(pid: number): boolean {
   try {
     process.kill(pid, 0)
@@ -188,7 +219,7 @@ export function alive(pid: number): boolean {
     return false
   }
   try {
-    return !/\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8'))
+    return statShowsLive(readFileSync(`/proc/${pid}/stat`, 'utf8'))
   } catch {
     return false
   }
