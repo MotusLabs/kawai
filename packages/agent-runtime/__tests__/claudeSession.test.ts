@@ -209,20 +209,41 @@ describe('claude session on the owned spawner', () => {
     expect(h.s.lifecycle.jobs.size).toBe(0)
   })
 
+  // Translated for K1 (task-a67abea1 R2): kill now sends SIGKILL first, so the
+  // SIGTERM grace and escalation this case proved live on in the shutdown
+  // counterpart below, unchanged; the kill case proves the first-signal exit.
   // @covers: agent-runtime › Forced stop has an actual exit boundary › Delayed process exit
-  test('L11: a CLI that ignores SIGTERM keeps kill pending until escalation proves the exit', async () => {
+  test('L11 (shutdown counterpart): a CLI that ignores SIGTERM and EOF keeps shutdown pending until escalation proves the exit', async () => {
+    const h = harness()
+    await h.s.start()
+    await (await h.s.send('ignore-term')).result
+    const shutdown = h.s.shutdown()
+    let settled = false
+    void shutdown.then(() => (settled = true), () => (settled = true))
+    await tick(150)
+    expect(settled).toBe(false)
+    expect(h.s.state).toBe('stopping')
+    const receipt = await shutdown
+    expect(receipt.processes[0]).toMatchObject({ state: 'exited', signal: 'SIGKILL', escalated: true, groupCleared: true })
+    for (const pid of exited(receipt)) expect(alive(pid!)).toBe(false)
+  })
+
+  test('L11 (K1): kill ends a SIGTERM-ignoring CLI with its first signal, SIGKILL, and the receipt follows the observed exit', async () => {
     const h = harness()
     await h.s.start()
     await (await h.s.send('ignore-term')).result
     const kill = h.s.kill()
-    let settled = false
-    void kill.then(() => (settled = true), () => (settled = true))
-    await tick(150)
-    expect(settled).toBe(false)
-    expect(h.s.state).toBe('stopping')
+    const atSettle: { exitRecorded: boolean | null } = { exitRecorded: null }
+    void kill.then(() => (atSettle.exitRecorded = h.frames.some((f) => f.direction === 'lifecycle' && JSON.parse(f.text).event === 'exit')))
     const receipt = await kill
-    expect(receipt.processes[0]).toMatchObject({ state: 'exited', signal: 'SIGKILL', escalated: true, groupCleared: true })
+    expect(atSettle.exitRecorded).toBe(true)
+    expect(receipt).toMatchObject({ scope: 'agent-processes', mode: 'kill', js: 'settled' })
+    expect(receipt.processes).toHaveLength(1)
+    expect(receipt.processes[0]).toMatchObject({ generation: 1, state: 'exited', code: null, signal: 'SIGKILL', escalated: false, groupCleared: true })
     for (const pid of exited(receipt)) expect(alive(pid!)).toBe(false)
+    expect(h.s.state).toBe('stopped')
+    expect(h.ends).toEqual([])
+    expect(h.s.lifecycle.jobs.size).toBe(0)
   })
 
   test('shutdown: closing the input lets the CLI exit on its own within the grace bound', async () => {

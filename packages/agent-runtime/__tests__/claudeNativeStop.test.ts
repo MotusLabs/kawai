@@ -13,7 +13,11 @@
 // - B6: a recorder that requests stop on the spawn record, inside query(),
 //   still finds the process owned. Stop terminates, joins and accounts it.
 // - O2-O4: an owned SIGTERM and a native exit 0 stop cleanly. A CLI that
-//   traps SIGTERM and exits 3 is an unknown end, so the stop fails.
+//   traps SIGTERM and exits 3 is an unknown end, so the stop fails. Since K1
+//   (task-a67abea1 R2) kill sends SIGKILL first, so the SIGTERM cases run
+//   through shutdown on a CLI that ignores stdin EOF (O2, O4, O4-143), and
+//   the kill counterparts end the same CLIs with an owned SIGKILL (O2k, O4k,
+//   O4k-143). A trapped normal exit, 3 or 143, still fails the stop.
 // - F1: a spawn that fails (an existing executable, a nonexistent absolute
 //   cwd) leaves the owner's original error E; the failed stop keeps E itself,
 //   whatever replacement the SDK reported.
@@ -238,12 +242,23 @@ describe('the stop accounts native evidence (A3)', () => {
     expect(h.frames.filter((f) => f.direction === 'lifecycle' && f.text.startsWith('{"event":"spawn"'))).toHaveLength(1)
   })
 
-  test('O2: an owned SIGTERM ends a hung CLI and the stop succeeds', async () => {
+  test('O2 (shutdown counterpart): an owned SIGTERM ends a CLI that ignores EOF and the stop succeeds', async () => {
+    const h = session()
+    await h.s.start()
+    await (await h.s.send('hold-eof')).result
+    const receipt = await within(h.s.shutdown())
+    expect(receipt.processes[0]).toMatchObject({ generation: 1, state: 'exited', code: null, signal: 'SIGTERM', escalated: false })
+    joined(h)
+  })
+
+  test('O2k: kill ends a hung CLI with an owned SIGKILL as its first signal and the stop succeeds', async () => {
     const h = session()
     await h.s.start()
     void (await h.s.send('hang')).result.catch(() => {})
     const receipt = await within(h.s.kill())
-    expect(receipt.processes[0]).toMatchObject({ generation: 1, state: 'exited', code: null, signal: 'SIGTERM', escalated: false })
+    expect(receipt.processes[0]).toMatchObject({ generation: 1, state: 'exited', code: null, signal: 'SIGKILL', escalated: false, groupCleared: true })
+    expect(h.owners()[0]!.evidence).toMatchObject({ exit: { kind: 'exited', code: null, signal: 'SIGKILL' }, marked: true })
+    expect((h.owners()[0]!.evidence as unknown as { sentAfterMark: string[] }).sentAfterMark[0]).toBe('SIGKILL')
     joined(h)
   })
 
@@ -257,15 +272,35 @@ describe('the stop accounts native evidence (A3)', () => {
     joined(h)
   })
 
-  test('O4: a CLI that traps the owned SIGTERM and exits 3 is an unknown end; the stop fails', async () => {
+  /** Shutdown of a CLI that traps the owned SIGTERM and exits `code`: an unknown end, so the stop fails. */
+  async function trappedShutdownFails(code: 3 | 143) {
     const h = session()
     await h.s.start()
-    await (await h.s.send('trap3')).result
-    const error = await stopFailure(h.s.kill())
+    await (await h.s.send(`trap${code}`)).result
+    const error = await stopFailure(h.s.shutdown())
     expect(error.category).toBe('stop')
-    expect(natives(error).map((n) => n.facts)).toEqual([{ generation: 1, pid: h.owners()[0]!.pid, code: 3, signal: null, observedBeforeStop: false }])
+    expect(natives(error).map((n) => n.facts)).toEqual([{ generation: 1, pid: h.owners()[0]!.pid, code, signal: null, observedBeforeStop: false }])
     joined(h)
-  })
+  }
+
+  /** Kill of the same trapping CLI: an owned SIGKILL ends it before its trap can run, so the stop succeeds. */
+  async function trappedKillSucceeds(code: 3 | 143) {
+    const h = session()
+    await h.s.start()
+    await (await h.s.send(`trap${code}`)).result
+    const receipt = await within(h.s.kill())
+    expect(receipt.processes[0]).toMatchObject({ generation: 1, state: 'exited', code: null, signal: 'SIGKILL', escalated: false, groupCleared: true })
+    expect((h.owners()[0]!.evidence as unknown as { sentAfterMark: string[] }).sentAfterMark[0]).toBe('SIGKILL')
+    joined(h)
+  }
+
+  test('O4 (shutdown counterpart): a CLI that traps the owned SIGTERM and exits 3 is an unknown end; the stop fails', () => trappedShutdownFails(3))
+
+  test('O4-143 (shutdown counterpart): a CLI that traps the owned SIGTERM and exits 143 is an unknown end; the stop fails', () => trappedShutdownFails(143))
+
+  test('O4k: kill ends a CLI that traps SIGTERM with exit 3 by an owned SIGKILL before its trap can run; the stop succeeds', () => trappedKillSucceeds(3))
+
+  test('O4k-143: kill ends a CLI that traps SIGTERM with exit 143 by an owned SIGKILL before its trap can run; the stop succeeds', () => trappedKillSucceeds(143))
 
   test('F1: a spawn failure keeps the owner\'s original error by identity in the failed stop', async () => {
     const h = session(() => {}, { cwd: 'missing-cwd' })

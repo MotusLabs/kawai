@@ -186,16 +186,37 @@ export function linkedAbort(own: AbortController, caller: AbortController | unde
 }
 
 /**
- * Mark every owned process, cancel every query with the stop's token, end its
- * input, then terminate each owned process and close each query. Every
- * termination settles and every close is attempted before the stop settles,
- * even when a termination rejects (task-f5001d7f A13). Outcomes are judged by
- * status: none rejected returns the facts by generation; one rejected throws
- * its reason unchanged; several throw one stop error whose causes are every
- * reason in supplied order.
+ * Mark every owned process, then (kill only) send SIGKILL to each owner whose
+ * exit has not been observed, then cancel every query with the stop's token
+ * and end its input, all without an await in between; then terminate each
+ * owned process and close each query. Kill sends SIGKILL first because a CLI
+ * that traps SIGTERM ends with a normal exit (143), which the strict verdict
+ * fails (task-a67abea1 R2, K1). The exited check runs immediately before each
+ * send; it is a JS guard on this owner's observed exit, not a kernel-atomic
+ * identity proof. Exited and never-started owners are not signalled but are
+ * terminated, joined and accounted as before. A send's result proves
+ * nothing: the frozen exit evidence decides. Shutdown sends nothing here.
+ * Every termination settles and every close is attempted before the stop
+ * settles, even when a send throws or a termination rejects (task-f5001d7f
+ * A13). Outcomes are judged by status: none failed returns the facts by
+ * generation; one failed throws its reason unchanged; several throw one stop
+ * error whose causes are every send throw, then every termination rejection,
+ * each in supplied order.
  */
 export async function terminateGenerations(generations: readonly Generation[], mode: 'kill' | 'shutdown', bounds: TerminateOptions, stopToken: object): Promise<ProcessExitFact[]> {
   for (const generation of generations) generation.owned?.markTermination()
+  const sendFailures: unknown[] = []
+  if (mode === 'kill') {
+    for (const generation of generations) {
+      const owned = generation.owned
+      if (!owned || owned.pid === null || owned.exited !== null) continue
+      try {
+        owned.signal('SIGKILL')
+      } catch (error) {
+        sendFailures.push(error)
+      }
+    }
+  }
   for (const generation of generations) {
     if (!generation.abort.signal.aborted) generation.abort.abort(stopToken)
     generation.input.end()
@@ -213,7 +234,7 @@ export async function terminateGenerations(generations: readonly Generation[], m
       // The transport is already closed.
     }
   }
-  const failures = outcomes.flatMap((outcome) => (outcome.status === 'rejected' ? [outcome.reason as unknown] : []))
+  const failures = [...sendFailures, ...outcomes.flatMap((outcome) => (outcome.status === 'rejected' ? [outcome.reason as unknown] : []))]
   if (failures.length === 1) throw failures[0]
   if (failures.length > 1) throw new AgentRuntimeError({ category: 'stop', message: `${failures.length} owned process terminations failed` }, failures)
   const facts = outcomes.map((outcome) => (outcome as PromiseFulfilledResult<ProcessExitFact>).value)

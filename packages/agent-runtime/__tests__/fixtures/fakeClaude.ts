@@ -11,7 +11,9 @@
 // `quit` exits 0 mid-turn (the CLI ending on its own, no failure);
 // `eof-alive` closes the protocol stream and keeps running; `ignore-term`
 // ignores SIGTERM and stdin EOF from then on (only SIGKILL ends it);
-// `trap3` traps SIGTERM and exits 3 on it, ignoring stdin EOF;
+// `trap3` traps SIGTERM and exits 3 on it, ignoring stdin EOF; `trap143`
+// does the same with exit 143 (as the installed CLI's SIGTERM handler does);
+// `hold-eof` ignores stdin EOF but keeps the default SIGTERM action;
 // `child` starts a helper in this process's own group (not detached, no
 // shared pipes) that outlives this process, appends its pid to
 // $HOME/child-pids, and exits on its own after 20 s at most;
@@ -322,11 +324,19 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
       setInterval(() => {}, 1000)
       return
     case 'trap3':
-      process.on('SIGTERM', () => process.exit(3))
+    case 'trap143': {
+      const code = command === 'trap3' ? 3 : 143
+      process.on('SIGTERM', () => process.exit(code))
       holdOnEof = true
       setInterval(() => {}, 1000)
       assistant('trapping SIGTERM')
       return result(uuid, 'success', 'trapping SIGTERM')
+    }
+    case 'hold-eof':
+      holdOnEof = true
+      setInterval(() => {}, 1000)
+      assistant('holding EOF')
+      return result(uuid, 'success', 'holding EOF')
     case 'stderr-tail': {
       const dir = rest[0] ?? '.'
       const helper = spawn(process.execPath, ['-e', TAIL_HELPER], { detached: true, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, TAIL_RELEASE: `${dir}/release` } })

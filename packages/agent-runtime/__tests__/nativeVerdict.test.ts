@@ -27,6 +27,12 @@ describe('nativeVerdict decision table', () => {
     ['SIGTERM after the mark, but this owner never sent it', evidence(exited(null, 'SIGTERM'), true, []), 'failed'],
     ['SIGKILL after the mark, only SIGTERM sent', evidence(exited(null, 'SIGKILL'), true, ['SIGTERM']), 'failed'],
     ['an unknown signal after the mark', evidence(exited(null, 'SIGSEGV'), true, ['SIGTERM']), 'failed'],
+    // Kill-first (K1, task-a67abea1 R2): additive rows; the verdict is unchanged.
+    ['marked, own SIGKILL first, died of SIGKILL', evidence(exited(null, 'SIGKILL'), true, ['SIGKILL']), 'owned'],
+    ['marked, own SIGKILL first then a later SIGTERM, died of SIGKILL', evidence(exited(null, 'SIGKILL'), true, ['SIGKILL', 'SIGTERM']), 'owned'],
+    ['SIGKILL, unmarked', evidence(exited(null, 'SIGKILL'), false), 'failed'],
+    ['SIGKILL, marked but sent before the mark (not recorded)', evidence(exited(null, 'SIGKILL'), true, []), 'failed'],
+    ['exit 143 after the mark and an own SIGKILL', evidence(exited(143, null), true, ['SIGKILL', 'SIGTERM']), 'failed'],
     ['spawn failed', evidence({ kind: 'spawn-failed', error: new Error('ENOENT') }, true), 'failed'],
     ['no evidence', null, 'failed'],
   ]
