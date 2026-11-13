@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 /**
  * Last-known identity (team-message-threads D3): creation and every rename
@@ -68,6 +68,7 @@ describe('ChatSessionManager team session directory', () => {
       JSON.stringify({ type: 'ai-title', aiTitle: 'adopted title', sessionId: 'dir-title' }) + '\n'
     )
     await harness.manager.send(id, 'hello')
+    await spawned(harness.handles)
     harness.handles[0]!.push(initMessage('dir-title'))
     await waitForCondition(() => directoryRow(id)?.name === 'adopted title')
     expect(directoryRow(id)!.group_id).toBeNull()
@@ -89,6 +90,7 @@ describe('ChatSessionManager team session directory', () => {
       JSON.stringify({ type: 'ai-title', aiTitle: 'too late', sessionId: 'dir-manual' }) + '\n'
     )
     await harness.manager.send(id, 'hello')
+    await spawned(harness.handles)
     harness.handles[0]!.push(initMessage('dir-manual'))
     await flush(10)
     expect(directoryRow(id)!.name).toBe('My own name')

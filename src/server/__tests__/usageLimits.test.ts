@@ -1,13 +1,28 @@
+// Claude plan-usage parsing runs in the public package
+// (@motuslabs/agent-runtime/usage). These cases read each report through
+// Kawai's production view (runtimeEvents.ts chatUsageReport): no
+// accountScope, the login pull as `pull`, and no periodMs for a window whose
+// length is unknown. A plan-window length reads an unknown one as undefined.
 import { describe, expect, test } from 'bun:test'
 import {
-  parseRateLimitEvent,
-  parseUsagePull,
-  parseUsageReport,
-  type RateLimitInfoSlice,
-  type UsagePullSlice,
-  type UsageReportSlice,
-} from '../chat/usageLimits'
-import { windowPeriodMs } from '../chat/usageWindowPeriods'
+  parseRateLimitEvent as parsePushedReport,
+  parseUsagePull as parsePulledReport,
+  parseUsageReport as parseCarriedReport,
+  windowPeriodMs as packageWindowPeriodMs,
+} from '@motuslabs/agent-runtime/usage'
+import type { ChatUsageReport } from '../../shared/chat'
+import { chatUsageReport } from '../chat/provider/runtimeEvents'
+
+const parseRateLimitEvent = (info: unknown, at?: string): ChatUsageReport => chatUsageReport(parsePushedReport(info, at), 'report')
+const parseUsageReport = (report: unknown, at?: string): ChatUsageReport | null => {
+  const parsed = parseCarriedReport(report, at)
+  return parsed === null ? null : chatUsageReport(parsed, 'report')
+}
+const parseUsagePull = (response: unknown, at?: string): ChatUsageReport | null => {
+  const parsed = parsePulledReport(response, at)
+  return parsed === null ? null : chatUsageReport(parsed, 'report')
+}
+const windowPeriodMs = (key: string, group?: string): number | undefined => packageWindowPeriodMs(key, group) ?? undefined
 
 const AT = '2026-10-07T13:00:00.000Z'
 const FIVE_HOUR_RESET = '2026-10-07T18:11:04.000Z'
@@ -20,7 +35,7 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
  * the undocumented unifiedWindows sibling (fractions, epoch-seconds resets), plus
  * the legacy single-window fields naming one of them.
  */
-const PROBE_EVENT: RateLimitInfoSlice = {
+const PROBE_EVENT = {
   status: 'allowed',
   rateLimitType: 'seven_day',
   utilization: 0.1712,
@@ -174,7 +189,7 @@ describe('parseRateLimitEvent', () => {
 })
 
 /** The structured /usage twin an assistant message carries. */
-const FULL_USAGE_REPORT: UsageReportSlice = {
+const FULL_USAGE_REPORT = {
   rate_limits: {
     limits: [
       {
@@ -308,7 +323,7 @@ describe('parseUsageReport', () => {
 })
 
 /** A full usage control reply (the SDK pull response shape). */
-const FULL_PULL: UsagePullSlice = {
+const FULL_PULL = {
   subscription_type: 'max',
   rate_limits_available: true,
   rate_limits: {

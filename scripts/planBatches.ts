@@ -65,12 +65,15 @@ export const PRELOAD_ARG = 'scripts/test-preload.ts'
 
 // The unit-test corpus, in collectFiles' order: the one list the runner's
 // file collection and the @reads guard's scan both use, so the guard always
-// scans exactly what the suite runs (per-result-suite D3/B4).
+// scans exactly what the suite runs (per-result-suite D3/B4). The last entry
+// is every workspace package's own tests (extract-agent-runtime 6.4), so a
+// package test runs, is recorded, and is judged exactly like a root one.
 export const UNIT_TEST_GLOBS = [
   'src/server/__tests__/*.test.ts',
   'src/shared/__tests__/*.test.{ts,tsx}',
   'src/client/__tests__/*.test.{ts,tsx}',
   'scripts/__tests__/*.test.{ts,tsx}',
+  'packages/*/__tests__/*.test.ts',
 ] as const
 
 // Per-file isolation pays cold module compilation and per-test database

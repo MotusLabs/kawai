@@ -1,5 +1,17 @@
+// Limit classification runs in the public package (@motuslabs/agent-runtime/usage);
+// these cases read it through Kawai's production view (runtimeEvents.ts
+// chatLimitSignal: the package's `type` tag stripped). The zone memo and the
+// text-reset adapter are Kawai's own.
 import { describe, expect, test } from 'bun:test'
-import { assistantLimitSignal, isResetTimeZone, rejectedResetsAt, rejectedWindow, retryLimitSignal, textResetsAt, withTextReset } from '../chat/limitSignals'
+import { assistantLimitFailure, rejectedResetsAt, rejectedWindow, retryLimitFailure, textResetsAt } from '@motuslabs/agent-runtime/usage'
+import { type ChatLimitSignal, isResetTimeZone, withTextReset } from '../chat/limitSignals'
+import { chatLimitSignal } from '../chat/provider/runtimeEvents'
+
+/** A package failure as the signal Kawai's session sees, or null. */
+const view = (failure: Parameters<typeof chatLimitSignal>[0] | null): ChatLimitSignal | null => (failure === null ? null : chatLimitSignal(failure))
+const retryLimitSignal = (frame: unknown, resetsAt: string | null, window: string | null = null) => view(retryLimitFailure(frame, resetsAt, window))
+const assistantLimitSignal = (error: string | undefined, text: string, resetsAt: string | null, window: string | null = null) =>
+  view(assistantLimitFailure(error, text, resetsAt, window))
 
 describe('the rejected report window', () => {
   test('a rejected report names its window; other statuses and unnamed windows do not', () => {

@@ -13,6 +13,7 @@ import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import type { OutboundAuditBackups } from '../outbound/service'
 import type { TeamIdentity } from '../team/teamIdentity'
+import { spawned } from './helpers/chatSessionManagerHarness'
 
 let tempDir: string
 let db: SessionDatabase
@@ -69,14 +70,19 @@ async function harness() {
   const created = manager.createSession({ projectPath: '/tmp/proj', name: 'Auditor' })
   if (!created.ok) throw new Error(created.error)
   expect((await manager.send(created.session.id, 'go')).ok).toBe(true)
+  await spawned(spawns)
   spawns[0]!.push({ type: 'system', subtype: 'init', session_id: 'sdk-audit' } as unknown as SDKMessage)
   await settle()
-  const pre = spawns[0]!.options.hooks?.PreToolUse?.[0]?.hooks[0]
-  if (!pre) throw new Error('audit hooks not registered')
-  await pre({
-    hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'tu-1',
-    tool_input: { command: 'curl -d x https://example.internal/hook' },
-  } as never, undefined, { signal: new AbortController().signal })
+  // Every registered PreToolUse hook runs, as the SDK runs them (the package
+  // registers its own beside the audit observation, task 6.1).
+  const pres = (spawns[0]!.options.hooks?.PreToolUse ?? []).flatMap(matcher => matcher.hooks)
+  if (pres.length === 0) throw new Error('audit hooks not registered')
+  for (const pre of pres) {
+    await pre({
+      hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'tu-1',
+      tool_input: { command: 'curl -d x https://example.internal/hook' },
+    } as never, undefined, { signal: new AbortController().signal })
+  }
   await settle()
   return { manager, sessionId: created.session.id, changes }
 }

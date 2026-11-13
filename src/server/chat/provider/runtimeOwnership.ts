@@ -1,0 +1,191 @@
+// Owned work of one Kawai chat driver adapter (task 6.1, A5): every promise a
+// package driver returns (start, send, its turn result, interrupt, kill,
+// shutdown) and every promise a host callback returns is registered here,
+// never dropped. A rejection is kept raw and logged; `settled()` joins
+// everything registered so far (and anything registered while it waits),
+// then reports the failures it has not reported yet, once: it rejects with
+// the original object for one failure, or an AggregateError of the originals
+// for several. Callers waiting at the same time share one report; a later
+// wait reports only newer failures. Nothing here awaits itself: the adapter
+// never calls `settled()` from its own jobs, and a host callback run by
+// `hosted()` carries a private ancestry frame (sync and async continuations
+// alike) while its result is outstanding, so a `settled()` reached from its
+// own live callback is refused at once (category `internal`) before a join is
+// created or reused (F1 R12, note-3893b594). Callers outside that ancestry,
+// of other drivers, or after the callback finished join normally.
+// TerminalJoin re-issues a terminal call the package refused as a self-join
+// from the next outside caller.
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { AgentRuntimeError } from '@motuslabs/agent-runtime'
+import { logger } from '../../logger'
+
+/**
+ * Run host work outside the package's callback ancestry. Kawai's identity
+ * persistence is synchronous, but its side effects start long-lived work
+ * (the mail dispatcher loop) that would inherit the package's "inside
+ * onCheckpoint" mark, so every send that work makes later would be refused.
+ * Kawai keeps no async context of its own: the module's load context is
+ * the root one.
+ */
+export const outsideRuntime: <R>(fn: () => R) => R = AsyncLocalStorage.snapshot()
+
+/** One running host callback of one OwnedWork; live until its result is settled. */
+type Frame = { readonly owner: OwnedWork; readonly parent: Frame | undefined; live: boolean }
+const callbackAncestry = new AsyncLocalStorage<Frame>()
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return value !== null && (typeof value === 'object' || typeof value === 'function') && typeof (value as PromiseLike<unknown>).then === 'function'
+}
+
+export class OwnedWork {
+  private readonly live = new Set<Promise<unknown>>()
+  private readonly failures: Array<{ label: string; error: unknown }> = []
+  /** How many failures a settled() report already carried. */
+  private reported = 0
+  private joining: Promise<void> | null = null
+
+  constructor(private readonly sessionId: string) {}
+
+  /** Register `promise`; its rejection is retained raw and logged once. Returns a promise that never rejects. */
+  track<T>(label: string, promise: Promise<T>): Promise<T | undefined> {
+    const owned = promise.then(
+      (value) => value,
+      (error: unknown) => {
+        this.failures.push({ label, error })
+        logger.warn('chat_runtime_owned_failure', { sessionId: this.sessionId, label, error: error instanceof Error ? error.message : String(error) })
+        return undefined
+      },
+    )
+    this.live.add(owned)
+    void owned.finally(() => this.live.delete(owned))
+    return owned
+  }
+
+  /**
+   * Run a forwarded host callback. A returned promise is owned here (the
+   * package's notifier only catches synchronous throws); a throw goes to the
+   * package, whose stop reports it.
+   */
+  hosted(label: string, fn: () => unknown): void {
+    const frame: Frame = { owner: this, parent: callbackAncestry.getStore(), live: true }
+    // The thenable check and its adoption run inside the frame too: a
+    // custom thenable's then() (and a throwing then getter) belong to the
+    // callback, and any throw finishes the frame before it propagates.
+    let adopted: Promise<unknown> | null
+    try {
+      adopted = callbackAncestry.run(frame, () => {
+        const result = fn()
+        return isThenable(result) ? Promise.resolve(result) : null
+      })
+    } catch (error) {
+      frame.live = false
+      throw error
+    }
+    if (!adopted) {
+      frame.live = false
+      return
+    }
+    void this.track(`callback:${label}`, adopted).finally(() => {
+      frame.live = false
+    })
+  }
+
+  /** True while the caller runs inside one of this owner's own live host callbacks. */
+  private insideOwnCallback(): boolean {
+    for (let frame = callbackAncestry.getStore(); frame; frame = frame.parent) {
+      if (frame.owner === this && frame.live) return true
+    }
+    return false
+  }
+
+  /** Every raw rejection retained so far, oldest first. */
+  retained(): Array<{ label: string; error: unknown }> {
+    return this.failures.slice()
+  }
+
+  /**
+   * Resolves once every registered job (including ones registered meanwhile)
+   * settled, or rejects with the failures not yet reported. `before` runs
+   * between joins, so the adapter can register work that only an outside
+   * caller may start (a re-acquired terminal join).
+   */
+  settled(before?: () => void): Promise<void> {
+    if (this.insideOwnCallback()) {
+      return Promise.reject(new AgentRuntimeError({ category: 'internal', message: 'settled() inside a live host callback of this driver would wait for that callback' }))
+    }
+    this.joining ??= this.join(before).finally(() => {
+      this.joining = null
+    })
+    return this.joining
+  }
+
+  private async join(before?: () => void): Promise<void> {
+    // One turn first: a join started (outside the ancestry) from inside a
+    // host callback still sees that callback's result, which hosted()
+    // registers right after the callback returns.
+    await Promise.resolve()
+    before?.()
+    while (this.live.size > 0) {
+      await Promise.allSettled([...this.live])
+      before?.()
+    }
+    const fresh = this.failures.slice(this.reported)
+    this.reported = this.failures.length
+    if (fresh.length === 1) throw fresh[0]!.error
+    if (fresh.length > 1) throw new AggregateError(fresh.map((f) => f.error), `${fresh.length} owned chat runtime operations failed`)
+  }
+}
+
+/**
+ * A driver's terminal calls (kill/shutdown) over its OwnedWork (decision
+ * note-d342e9bf, A5/A10). The package refuses a terminal join made from inside
+ * its own callback (category `internal`) while its teardown runs on; that
+ * refusal is not a failure but a mark: the next outside caller — a later
+ * kill, or settled() — re-issues the call, so a real caller always joins the
+ * terminal cleanup. settled() re-issues once per call; refused again (it was
+ * itself called from inside a callback), it reports that refusal once instead
+ * of waiting on itself, and the mark stays for a later caller.
+ */
+export class TerminalJoin {
+  private pending: { how: string; call: () => Promise<unknown>; refusal: unknown; reported: boolean } | null = null
+
+  constructor(private readonly owned: OwnedWork) {}
+
+  /** One owned terminal call; a self-join refusal marks it for an outside caller. */
+  begin(how: string, call: () => Promise<unknown>): void {
+    const attempt = call().then(
+      () => undefined,
+      (error: unknown) => {
+        if (error instanceof AgentRuntimeError && error.category === 'internal') {
+          this.pending = { how, call, refusal: error, reported: false }
+          return undefined
+        }
+        throw error
+      },
+    )
+    void this.owned.track(how, attempt)
+  }
+
+  /** Re-issue a refused terminal call from this outside caller. */
+  reacquire(): void {
+    const pending = this.pending
+    if (!pending) return
+    this.pending = null
+    this.begin(pending.how, pending.call)
+  }
+
+  settled(): Promise<void> {
+    let reissued = false
+    return this.owned.settled(() => {
+      const pending = this.pending
+      if (!pending) return
+      if (!reissued) {
+        reissued = true
+        this.reacquire()
+      } else if (!pending.reported) {
+        pending.reported = true
+        void this.owned.track(`${pending.how}:refused`, Promise.reject(pending.refusal))
+      }
+    })
+  }
+}

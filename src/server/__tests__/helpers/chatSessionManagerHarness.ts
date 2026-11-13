@@ -235,6 +235,16 @@ export async function flush(rounds = 6): Promise<void> {
   }
 }
 
+/**
+ * The `index`th spawned fake (task 6.1): the package adapter builds its
+ * query after an asynchronous start, so a test that sent or started waits
+ * for the spawn instead of reading the list synchronously.
+ */
+export async function spawned<T>(list: readonly T[], index = 0, timeoutMs = 2_000): Promise<T> {
+  await waitForCondition(() => list.length > index, timeoutMs)
+  return list[index]!
+}
+
 /** Poll until the condition holds (watcher callbacks are async). */
 export async function waitForCondition(
   condition: () => boolean,
@@ -282,6 +292,8 @@ export function assistantUsage(inputTokens: number, id: string): SDKMessage {
 /** A successful result revealing a 200000-token model window. */
 export function resultWithWindow(): SDKMessage {
   return {
+    // The CLI's frame identity: the package settles each result once by it (task 6.1).
+    uuid: crypto.randomUUID(),
     type: 'result',
     subtype: 'success',
     is_error: false,

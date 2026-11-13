@@ -7,7 +7,7 @@ import type { Session } from '../../shared/types'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, writeTranscript, waitForCondition, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, writeTranscript, waitForCondition, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -83,6 +83,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       await manager.send(sessionId, 'one')
+      await spawned(handles)
       handles[0]!.push(initMessage('sdk-archived'))
       await flush()
       handles[0]!.wire!.record('in', '{"type":"system"}')
@@ -91,6 +92,8 @@ describe('ChatSessionManager', () => {
       await wireLogs.get(sessionId).flush()
 
       expect(manager.archive(sessionId)).toEqual({ ok: true })
+      // The package adapter's kill closes the query in its owned teardown (task 6.1).
+      await waitForCondition(() => handles[0]!.closed)
       expect(handles[0]!.closed).toBe(true)
       // Record, conversation id, and protocol log all survive.
       const row = db.getChatSession(sessionId)!
@@ -114,6 +117,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       await manager.send(sessionId, 'work')
+      await spawned(handles)
       const handle = handles[0]!
       const approval = handle.options.canUseTool!(
         'Bash',
@@ -188,6 +192,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       await manager.send(sessionId, 'first')
+      await spawned(handles)
       handles[0]!.push(initMessage('sdk-resume-after-archive'))
       await flush()
       manager.archive(sessionId)
@@ -200,6 +205,7 @@ describe('ChatSessionManager', () => {
       // Resume needs the transcript on disk (the resume gate).
       writeTranscript('sdk-resume-after-archive', '[]')
       expect((await manager.send(sessionId, 'continue')).ok).toBe(true)
+      await spawned(handles, 1)
       expect(handles[1]!.options.resume).toBe('sdk-resume-after-archive')
       // Restoring an unarchived session is a harmless no-op.
       expect(manager.restore(sessionId)).toEqual({ ok: true })
@@ -218,6 +224,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       await managerA.send(sessionId, 'one')
+      await spawned(handles)
       handles[0]!.push(initMessage('sdk-restart-archived'))
       await flush()
       handles[0]!.wire!.record('in', '{"type":"system"}')

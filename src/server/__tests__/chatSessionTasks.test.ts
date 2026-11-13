@@ -60,12 +60,15 @@ describe('chat session tasks', () => {
     expect(ordinary.ok && ordinary.session.spawned).toBeUndefined()
     expect(ordinary.ok && ordinary.session.taskId).toBeUndefined()
     manager.shutdown()
+    // The retired driver's late settles land before the database closes (task 6.1).
+    await manager.retiredSettled()
   })
 
   test('task and spawned identity survive restart and archive/restore', async () => {
     const first = createManager()
     const { task, session } = await spawnedSession(first)
     first.shutdown()
+    await first.retiredSettled()
     registry = new SessionRegistry()
     const second = createManager()
     expect(registry.get(session.id)).toMatchObject({ spawned: true, taskId: task.id, taskTitle: 'Export' })
@@ -74,6 +77,7 @@ describe('chat session tasks', () => {
     expect(registry.get(session.id)).toMatchObject({ spawned: true, taskId: task.id })
     expect(db.getChatSession(session.id)).toMatchObject({ spawned: true, taskId: task.id, archivedAt: null })
     second.shutdown()
+    await second.retiredSettled()
   })
 
   test('receiving task mail associates an ordinary member with the task and publishes its title', async () => {
@@ -88,6 +92,7 @@ describe('chat session tasks', () => {
     expect(registry.get(dev.session.id)?.taskTitle).toBe('Import')
     expect(db.getChatSession(dev.session.id)?.taskId).toBe(task.id)
     manager.shutdown()
+    await manager.retiredSettled()
   })
 
   test('a spawned member keeps the task it was spawned for when other task mail arrives', async () => {
@@ -100,6 +105,7 @@ describe('chat session tasks', () => {
     expect(registry.get(session.id)).toMatchObject({ taskId: task.id, taskTitle: 'Export' })
     expect(db.getChatSession(session.id)?.taskId).toBe(task.id)
     manager.shutdown()
+    await manager.retiredSettled()
   })
 
   for (const prompt of ['approval', 'question'] as const) {
@@ -116,6 +122,7 @@ describe('chat session tasks', () => {
       expect(resolved.ok).toBe(true)
       await waitFor(() => registry.get(session.id)?.status !== 'permission', 'resolution')
       manager.shutdown()
+      await manager.retiredSettled()
     })
   }
 })

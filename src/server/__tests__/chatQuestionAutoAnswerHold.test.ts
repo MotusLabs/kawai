@@ -1,14 +1,18 @@
 // Question auto-answer hold (openspec question-auto-answer, task 2.3):
 // holdQuestion's refusals and effect on the driver, over the manual clock.
 // The design's "Acceptance oracles" QA-* ids name the row each test pins.
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent, ChatPendingRequest } from '../../shared/chat'
 import {
   createHarness,
   flush,
+  cleanupHarnesses,
 } from './fixtures/chatDriverHarness'
 import { ManualClock } from './fixtures/manualClock'
+
+// Every harness's driver is killed and joined (settled()) after each case.
+afterEach(cleanupHarnesses)
 
 const WAIT_MS = 60_000
 
@@ -86,6 +90,7 @@ test('holdQuestion refuses unknown, non-question, deadline-less, settled, and ca
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
 
   expect(harness.driver.holdQuestion('no-such-id')).toMatchObject({ ok: false })
 
@@ -137,6 +142,7 @@ test('a hold drops the deadline: held event, no autoAnswer in the snapshot, neve
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   const request = questionRequests(harness.events).at(-1)!
   expect(clock.pendingCount).toBe(1)
@@ -163,6 +169,7 @@ test('after a hold the user answers ordinarily and a second hold is refused (QA-
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   try {
     await flush()

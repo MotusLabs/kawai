@@ -1,9 +1,26 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatBackgroundTask, ChatEvent, ChatWireDirection, ChatWorker } from '../../shared/chat'
-import { ChatSessionDriver } from '../chat/ChatSessionDriver'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
+import type { ClaudeChatDriverOptions } from '../chat/provider/claudeRuntime'
+import { createChatDriver } from '../chat/provider/createChatDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import { TurnQueue } from '../chat/TurnQueue'
+
+// The fixture drives Kawai's production composition (createChatDriver ->
+// claudeRuntime.ts -> package core), as the manager does; every driver is
+// killed and joined (settled()) after each case.
+const open: Array<ChatAgentDriver & { settled(): Promise<void> }> = []
+afterEach(async () => {
+  const drivers = open.splice(0)
+  for (const driver of drivers) driver.kill()
+  await Promise.all(drivers.map((driver) => driver.settled()))
+})
+function fixtureDriver(options: Omit<ClaudeChatDriverOptions, 'queryFactory'>): ChatAgentDriver {
+  const driver = createChatDriver({ runtime: 'claude', options: { ...options, queryFactory: fixtureQueryFactory } }) as ChatAgentDriver & { settled(): Promise<void> }
+  open.push(driver)
+  return driver
+}
 
 function userMessage(text: string): SDKUserMessage {
   return { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null } as SDKUserMessage
@@ -96,10 +113,9 @@ describe('development fixture wire frames', () => {
 describe('development fixture context-exhaustion turn', () => {
   test('a prompt-too-long turn ends failed with the incident\'s terminal reason', async () => {
     const events: ChatEvent[] = []
-    const driver = new ChatSessionDriver({
+    const driver = fixtureDriver({
       sessionId: 'chat-fixture-exhausted',
       projectPath: '/tmp/project',
-      queryFactory: fixtureQueryFactory,
       onEvent: (event) => events.push(event),
       onStatus: () => {},
       onWorkers: () => {},
@@ -119,10 +135,9 @@ describe('development fixture rate-limit turn', () => {
   test('a rate-limit turn reports a final 429 limit and ends failed', async () => {
     const events: ChatEvent[] = []
     const limits: unknown[] = []
-    const driver = new ChatSessionDriver({
+    const driver = fixtureDriver({
       sessionId: 'chat-fixture-limited',
       projectPath: '/tmp/project',
-      queryFactory: fixtureQueryFactory,
       onEvent: (event) => events.push(event),
       onStatus: () => {},
       onWorkers: () => {},
@@ -228,10 +243,9 @@ describe('development fixture worker turn', () => {
     const events: ChatEvent[] = []
     const rosters: ChatWorker[][] = []
     const statuses: string[] = []
-    const driver = new ChatSessionDriver({
+    const driver = fixtureDriver({
       sessionId: 'chat-fixture-workers',
       projectPath: '/tmp/project',
-      queryFactory: fixtureQueryFactory,
       onEvent: (event) => events.push(event),
       onStatus: (status) => statuses.push(status),
       onWorkers: (workers) => rosters.push(workers),
@@ -282,10 +296,9 @@ describe('development fixture background turn', () => {
     const events: ChatEvent[] = []
     const rosters: ChatBackgroundTask[][] = []
     const statuses: string[] = []
-    const driver = new ChatSessionDriver({
+    const driver = fixtureDriver({
       sessionId: 'chat-fixture-background',
       projectPath: '/tmp/project',
-      queryFactory: fixtureQueryFactory,
       onEvent: (event) => events.push(event),
       onStatus: (status) => statuses.push(status),
       onBackgroundTasks: (tasks) => rosters.push(tasks),

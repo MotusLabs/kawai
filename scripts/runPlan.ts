@@ -59,6 +59,7 @@ export function planRun(input: {
         ...input.collected.runnerTests,
         ...input.collected.sharedTests,
         ...input.collected.clientTests,
+        ...input.collected.packageTests,
       ],
       serialFiles: input.serialFiles,
       passthrough: input.args.passthrough,

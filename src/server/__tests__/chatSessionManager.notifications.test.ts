@@ -8,7 +8,7 @@ import type { ChatNotification } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
-import { anyDirectory, writeCredentialedProviderCatalog, FakeHandle, testManagers, managedManager, closeDispatchers, fakeQueryFactory, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, writeCredentialedProviderCatalog, FakeHandle, testManagers, managedManager, closeDispatchers, fakeQueryFactory, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -125,6 +125,7 @@ describe('ChatSessionManager notifications', () => {
     const { manager, handles, pushes } = await noticeHarness()
     const first = await startedSession(manager, handles)
     const second = await startedSession(manager, handles, 'second')
+    await spawned(handles)
     handles[0]!.push(notifyFrame({ text: 'first copy' }))
     await drain()
     handles[0]!.push(notifyFrame({ text: 'second copy' }))
@@ -146,6 +147,7 @@ describe('ChatSessionManager notifications', () => {
     jest.useFakeTimers()
     const { manager, handles, pushes } = await noticeHarness()
     const id = await startedSession(manager, handles)
+    await spawned(handles)
     handles[0]!.push(notifyFrame({ timeout_ms: 15_000 }))
     handles[0]!.push(notifyFrame({ key: 'error-compacting-conversation', text: 'Error compacting conversation', color: 'error', priority: 'immediate', timeout_ms: undefined }))
     await drain()
@@ -167,6 +169,7 @@ describe('ChatSessionManager notifications', () => {
     jest.useFakeTimers()
     const { manager, handles } = await noticeHarness()
     const id = await startedSession(manager, handles)
+    await spawned(handles)
     handles[0]!.push(notifyFrame({ timeout_ms: 5_000 }))
     await drain()
     jest.advanceTimersByTime(3_000)
@@ -188,6 +191,7 @@ describe('ChatSessionManager notifications', () => {
     writeCredentials(expiringCredentials(1.4))
     const { manager, handles, pushes } = await noticeHarness()
     const id = await startedSession(manager, handles)
+    await spawned(handles)
     handles[0]!.push(notifyFrame())
     await drain()
     expect(manager.getSnapshot(id)!.notifications).toHaveLength(2)
@@ -201,6 +205,7 @@ describe('ChatSessionManager notifications', () => {
   test('kill clears notices with the session and a restart begins clean', async () => {
     const { manager, handles } = await noticeHarness()
     const id = await startedSession(manager, handles)
+    await spawned(handles)
     handles[0]!.push(notifyFrame())
     await drain()
     expect(manager.getSnapshot(id)!.notifications).toHaveLength(1)
@@ -216,6 +221,7 @@ describe('ChatSessionManager notifications', () => {
   test('an unexpected exit clears untimed notices; the same session respawn starts clean', async () => {
     const { manager, handles, pushes } = await noticeHarness()
     const id = await startedSession(manager, handles)
+    await spawned(handles)
     handles[0]!.push(notifyFrame({ timeout_ms: undefined }))
     await drain()
     expect(manager.getSnapshot(id)!.notifications).toHaveLength(1)
@@ -329,6 +335,7 @@ describe('ChatSessionManager notifications', () => {
   test('dismissNotification removes the key and pushes the new list; unknown keys are a no-op', async () => {
     const { manager, handles, pushes } = await noticeHarness()
     const id = await startedSession(manager, handles)
+    await spawned(handles)
     handles[0]!.push(notifyFrame())
     await drain()
     expect(pushes).toHaveLength(1)
@@ -354,6 +361,7 @@ describe('ChatSessionManager notifications', () => {
     writeCredentials(expiringCredentials(1.4))
     const { manager, handles } = await noticeHarness()
     const id = await startedSession(manager, handles)
+    await spawned(handles)
     handles[0]!.push(notifyFrame({ key: 'low-note', text: 'meh', priority: 'low', color: undefined }))
     await drain()
     handles[0]!.push(notifyFrame({ key: 'urgent-note', text: 'now', priority: 'immediate', color: 'error' }))

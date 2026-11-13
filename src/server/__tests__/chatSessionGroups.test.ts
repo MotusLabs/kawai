@@ -11,6 +11,7 @@ import { fixtureQueryFactory } from '../chat/developmentFixture'
 import { type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { sha256 } from '../metrics/provenanceHash'
+import { waitForCondition } from './helpers/chatSessionManagerHarness'
 import { freshTestDatabase } from './helpers/testDatabase'
 
 describe('chat session groups', () => {
@@ -154,6 +155,7 @@ describe('chat session groups', () => {
     const result = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
     if (!result.ok) throw new Error(result.error)
     expect(await manager.start(result.session.id)).toEqual({ ok: true })
+    await waitForCondition(() => spawned.length > 0)
     const systemPrompt = spawned[0]?.systemPrompt as { append?: string }
     expect(systemPrompt.append).toContain('# Your role: devs\n\nBuild.')
     expect(systemPrompt.append).toContain('- `qa` (qa): Tests releases')
@@ -172,11 +174,13 @@ describe('chat session groups', () => {
       const lead = await manager.createAvailableSession({ projectPath: project, groupId: 'lead' })
       if (!lead.ok) throw new Error(lead.error)
       expect(await manager.start(lead.session.id)).toEqual({ ok: true })
+      await waitForCondition(() => spawned.length > 0)
       expect(spawned[0]?.effort).toBe('max')
 
       const loose = await manager.createAvailableSession({ projectPath: project })
       if (!loose.ok) throw new Error(loose.error)
       expect(await manager.start(loose.session.id)).toEqual({ ok: true })
+      await waitForCondition(() => spawned.length > 1)
       expect(spawned).toHaveLength(2)
       expect('effort' in spawned[1]!).toBe(false)
     } finally {
@@ -194,6 +198,7 @@ describe('chat session groups', () => {
       const lead = await manager.createAvailableSession({ projectPath: project, groupId: 'lead' })
       if (!lead.ok) throw new Error(lead.error)
       expect(await manager.start(lead.session.id)).toEqual({ ok: true })
+      await waitForCondition(() => manager.provenance.starts(lead.session.id).length > 0)
       const [start] = manager.provenance.starts(lead.session.id)
       expect(start).toMatchObject({
         groupId: 'lead', effort: 'max', profileId: 'default', cwd: project,
@@ -207,6 +212,7 @@ describe('chat session groups', () => {
         const loose = await manager.createAvailableSession({ projectPath: project })
         if (!loose.ok) throw new Error(loose.error)
         expect(await manager.start(loose.session.id)).toEqual({ ok: true })
+        await waitForCondition(() => record.mock.calls.length > 0)
         expect(record).toHaveBeenCalledTimes(1)
       } finally { record.mockRestore() }
     } finally {
@@ -230,7 +236,9 @@ describe('chat session groups', () => {
       const launch = async (input: { claudeProfileId?: string; spawned?: boolean }) => {
         const created = await manager.createAvailableSession({ projectPath: project, groupId: 'juniors', ...input })
         if (!created.ok) throw new Error(created.error)
+        const before = spawned.length
         expect(await manager.start(created.session.id)).toEqual({ ok: true })
+        await waitForCondition(() => spawned.length > before)
         return created.session.id
       }
       const human = await launch({ claudeProfileId: 'haiku' })

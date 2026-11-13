@@ -4,11 +4,14 @@
 // KeepCancelledScheduler keeps every cancelled callback invocable and the
 // test fires it by hand — the cleared-fields mutant dies in the hold run,
 // the settled mutant in the user-answer run, each seen one at a time.
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent, ChatPendingRequest } from '../../shared/chat'
 import type { ChatTimerScheduler } from '../chat/timerScheduler'
-import { createHarness, flush } from './fixtures/chatDriverHarness'
+import { createHarness, flush, cleanupHarnesses } from './fixtures/chatDriverHarness'
+
+// Every harness's driver is killed and joined (settled()) after each case.
+afterEach(cleanupHarnesses)
 
 const WAIT_MS = 60_000
 
@@ -97,6 +100,7 @@ test('a deadline callback firing after a hold settles nothing (review F1)', asyn
     timerScheduler: scheduler,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   try {
     await flush()
@@ -127,6 +131,7 @@ test('a deadline callback firing after a user answer never settles twice (review
     timerScheduler: scheduler,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   try {
     await flush()

@@ -1,5 +1,6 @@
-// Claude conversation content-block shapes, shared by the live SDK stream
-// (ChatSessionDriver) and transcript replay (transcriptReplay). SDK-specific
+// Claude conversation content-block shapes, shared by transcript replay
+// (transcriptReplay), the adapter's question deadlines and the approval
+// policy (the live stream's mapping is the package's). SDK-specific
 // types stay out of here: these helpers only read the JSON shapes the CLI
 // writes to transcripts and the SDK streams as messages.
 import type { ChatQuestion, ChatQuestionAnswer } from '../../shared/chat'

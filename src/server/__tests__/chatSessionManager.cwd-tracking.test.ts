@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Session } from '../../shared/types'
 import { type SessionDatabase } from '../db'
-import { anyDirectory, closeDispatchers, createHarness, flush, initMessage, fireCwdChanged, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, closeDispatchers, createHarness, flush, initMessage, fireCwdChanged, writeTranscript, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
@@ -73,6 +73,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       expect(await harness.manager.send(sessionId, 'enter a worktree')).toEqual({ ok: true })
+      await spawned(harness.handles)
       expect(harness.handles[0]!.options.cwd).toBe('/tmp/proj')
 
       const updates: Session[] = []
@@ -103,6 +104,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       await harness.manager.send(sessionId, 'first')
+      await spawned(harness.handles)
       harness.handles[0]!.push(initMessage('sdk-cwd-session'))
       await flush()
       const worktree = '/tmp/proj/.claude/worktrees/add-feature'
@@ -113,6 +115,7 @@ describe('ChatSessionManager', () => {
       harness.handles[0]!.query.close()
       await flush()
       expect(await harness.manager.send(sessionId, 'second')).toEqual({ ok: true })
+      await spawned(harness.handles, 1)
       expect(harness.handles).toHaveLength(2)
       expect(harness.handles[1]!.options.cwd).toBe(worktree)
       expect(harness.handles[1]!.options.resume).toBe('sdk-cwd-session')
@@ -127,6 +130,7 @@ describe('ChatSessionManager', () => {
       await harness.manager.send(created.session.id, 'cd around')
       // A fast cd chain collapses into one discovery pass for its final
       // directory (worktree tracking D2).
+      await spawned(harness.handles)
       await fireCwdChanged(harness.handles[0]!, '/tmp/proj/.claude/worktrees/one')
       await fireCwdChanged(harness.handles[0]!, '/tmp/proj/.claude/worktrees/two')
       await fireCwdChanged(harness.handles[0]!, '/tmp/proj/.claude/worktrees/three')
@@ -142,6 +146,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       await harness.manager.send(sessionId, 'move')
+      await spawned(harness.handles)
       await fireCwdChanged(harness.handles[0]!, '/tmp/proj/.claude/worktrees/gone')
       harness.manager.kill(sessionId)
       await new Promise((resolve) => setTimeout(resolve, 30))
@@ -171,6 +176,7 @@ describe('ChatSessionManager', () => {
           : await harness.manager.start('chat-recovered')
         expect(outcome).toEqual({ ok: true })
         expect(db.getChatSession('chat-recovered')?.projectPath).toBe(worktree)
+        await spawned(harness.handles)
         expect(harness.handles[0]!.options.cwd).toBe(worktree)
         expect(harness.handles[0]!.options.resume).toBe('sdk-late-cwd')
         await new Promise((resolve) => setTimeout(resolve, 30))
@@ -186,6 +192,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const id = created.session.id
       await harness.manager.send(id, 'first')
+      await spawned(harness.handles)
       harness.handles[0]!.push(initMessage('sdk-history-cwd'))
       await flush()
       const recover = (cwd: string) => {
@@ -211,6 +218,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       await first.manager.send(sessionId, 'enter a worktree')
+      await spawned(first.handles)
       first.handles[0]!.push(initMessage('sdk-moved-session'))
       await flush()
       first.manager.shutdown()
@@ -242,6 +250,7 @@ describe('ChatSessionManager', () => {
         '/tmp/proj/.claude/worktrees/add-feature'
       )
       expect(await restored.manager.send(sessionId, 'continue')).toEqual({ ok: true })
+      await spawned(restored.handles)
       expect(restored.handles[0]!.options.cwd).toBe(
         '/tmp/proj/.claude/worktrees/add-feature'
       )

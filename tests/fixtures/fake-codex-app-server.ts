@@ -2,7 +2,7 @@
 // Fake Codex app-server (codex-chat-sessions 4.4): replays one run of the
 // recorded smoke transcript over stdio, so tests exercise the real recorded
 // JSON-RPC shapes without a Codex install. Spawned as `<fake> app-server`
-// (the AppServerClient's argv), selected through KAWAI_CODEX_PATH like the
+// (the transport's default argv), selected through KAWAI_CODEX_PATH like the
 // real executable.
 //
 // FAKE_RUN=<n> picks the run (1-based; the transcript splits on each fresh

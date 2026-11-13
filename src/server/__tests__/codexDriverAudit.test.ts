@@ -3,6 +3,10 @@
 // effort sent as turn/start.effort — and its outbound-audit feed: commands as
 // `Bash` and external MCP calls as `mcp__<server>__<tool>` through every
 // lifecycle edge, never kawai-team calls or file changes, observation only.
+// Through Kawai's production composition (task-5906f19c): createChatDriver →
+// codexRuntime.ts → the public package factory over default-owned stdio; the
+// app-server hears the package's client (the in-tree driver in its place
+// sends Kawai's own clientInfo and fails that value).
 import { afterEach, expect, test } from 'bun:test'
 import type { ChatEvent } from '../../shared/chat'
 import type { OutboundAuditSink } from '../outbound/observer'
@@ -10,9 +14,10 @@ import { SECURITY_NOTE_BODY } from '../team/teamPrompt'
 import { Script, sentRequest, startHarness, THREAD_ID, until, type Harness } from './codexDriverHarness'
 
 let harness: Harness | null = null
-afterEach(() => {
-  harness?.cleanup()
+afterEach(async () => {
+  const done = harness?.cleanup()
   harness = null
+  await done
 })
 
 type Call = { hook: string; use: Record<string, unknown> }
@@ -49,8 +54,10 @@ test('developerInstructions carries the prompt append, security note included, a
     await until(() => harness!.transcriptPaths.length === 1)
     expect(sentRequest(harness, method)!.developerInstructions).toBe(append)
     expect(reads).toBe(1)
-    harness.cleanup()
+    expect(sentRequest(harness, 'initialize')!.clientInfo).toMatchObject({ name: 'agent-runtime' })
+    const done = harness.cleanup()
     harness = null
+    await done
   }
 })
 

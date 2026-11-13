@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ChatSessionRecord } from '../db'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
 import { messageEnvelope, formatEnvelope } from '../team/envelope'
@@ -37,7 +37,7 @@ beforeEach(async () => {
   runtime = new SessionMailbox(db, {
     ownership: NULL_OWNERSHIP, onTaskResultWrite: () => {},
     teams, records: () => records.values(), getRecord: id => records.get(id), available: record => !record.archivedAt,
-    getDriver: id => ({ getPendingRequests: () => [], deliver: () => { records.get(id)!.status = 'working' } }) as unknown as ChatSessionDriver,
+    getDriver: id => ({ getPendingRequests: () => [], deliver: () => { records.get(id)!.status = 'working' } }) as unknown as ChatAgentDriver,
     prepare: async () => {}, restore: () => {}, watchReceipt: () => {}, archive: () => ({ ok: true }), hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false, transcriptFor: () => file, homeDir: dir, onError: error => { throw error },
   })
   // These tests drive dispatch directly, without start()'s recovery pass.

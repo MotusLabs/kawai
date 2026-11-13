@@ -20,6 +20,7 @@ import type { ClaimRef } from '../team/sessionMailbox'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionManager, type ChatQueryFactory } from '../chat/ChatSessionManager'
+import { spawned } from './helpers/chatSessionManagerHarness'
 
 interface FakeHandle {
   query: Query
@@ -72,6 +73,7 @@ function resultWithWindow(): SDKMessage {
   return {
     type: 'result',
     subtype: 'success',
+    uuid: crypto.randomUUID(),
     is_error: false,
     num_turns: 1,
     total_cost_usd: 0.01,
@@ -159,6 +161,7 @@ describe('ChatSessionManager turn-end settle wiring', () => {
         realSettleClaims(refs)
       }
 
+      await spawned(handles)
       handles[0]!.push(resultWithWindow())
       // The inline attempt failed inside handleDriverEvent, which continued;
       // the guard's timer retry runs about a second later.
@@ -230,6 +233,7 @@ describe('ChatSessionManager turn-end settle wiring', () => {
         realSettleClaims(refs)
       }
 
+      await spawned(handles)
       handles[0]!.push(resultWithWindow())
       // Wait out the inline attempt: only then does M2 land inside the
       // retry window.
@@ -284,6 +288,7 @@ describe('ChatSessionManager turn-end settle wiring', () => {
         realSettleClaims(refs)
       }
 
+      await spawned(handles)
       handles[0]!.push(resultWithWindow())
       // Wait out the inline attempt, then requeue the claimed message and
       // claim it again with an explicitly newer claimed_at, inside the
@@ -338,6 +343,7 @@ describe('ChatSessionManager turn-end settle wiring', () => {
         realSettleClaims(refs)
       }
 
+      await spawned(handles)
       handles[0]!.push(resultWithWindow()) // turn 1 ends: inline fail, chain armed
       // Wait out the inline attempt — the fake query delivers pushed
       // messages on a later macrotask, so turn two may only open once turn

@@ -1,12 +1,14 @@
 // Picks a chat driver from the chat's stored runtime (openspec
 // codex-chat-sessions design D1): the caller passes `record.runtime` with
-// that runtime's options. `claude` builds the SDK-backed ChatSessionDriver,
-// `codex` the app-server-backed CodexSessionDriver (task 5.6). A runtime
+// that runtime's options. Both build Kawai's adapters over
+// @motuslabs/agent-runtime's public factories (claudeRuntime.ts and
+// codexRuntime.ts, extract-agent-runtime task 6.1). A runtime
 // with no wired driver throws — a chat must never silently start as
 // something it is not.
-import { ChatSessionDriver, type ChatSessionDriverOptions } from '../ChatSessionDriver'
-import { CodexSessionDriver } from '../codex/CodexSessionDriver'
-import type { CodexSessionDriverOptions } from '../codex/codexThread'
+import type { ChatSessionDriverOptions } from './claudeDriverTypes'
+import { createClaudeChatDriver, type ClaudeChatDriverOptions } from './claudeRuntime'
+import { createCodexChatDriver } from './codexRuntime'
+import type { CodexSessionDriverOptions } from './codexDriverTypes'
 import type { ChatAgentDriver, ChatDriverCallbacks, ChatRuntime } from './driver'
 
 /**
@@ -20,16 +22,16 @@ export type ChatDriverSharedOptions = Pick<
 
 /** One runtime and the options its driver takes. */
 export type ChatDriverDeps =
-  | { runtime: 'claude'; options: ChatSessionDriverOptions }
+  | { runtime: 'claude'; options: ClaudeChatDriverOptions }
   | { runtime: 'codex'; options: CodexSessionDriverOptions }
 
 export function createChatDriver(deps: ChatDriverDeps): ChatAgentDriver {
   const runtime: ChatRuntime = deps.runtime
   switch (deps.runtime) {
     case 'claude':
-      return new ChatSessionDriver(deps.options)
+      return createClaudeChatDriver(deps.options)
     case 'codex':
-      return new CodexSessionDriver(deps.options)
+      return createCodexChatDriver(deps.options)
     default:
       // A stored value no build of kawai ever wrote.
       throw new Error(`No chat driver for runtime "${String(runtime)}" (wired runtimes: claude, codex)`)

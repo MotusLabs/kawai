@@ -157,17 +157,21 @@ describe('the commit hook in a temporary repository', () => {
     expect(result.output).toContain('escape matched bun.lock; running the full check')
   })
 
+  // The amended commit is createHookRepo's own initial commit: the
+  // constructor's checked `git commit` already leaves a clean index equal to
+  // HEAD, which is the precondition a staged edit plus a setup commit used to
+  // build here, so this case spends its budget on the check and the amend.
   test('a message-only amend whose record is unreadable runs the full check (R3)', () => {
-    stage('src/shared/lone.ts', 'export const lone = 10\n')
-    expect(fixture.commit(['-m', 'lone']).code).toBe(0)
+    const tree = fixture.git(['rev-parse', 'HEAD^{tree}']).trim()
     expect(fixture.check().code).toBe(0)
     fixture.takeLog()
     const [name] = fixture.records()
     fs.writeFileSync(path.join(fixture.repo, '.git', 'kawai-checks', name), '{ not json')
-    const result = fixture.commit(['--amend', '-m', 'lone, reworded'])
+    const result = fixture.commit(['--amend', '-m', 'fixture, reworded'])
     expect(result.code).toBe(0)
     expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
     expect(result.output).toContain('no recorded full pass for the index tree')
+    expect(fixture.git(['rev-parse', 'HEAD^{tree}']).trim()).toBe(tree)
   })
 
   test('the amend gate reads no record when write-tree fails (R3)', () => {

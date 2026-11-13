@@ -2,13 +2,19 @@
 // the recorded wire shapes — the snapshot's primary/secondary windows, the
 // read reply's extraction, the drop rule, the limited state, and the labels
 // the usage bar renders.
+//
+// The normalization is the package's public `codexQuotaReport` (task-ce05430a
+// R2 A6), read through Kawai's production view `chatUsageReport`: a pushed
+// snapshot is a `push`, the one `account/rateLimits/read` reply a `report`
+// that Kawai shows as a provider read (codexRuntimeSupport.ts).
 import { describe, expect, test } from 'bun:test'
-import type { RateLimitSnapshot } from '../chat/codex/protocol/v2/RateLimitSnapshot'
-import { codexWindowLabel, normalizeRateLimitSnapshot, snapshotOfRateLimitsRead } from '../chat/codex/codexUsage'
+import { codexQuotaReport, codexReadSnapshot, codexWindowLabel } from '@motuslabs/agent-runtime/usage'
+import type { ChatUsageSource } from '../../shared/chat'
+import { chatUsageReport } from '../chat/provider/runtimeEvents'
 
 const RECEIVED = '2026-10-21T12:00:00.000Z'
 
-const snapshot = (over: Record<string, unknown> = {}): RateLimitSnapshot =>
+const snapshot = (over: Record<string, unknown> = {}) =>
   ({
     limitId: 'codex',
     limitName: null,
@@ -21,7 +27,11 @@ const snapshot = (over: Record<string, unknown> = {}): RateLimitSnapshot =>
     planType: 'plus',
     rateLimitReachedType: null,
     ...over,
-  }) as RateLimitSnapshot
+  })
+
+/** A snapshot as Kawai's usage report: a push by default, a provider read for the read reply. */
+const normalizeRateLimitSnapshot = (snap: unknown, receivedAt = new Date().toISOString(), source: ChatUsageSource = 'push') =>
+  chatUsageReport(codexQuotaReport(snap, source === 'push' ? 'push' : 'report', receivedAt), source)
 
 describe('normalizeRateLimitSnapshot', () => {
   test('primary and secondary windows render with their own identity', () => {
@@ -66,11 +76,20 @@ describe('normalizeRateLimitSnapshot', () => {
 
   test('the read reply supplies the snapshot; a reply without one does not', () => {
     const read = { ordinaryUsageAllowed: true, rateLimits: snapshot(), rateLimitsByLimitId: null, rateLimitResetCredits: null, accountId: null, rateLimitUpsell: null }
-    expect(snapshotOfRateLimitsRead(read)).toEqual(snapshot())
-    expect(snapshotOfRateLimitsRead({})).toBeNull()
-    expect(snapshotOfRateLimitsRead({ rateLimits: null })).toBeNull()
-    expect(snapshotOfRateLimitsRead(null)).toBeNull()
+    expect(codexReadSnapshot(read)).toEqual(snapshot())
+    expect(codexReadSnapshot({})).toBeNull()
+    expect(codexReadSnapshot({ rateLimits: null })).toBeNull()
+    expect(codexReadSnapshot(null)).toBeNull()
     // The fill read reports itself as a provider pull, not a push.
-    expect(normalizeRateLimitSnapshot(snapshotOfRateLimitsRead(read), RECEIVED, 'provider').source).toBe('provider')
+    expect(normalizeRateLimitSnapshot(codexReadSnapshot(read), RECEIVED, 'provider').source).toBe('provider')
+  })
+
+  // A17 D-U1 (task-ce05430a): a non-positive or non-finite window length is
+  // an unknown period (no periodMs); the old root copy kept 0 or negative ms.
+  test('a non-positive or non-finite window length renders without a period', () => {
+    for (const windowDurationMins of [0, -300, Number.POSITIVE_INFINITY, Number.NaN]) {
+      const window = normalizeRateLimitSnapshot(snapshot({ secondary: { usedPercent: 5, windowDurationMins, resetsAt: null } }), RECEIVED).windows[1]
+      expect({ windowDurationMins, window }).toEqual({ windowDurationMins, window: { key: 'codex:secondary', label: 'Window', percentUsed: 5, resetsAt: null } })
+    }
   })
 })

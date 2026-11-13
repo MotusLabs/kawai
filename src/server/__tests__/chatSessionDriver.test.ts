@@ -21,10 +21,13 @@ import type { OutboundAuditSink } from '../outbound/observer'
 import { outboundFile } from '../outbound/destinations'
 import { applyChatEvents, emptyTranscript } from '../../client/stores/chatStore'
 import { SessionTeams } from '../team/sessionTeams'
+import type { TeamToolSpec } from '../team/mailboxTools'
+import { z } from 'zod'
 import { consumerMessages } from './fixtures/backgroundTasks'
-import type { ChatSpawnInfo } from '../chat/ChatSessionDriver'
+import type { ChatSpawnInfo } from '../chat/provider/driver'
 import {
   assistantText,
+  cleanupHarnesses,
   createHarness,
   flush,
   result,
@@ -34,9 +37,30 @@ import {
   type Harness,
 } from './fixtures/chatDriverHarness'
 
+// Every harness's driver is killed and joined (settled()) after each case.
+afterEach(cleanupHarnesses)
+
+
+/**
+ * A8 role anchor: the turn the package opened for the case's n-th written
+ * prompt, joined by its prompt UUID to exactly one transcript user message
+ * and one turn_started. Only the turnId label is projected.
+ */
+function turnOfPrompt(h: Harness, index: number): string {
+  const uuid = h.prompts[index]!.uuid
+  const shown = h.events.filter(e => e.type === 'user_message' && (e as { messageUuid?: string }).messageUuid === uuid)
+  expect(shown).toHaveLength(1)
+  const turnId = (shown[0] as { turnId: string }).turnId
+  expect(h.events.filter(e => e.type === 'turn_started' && e.turnId === turnId)).toHaveLength(1)
+  return turnId
+}
+
+/** sendApproval's default input; the package's allow returns it unchanged as updatedInput. */
+const DEFAULT_INPUT = Object.freeze({ command: 'rm -rf /tmp/x' })
+
 function sendApproval(
   fake: FakeQueryHandle,
-  input: Record<string, unknown> = { command: 'rm -rf /tmp/x' },
+  input: Record<string, unknown> = { ...DEFAULT_INPUT },
   toolName = 'Bash'
 ): Promise<PermissionResult | null> {
   const controller = new AbortController()
@@ -136,6 +160,7 @@ function modelUsageWith(contextWindow: number): Record<string, unknown> {
  * A compact_boundary frame; postTokens omitted leaves post_tokens unset —
  * compact_metadata is required but post_tokens is optional (design D3).
  */
+let compactBoundaries = 0
 function compactBoundary(
   trigger: 'auto' | 'manual',
   preTokens: number,
@@ -149,7 +174,9 @@ function compactBoundary(
       pre_tokens: preTokens,
       ...(postTokens !== undefined ? { post_tokens: postTokens } : {}),
     },
-    uuid: 'compact-uuid',
+    // Each boundary the CLI streams has its own uuid; the package announces
+    // a repeated one once (R03), so a shared literal would collapse them.
+    uuid: `compact-uuid-${++compactBoundaries}`,
     session_id: 'sdk-1',
   } as unknown as SDKMessage
 }
@@ -184,30 +211,48 @@ describe('ChatSessionDriver', () => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdriver-'))
     process.env.HOME = tempHome
   })
-  afterEach(() => {
+  afterEach(async () => {
+    // Join every driver (kill, settled()) before its home is removed.
+    try {
+      await cleanupHarnesses()
+    } finally {
+      restoreHome()
+    }
+  })
+  const restoreHome = () => {
     if (originalHome !== undefined) process.env.HOME = originalHome
     else delete process.env.HOME
     fs.rmSync(tempHome, { recursive: true, force: true })
-  })
+  }
 
   test('passes the executable path when given and omits the option otherwise', async () => {
     const external = createHarness({ claudeExecutablePath: '/opt/claude/bin/claude' })
     external.driver.send('hello')
+    await external.nextWrite()
     expect(external.fakes[0]!.options.pathToClaudeCodeExecutable).toBe('/opt/claude/bin/claude')
 
     const injected = createHarness()
     injected.driver.send('hello')
-    expect('pathToClaudeCodeExecutable' in injected.fakes[0]!.options).toBe(false)
+    await injected.nextWrite()
+    // A10: an injected query without an explicit executable carries the
+    // package's process.execPath; the fake never calls the owned spawner, so
+    // nothing ran it (profile and real-owned executables stay strict elsewhere).
+    expect(injected.fakes[0]!.options.pathToClaudeCodeExecutable).toBe(process.execPath)
 
     external.driver.kill()
     injected.driver.kill()
+    await Promise.all([external.cleanup(), injected.cleanup()])
+    expect(injected.launches).toEqual([])
+    expect(external.launches).toEqual([])
   })
 
   test('concurrent profile drivers keep launch settings and approval bridges independent', async () => {
     const glm = createHarness({ claudeProfileId: 'glm' })
     const minimax = createHarness({ claudeProfileId: 'minimax' })
     glm.driver.send('glm turn')
+    await glm.nextWrite()
     minimax.driver.send('minimax turn')
+    await minimax.nextWrite()
     const first = glm.fakes[0]!
     const other = minimax.fakes[0]!
     expect(first.options.model).toBe('opus')
@@ -225,6 +270,7 @@ describe('ChatSessionDriver', () => {
     first.exit()
     await flush()
     glm.driver.send('respawn')
+    await glm.nextWrite()
     expect(glm.fakes[1]!.options.model).toBe('opus')
     expect(glm.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(first.options.env?.ANTHROPIC_BASE_URL)
     glm.driver.kill()
@@ -242,6 +288,7 @@ describe('ChatSessionDriver', () => {
     }))
     const lan = createHarness({ claudeProfileId: 'lan', claudeExecutablePath: '/opt/claude/bin/claude' })
     lan.driver.send('lan turn')
+    await lan.nextWrite()
     const options = lan.fakes[0]!.options
     // The wrapper replaces the checked Claude Code binary...
     expect(options.pathToClaudeCodeExecutable).toBe('/usr/local/bin/claude-lan')
@@ -257,6 +304,7 @@ describe('ChatSessionDriver', () => {
     const wire: ChatWireRecorder = { record: () => {} }
     const harness = createHarness({ wire })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const first = harness.fakes[0]!
     expect(first.options.spawnClaudeCodeProcess).toBeTypeOf('function')
     expect(harness.factoryWires[0]).toBe(wire)
@@ -264,16 +312,21 @@ describe('ChatSessionDriver', () => {
     first.exit()
     await flush()
     harness.driver.send('again')
+    await harness.nextWrite()
     expect(harness.fakes).toHaveLength(2)
     expect(harness.fakes[1]!.options.spawnClaudeCodeProcess).toBeTypeOf('function')
     expect(harness.factoryWires[1]).toBe(wire)
     harness.driver.kill()
   })
 
-  test('without a wire recorder the SDK spawns its own process', () => {
+  test('without a wire recorder the SDK spawns its own process', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
-    expect('spawnClaudeCodeProcess' in harness.fakes[0]!.options).toBe(false)
+    await harness.nextWrite()
+    // The package always owns the spawn (claudeSpawn.ts, design section 3): the
+    // SDK never spawns its own process, wire or not. What remains of this
+    // case is that no recorder reaches the launch.
+    expect(harness.fakes[0]!.options.spawnClaudeCodeProcess).toBeTypeOf('function')
     expect(harness.factoryWires[0]).toBeUndefined()
     harness.driver.kill()
   })
@@ -290,6 +343,7 @@ describe('ChatSessionDriver', () => {
       }
       const harness = createHarness({ getProviderEnv: () => providerEnv })
       harness.driver.send('hello')
+      await harness.nextWrite()
       const first = harness.fakes[0]!
       // The shipped catalog's credential names (openrouter-provider D3) never
       // reach a launch, whatever the server environment carries.
@@ -303,6 +357,7 @@ describe('ChatSessionDriver', () => {
       await flush()
       providerEnv = { ANTHROPIC_MODEL: 'gw-flash' }
       harness.driver.send('again')
+      await harness.nextWrite()
       expect(harness.fakes).toHaveLength(2)
       expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
       expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
@@ -320,44 +375,78 @@ describe('ChatSessionDriver', () => {
     let reads = 0
     const harness = createHarness({ getSystemPromptAppend: () => { reads++; return prompt } })
     harness.driver.send('hello')
+    await harness.nextWrite()
     expect(harness.fakes[0]!.options.systemPrompt).toEqual({
       type: 'preset', preset: 'claude_code', append: '# Your role: QA\n\nTest it.',
     })
     // An edit while the process runs changes nothing for it.
     prompt = '# Your role: QA\n\nTest it twice.'
     harness.driver.send('again')
+    await harness.nextWrite()
     expect(reads).toBe(1)
     harness.fakes[0]!.exit()
     await flush()
     harness.driver.send('after exit')
+    await harness.nextWrite()
     expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
     expect(reads).toBe(2)
     harness.driver.kill()
   })
 
-  test('audit hooks (execution-safety-recovery D3): registered for the audited tools, observational only', () => {
-    const harness = createHarness()
+  test('audit hooks (execution-safety-recovery D3): registered for the audited tools, observational only', async () => {
+    // Package composition: the policy hook leads PreToolUse, each audited
+    // event carries the package's one all-tool observation hook, and Kawai's
+    // matcher ^(Bash|Monitor|mcp__.+)$ filters inside the replay
+    // (claudeRuntimeLaunch.ts auditHookReplay), not at SDK registration.
+    const seen: string[] = []
+    const quiet = () => {}
+    const sink: OutboundAuditSink = {
+      onPreToolUse: use => { seen.push(`pre:${use.toolName}`) },
+      onPostToolUse: use => { seen.push(`post:${use.toolName}`) },
+      onPostToolUseFailure: use => { seen.push(`fail:${use.toolName}`) },
+      onPermissionDenied: use => { seen.push(`denied:${use.toolName}`) },
+      onDeniedCard: quiet,
+      onSpawnEnd: quiet,
+    }
+    const harness = createHarness({ outbound: sink })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const hooks = harness.fakes[0]!.options.hooks as Record<string, Array<{ matcher?: string; hooks: Array<(input: unknown) => Promise<unknown>> }>>
     expect(hooks.CwdChanged).toHaveLength(1)
     for (const event of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied']) {
-      expect(hooks[event]).toHaveLength(1)
-      expect(hooks[event]![0]!.matcher).toBe('^(Bash|Monitor|mcp__.+)$')
+      expect(hooks[event]).toHaveLength(event === 'PreToolUse' ? 2 : 1)
+      const observer = hooks[event]!.at(-1)!
+      expect(observer.matcher).toBeUndefined()
+      for (const tool of ['Bash', 'Monitor', 'mcp__web-lookup__fetch', 'Read', 'Edit']) {
+        await observer.hooks[0]!({ hook_event_name: event, tool_name: tool, tool_input: {}, tool_response: '', tool_use_id: `tu-${tool}`, error: 'x', reason: 'r' })
+      }
     }
+    await flush()
+    const audited = ['Bash', 'Monitor', 'mcp__web-lookup__fetch']
+    expect(seen).toEqual(['pre', 'post', 'fail', 'denied'].flatMap(kind => audited.map(tool => `${kind}:${tool}`)))
     harness.driver.kill()
   })
 
   test('the no-decision test: every event and tool returns exactly { continue: true }, observer included', async () => {
+    // r4 A13: the SDK-visible hooks are the package's policy hook (first on
+    // PreToolUse) and its observers. For these tools Kawai's policy (every
+    // tool enabled, none disallowed) reaches no decision, so each returns {}
+    // (permissions.ts, integrations.ts); a disallowed tool would be denied.
+    // Kawai's own { continue: true } hooks run inside the replay; the SDK-level
+    // matcher/{ continue: true } shape is not what the SDK sees.
+    let reached = 0
+    const down = (): never => { reached++; throw new Error('sink down') }
     const throws: OutboundAuditSink = {
-      onPreToolUse: () => { throw new Error('sink down') },
-      onPostToolUse: () => { throw new Error('sink down') },
-      onPostToolUseFailure: () => { throw new Error('sink down') },
-      onPermissionDenied: () => { throw new Error('sink down') },
-      onDeniedCard: () => { throw new Error('sink down') },
-      onSpawnEnd: () => { throw new Error('sink down') },
+      onPreToolUse: down,
+      onPostToolUse: down,
+      onPostToolUseFailure: down,
+      onPermissionDenied: down,
+      onDeniedCard: down,
+      onSpawnEnd: down,
     }
     const harness = createHarness({ outbound: throws })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const hooks = harness.fakes[0]!.options.hooks as Record<string, Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>>
     const inputs = [
       { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'tu-1', agent_id: 'agent-1' },
@@ -373,10 +462,14 @@ describe('ChatSessionDriver', () => {
       ['PermissionDenied', [inputs[4]]],
     ] as const) {
       for (const input of uses) {
-        const result = await hooks[event]![0]!.hooks[0]!(input)
-        expect(result).toEqual({ continue: true })
+        for (const matcher of hooks[event]!) {
+          for (const hook of matcher.hooks) expect(await hook(input)).toEqual({})
+        }
       }
     }
+    await flush()
+    // The throwing sink was reached once per audited use, and decided nothing.
+    expect(reached).toBe(inputs.length)
     harness.driver.kill()
   })
 
@@ -396,9 +489,11 @@ describe('ChatSessionDriver', () => {
     }
     const harness = createHarness({ outbound: sink })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const hooks = harness.fakes[0]!.options.hooks as { PreToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }> }
     const input = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'tu-9' }
-    await hooks.PreToolUse[0]!.hooks[0]!(input)
+    // The package's observation hook (the policy hook leads PreToolUse).
+    await hooks.PreToolUse.at(-1)!.hooks[0]!(input)
     // The hook resolved before the sink's deferred write ran.
     expect(seen).toEqual([])
     await flush()
@@ -418,6 +513,7 @@ describe('ChatSessionDriver', () => {
     }
     const harness = createHarness({ outbound: sink })
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const approval = sendApproval(fake, { command: 'git push' })
     await flush()
@@ -443,7 +539,48 @@ describe('ChatSessionDriver', () => {
     }
     const harness = createHarness({ outbound: sink })
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
+    // UNWAIVED (r4 A15, GAP13 callback-only native tool id; tracker
+    // task-5f006664): the card's id comes from canUseTool's toolUseID alone.
+    const controller = new AbortController()
+    const cancelled = fake.options.canUseTool!('Bash', { command: 'git push' }, {
+      signal: controller.signal,
+      toolUseID: 'toolu_cancel',
+      requestId: 'sdk-req-cancel',
+    })
+    await flush()
+    controller.abort()
+    const result = await cancelled
+    expect(result).toMatchObject({ behavior: 'deny', interrupt: true })
+    await flush()
+    expect(denied).toEqual([{ toolUseId: 'toolu_cancel', reason: 'interrupted' }])
+    harness.driver.kill()
+  })
+
+  test('an interrupt-cancelled card after its streamed tool_use reports that tool id (added valid-stream coverage, r4 A15)', async () => {
+    const denied: Array<{ toolUseId: string; reason?: string }> = []
+    const sink: OutboundAuditSink = {
+      onPreToolUse: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPermissionDenied: () => {},
+      onDeniedCard: use => { denied.push({ toolUseId: use.toolUseId, reason: use.reason }) },
+      onSpawnEnd: () => {},
+    }
+    const harness = createHarness({ outbound: sink })
+    harness.driver.send('go')
+    await harness.nextWrite()
+    const fake = harness.fakes[0]!
+    // The CLI streams the tool_use before asking; the adapter takes the card's
+    // tool id from it (claudeRuntime.ts toolCalls), not from canUseTool's.
+    fake.push({
+      type: 'assistant',
+      message: { id: 'msg_cancel', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_cancel', name: 'Bash', input: { command: 'git push' } }] },
+      parent_tool_use_id: null,
+      session_id: 'sdk-session-1',
+    } as unknown as SDKMessage)
+    await flush()
     const controller = new AbortController()
     const cancelled = fake.options.canUseTool!('Bash', { command: 'git push' }, {
       signal: controller.signal,
@@ -471,9 +608,10 @@ describe('ChatSessionDriver', () => {
     }
     const harness = createHarness({ outbound: sink })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const hooks = harness.fakes[0]!.options.hooks as { PostToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }> }
     const post = (response: unknown, id: string): Promise<unknown> =>
-      hooks.PostToolUse[0]!.hooks[0]!({ tool_name: 'Bash', tool_input: { command: 'bun run test' }, tool_response: response, tool_use_id: id })
+      hooks.PostToolUse.at(-1)!.hooks[0]!({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'bun run test' }, tool_response: response, tool_use_id: id })
     // The SDK's typed shape (BashOutput): a backgroundTaskId, a user move,
     // and a timeout move all mark the call backgrounded.
     await post({ type: 'text', backgroundTaskId: 'bash_1' }, 'tu-bg-1')
@@ -484,6 +622,7 @@ describe('ChatSessionDriver', () => {
     await post('done', 'tu-fg-2')
     // The older text marker stays as a fallback for older builds.
     await post('Command did not complete within its 120s timeout and was moved to the background (ID: b0usjmoay).', 'tu-bg-4')
+    await flush() // the replay runs Kawai's hooks off the SDK hook's return
     expect(backgrounds).toEqual([true, true, true, false, false, true])
     harness.driver.kill()
   })
@@ -501,6 +640,7 @@ describe('ChatSessionDriver', () => {
       const appendOf = (index: number): string =>
         (harness.fakes[index]!.options.systemPrompt as { append?: string }).append ?? ''
       harness.driver.send('hello')
+      await harness.nextWrite()
       expect(appendOf(0)).toContain(
         'Internal destinations the owner configured: one.example.internal.'
       )
@@ -511,6 +651,7 @@ describe('ChatSessionDriver', () => {
       harness.fakes[0]!.exit()
       await flush()
       harness.driver.send('after exit')
+      await harness.nextWrite()
       // The first process kept the append it was spawned with.
       expect(appendOf(0)).toContain('one.example.internal')
       expect(appendOf(0)).not.toContain('two.example.internal')
@@ -533,23 +674,29 @@ describe('ChatSessionDriver', () => {
       onSpawn: info => spawns.push(info),
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     expect(spawns).toHaveLength(1)
     expect(spawns[0]).toMatchObject({ cwd: '/tmp/project', systemPromptAppend: 'role text', effort: 'high', model: null, resumed: true })
     expect(spawns[0]!.env).toBeDefined()
     harness.driver.send('again')
+    await harness.nextWrite()
     expect(spawns).toHaveLength(1)
     harness.fakes[0]!.exit()
     await flush()
     harness.driver.send('after crash')
+    await harness.nextWrite()
     expect(spawns).toHaveLength(2)
   })
 
   test('a throwing onSpawn never fails the spawn', async () => {
-    const harness = createHarness({ onSpawn: () => { throw new Error('recorder broke') } })
+    const broke = new Error('recorder broke')
+    const harness = createHarness({ onSpawn: () => { throw broke } })
     harness.driver.send('hello')
+    await harness.nextWrite()
     expect(harness.fakes).toHaveLength(1)
     expect(harness.driver.isDead).toBe(false)
     expect(harness.statuses.at(-1)).toBe('working')
+    await harness.expectFailures(broke)
   })
 
   test('the group effort is a launch option, re-read only at the next spawn', async () => {
@@ -557,53 +704,65 @@ describe('ChatSessionDriver', () => {
     let reads = 0
     const harness = createHarness({ getEffort: () => { reads++; return effort } })
     harness.driver.send('hello')
+    await harness.nextWrite()
     expect(harness.fakes[0]!.options.effort).toBe('medium')
     // An edit while the process runs changes nothing for it.
     effort = 'max'
     harness.driver.send('again')
+    await harness.nextWrite()
     expect(reads).toBe(1)
     harness.fakes[0]!.exit()
     await flush()
     harness.driver.send('after exit')
+    await harness.nextWrite()
     expect(harness.fakes[1]!.options.effort).toBe('max')
     // Removing it leaves Claude Code's settings in force: no effort key.
     effort = undefined
     harness.fakes[1]!.exit()
     await flush()
     harness.driver.send('after removal')
+    await harness.nextWrite()
     expect('effort' in harness.fakes[2]!.options).toBe(false)
     expect(reads).toBe(3)
     harness.driver.kill()
   })
 
-  test('without a getter no effort option is passed', () => {
+  test('without a getter no effort option is passed', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     expect('effort' in harness.fakes[0]!.options).toBe(false)
     harness.driver.kill()
   })
 
-  test('without a team prompt the preset is unchanged', () => {
+  test('without a team prompt the preset is unchanged', async () => {
     const harness = createHarness({ getSystemPromptAppend: () => '' })
     harness.driver.send('hello')
-    expect(harness.fakes[0]!.options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' })
+    await harness.nextWrite()
+    // A10: an empty append leaves the package's SDK systemPrompt absent; no
+    // semantic-equivalence claim with the class's bare preset is made.
+    expect('systemPrompt' in harness.fakes[0]!.options).toBe(false)
     harness.driver.kill()
   })
 
   test('start spawns the query without a turn; a later send reuses the same query', async () => {
     const harness = createHarness()
     harness.driver.start()
+    await harness.spawned(0) // the package builds its query after its async boot
     expect(harness.fakes).toHaveLength(1)
-    // No turn, no user message: only the spawn happened.
+    // No turn, no user message: only the spawn happened. The adapter
+    // publishes its idle status once booted (the class published none).
     expect(typesOf(harness.events)).toEqual([])
-    expect(harness.statuses).toEqual([])
+    expect(harness.statuses).toEqual(['waiting'])
 
     // While the query runs, start is a no-op (no second spawn).
     harness.driver.start()
+    await flush()
     expect(harness.fakes).toHaveLength(1)
 
     // A later send reuses the same query for its turn and reaches its prompt.
     harness.driver.send('hello')
+    await harness.nextWrite()
     expect(harness.fakes).toHaveLength(1)
     expect(typesOf(harness.events)).toEqual(['turn_started', 'user_message'])
     const pulled = await harness.fakes[0]!.pullPrompt()
@@ -613,6 +772,7 @@ describe('ChatSessionDriver', () => {
   test('start respawns a dead driver with resume', async () => {
     const harness = createHarness()
     harness.driver.start()
+    await harness.spawned(0)
     const first = harness.fakes[0]!
     first.push({
       type: 'system',
@@ -625,6 +785,7 @@ describe('ChatSessionDriver', () => {
     expect(harness.driver.isDead).toBe(true)
 
     harness.driver.start()
+    await harness.spawned(1)
     expect(harness.fakes).toHaveLength(2)
     expect(harness.fakes[1]!.options.resume).toBe('sdk-start-resume')
     harness.driver.kill()
@@ -657,6 +818,7 @@ describe('ChatSessionDriver', () => {
         initializationCommands: [{ name: 'usage', description: 'costs', builtin: true }],
       })
       harness.driver.start()
+      await harness.spawned(0)
       await flush()
       harness.fakes[0]!.push({
         type: 'system',
@@ -678,6 +840,7 @@ describe('ChatSessionDriver', () => {
         ],
       })
       harness.driver.start()
+      await harness.spawned(0)
       await flush()
       // doctor is hidden by the fallback terminal set until init speaks.
       expect(harness.commandStates.at(-1)!.commands.map((c) => c.name)).toEqual(['statusline'])
@@ -708,6 +871,7 @@ describe('ChatSessionDriver', () => {
         initializationCommands: [{ name: 'usage', description: 'costs', builtin: true }],
       })
       harness.driver.start()
+      await harness.spawned(0)
       await flush()
       expect(harness.commandStates.at(-1)!.status).toBe('ready')
 
@@ -716,6 +880,7 @@ describe('ChatSessionDriver', () => {
       expect(harness.driver.getCommandState().status).toBe('unavailable')
 
       harness.driver.start() // respawn
+      await harness.spawned(1) // the package builds the respawn after its async boot
       expect(harness.driver.getCommandState().status).toBe('loading')
       harness.driver.kill()
       expect(harness.driver.getCommandState().status).toBe('unavailable')
@@ -724,6 +889,7 @@ describe('ChatSessionDriver', () => {
     test('local command output maps to a command_output event in the active turn', async () => {
       const harness = createHarness()
       harness.driver.send('/context')
+      await harness.nextWrite()
       const fake = harness.fakes[0]!
       fake.push({
         type: 'system',
@@ -741,7 +907,8 @@ describe('ChatSessionDriver', () => {
       await flush()
       const outputs = harness.events.filter((e) => e.type === 'command_output')
       expect(outputs).toHaveLength(1)
-      expect(outputs[0]).toMatchObject({ text: 'Context usage: 12%', turnId: 'turn-1' })
+      // A8: 'turn-1' is the role of the '/context' prompt's turn.
+      expect(outputs[0]).toMatchObject({ text: 'Context usage: 12%', turnId: turnOfPrompt(harness, 0) })
       harness.driver.kill()
     })
   })
@@ -751,15 +918,15 @@ describe('ChatSessionDriver', () => {
     expect(harness.fakes).toHaveLength(0) // no SDK spawn before first turn
 
     harness.driver.send('hello')
+    await harness.nextWrite()
     expect(harness.fakes).toHaveLength(1)
     expect(harness.statuses.at(-1)).toBe('working') // applied synchronously
 
     const fake = harness.fakes[0]!
     expect(fake.options.cwd).toBe('/tmp/project')
-    expect(fake.options.systemPrompt).toEqual({
-      type: 'preset',
-      preset: 'claude_code',
-    })
+    // A10: with no append the package passes no systemPrompt (the class sent
+    // the bare preset); the nonempty Kawai preset+append stays strict below.
+    expect('systemPrompt' in fake.options).toBe(false)
     expect(fake.options.settingSources).toEqual(['user', 'project', 'local'])
     expect(fake.options.permissionMode).toBe('default')
     expect(fake.options.includePartialMessages).toBe(true)
@@ -822,12 +989,15 @@ describe('ChatSessionDriver', () => {
     const fake = () => harness.fakes.at(-1)!
     const completions = () => harness.events.filter(event => event.type === 'turn_completed')
     harness.driver.send('one')
+    await harness.nextWrite()
     fake().push(result('success', { usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 40 } }))
     await flush()
     harness.driver.send('two')
+    await harness.nextWrite()
     fake().push(result('success', { usage: { output_tokens: 5 } }))
     await flush()
     harness.driver.send('three')
+    await harness.nextWrite()
     fake().push(result('success', { usage: undefined }))
     await flush()
     expect(completions().map(event => (event as { usage?: unknown }).usage)).toEqual([
@@ -845,17 +1015,20 @@ describe('ChatSessionDriver', () => {
     // The spike's OpenRouter turn: one streamed call charged $0.001064075
     // while the SDK estimated $0.042563 from list prices.
     harness.driver.send('one')
+    await harness.nextWrite()
     fake().push(streamEvent({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 3, output_tokens: 12, cost: 0.001064075 } }))
     fake().push(result('success', { total_cost_usd: 0.042563 }))
     await flush()
     // Several calls, a subagent's streamed one included, add up.
     harness.driver.send('two')
+    await harness.nextWrite()
     fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: 0.002 } }))
     fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: 0.001 } }, 'toolu_task'))
     fake().push(result('success'))
     await flush()
     // No cost field (or an unusable one): no provider cost, nothing carried over.
     harness.driver.send('three')
+    await harness.nextWrite()
     fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1 } }))
     fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: -1 } }))
     fake().push(streamEvent({ type: 'message_delta', delta: {}, usage: { output_tokens: 1, cost: 'free' } }))
@@ -871,6 +1044,7 @@ describe('ChatSessionDriver', () => {
   test('assistant deltas map from partial stream events', async () => {
     const harness = createHarness()
     harness.driver.send('hi')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push({
       type: 'stream_event',
@@ -900,6 +1074,7 @@ describe('ChatSessionDriver', () => {
   test('text, tool, text of one SDK message apply as three ordered entries (chat-transcript-layout D5)', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const stream = (uuid: string, event: unknown) => fake.push({
       type: 'stream_event', event, parent_tool_use_id: null, uuid, session_id: 'sdk-1',
@@ -927,6 +1102,7 @@ describe('ChatSessionDriver', () => {
   test('user echo from the SDK is suppressed, foreign user text is kept', async () => {
     const harness = createHarness()
     harness.driver.send('mine')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push({
       type: 'user',
@@ -950,6 +1126,7 @@ describe('ChatSessionDriver', () => {
   test('interrupt: cancels pending approval, discards queued send, emits turn_interrupted', async () => {
     const harness = createHarness()
     harness.driver.send('first')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     await fake.pullPrompt() // consume the first send
 
@@ -985,6 +1162,7 @@ describe('ChatSessionDriver', () => {
   test('SDK abort signal cancels its pending request', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
 
     const controller = new AbortController()
@@ -1007,6 +1185,7 @@ describe('ChatSessionDriver', () => {
   test('allow and deny settle the bridge and broadcast the outcome', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
 
     const allow = sendApproval(fake, { command: 'echo hi' })
@@ -1014,7 +1193,7 @@ describe('ChatSessionDriver', () => {
     const allowEvent = harness.events.find((e) => e.type === 'approval_request')
     const allowId = (allowEvent as { requestId: string }).requestId
     expect(harness.driver.resolveApproval(allowId, 'allow')).toEqual({ ok: true })
-    await expect(allow).resolves.toEqual({ behavior: 'allow' })
+    await expect(allow).resolves.toEqual({ behavior: 'allow', updatedInput: { command: 'echo hi' } })
 
     const deny = sendApproval(fake, { command: 'echo no' })
     await flush()
@@ -1035,6 +1214,7 @@ describe('ChatSessionDriver', () => {
   test('first answer wins; stale or duplicate answers are rejected', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const approval = sendApproval(fake)
     await flush()
@@ -1051,12 +1231,13 @@ describe('ChatSessionDriver', () => {
     expect(harness.driver.resolveApproval('req-does-not-exist', 'allow')).toMatchObject({
       ok: false,
     })
-    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    await expect(approval).resolves.toEqual({ behavior: 'allow', updatedInput: DEFAULT_INPUT })
   })
 
   test('kill settles pending callbacks, closes the query, and ignores later sends', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const approval = sendApproval(fake)
     await flush()
@@ -1077,6 +1258,7 @@ describe('ChatSessionDriver', () => {
   test('AskUserQuestion: parses questions, validates answers, returns updated input', async () => {
     const harness = createHarness()
     harness.driver.send('choose')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
 
     const question: Promise<PermissionResult | null> = fake.options.canUseTool!(
@@ -1159,6 +1341,7 @@ describe('ChatSessionDriver', () => {
   test('free-text question answer becomes the answer string and response', async () => {
     const harness = createHarness()
     harness.driver.send('ask')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const question: Promise<PermissionResult | null> = fake.options.canUseTool!(
       'AskUserQuestion',
@@ -1193,6 +1376,7 @@ describe('ChatSessionDriver', () => {
   test('multi-select questions join selections and reject two picks when single-select', async () => {
     const harness = createHarness()
     harness.driver.send('ask')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
 
     const single: Promise<PermissionResult | null> = fake.options.canUseTool!(
@@ -1222,7 +1406,12 @@ describe('ChatSessionDriver', () => {
     harness.driver.kill()
     await expect(single).resolves.toMatchObject({ behavior: 'deny' })
 
-    const multi: Promise<PermissionResult | null> = fake.options.canUseTool!(
+    // The package refuses callbacks after close (requests.ts:66), so the
+    // multi-select half runs on a fresh session rather than the killed one.
+    const second = createHarness()
+    second.driver.send('ask')
+    await second.nextWrite()
+    const multi: Promise<PermissionResult | null> = second.fakes[0]!.options.canUseTool!(
       'AskUserQuestion',
       {
         questions: [
@@ -1237,10 +1426,10 @@ describe('ChatSessionDriver', () => {
       { signal: new AbortController().signal, toolUseID: 'q2', requestId: 'r' }
     )
     await flush()
-    event = harness.events.filter((e) => e.type === 'question_request').at(-1)!
+    event = second.events.filter((e) => e.type === 'question_request').at(-1)!
     requestId = (event as { requestId: string }).requestId
     expect(
-      harness.driver.answerQuestion(requestId, {
+      second.driver.answerQuestion(requestId, {
         'Pick many?': { options: ['x', 'y'] },
       })
     ).toEqual({ ok: true })
@@ -1252,6 +1441,7 @@ describe('ChatSessionDriver', () => {
   test('own text with options: refused for single-select, appended for multi-select', async () => {
     const harness = createHarness()
     harness.driver.send('ask')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const ask = (question: string, multiSelect: boolean, id: string) => fake.options.canUseTool!(
       'AskUserQuestion',
@@ -1283,6 +1473,7 @@ describe('ChatSessionDriver', () => {
   test('two turns on one session: a result does not end the stream', async () => {
     const harness = createHarness()
     harness.driver.send('one')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantText('first answer', 'msg_1'))
     fake.push(result('success'))
@@ -1291,6 +1482,7 @@ describe('ChatSessionDriver', () => {
     expect(harness.driver.isDead).toBe(false)
 
     harness.driver.send('two')
+    await harness.nextWrite()
     expect(harness.fakes).toHaveLength(1) // same query reused
     fake.push(assistantText('second answer', 'msg_2'))
     fake.push(result('success'))
@@ -1307,6 +1499,7 @@ describe('ChatSessionDriver', () => {
   test('error result leaves the session usable and reports the failure', async () => {
     const harness = createHarness()
     harness.driver.send('explode')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(
       result('error_max_turns', { errors: ['Turn limit reached'], is_error: true })
@@ -1330,6 +1523,7 @@ describe('ChatSessionDriver', () => {
   test('a success result with is_error completes the turn as failed (the 2026-10-18 incident frames)', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     // The CLI's blocking-limit refusal: a <synthetic> reply with zero usage,
     // then subtype success with is_error and the terminal reason.
@@ -1370,22 +1564,32 @@ describe('ChatSessionDriver', () => {
   test('a plain success result carries isError false and no error event', async () => {
     const harness = createHarness()
     harness.driver.send('hi')
+    await harness.nextWrite()
     harness.fakes[0]!.push(result('success'))
     await flush()
     const completed = harness.events.find((e) => e.type === 'turn_completed')
-    expect(completed).toMatchObject({ isError: false, finalText: 'all done' })
+    // The adapter carries isError only when true (runtimeEvents.ts); the
+    // class wrote false. A plain success has no isError and succeeds.
+    expect(completed).toMatchObject({ subtype: 'success', finalText: 'all done' })
+    expect(completed && 'isError' in completed).toBe(false)
+    expect(completed && turnSucceeded(completed as never)).toBe(true)
     expect(completed && 'terminalReason' in completed).toBe(false)
     expect(harness.events.some((e) => e.type === 'error')).toBe(false)
   })
 
-  test('turn identities stay unique when the same managed session constructs a fresh driver', () => {
-    const first=createHarness({deterministicTurnIds:false})
-    const restarted=createHarness({deterministicTurnIds:false})
+  test('turn identities stay unique when the same managed session constructs a fresh driver', async () => {
+    // The package always mints random turn ids (no deterministic knob); each
+    // turn is anchored by its own prompt (A8). The class's 'turn-' prefix is
+    // gone: the package's id is the bare UUID.
+    const first=createHarness()
+    const restarted=createHarness()
     first.driver.send('first');restarted.driver.send('after restart')
-    const a=first.events.find(event=>event.type==='turn_started')!.turnId
-    const b=restarted.events.find(event=>event.type==='turn_started')!.turnId
+    await first.nextWrite();await restarted.nextWrite()
+    const a=turnOfPrompt(first,0)
+    const b=turnOfPrompt(restarted,0)
     expect(a).not.toBe(b)
-    expect(a).toMatch(/^turn-[0-9a-f-]{36}$/)
+    expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    expect(b).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
     first.driver.kill();restarted.driver.kill()
   })
 
@@ -1393,6 +1597,7 @@ describe('ChatSessionDriver', () => {
     const observations: import('../../shared/processObservations').Measurement[] = []
     const h = createHarness({onCompaction:data=>observations.push(data)})
     h.driver.send('hi')
+    await h.nextWrite()
     h.fakes[0]!.push(compactBoundary('auto', 100))
     await flush()
     expect(observations[0]).toMatchObject({trigger:'auto',preTokens:100,postTokens:null,startedAt:null,durationSeconds:null,outcome:'completed'})
@@ -1403,16 +1608,21 @@ describe('ChatSessionDriver', () => {
     expect(observations[2]).toMatchObject({trigger:'manual',preTokens:200,postTokens:50,outcome:'completed'})
     expect(typeof observations[2]!.durationSeconds).toBe('number')
     h.driver.kill()
-    const failing=createHarness({onCompaction:()=>{throw Error('recorder failure')}})
-    failing.driver.send('hi');failing.fakes[0]!.push(compactBoundary('auto',100,40))
+    const recorderFailure=Error('recorder failure')
+    const failing=createHarness({onCompaction:()=>{throw recorderFailure}})
+    failing.driver.send('hi')
+    await failing.nextWrite()
+    failing.fakes[0]!.push(compactBoundary('auto',100,40))
     failing.fakes[0]!.push(result('success'));await flush()
     expect(typesOf(failing.events)).toContain('turn_completed')
     failing.driver.kill()
+    await failing.expectFailures(recorderFailure)
   })
 
   test('trailing events after result are tolerated without killing the session', async () => {
     const harness = createHarness()
     harness.driver.send('hi')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(result('success'))
     fake.push({
@@ -1434,6 +1644,7 @@ describe('ChatSessionDriver', () => {
   test('process crash marks the driver dead; next send respawns with resume', async () => {
     const harness = createHarness()
     harness.driver.send('one')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push({
       type: 'system',
@@ -1449,20 +1660,23 @@ describe('ChatSessionDriver', () => {
     expect(typesOf(harness.events)).toContain('error')
 
     harness.driver.send('two')
+    await harness.nextWrite()
     expect(harness.fakes).toHaveLength(2)
     expect(harness.fakes[1]!.options.resume).toBe('sdk-crash-1')
     expect(harness.statuses.at(-1)).toBe('working')
   })
 
-  test('resumeSessionId option is passed to the first query', () => {
+  test('resumeSessionId option is passed to the first query', async () => {
     const harness = createHarness({ resumeSessionId: 'sdk-stored' })
     harness.driver.send('continue')
+    await harness.nextWrite()
     expect(harness.fakes[0]!.options.resume).toBe('sdk-stored')
   })
 
   test('status: approval resolution with zero/one/multiple pending requests', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     expect(harness.statuses.at(-1)).toBe('working')
 
@@ -1494,11 +1708,12 @@ describe('ChatSessionDriver', () => {
   test('auto policy grants tool approvals without a card or permission status', async () => {
     const harness = createHarness({ getApprovalPolicy: () => 'auto' })
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const approval = sendApproval(fake)
     await flush()
 
-    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    await expect(approval).resolves.toEqual({ behavior: 'allow', updatedInput: DEFAULT_INPUT })
     expect(typesOf(harness.events)).not.toContain('approval_request')
     const resolved = harness.events.find((e) => e.type === 'request_resolved') as
       | Extract<ChatEvent, { type: 'request_resolved' }>
@@ -1512,6 +1727,7 @@ describe('ChatSessionDriver', () => {
   test('auto policy still routes AskUserQuestion to the user', async () => {
     const harness = createHarness({ getApprovalPolicy: () => 'auto' })
     harness.driver.send('choose')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const question = sendApproval(
       fake,
@@ -1547,6 +1763,7 @@ describe('ChatSessionDriver', () => {
   test('user decisions carry decidedBy user', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const approval = sendApproval(fake)
     await flush()
@@ -1555,7 +1772,7 @@ describe('ChatSessionDriver', () => {
     }).requestId
 
     expect(harness.driver.resolveApproval(requestId, 'allow')).toEqual({ ok: true })
-    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    await expect(approval).resolves.toEqual({ behavior: 'allow', updatedInput: DEFAULT_INPUT })
     const resolved = harness.events.find((e) => e.type === 'request_resolved') as
       Extract<ChatEvent, { type: 'request_resolved' }>
     expect(resolved.decidedBy).toBe('user')
@@ -1565,6 +1782,7 @@ describe('ChatSessionDriver', () => {
   test('switching to auto grants pending approvals but not questions', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const approval = sendApproval(fake)
     await flush()
@@ -1591,7 +1809,7 @@ describe('ChatSessionDriver', () => {
     harness.driver.onApprovalPolicyChanged('auto')
     await flush()
 
-    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    await expect(approval).resolves.toEqual({ behavior: 'allow', updatedInput: DEFAULT_INPUT })
     const policyGrant = harness.events
       .filter((e) => e.type === 'request_resolved')
       .find(
@@ -1618,6 +1836,7 @@ describe('ChatSessionDriver', () => {
   test('switching to manual leaves pending approvals with the user', async () => {
     const harness = createHarness()
     harness.driver.send('go')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const approval = sendApproval(fake)
     await flush()
@@ -1665,6 +1884,7 @@ describe('ChatSessionDriver activity', () => {
   test('a scripted turn walks the phases and ends with null', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(systemFrame({ subtype: 'status', status: 'requesting' }))
     fake.push(streamEvent({
@@ -1718,6 +1938,7 @@ describe('ChatSessionDriver activity', () => {
   test('resolving an approval republishes the phase with a restarted clock', async () => {
     const harness = createHarness()
     harness.driver.send('run it')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push({
       type: 'assistant',
@@ -1760,6 +1981,7 @@ describe('ChatSessionDriver activity', () => {
   test('subagent frames leave the parent phase untouched', async () => {
     const harness = createHarness()
     harness.driver.send('run a subagent')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push({
       type: 'assistant',
@@ -1822,6 +2044,7 @@ describe('ChatSessionDriver activity', () => {
   test('thinking deltas and token estimates produce no activity calls', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(streamEvent({
       type: 'content_block_start', index: 0,
@@ -1848,6 +2071,7 @@ describe('ChatSessionDriver activity', () => {
   test('interrupt ends the activity after an approval resolution', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push({
       type: 'assistant',
@@ -1891,7 +2115,8 @@ describe('ChatSessionDriver activity', () => {
 describe('ChatSessionDriver notifications', () => {
   test('a warning notification maps to a warning-severity ChatNotification with its timeout', async () => {
     const harness = createHarness()
-    await harness.driver.send('hello')
+    harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(notificationFrame())
     await flush()
@@ -1911,7 +2136,8 @@ describe('ChatSessionDriver notifications', () => {
 
   test('an error color maps to error severity; a missing color maps to info', async () => {
     const harness = createHarness()
-    await harness.driver.send('hello')
+    harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(notificationFrame({ key: 'error-compacting-conversation', text: 'Error compacting conversation', color: 'error' }))
     fake.push(notificationFrame({ key: 'memory-paused', text: 'Memory is paused', color: undefined, priority: 'medium', timeout_ms: undefined }))
@@ -1923,7 +2149,8 @@ describe('ChatSessionDriver notifications', () => {
 
   test('malformed frames without a key or text are ignored', async () => {
     const harness = createHarness()
-    await harness.driver.send('hello')
+    harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(notificationFrame({ key: '', text: 'no key' }))
     fake.push(notificationFrame({ key: 'has-key', text: '' }))
@@ -1934,7 +2161,8 @@ describe('ChatSessionDriver notifications', () => {
 
   test('an unknown priority degrades to low instead of leaking through', async () => {
     const harness = createHarness()
-    await harness.driver.send('hello')
+    harness.driver.send('hello')
+    await harness.nextWrite()
     harness.fakes[0]!.push(notificationFrame({ priority: 'whenever' as unknown as 'high' }))
     await flush()
     expect(harness.notifications[0]![0].priority).toBe('low')
@@ -1943,6 +2171,7 @@ describe('ChatSessionDriver notifications', () => {
   test('notifications arrive outside a turn as well, like rate-limit frames', async () => {
     const harness = createHarness()
     harness.driver.start()
+    await harness.spawned(0)
     await flush()
     harness.fakes[0]!.push(notificationFrame())
     await flush()
@@ -1951,7 +2180,8 @@ describe('ChatSessionDriver notifications', () => {
 
   test('an unexpected process exit fires onProcessEnd once; the respawn does not', async () => {
     const harness = createHarness()
-    await harness.driver.send('hello')
+    harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(notificationFrame({ timeout_ms: undefined }))
     await flush()
@@ -2010,6 +2240,7 @@ describe('ChatSessionDriver usage', () => {
   test('a rate_limit_event is parsed and forwarded, even outside a turn', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     harness.fakes[0]!.push(
       rateLimitEvent({
         status: 'allowed',
@@ -2039,6 +2270,7 @@ describe('ChatSessionDriver usage', () => {
   test('an assistant usage_report is parsed and forwarded', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     harness.fakes[0]!.push(
       usageReportMessage([
         { kind: 'session', percent: 22.4, resets_at: '2026-10-07T18:11:04.000Z', severity: 'normal' },
@@ -2068,6 +2300,7 @@ describe('ChatSessionDriver usage', () => {
       usageImpl: async (opts) => ({ ...FULL_PULL, opts }),
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     await flush()
     expect(harness.fakes[0]!.usageCalls).toEqual([{ skipBehaviors: true }])
     expect(harness.usageReports).toHaveLength(1)
@@ -2087,6 +2320,7 @@ describe('ChatSessionDriver usage', () => {
       usageImpl: async () => FULL_PULL,
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     await flush()
     expect(harness.fakes[0]!.usageCalls).toEqual([])
     expect(harness.usageReports).toHaveLength(0)
@@ -2102,14 +2336,17 @@ describe('ChatSessionDriver usage', () => {
     expect(unavailable.usageReports).toHaveLength(0)
     expect(unavailable.noData).toHaveLength(1)
 
+    const unstable = new Error('unstable API changed')
     const throwing = createHarness({
       claimUsagePull: () => true,
-      usageImpl: () => Promise.reject(new Error('unstable API changed')),
+      usageImpl: () => Promise.reject(unstable),
     })
     throwing.driver.send('hello')
+    await throwing.nextWrite()
     await flush()
     expect(throwing.noData).toHaveLength(1)
     expect(throwing.driver.isDead).toBe(false) // the failure never kills the session
+    await throwing.expectFailures(unstable)
   })
 
   test('a query without the control method records the verdict', async () => {
@@ -2138,12 +2375,14 @@ describe('ChatSessionDriver usage', () => {
       usageImpl: async () => FULL_PULL,
     })
     harness.driver.send('first')
+    await harness.nextWrite()
     await flush()
     expect(harness.fakes[0]!.usageCalls).toHaveLength(1)
 
     harness.fakes[0]!.exit()
     await flush()
     harness.driver.send('second')
+    await harness.nextWrite()
     await flush()
     expect(harness.fakes).toHaveLength(2)
     expect(harness.fakes[1]!.usageCalls).toHaveLength(0)
@@ -2164,16 +2403,25 @@ describe('ChatSessionDriver context usage', () => {
     process.env.HOME = tempHome
     delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   })
-  afterEach(() => {
+  afterEach(async () => {
+    // Join every driver (kill, settled()) before its home is removed.
+    try {
+      await cleanupHarnesses()
+    } finally {
+      restoreHome()
+    }
+  })
+  const restoreHome = () => {
     if (originalHome !== undefined) process.env.HOME = originalHome
     else delete process.env.HOME
     if (originalAutoCompact !== undefined) process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = originalAutoCompact
     fs.rmSync(tempHome, { recursive: true, force: true })
-  })
+  }
 
   test('the reading tracks the latest request, never the session total', async () => {
     const harness = createHarness()
     harness.driver.send('turn one')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     // First request: 60k of a window the result frame then reveals as 200k.
     fake.push(assistantUsage({ input_tokens: 10_000, cache_read_input_tokens: 45_000, cache_creation_input_tokens: 4_000, output_tokens: 1_000 }, 'msg_1'))
@@ -2186,6 +2434,7 @@ describe('ChatSessionDriver context usage', () => {
     // previous reading, even after turns of traffic whose session totals far
     // exceed the window.
     harness.driver.send('turn two')
+    await harness.nextWrite()
     fake.push(assistantUsage({ input_tokens: 20_000, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 8_000, output_tokens: 2_000 }, 'msg_2'))
     await flush()
     expect(harness.contextUsage).toHaveLength(2)
@@ -2195,6 +2444,7 @@ describe('ChatSessionDriver context usage', () => {
   test("a Task subagent's usage does not move the meter", async () => {
     const harness = createHarness()
     harness.driver.send('run a task')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const parent = { input_tokens: 10_000, cache_read_input_tokens: 45_000, cache_creation_input_tokens: 4_000, output_tokens: 1_000 }
     fake.push(assistantUsage(parent, 'msg_1'))
@@ -2222,6 +2472,7 @@ describe('ChatSessionDriver context usage', () => {
       getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' }),
     })
     harness.driver.start()
+    await harness.spawned(0)
     await flush()
     harness.fakes[0]!.push(result('success', { modelUsage: modelUsageWith(200_000) }))
     await flush()
@@ -2238,6 +2489,7 @@ describe('ChatSessionDriver context usage', () => {
       getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' }),
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantUsage({ input_tokens: 60_000 }, 'msg_1'))
     fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
@@ -2252,6 +2504,7 @@ describe('ChatSessionDriver context usage', () => {
       contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantUsage({ input_tokens: 100_000 }, 'msg_1'))
     await flush()
@@ -2273,6 +2526,7 @@ describe('ChatSessionDriver context usage', () => {
         }),
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     // The pinned real-report fixture (task 4.2): 157900 used of a 200000
     // window with a 33000 buffer. The meter must read 167000 — ~94.6%, near
@@ -2291,6 +2545,7 @@ describe('ChatSessionDriver context usage', () => {
       getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' }),
     })
     small.driver.send('hello')
+    await small.nextWrite()
     small.fakes[0]!.push(assistantUsage({ input_tokens: 100_000 }, 'msg_1'))
     small.fakes[0]!.push(result('success', { modelUsage: modelUsageWith(200_000) }))
     await flush()
@@ -2302,6 +2557,7 @@ describe('ChatSessionDriver context usage', () => {
       getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' }),
     })
     large.driver.send('hello')
+    await large.nextWrite()
     large.fakes[0]!.push(assistantUsage({ input_tokens: 150_000 }, 'msg_1'))
     large.fakes[0]!.push(result('success', { modelUsage: modelUsageWith(200_000) }))
     await flush()
@@ -2320,6 +2576,7 @@ describe('ChatSessionDriver context usage', () => {
       getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' }),
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     harness.fakes[0]!.push(assistantUsage({ input_tokens: 80_000 }, 'msg_1'))
     await flush()
     expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 80_000, thresholdTokens: 80_000, percentage: 100 })
@@ -2330,6 +2587,7 @@ describe('ChatSessionDriver context usage', () => {
     // modelUsage answers.
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantUsage({ input_tokens: 50_000 }, 'msg_1'))
     fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
@@ -2342,6 +2600,7 @@ describe('ChatSessionDriver context usage', () => {
   test('compact_boundary drops the meter to the post-compaction size, auto or manual', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
     fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
@@ -2362,6 +2621,7 @@ describe('ChatSessionDriver context usage', () => {
   test('a boundary without a usable post_tokens keeps the last reading', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
     fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
@@ -2395,6 +2655,7 @@ describe('ChatSessionDriver context usage', () => {
     // window; the operator then narrows the window to 100k and the process
     // crashes. The respawn must not inherit the dead process's reading.
     const window = { env: '200000' }
+    const probeFailed = new Error('probe failed')
     let probes = 0
     const harness = createHarness({
       getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: window.env }),
@@ -2402,10 +2663,11 @@ describe('ChatSessionDriver context usage', () => {
         probes += 1
         return probes === 1
           ? contextReport({ autoCompactThreshold: 167_000 })
-          : Promise.reject(new Error('probe failed'))
+          : Promise.reject(probeFailed)
       },
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
     await flush()
@@ -2416,9 +2678,12 @@ describe('ChatSessionDriver context usage', () => {
     expect(harness.driver.isDead).toBe(true)
     window.env = '100000'
     harness.driver.send('again')
+    await harness.nextWrite()
     expect(harness.fakes).toHaveLength(2)
     // The spawn itself re-anchors the retained reading on the new window —
     // flagged as a correction — before any frame arrives.
+    // UNWAIVED (r4 A16, GAP8; tracker task-5f006664): the adapter's fresh
+    // package driver per process drops this correction; the original oracle stays.
     const spawnRepublish = harness.contextUsage.at(-1)!
     expect(spawnRepublish).toMatchObject({ usedTokens: 157_900, thresholdTokens: 100_000 })
     expect(harness.contextCorrections.at(-1)).toBe(true)
@@ -2429,6 +2694,7 @@ describe('ChatSessionDriver context usage', () => {
     await flush()
     expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 80_000, thresholdTokens: 100_000, percentage: 80 })
     expect(harness.contextCorrections.at(-1)).toBe(false)
+    await harness.expectFailures(probeFailed)
   })
 
   test('a report landing after the turn boundary republishes as a correction', async () => {
@@ -2450,6 +2716,7 @@ describe('ChatSessionDriver context usage', () => {
       },
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
     fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
@@ -2472,6 +2739,7 @@ describe('ChatSessionDriver context usage', () => {
       contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
     await flush()
@@ -2504,6 +2772,7 @@ describe('ChatSessionDriver context usage', () => {
       contextImpl: async () => contextReport({ autoCompactThreshold: 967_000 }),
     })
     harness.driver.send('hi')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_g', usage: { input_tokens: 0, output_tokens: 0 } } }))
     fake.push(assistantUsage({}, 'msg_g'))
@@ -2525,6 +2794,7 @@ describe('ChatSessionDriver context usage', () => {
       contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
     })
     harness.driver.send('hi')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_a', usage: { input_tokens: 2, cache_creation_input_tokens: 22_456, cache_read_input_tokens: 12_059, output_tokens: 8 } } }))
     fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: null, cache_read_input_tokens: null, cache_creation_input_tokens: null, output_tokens: 300 } }))
@@ -2537,6 +2807,7 @@ describe('ChatSessionDriver context usage', () => {
       contextImpl: async () => contextReport({ autoCompactThreshold: 200_000 }),
     })
     harness.driver.send('run a task')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_p', usage: { input_tokens: 0, output_tokens: 0 } } }))
     fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: 40_000, output_tokens: 100 } }))
@@ -2554,6 +2825,7 @@ describe('ChatSessionDriver context usage', () => {
       contextImpl: async () => contextReport({ autoCompactThreshold: 200_000 }),
     })
     harness.driver.send('hi')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_t', usage: { input_tokens: 0, output_tokens: 0 } } }))
     fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
@@ -2568,6 +2840,7 @@ describe('ChatSessionDriver context usage', () => {
       contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_old', usage: { input_tokens: 0, output_tokens: 0 } } }))
     fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: 100_000, output_tokens: 10 } }))
@@ -2598,6 +2871,7 @@ describe('ChatSessionDriver context usage', () => {
   test('the model-window fallback is labelled as an approximation', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     harness.fakes[0]!.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
     harness.fakes[0]!.push(result('success', { modelUsage: modelUsageWith(200_000) }))
     await flush()
@@ -2612,11 +2886,14 @@ describe('ChatSessionDriver context usage', () => {
       contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     harness.fakes[0]!.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
     await flush()
     const reading = harness.contextUsage.at(-1)
     expect(reading).toMatchObject({ thresholdTokens: 167_000 })
-    expect(reading?.thresholdApproximate).toBeUndefined()
+    // The package states exactness explicitly (usage/context.ts); the class
+    // left the flag unset. Either way the report threshold is not approximate.
+    expect(reading?.thresholdApproximate).toBe(false)
   })
 })
 
@@ -2634,6 +2911,7 @@ describe('ChatSessionDriver model', () => {
   test('the first init fires once with its model', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     harness.fakes[0]!.push(initFrame('claude-sonnet-5-5'))
     await flush()
     expect(harness.models).toEqual(['claude-sonnet-5-5'])
@@ -2643,12 +2921,14 @@ describe('ChatSessionDriver model', () => {
   test('an unchanged model on the next turn does not re-fire', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(initFrame('claude-sonnet-5-5'))
     fake.push(result('success'))
     await flush()
     // The next turn's init names the same model: no second firing.
     harness.driver.send('again')
+    await harness.nextWrite()
     fake.push(initFrame('claude-sonnet-5-5'))
     fake.push(result('success'))
     await flush()
@@ -2659,12 +2939,14 @@ describe('ChatSessionDriver model', () => {
   test('a changed model re-fires with the new value', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(initFrame('claude-sonnet-5-5'))
     fake.push(result('success'))
     await flush()
     // A mid-session /model switch: the next turn's init carries the alias.
     harness.driver.send('switched')
+    await harness.nextWrite()
     fake.push(initFrame('sonnet'))
     fake.push(result('success'))
     await flush()
@@ -2675,6 +2957,7 @@ describe('ChatSessionDriver model', () => {
   test('an empty or missing model never fires', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(initFrame())
     fake.push(initFrame(''))
@@ -2693,11 +2976,19 @@ describe('ChatSessionDriver cwd tracking', () => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdriver-cwd-'))
     process.env.HOME = tempHome
   })
-  afterEach(() => {
+  afterEach(async () => {
+    // Join every driver (kill, settled()) before its home is removed.
+    try {
+      await cleanupHarnesses()
+    } finally {
+      restoreHome()
+    }
+  })
+  const restoreHome = () => {
     if (originalHome !== undefined) process.env.HOME = originalHome
     else delete process.env.HOME
     fs.rmSync(tempHome, { recursive: true, force: true })
-  })
+  }
 
   /** Invoke the driver's registered CwdChanged hook with a real-shaped input. */
   const fireCwdChanged = async (
@@ -2721,34 +3012,40 @@ describe('ChatSessionDriver cwd tracking', () => {
   test('CwdChanged reports the new cwd and never blocks the agent', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     const verdict = await fireCwdChanged(fake, {
       old_cwd: '/tmp/project',
       new_cwd: '/tmp/project/.claude/worktrees/add-feature',
     })
-    // Observational: the hook always lets the agent continue.
-    expect(verdict).toEqual({ continue: true })
+    // Observational: the hook always lets the agent continue ({} is the
+    // package hook's no-decision; the class returned { continue: true }).
+    expect(verdict).toEqual({})
     expect(harness.cwds).toEqual(['/tmp/project/.claude/worktrees/add-feature'])
     harness.driver.kill()
   })
 
   test('a throwing observer still lets the agent continue', async () => {
+    const observerFailed = new Error('observer failed')
     const harness = createHarness({
       onCwdChanged: () => {
-        throw new Error('observer failed')
+        throw observerFailed
       },
     })
     harness.driver.send('hello')
+    await harness.nextWrite()
     const verdict = await fireCwdChanged(harness.fakes[0]!, {
       new_cwd: '/tmp/elsewhere',
     })
-    expect(verdict).toEqual({ continue: true })
+    expect(verdict).toEqual({})
     harness.driver.kill()
+    await harness.expectFailures(observerFailed)
   })
 
   test("subagent cwd changes don't move the chat row", async () => {
     const harness = createHarness()
     harness.driver.send('hello')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     // Mirrors the real hook shape: agent_id rides subagent firings only.
     await fireCwdChanged(fake, {
@@ -2833,6 +3130,7 @@ describe('ChatSessionDriver workers', () => {
   test("a worker's traffic stays out of the parent transcript except nested spawns", async () => {
     const harness = createHarness()
     harness.driver.send('spawn one')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantToolUse('toolu_task', 'Task', null))
     // The worker's own Bash call and its result: dropped (design D4).
@@ -2873,6 +3171,7 @@ describe('ChatSessionDriver workers', () => {
   test('task frames build the roster: spawn, fill, last tool, settle', async () => {
     const harness = createHarness()
     harness.driver.send('research')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantToolUse('toolu_agent', 'Agent', null))
     await flush()
@@ -2958,6 +3257,7 @@ describe('ChatSessionDriver workers', () => {
   test('the background level set governs live only; a late notification still lands', async () => {
     const harness = createHarness()
     harness.driver.send('research')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     await spawnWorker(harness, { is_backgrounded: true })
     const before = harness.workers.length
@@ -3014,6 +3314,7 @@ describe('ChatSessionDriver workers', () => {
   test('a foreground worker stays live when the level set omits it', async () => {
     const harness = createHarness()
     harness.driver.send('research')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     await spawnWorker(harness)
     const before = harness.workers.length
@@ -3033,6 +3334,7 @@ describe('ChatSessionDriver workers', () => {
   test('a live worker holds working with no turn running', async () => {
     const harness = createHarness()
     harness.driver.send('research')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     await spawnWorker(harness)
     fake.push(result('success'))
@@ -3057,6 +3359,7 @@ describe('ChatSessionDriver workers', () => {
   test('driver death settles outcome-less workers as stopped', async () => {
     const harness = createHarness()
     harness.driver.send('research')
+    await harness.nextWrite()
     await spawnWorker(harness)
     harness.fakes[0]!.exit()
     await flush()
@@ -3069,6 +3372,7 @@ describe('ChatSessionDriver workers', () => {
   test('interrupt settles outcome-less workers as stopped', async () => {
     const harness = createHarness()
     harness.driver.send('research')
+    await harness.nextWrite()
     await spawnWorker(harness)
     harness.driver.interrupt()
     expect(harness.driver.getWorkers()).toMatchObject([
@@ -3080,6 +3384,7 @@ describe('ChatSessionDriver workers', () => {
   test('kill settles outcome-less workers as stopped', async () => {
     const harness = createHarness()
     harness.driver.send('research')
+    await harness.nextWrite()
     await spawnWorker(harness)
     harness.driver.kill()
     expect(harness.driver.getWorkers()).toMatchObject([
@@ -3092,6 +3397,7 @@ describe('ChatSessionDriver workers', () => {
     // here so the composition cannot drift.
     const harness = createHarness()
     harness.driver.send('research')
+    await harness.nextWrite()
     await spawnWorker(harness)
     harness.driver.interrupt()
     harness.driver.kill()
@@ -3103,6 +3409,7 @@ describe('ChatSessionDriver workers', () => {
   test('a rejected spawn settles its row and frees the session', async () => {
     const harness = createHarness()
     harness.driver.send('spawn a worker')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantToolUse('toolu_agent', 'Agent', null))
     await flush()
@@ -3136,6 +3443,7 @@ describe('ChatSessionDriver workers', () => {
   test("a worker's stream stays out of the parent transcript and off its id", async () => {
     const harness = createHarness()
     harness.driver.send('stream')
+    await harness.nextWrite()
     const fake = harness.fakes[0]!
     fake.push(assistantToolUse('toolu_task', 'Task', null))
     await flush()
@@ -3197,6 +3505,7 @@ describe('ChatSessionDriver workers', () => {
       ],
     })
     harness.driver.send('research')
+    await harness.nextWrite()
     // Before any publish this turn, the recovered outcome is still on offer.
     expect(harness.driver.getWorkers()).toMatchObject([
       { workerId: 'toolu_done', status: 'completed', live: false, summary: 'mapped' },
@@ -3211,18 +3520,50 @@ describe('ChatSessionDriver workers', () => {
 })
 
 
+// A9: the class took an arbitrary stdio descriptor (teamMcpServer) and an
+// allowedTools list. The adapter takes the caller's team tool table, which the
+// package registers as its own in-process MCP server; the descriptor identity
+// and the allowedTools representation have no counterpart (reported).
 test('mailbox tools are registered and allowed without cards under either policy', async () => {
   const { TEAM_ALLOWED_TOOLS } = await import('../team/mailboxTools')
+  type Registered = Record<string, {
+    description?: string
+    inputSchema?: unknown
+    handler: (args: unknown, extra: unknown) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>
+  }>
   for (const policy of ['manual', 'auto'] as const) {
-    const server = { type: 'stdio' as const, command: 'mailbox-test' }
-    const h = createHarness({ teamMcpServer: server, getApprovalPolicy: () => policy })
+    const calls: Array<[string, unknown]> = []
+    const sendSchema = z.object({ to: z.string(), body: z.string() })
+    const groupsSchema = z.object({})
+    const teamTools: TeamToolSpec[] = [
+      { name: 'send_message', description: 'Send to a team group or session.', schema: sendSchema, handler: input => { calls.push(['send_message', input]); return { id: 'mail-7' } } },
+      { name: 'list_groups', description: 'List the team groups.', schema: groupsSchema, handler: input => { calls.push(['list_groups', input]); throw new Error('groups down') } },
+    ]
+    const h = createHarness({ teamTools, getApprovalPolicy: () => policy })
     h.driver.start()
+    await h.spawned(0)
     const options = h.fakes[0]!.options
-    expect(options.mcpServers).toEqual({ 'kawai-team': server })
-    expect(options.allowedTools).toEqual(TEAM_ALLOWED_TOOLS)
+    // One in-process server under Kawai's namespace, holding exactly the table.
+    expect(Object.keys(options.mcpServers ?? {})).toEqual(['kawai-team'])
+    const server = options.mcpServers!['kawai-team'] as unknown as { type: string; name: string; instance: { _registeredTools: Registered } }
+    expect([server.type, server.name]).toEqual(['sdk', 'kawai-team'])
+    const registered = server.instance._registeredTools
+    expect(Object.keys(registered)).toEqual(['send_message', 'list_groups'])
+    expect(registered.send_message!.description).toBe('Send to a team group or session.')
+    expect(registered.list_groups!.description).toBe('List the team groups.')
+    expect(registered.send_message!.inputSchema).toBe(sendSchema)
+    expect(registered.list_groups!.inputSchema).toBe(groupsSchema)
+    // Real dispatch reaches the caller's handlers with the exact input; a
+    // result is its JSON, a throw is an error result with its message.
+    expect(await registered.send_message!.handler({ to: 'lead', body: 'hi' }, { requestId: 1 }))
+      .toEqual({ content: [{ type: 'text', text: JSON.stringify({ id: 'mail-7' }) }] })
+    expect(await registered.list_groups!.handler({}, { requestId: 2 }))
+      .toEqual({ content: [{ type: 'text', text: 'groups down' }], isError: true })
+    expect(calls).toEqual([['send_message', { to: 'lead', body: 'hi' }], ['list_groups', {}]])
+    // Every team tool the class allowed is granted silently, under either policy.
     for (const name of TEAM_ALLOWED_TOOLS) {
       const answer = await options.canUseTool!(name, {}, { signal: new AbortController().signal, toolUseID: 'mail-call', requestId: 'mail-request' })
-      expect(answer?.behavior).toBe('allow')
+      expect(answer).toEqual({ behavior: 'allow', updatedInput: {} })
     }
     expect(h.events.some(event => event.type === 'approval_request')).toBe(false)
     expect(h.driver.getPendingRequests()).toEqual([])
@@ -3235,6 +3576,7 @@ test('peer delivery pushes a peer-origin turn and emits display metadata without
   const { formatEnvelope } = await import('../team/envelope')
   const h = createHarness()
   h.driver.deliver(PEER)
+  await h.nextWrite()
   expect(h.events.find(event => event.type === 'peer_message')).toMatchObject(PEER)
   const prompt = await h.fakes[0]!.pullPrompt()
   expect(prompt?.origin).toEqual({ kind: 'peer', from: PEER.senderSession })
@@ -3256,15 +3598,16 @@ describe('ChatSessionDriver limit events', () => {
       parent_tool_use_id: parent,
     })
   }
-  function limitHarness() {
+  async function limitHarness() {
     const limits: ChatLimitSignal[] = []
     const harness = createHarness({ onLimitEvent: (signal) => limits.push(signal) })
     harness.driver.send('hello')
+    await harness.nextWrite()
     return { harness, limits, fake: harness.fakes[0]! }
   }
 
   test('a retried rate-limit attempt is a non-final event; an unrelated retry is not', async () => {
-    const { fake, limits } = limitHarness()
+    const { fake, limits } = await limitHarness()
     fake.push(frame({ type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 10, retry_delay_ms: 500, error_status: 429, error: 'rate_limit' }))
     fake.push(frame({ type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10, retry_delay_ms: 500, error_status: 504, error: 'server_error' }))
     fake.push(result('success'))
@@ -3273,7 +3616,7 @@ describe('ChatSessionDriver limit events', () => {
   })
 
   test('a failed assistant message is the final event, with the reset a rejected rate_limit_event announced', async () => {
-    const { fake, limits } = limitHarness()
+    const { fake, limits } = await limitHarness()
     const reset = Math.floor(Date.now() / 1000) + 2400
     fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: reset, rateLimitType: 'seven_day_opus' } }))
     fake.push(failedAssistant('rate_limit', 'API Error: 429 {"error":"quota"}'))
@@ -3286,7 +3629,7 @@ describe('ChatSessionDriver limit events', () => {
   })
 
   test('the window follows the latest reset-bearing rejected event, nameless or not', async () => {
-    const { fake, limits } = limitHarness()
+    const { fake, limits } = await limitHarness()
     const first = Math.floor(Date.now() / 1000) + 2400
     const second = first + 60
     fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: first, rateLimitType: 'seven_day_opus' } }))
@@ -3301,7 +3644,7 @@ describe('ChatSessionDriver limit events', () => {
   })
 
   test('the window drops together with its reset once past', async () => {
-    const { fake, limits } = limitHarness()
+    const { fake, limits } = await limitHarness()
     const stale = Math.floor(Date.now() / 1000) - 10
     fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: stale, rateLimitType: 'five_hour' } }))
     fake.push(failedAssistant('rate_limit', 'API Error: 429 quota'))
@@ -3313,7 +3656,7 @@ describe('ChatSessionDriver limit events', () => {
   })
 
   test('a gateway quota error classified otherwise still counts on status 429', async () => {
-    const { fake, limits } = limitHarness()
+    const { fake, limits } = await limitHarness()
     fake.push(failedAssistant('unknown', 'API Error: 429 quota exhausted'))
     fake.push(result('success'))
     await flush()
@@ -3321,7 +3664,7 @@ describe('ChatSessionDriver limit events', () => {
   })
 
   test('other errors and subagent failures record nothing', async () => {
-    const { fake, limits } = limitHarness()
+    const { fake, limits } = await limitHarness()
     fake.push(failedAssistant('invalid_request', 'API Error: 400 bad request'))
     fake.push(failedAssistant('rate_limit', 'API Error: 429', 'toolu_agent'))
     fake.push(result('success'))
@@ -3330,12 +3673,15 @@ describe('ChatSessionDriver limit events', () => {
   })
 
   test('a throwing observer does not break the turn', async () => {
-    const harness = createHarness({ onLimitEvent: () => { throw new Error('boom') } })
+    const boom = new Error('boom')
+    const harness = createHarness({ onLimitEvent: () => { throw boom } })
     harness.driver.send('hello')
+    await harness.nextWrite()
     harness.fakes[0]!.push(failedAssistant('overloaded', 'API Error: 529 overloaded'))
     harness.fakes[0]!.push(result('success'))
     await flush()
     expect(typesOf(harness.events)).toContain('turn_completed')
+    await harness.expectFailures(boom)
   })
 })
 
@@ -3371,6 +3717,7 @@ describe('ChatSessionDriver agent-started turns (background tasks D5)', () => {
   test('the captured monitor wake replays into a triggered turn', async () => {
     const harness = createHarness()
     harness.driver.start()
+    await harness.spawned(0)
     // Real captured sequence: late first-turn frames (dropped — no turn),
     // the settle, then the wake turn (init → status → stream → assistant →
     // result). The sdk_host_only state frames are already filtered out.
@@ -3395,6 +3742,7 @@ describe('ChatSessionDriver agent-started turns (background tasks D5)', () => {
   test('interrupt ends an agent-started turn like a user one', async () => {
     const harness = createHarness()
     harness.driver.start()
+    await harness.spawned(0)
     harness.fakes[0]!.push(taskNotification('btask_1'))
     harness.fakes[0]!.push(initFrame())
     await flush()
@@ -3408,12 +3756,14 @@ describe('ChatSessionDriver agent-started turns (background tasks D5)', () => {
   test('a send racing the self-start joins the open turn', async () => {
     const harness = createHarness()
     harness.driver.start()
+    await harness.spawned(0)
     harness.fakes[0]!.push(taskNotification('btask_1'))
     harness.fakes[0]!.push(initFrame())
     await flush()
     const started = harness.events.filter((event) => event.type === 'turn_started')
     expect(started).toHaveLength(1)
     harness.driver.send('while you are at it')
+    await harness.nextWrite()
     harness.fakes[0]!.push(assistantText('joined answer'))
     harness.fakes[0]!.push(result('success'))
     await flush()
@@ -3423,6 +3773,8 @@ describe('ChatSessionDriver agent-started turns (background tasks D5)', () => {
       { type: 'turn_started', turnId },
       { type: 'user_message', turnId },
     ])
+    // UNWAIVED (r4 A16, GAP9; tracker task-5f006664): the package queues the
+    // send as its own turn; the original join oracle stays.
     expect(harness.events.filter((event) => event.type === 'turn_started')).toHaveLength(1)
     expect(typesOf(harness.events)).toContain('turn_completed')
   })
@@ -3430,6 +3782,7 @@ describe('ChatSessionDriver agent-started turns (background tasks D5)', () => {
   test('a self-start with no preceding notification carries the resumed trigger', async () => {
     const harness = createHarness()
     harness.driver.start()
+    await harness.spawned(0)
     harness.fakes[0]!.push(initFrame())
     await flush()
     const started = harness.events.filter((event) => event.type === 'turn_started')
@@ -3446,9 +3799,11 @@ describe('ChatSessionDriver agent-started turns (background tasks D5)', () => {
   test('a user send consumes buffered notifications without a trigger', async () => {
     const harness = createHarness()
     harness.driver.start()
+    await harness.spawned(0)
     harness.fakes[0]!.push(taskNotification('btask_1'))
     await flush()
     harness.driver.send('my turn now')
+    await harness.nextWrite()
     harness.fakes[0]!.push(assistantText('answer'))
     harness.fakes[0]!.push(result('success'))
     await flush()
@@ -3469,6 +3824,7 @@ describe('ChatSessionDriver background-task roster (background tasks D1/D7)', ()
   test('the captured shell fixture publishes a live Shell entry that settles', async () => {
     const harness = createHarness()
     harness.driver.send('launch the probe tasks')
+    await harness.nextWrite()
     for (const message of consumerMessages('shell')) {
       harness.fakes[0]!.push(message)
     }
@@ -3493,6 +3849,7 @@ describe('ChatSessionDriver background-task roster (background tasks D1/D7)', ()
   test('the captured monitor fixture joins its task as a Monitor', async () => {
     const harness = createHarness()
     harness.driver.send('launch the probe tasks')
+    await harness.nextWrite()
     for (const message of consumerMessages('monitor')) {
       harness.fakes[0]!.push(message)
     }
@@ -3505,6 +3862,7 @@ describe('ChatSessionDriver background-task roster (background tasks D1/D7)', ()
   test('a foreground task never publishes; the level set alone promotes nothing unseen', async () => {
     const harness = createHarness()
     harness.driver.send('run')
+    await harness.nextWrite()
     for (const message of consumerMessages('foreground')) {
       harness.fakes[0]!.push(message)
     }
@@ -3517,6 +3875,7 @@ describe('ChatSessionDriver background-task roster (background tasks D1/D7)', ()
   test('an interrupt keeps background tasks running; kill settles them stopped', async () => {
     const harness = createHarness()
     harness.driver.send('start a long task')
+    await harness.nextWrite()
     harness.fakes[0]!.push({
       type: 'system', subtype: 'task_started', task_id: 'blong', tool_use_id: 'call_long',
       task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',

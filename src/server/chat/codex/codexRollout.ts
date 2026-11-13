@@ -22,7 +22,7 @@ import type { ChatEvent } from '../../../shared/chat'
 import { parseEnvelope } from '../../team/envelope'
 import { historyUnavailable, type TranscriptReplay } from '../transcriptReplay'
 import { readLines } from '../lineReader'
-import type { CodexEventDraft } from './codexEvents'
+import type { ChatEventDraft } from '../provider/runtimeEvents'
 
 type Row = Record<string, unknown>
 
@@ -91,7 +91,7 @@ export function createRolloutParser(): RolloutParser {
     const rowId = `codex-r${index}-${createHash('sha256').update(line).digest('hex').slice(0, 8)}`
     const at = str(row.timestamp) ?? ''
     let part = 0
-    const push = (draft: CodexEventDraft) => {
+    const push = (draft: ChatEventDraft) => {
       events.push({ ...draft, id: part === 0 ? rowId : `${rowId}:${part}`, sequence: 0, at } as ChatEvent)
       part += 1
     }

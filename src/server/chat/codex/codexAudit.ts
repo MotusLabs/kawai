@@ -5,13 +5,36 @@
 // a Claude agent's Bash and MCP calls pass through. The item lifecycle maps
 // onto the observer's hook methods: started → Pre, completed → Post, failed
 // → PostFailure, declined → PermissionDenied (a declined card is reported by
-// codexRequests through `onDeniedCard`). Observation only: nothing here can
-// block, delay, or deny a call, and a throwing observer is swallowed.
+// the adapter, codexRuntime.ts, through `onDeniedCard`). Observation only:
+// nothing here can block, delay, or deny a call, and a throwing observer is
+// swallowed.
 // `kawai-team` dynamic-tool calls are never fed (the mailbox records them),
 // and a `fileChange` is not a send.
+//
+// The item is read through `AuditItem`, a narrow host view of exactly the
+// fields the audit reads (task-ce05430a R2 G1), not the generated protocol's
+// ThreadItem: the package owns the protocol, and its item edges reach Kawai
+// as plain records.
 import type { OutboundAuditSink } from '../../outbound/observer'
-import type { ThreadItem } from './protocol/v2/ThreadItem'
-import { mcpToolName, TEAM_NAMESPACE } from './codexEvents'
+import { TEAM_MCP_SERVER as TEAM_NAMESPACE } from '../../team/teamPrompt'
+
+/** The Kawai tool name of a dynamic or MCP tool call. */
+const mcpToolName = (server: string, tool: string): string => `mcp__${server}__${tool}`
+
+/**
+ * The fields of a Codex item the audit reads (G1): a command, an MCP call, or
+ * any other kind, which is never audited.
+ */
+export type AuditItem =
+  | {
+    type: 'commandExecution'; id: string; command: string; cwd: string; status: string
+    aggregatedOutput: string | null; exitCode: number | null; durationMs: number | null
+  }
+  | {
+    type: 'mcpToolCall'; id: string; server: string; tool: string; arguments: unknown; status: string
+    error: { message: string } | null; durationMs: number | null
+  }
+  | { type: 'other'; id: string; status?: string }
 
 /** The live facts each fed use carries. */
 export interface CodexAuditContext {
@@ -23,7 +46,7 @@ export interface CodexAuditContext {
 }
 
 /** The audited use an item stands for, or null when it is not audited. */
-export function auditedUse(item: ThreadItem, fallbackCwd: string): { toolName: string; toolInput: unknown; cwd: string } | null {
+export function auditedUse(item: AuditItem, fallbackCwd: string): { toolName: string; toolInput: unknown; cwd: string } | null {
   if (item.type === 'commandExecution') {
     return { toolName: 'Bash', toolInput: { command: item.command }, cwd: item.cwd || fallbackCwd }
   }
@@ -34,7 +57,7 @@ export function auditedUse(item: ThreadItem, fallbackCwd: string): { toolName: s
 }
 
 /** Feed one item edge to the observer; never throws. */
-export function auditItem(phase: 'started' | 'completed', item: ThreadItem | undefined, context: CodexAuditContext): void {
+export function auditItem(phase: 'started' | 'completed', item: AuditItem | undefined, context: CodexAuditContext): void {
   const sink = context.sink
   if (!sink || !item || typeof (item as { id?: unknown }).id !== 'string') return
   try {
@@ -69,7 +92,7 @@ export function auditSpawnEnd(sink: OutboundAuditSink | undefined, spawnId: stri
   }
 }
 
-/** A declined or cancelled card (codexRequests), as Claude's canUseTool deny. */
+/** A declined or cancelled card (codexRuntime.ts), as Claude's canUseTool deny. */
 export function auditDeniedCard(
   sink: OutboundAuditSink | undefined,
   use: { tool: string; itemId: string; input: unknown; reason?: string },
@@ -90,7 +113,7 @@ export function auditDeniedCard(
   }
 }
 
-function failureText(item: ThreadItem): string {
+function failureText(item: AuditItem): string {
   if (item.type === 'mcpToolCall') return item.error?.message ?? 'failed'
   if (item.type === 'commandExecution') {
     const output = (item.aggregatedOutput ?? '').slice(-512)

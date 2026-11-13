@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { closeDispatchers, createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { closeDispatchers, createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -77,6 +77,7 @@ describe('ChatSessionManager', () => {
     await harness.manager.send(id, 'hello')
     // The init message carries the SDK session id; the title tail starts with
     // it and adopts the transcript's current title.
+    await spawned(harness.handles)
     harness.handles[0]!.push(initMessage('title-session'))
     await waitForCondition(
       () => db.getChatSession(id)?.name === 'first title'
@@ -116,6 +117,7 @@ describe('ChatSessionManager', () => {
       JSON.stringify({ type: 'ai-title', aiTitle: 'kill title', sessionId: 'title-kill' }) + '\n'
     )
     await killHarness.manager.send(killId, 'hello')
+    await spawned(killHarness.handles)
     killHarness.handles[0]!.push(initMessage('title-kill'))
     await waitForCondition(
       () => db.getChatSession(killId)?.name === 'kill title'
@@ -139,6 +141,7 @@ describe('ChatSessionManager', () => {
       JSON.stringify({ type: 'ai-title', aiTitle: 'archive title', sessionId: 'title-archive' }) + '\n'
     )
     await archiveHarness.manager.send(archiveId, 'hello')
+    await spawned(archiveHarness.handles)
     archiveHarness.handles[0]!.push(initMessage('title-archive'))
     await waitForCondition(
       () => db.getChatSession(archiveId)?.name === 'archive title'
@@ -162,6 +165,7 @@ describe('ChatSessionManager', () => {
       JSON.stringify({ type: 'ai-title', aiTitle: 'shutdown title', sessionId: 'title-shutdown' }) + '\n'
     )
     await shutdownHarness.manager.send(shutdownId, 'hello')
+    await spawned(shutdownHarness.handles)
     shutdownHarness.handles[0]!.push(initMessage('title-shutdown'))
     await waitForCondition(
       () => db.getChatSession(shutdownId)?.name === 'shutdown title'
