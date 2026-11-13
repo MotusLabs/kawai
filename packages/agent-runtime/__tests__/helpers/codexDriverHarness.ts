@@ -90,6 +90,8 @@ export interface HarnessOptions extends Partial<Omit<CodexDriverOptions, 'callba
   inProcess?: boolean
   /** Private per-method request deadlines through createCodexDriverWith (task-5906f19c A7); never a public option. */
   requestTimeoutsMs?: Readonly<Record<string, number>>
+  /** Fixture-internal cleanup owner: receives the inert driver instead of the shared stopDrivers registry; never a driver option. */
+  enroll?: (driver: CodexAgentDriver) => void
 }
 
 /**
@@ -100,7 +102,7 @@ export interface HarnessOptions extends Partial<Omit<CodexDriverOptions, 'callba
  * per-method deadlines; the owned process stays the default spawn).
  */
 export function codexDriver(options: HarnessOptions = {}): Recorded {
-  const { root: given, env, callbacks = {}, launch, inProcess = false, requestTimeoutsMs, ...rest } = options
+  const { root: given, env, callbacks = {}, launch, inProcess = false, requestTimeoutsMs, enroll, ...rest } = options
   const root = given ?? codexRoot()
   const recorded = { root, events: [] as AgentEvent[], results: [] as TurnResult[], states: [] as DriverState[], ends: [] as ProcessEndReport[], checkpoints: [] as ResumeCheckpoint[], warnings: [] as unknown[] }
   const logger = { debug() {}, info() {}, warn: (obj: object, msg?: string) => recorded.warnings.push([msg, obj]), error: (obj: object, msg?: string) => recorded.warnings.push([msg, obj]) }
@@ -135,7 +137,8 @@ export function codexDriver(options: HarnessOptions = {}): Recorded {
       },
     },
   })
-  live.push(driver)
+  if (enroll) enroll(driver)
+  else live.push(driver)
   return { driver, ...recorded, types: () => recorded.events.map((event) => event.type) }
 }
 

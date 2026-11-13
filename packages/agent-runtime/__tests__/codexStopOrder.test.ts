@@ -19,15 +19,24 @@
 // its leader as a zombie when the container's PID 1 does not reap it;
 // alive() counts a zombie as dead, as the production group check does
 // (zombieLiveness.test.ts).
+//
+// Cleanup (batch B F2): every driver here is owned by one file-local
+// ownedCodexDrivers (helpers/ownedCodexDrivers.ts), never by the shared
+// stopDrivers registry. Each sequence reopens admission, admits its driver
+// before constructing it, asserts its verdict, and only then authorizes the
+// one stop rejection it asserted exactly (by its original value) before
+// closing; any other rejection fails the cleanup with its raw value.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ProcessExitReceipt, TurnHandle, TurnResult } from '../src/contract.js'
+import type { CodexAgentDriver, ProcessExitReceipt, TurnHandle, TurnResult } from '../src/contract.js'
 import type { ToolSet } from '../src/options.js'
-import { alive, codexDriver, pids, stopDrivers } from './helpers/codexDriverHarness.js'
+import { alive, codexDriver, pids } from './helpers/codexDriverHarness.js'
+import { ownedCodexDrivers } from './helpers/ownedCodexDrivers.js'
 
-afterEach(stopDrivers)
+const drivers = ownedCodexDrivers()
+afterEach(() => drivers.close())
 
 type Op = 'send' | 'hold' | 'steer' | 'interrupt' | 'crash' | 'child' | 'restart' | 'tool' | 'ask' | 'answer' | 'tick' | 'kill' | 'shutdown'
 const OPS: Op[] = ['send', 'send', 'hold', 'steer', 'interrupt', 'crash', 'child', 'restart', 'tool', 'ask', 'answer', 'tick', 'tick', 'kill', 'shutdown']
@@ -77,7 +86,14 @@ interface Reach {
   failure: { category: unknown; causes: string[] } | null
 }
 
-async function run(seed: number, ready = false): Promise<{ verdict: Verdict; reach: Reach }> {
+/** The sequence's stop as the driver settled it: its original rejection value, if it rejected. */
+interface Stop {
+  driver: CodexAgentDriver
+  rejected: boolean
+  error: unknown
+}
+
+async function run(seed: number, ready = false): Promise<{ verdict: Verdict; reach: Reach; stop: Stop }> {
   const { ops, ticks } = generateOps(seed)
   let started = 0
   let finished = 0
@@ -93,7 +109,16 @@ async function run(seed: number, ready = false): Promise<{ verdict: Verdict; rea
       },
     }],
   }
-  const h = codexDriver({ tools, unansweredRequests: 'wait' })
+  // A new sequence: admission reopens only after the previous close settled.
+  drivers.open()
+  const admission = drivers.admit()
+  let h: ReturnType<typeof codexDriver>
+  try {
+    h = codexDriver({ tools, unansweredRequests: 'wait', enroll: (driver) => admission.enroll(driver) })
+  } catch (error) {
+    admission.abandon(error)
+    throw error
+  }
   const handles: TurnHandle[] = []
   const settled = new Set<string>()
   const track = (promise: Promise<TurnHandle>) =>
@@ -107,6 +132,7 @@ async function run(seed: number, ready = false): Promise<{ verdict: Verdict; rea
   let verdictAtStop: { live: number[]; open: number } | null = null
   let receipt: ProcessExitReceipt | null = null
   let stopError: unknown = null
+  let stopRejected = false
   const terminal = (mode: 'kill' | 'shutdown') => {
     const s = h.driver[mode]()
     const observe = () => {
@@ -116,7 +142,10 @@ async function run(seed: number, ready = false): Promise<{ verdict: Verdict; rea
       receipt ??= r
       observe()
     }, (error: unknown) => {
-      stopError ??= error
+      if (!stopRejected) {
+        stopRejected = true
+        stopError = error
+      }
       observe()
     })
     stop ??= s.then(() => 'ok', () => 'rejected')
@@ -162,7 +191,7 @@ async function run(seed: number, ready = false): Promise<{ verdict: Verdict; rea
     unsettledHandles: handles.filter((handle) => !settled.has(`${handle.turnId}:${handle.messageUuid}`)).length,
     duplicateResults: [...counts].filter(([, c]) => c > 1).map(([id]) => id),
   }
-  return { verdict, reach }
+  return { verdict, reach, stop: { driver: h.driver, rejected: stopRejected, error: stopError } }
 }
 
 describe('Codex stop: I1 over fixed-seed operation sequences', () => {
@@ -171,8 +200,8 @@ describe('Codex stop: I1 over fixed-seed operation sequences', () => {
     test(`I1: the stop settles only after every owned process exited and every admitted handler finished (sequences ${slice * 15}-${slice * 15 + 14})`, async () => {
       for (let i = slice * 15; i < slice * 15 + 15; i++) {
         const { verdict } = await run(0xa601 + i * 7919)
-        await stopDrivers()
         expect({ i, ...verdict }).toEqual({ i, ops: verdict.ops, liveAtStop: [], handlersOpenAtStop: 0, unreported: [], unsettledHandles: 0, duplicateResults: [] })
+        await drivers.close()
       }
     })
   }
@@ -190,8 +219,7 @@ describe('Codex stop: I1 after readiness over the same fixed-seed sequences', ()
   // literal title (so a coverage citation resolves it), in slice order.
   const readySlice = async (n: number) => {
     for (let i = n * 5; i < n * 5 + 5; i++) {
-      const { verdict, reach } = await run(0xa601 + i * 7919, true)
-      await stopDrivers()
+      const { verdict, reach, stop } = await run(0xa601 + i * 7919, true)
       reached[i] = reach
       expect({ i, ...verdict }).toEqual({ i, ops: verdict.ops, liveAtStop: [], handlersOpenAtStop: 0, unreported: [], unsettledHandles: 0, duplicateResults: [] })
       // A rejected stop is expected only from a crash: its one retained native exit, nothing else.
@@ -200,6 +228,9 @@ describe('Codex stop: I1 after readiness over the same fixed-seed sequences', ()
         expect({ i, crashed: verdict.ops.includes('crash'), category: reach.failure.category, causes: reach.failure.causes.length }).toEqual({ i, crashed: true, category: 'stop', causes: 1 })
         expect(reach.failure.causes[0]).toMatch(/^transport:agent process generation 1 exited with code 5 (before the stop|after the stop began)$/)
       }
+      // Only now, after the exact assertions above, may that one original rejection be expected.
+      if (stop.rejected) drivers.authorize(stop.driver, stop.error)
+      await drivers.close()
     }
   }
   test('I1 after readiness: the stop settles only after every owned process exited and every admitted handler finished (sequences 0-4)', () => readySlice(0))

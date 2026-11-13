@@ -18,13 +18,17 @@
 // case's entry reserves closing before any effect, so no host spawns after
 // its cleanup began. A host is registered with its whole collection (stdout,
 // stderr and actual exit, joined with allSettled) before anything is awaited,
-// so the parent owns it even when a collection rejects. The cleanup SIGKILLs
-// every live host, joins its exit and both streams, keeps each raw failure
-// without skipping the remaining hosts, and removes the roots last. Each
+// so the parent owns it even when a collection rejects. host() throws every
+// rejected stdout, stderr and exit outcome raw (settledValues). The cleanup
+// SIGKILLs every live host, joins each one's exit and both streams, reports
+// every kill, collection and root-removal failure raw and in order (none is
+// suppressed) without skipping the remaining hosts or roots, and removes
+// the roots last. Each
 // host script stops its driver in finally on every post-construction path
 // and reports every failure raw (fixtures/crossHostDriver.ts).
 import { afterEach, describe, expect, test } from 'bun:test'
-import { rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { LaunchConfiguration } from '../src/options.js'
 import { alive, BUN, codexRoot, pids, sent } from './helpers/codexDriverHarness.js'
@@ -40,26 +44,50 @@ interface Case {
   closed: OwnedOnce<void>
 }
 
-/** Close one case once: refuse new hosts, kill and await live ones, then remove the roots. */
+/** Throw the one original failure, or an AggregateError of every failure in order; nothing when there is none. */
+function throwAll(failures: unknown[], message: string): void {
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) throw new AggregateError(failures, message)
+}
+
+/** A host's collection outcomes (stdout, stderr, exit) as values; every rejected one is thrown raw, in that order. */
+function settledValues(outcomes: PromiseSettledResult<unknown>[]): unknown[] {
+  throwAll(outcomes.flatMap((outcome) => (outcome.status === 'rejected' ? [outcome.reason] : [])), 'host collection failed')
+  return outcomes.map((outcome) => (outcome as PromiseFulfilledResult<unknown>).value)
+}
+
+/**
+ * Close one case once: refuse new hosts, SIGKILL every live host, join every
+ * host's whole collection, then remove the roots. The ledger keeps, per host
+ * in insertion order, its kill failure and then every rejected stdout, stderr
+ * and exit outcome, then every root-removal failure; nothing is suppressed,
+ * since no case expects a collection or removal failure.
+ */
 const dispose = (entry: Case): Promise<void> =>
   entry.closed.run(async () => {
     entry.closing = true
-    const failures: unknown[] = []
-    try {
-      for (const { child, collected } of entry.hosts) {
-        try {
-          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-        } catch (error) {
-          failures.push(error)
-        }
-        // Exit and both streams; a collection failure already reached its test.
-        await collected
+    const hosts = [...entry.hosts]
+    const killed = hosts.map(({ child }) => {
+      try {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+        return []
+      } catch (error) {
+        return [error]
       }
-    } finally {
-      for (const root of entry.roots) rmSync(root, { recursive: true, force: true })
+    })
+    const failures: unknown[] = []
+    for (const [index, { collected }] of hosts.entries()) {
+      failures.push(...killed[index]!)
+      for (const outcome of await collected) if (outcome.status === 'rejected') failures.push(outcome.reason)
     }
-    if (failures.length === 1) throw failures[0]
-    if (failures.length > 1) throw new AggregateError(failures, 'cross-host case cleanup failed')
+    for (const root of entry.roots) {
+      try {
+        rmSync(root, { recursive: true, force: true })
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    throwAll(failures, 'cross-host case cleanup failed')
   })
 
 const owned = ownedAggregate<Case, void>({
@@ -95,9 +123,7 @@ async function host(entry: Case, root: string, config: Record<string, unknown>):
   const child = Bun.spawn([BUN, HOST, JSON.stringify(config)], { stdout: 'pipe', stderr: 'pipe', env: { PATH: '/usr/bin:/bin', HOME: root } })
   const collected = Promise.allSettled([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
   entry.hosts.add({ child, collected })
-  const outcomes = await collected
-  for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason
-  const [stdout, stderr, code] = outcomes.map((o) => (o as PromiseFulfilledResult<unknown>).value) as [string, string, number]
+  const [stdout, stderr, code] = settledValues(await collected) as [string, string, number]
   if (code !== 0) throw new Error(`host exited ${code}: ${stderr}\n${stdout}`)
   // The host has actually exited (reaped); nothing it owned may outlive it.
   expect(alive(child.pid)).toBe(false)
@@ -243,4 +269,142 @@ describe('cross-host resume with correlated identities (4.4, both public drivers
   test("codex: host 2 resumes host 1's saved conversation only after host 1 exited; handles, results, callbacks and wire ids correlate and every leader is gone", () => resumeAcrossHosts(CODEX))
 
   test('codex: a host whose checkpoint store cannot be written still stops its driver in finally, reports the raw failure and exits nonzero, and the parent finds every leader gone', () => failedStoreHost(CODEX))
+})
+
+// The cleanup ledger itself (F2), on the same dispose and host reader the
+// cases use. A host here is an inert stand-in (no process): its kill is
+// recorded or throws, and its collection is the same allSettled shape host()
+// registers, with raw rejections or an exit held until the test releases it.
+// These cases are not registered with the shared aggregate; each disposes its
+// own case, releasing every held gate in finally.
+const tick = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+function inertChild(kill: () => void): Bun.Subprocess {
+  return { exitCode: null, signalCode: null, kill } as unknown as Bun.Subprocess
+}
+
+function ledgerCase(roots: string[]): Case {
+  return { closing: false, hosts: new Set(), roots, closed: ownedOnce<void>() }
+}
+
+const failureOf = (promise: Promise<unknown>) => promise.then(() => 'resolved' as const, (error: unknown) => ({ error }))
+
+describe('cross-host case cleanup keeps every raw failure (F2)', () => {
+  test('the case cleanup joins a held host before removing its root and rejects with both raw stream failures in order', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cross-host-ledger-'))
+    const entry = ledgerCase([root])
+    const rawOut = { stream: 'stdout' }
+    const rawErr = { stream: 'stderr' }
+    let release!: () => void
+    const exit = new Promise<number>((resolve) => (release = () => resolve(0)))
+    let kills = 0
+    entry.hosts.add({ child: inertChild(() => (kills += 1)), collected: Promise.allSettled<unknown>([Promise.reject(rawOut), Promise.reject(rawErr), exit]) })
+    const closing = dispose(entry)
+    let state = 'pending'
+    closing.then(() => (state = 'resolved'), () => (state = 'rejected'))
+    let refused: unknown = null
+    try {
+      await tick(20)
+      expect([entry.closing, kills, existsSync(root), state]).toEqual([true, 1, true, 'pending'])
+      try {
+        await host(entry, root, {})
+      } catch (error) {
+        refused = error
+      }
+    } finally {
+      release()
+      await Promise.allSettled([closing])
+    }
+    expect((refused as Error).message).toBe('the case closed before the host spawned')
+    expect(existsSync(root)).toBe(false)
+    const outcome = await failureOf(closing)
+    const error = outcome !== 'resolved' ? outcome.error : null
+    expect(error).toBeInstanceOf(AggregateError)
+    const errors = (error as AggregateError).errors
+    expect(errors).toHaveLength(2)
+    expect(errors[0]).toBe(rawOut)
+    expect(errors[1]).toBe(rawErr)
+  })
+
+  test("the case cleanup rejects with a host's raw exit failure as the original value", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cross-host-ledger-'))
+    const entry = ledgerCase([root])
+    const rawExit = { exit: 'raw' }
+    entry.hosts.add({ child: inertChild(() => {}), collected: Promise.allSettled<unknown>([Promise.resolve(''), Promise.resolve(''), Promise.reject(rawExit)]) })
+    const outcome = await failureOf(dispose(entry))
+    expect(outcome !== 'resolved' && outcome.error).toBe(rawExit)
+    expect(existsSync(root)).toBe(false)
+  })
+
+  test('the case cleanup keeps a kill failure, a stream failure and a root-removal failure in order, joins a later held host and still removes every other root', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'cross-host-ledger-'))
+    const locked = join(parent, 'locked')
+    const lockedRoot = join(locked, 'root')
+    mkdirSync(lockedRoot, { recursive: true })
+    const free = mkdtempSync(join(tmpdir(), 'cross-host-ledger-'))
+    const entry = ledgerCase([lockedRoot, free])
+    const rawKill = { kill: 'raw' }
+    const rawStream = { stream: 'raw' }
+    let release!: () => void
+    const exit = new Promise<number>((resolve) => (release = () => resolve(0)))
+    let laterKills = 0
+    entry.hosts.add({
+      child: inertChild(() => {
+        throw rawKill
+      }),
+      collected: Promise.allSettled<unknown>([Promise.reject(rawStream), Promise.resolve(''), Promise.resolve(0)]),
+    })
+    entry.hosts.add({ child: inertChild(() => (laterKills += 1)), collected: Promise.allSettled<unknown>([Promise.resolve(''), Promise.resolve(''), exit]) })
+    chmodSync(locked, 0o500)
+    let closing: Promise<void> | null = null
+    try {
+      closing = dispose(entry)
+      let state = 'pending'
+      closing.then(() => (state = 'resolved'), () => (state = 'rejected'))
+      await tick(20)
+      expect([laterKills, existsSync(lockedRoot), existsSync(free), state]).toEqual([1, true, true, 'pending'])
+    } finally {
+      release()
+      if (closing) await Promise.allSettled([closing])
+      chmodSync(locked, 0o700)
+    }
+    try {
+      const outcome = await failureOf(closing!)
+      const error = outcome !== 'resolved' ? outcome.error : null
+      expect(error).toBeInstanceOf(AggregateError)
+      const errors = (error as AggregateError).errors
+      expect(errors).toHaveLength(3)
+      expect(errors[0]).toBe(rawKill)
+      expect(errors[1]).toBe(rawStream)
+      expect((errors[2] as NodeJS.ErrnoException).code).toBe('EACCES')
+      expect(existsSync(lockedRoot)).toBe(true)
+      expect(existsSync(free)).toBe(false)
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
+    }
+  })
+
+  test('the host reader throws every rejected stdout, stderr and exit outcome raw, in order', () => {
+    const [a, b, c] = [{ raw: 'stdout' }, { raw: 'stderr' }, { raw: 'exit' }]
+    let thrown: unknown = null
+    try {
+      settledValues([{ status: 'rejected', reason: a }, { status: 'rejected', reason: b }, { status: 'rejected', reason: c }])
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AggregateError)
+    const errors = (thrown as AggregateError).errors
+    expect(errors).toHaveLength(3)
+    expect(errors[0]).toBe(a)
+    expect(errors[1]).toBe(b)
+    expect(errors[2]).toBe(c)
+    let single: unknown = 'none'
+    try {
+      settledValues([{ status: 'fulfilled', value: 'out' }, { status: 'rejected', reason: undefined }, { status: 'fulfilled', value: 0 }])
+    } catch (error) {
+      single = error
+    }
+    expect(single).toBe(undefined)
+    expect(settledValues([{ status: 'fulfilled', value: 'out' }, { status: 'fulfilled', value: 'err' }, { status: 'fulfilled', value: 0 }])).toEqual(['out', 'err', 0])
+  })
 })

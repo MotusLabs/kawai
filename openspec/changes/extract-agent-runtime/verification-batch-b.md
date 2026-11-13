@@ -25,7 +25,7 @@ Committed evidence:
 
 - `claude: host 2 resumes host 1's saved conversation only after host 1 exited; handles, results, callbacks and wire ids correlate and every leader is gone` and `codex: host 2 resumes host 1's saved conversation only after host 1 exited; handles, results, callbacks and wire ids correlate and every leader is gone`. Each lifetime is a distinct, actually exited bun process. They share only the retained isolated home and the caller's file store. Host 2's reply holds host 1's unique marker. In each host, every handle, result and onTurnResult names one turnId/messageUuid, and the runtime received exactly those ids: Claude user-frame `uuid`, Codex `turn/start` `clientUserMessageId`. Every receipt leader and every pid the fake recorded is dead (zombie-aware) before host 2 starts and after it exits.
 - `claude: a host whose checkpoint store cannot be written still stops its driver in finally, reports the raw failure and exits nonzero, and the parent finds every leader gone` and `codex: a host whose checkpoint store cannot be written still stops its driver in finally, reports the raw failure and exits nonzero, and the parent finds every leader gone`. The failures must match an exact list of allowed shapes, with the raw ENOENT first in each stop's causes.
-- Cleanup (sweep 7553f8ac A9): one shared `ownedAggregate`. Closing is reserved before any spawn, each host's stdout, stderr and exit are joined with allSettled, a failure never skips the remaining hosts, and roots are removed last. The host stops in `finally` on every path after construction.
+- Cleanup (sweep 7553f8ac A9): one shared `ownedAggregate`. Closing is reserved before any spawn, and each host's stdout, stderr and exit are joined with allSettled. Since the F2 correction below, every kill, collection and root-removal failure is reported raw and in order, a failure never skips the remaining hosts or roots, and roots are removed last. The host stops in `finally` on every path after construction.
 
 Existing witnesses, unchanged:
 
@@ -79,4 +79,28 @@ Kawai resolves a coverage citation only against a literal title (`src/server/che
 - `codexStopOrder.test.ts`: the sixty after-readiness slices become sixty literal tests, in the original order, over one `readySlice(n)` body. The seeds, the five sequences per slice, the reach test and the cold describe are unchanged.
 
 `git diff -w` against 1e70eb58 shows only the test declarations and their wrappers changing. Every assertion line is the same, apart from indentation. So the five controls' inputs are equivalent and they are not replayed; the group-cleanup control's 16/60 count is for the same sixty slices.
+
+## F2 correction (review findings-6fcc1a71)
+
+The formal review's F2 (A9) reproduced two cleanup defects at ba319c39. First, the shared `stopDrivers` takes a snapshot, splices it and ignores its allSettled outcomes, so an overlapping second call settled while a kill was still held, and a raw kill rejection was lost. Second, the cross-host `dispose` ignored rejected stdout/stderr/exit outcomes, and `host()` threw only the first. The Lead's decision (note-04158757) after the reviewer's challenge (note-a39f7763) is a batch-local owner. The shared helper's legacy behavior is not fixed here; it is routed to backlog task-975cc067.
+
+- `helpers/ownedCodexDrivers.ts`: the one owner of `codexStopOrder.test.ts`'s drivers, built on the accepted `ownedAggregate`, which is unchanged.
+  - Admission is reserved before construction. The harness's fixture-internal `enroll` hands the driver to the owner instead of the shared registry (the default path is unchanged).
+  - close() closes admission synchronously. An admitted construction enrolled during a close delays that same close. open() reopens admission only at the next sequence, never during a join.
+  - An entry's join is its driver's kill(). Every rejection is reported as its original value. A test suppresses one occurrence of an exact value (Object.is) only through authorize(), after its exact assertions. An unconsumed authorization is reported.
+- `codexStopOrder.test.ts`: both describes and afterEach use that owner, with no `stopDrivers`. Each sequence asserts its verdict, then authorizes only the one crash stop it asserted exactly, then closes. The seeds, counts, order, literal titles and assertions are unchanged.
+- `crossHostResume.test.ts`: `host()` reads its outcomes through `settledValues`, which throws every rejected outcome raw, in order. `dispose` kills every live host, joins every collection, and keeps a ledger: per host its kill failure and then each rejected outcome, then each root-removal failure. Nothing is suppressed, and roots are removed last.
+
+Regressions on the actual paths:
+- `ownedCodexDrivers.test.ts` › `two overlapping closes share one join that stays pending while a kill is held, then both reject with the raw kill failure`
+- `ownedCodexDrivers.test.ts` › `an already admitted driver enrolled during a close delays that same close, while a new admission is refused before construction`
+- `ownedCodexDrivers.test.ts` › `only an authorized occurrence of the exact rejection value is suppressed; repeats, undefined, structural copies and unconsumed authorizations are reported`
+- `crossHostResume.test.ts` › `the case cleanup joins a held host before removing its root and rejects with both raw stream failures in order`
+- `crossHostResume.test.ts` › `the case cleanup rejects with a host's raw exit failure as the original value`
+- `crossHostResume.test.ts` › `the case cleanup keeps a kill failure, a stream failure and a root-removal failure in order, joins a later held host and still removes every other root`
+- `crossHostResume.test.ts` › `the host reader throws every rejected stdout, stderr and exit outcome raw, in order`
+
+One old-body run: the same seven tests, against the stopDrivers-style owner body and ba319c39's dispose and reader, ran 0 pass / 7 fail. Each failure is a definite value: early resolution, a missing refusal, a null in place of the AggregateError, a lost raw failure, or a masked one (`/tmp/kbb/f2/oldbody.log`).
+
+Diagnostic inventory, not a certificate: a scratch copy of ba319c39 logged every `stopDrivers` kill outcome over its 23 consumer files, which were all green. It recorded 2394 outcomes and 393 rejections in 12 files: 37 in codexStopOrder, all of them its asserted crash stops, and 356 in 11 non-batch files. The earlier figure of about 470 rejections in 13 files was wrong.
 
