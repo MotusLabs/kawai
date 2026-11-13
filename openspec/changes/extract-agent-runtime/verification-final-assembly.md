@@ -1,6 +1,6 @@
 # Verification: final local assembly
 
-Task task-3c3e3658, R4 (r4#9128d8464ba2). One writer in the final-assembly worktree. Bun 1.4.3 under suite-run for every install, check and hook. Controlled fakes only: nothing here is native 7.4, remote CI 8.3 or owner 8.4 evidence. This is a reviewed LOCAL candidate, not release acceptance.
+Task task-3c3e3658, R7 (r7#e07ecd1a0308; the history below starts at R4). One writer in the final-assembly worktree. Bun 1.4.3 under suite-run for every install, check and hook. Controlled fakes only: nothing here is native 7.4, remote CI 8.3 or owner 8.4 evidence. This is a reviewed LOCAL candidate, not release acceptance.
 
 ## Inputs (A1, A2)
 
@@ -72,7 +72,20 @@ Everything here is inspectable under /home/coder/krp7. That directory has no anc
   - Chat-fixture step (the CI list): 67 passed, 0 failed (e2e-fixture.log 561ca154).
   - `plan-supervision.spec.ts` passed here, with no retries configured and none reported. It had failed at `:174` in three earlier runs: `c59848f7`, master `72bed5e9` and `84e1c912`. Its inputs are byte-identical to master, so the case is intermittent with an unknown cause. It stays tracked as task fcbe74c7.
   - This one pass does not make CI green, and no remote CI ran.
-- Input equality for the final head: after `3c3a37c3`, only `verification-final-assembly.md` changes, a doc read by no stage above.
+- Input equality for the archive stages: after `3c3a37c3`, the commits below change only `verification-final-assembly.md` and four test-only files (`codexStopOrder.test.ts`, `fixtures/fakeCodexServer.ts`, `helpers/codexDriverHarness.ts`, `zombieLiveness.test.ts`). None is an input of the install, typecheck project outputs, builds, the release or selector tests, or the e2e client and server, so those results carry over by whole input equality. The minimum consumer was rerun (next section).
+
+## Codex I1 stop oracle and the liveness predicate (R5-R7: A15-A20)
+
+- The full check at `6eb8a3fc` failed: 10880 pass / 18 fail, all 18 in `codexStopOrder.test.ts`. The earlier oracle's expected cause count did not match the stop's actual causes (for example 1 expected, 2 received; full.log 5f5139d6). Nothing was recorded, and that tree was not rerun.
+- R5 (`9a211a4f`): expectations came from an opt-in fixture EXIT INTENT trace (`FAKE_CODEX_EXIT_TRACE=1`, `{pid, code}` appended just before the fake app-server exits itself) and an `I1_LAUNCH_TOKEN` launch mapping. The file passed 83/83 alone (r5-stoporder.log 42b35d98).
+- The R5 shared-fixture stage (38 files) went red in `claudeStopOrder.test.ts`: seq 206 left `liveAtStop` [590465], 524 pass / 2 fail (r5-fixture-users.log 88ae8510). Two read-only diagnostics (task-cbaa2760 R1 and R2; REPORTs e7e8d381 and d58dc779) did not reproduce it. R2 saw the production empty-group decision made on an unreaped Z helper that PID 1 reaped about 1.4 ms after the test's sample. Production counts Z and X as dead; the test's `alive()` counted only Z. The cause of 590465 stays unproven.
+- A18: `alive()` now uses `statShowsLive`, which counts Z and X as dead like production (`zombieLiveness.test.ts` › `a literal stat line in state X or Z is dead and one in state S or R is live, as production classifies them`). No runtime change.
+- The R6 affected run went red: a ready sequence (71) had a nonzero intent but a resolved stop (r6-affected.log 17814560, 171 pass / 2 fail). An intent records what the server meant to do, not what its owner observed, so the R5 premise failed and the design reopened.
+- R7 (`3d37d7c9`): expectations come only from the owners' frozen native evidence, read after the original stop settled and its verdict was observed. A leader exit is clean iff code 0 and signal null, and owned iff its owner marked termination and the exit signal is one it sent after the mark. Every other exit is one expected `NativeExitFailure`, in generation order, with `observedBeforeStop = !marked` and the exact message. The oracle never uses `nativeVerdict`, `nativeCauses` or the stop's causes. No expected failure needs a resolved stop; otherwise the stop needs category `stop` with exactly those causes, before the one authorization of the original value in both variants.
+- Mapping (A20): owner pids and generations are unique; onSpawn token-to-generation maps exactly onto the owners; every envs.jsonl row and intent matches its owner (an owner stopped before the fixture booted may have no row). An intent must equal its owner's exit code with no signal, unless that owner provably ended it by an owned signal. Missing, unfrozen or unsettled evidence, a spawn failure, a child error, an observer failure, or a missing or duplicate mapping throws before authorization. Tables: `codexStopOrder.test.ts` › `I1 stop oracle: zero, one and multiple exact native exits pass; every listed mismatch and malformed trace fails` and `codexStopOrder.test.ts` › `I1 stop oracle: expected failures come only from frozen owner evidence; clean and owned exits expect none, every other exit one, and every missing, duplicate or contradicted mapping throws`.
+- Seam qualification (A16): the owners are collected through an opt-in harness option on the private `createCodexDriverWith` spawn seam. It calls the unchanged production `spawnOwned` once with the exact request, keeps the returned owner and returns that same object, with no wrapper, listener or recorder. The I1 sequences therefore run a private-factory composition, not the public factory's empty-internal branch. The public, no-recorder Codex tests still run that branch and passed below. Generator, OPS, seed `0xA601`, 300 cold and 300 ready sequences, slices, titles, ticks, the 20 s timeout, the verdict, the reach checks and the owner are unchanged, and the fixture was not edited after R5.
+- Affected run at the R7 tree, through the root runner: the six `alive()` callers plus every Codex harness user, 55 files, 696 pass, 0 fail (r7-affected.log 5af4012e). Stock commit hook passed (r7-commit.log cb213140).
+- Minimum consumer at the R7 tree: `cand/` advanced by one scratch commit to tree `81697410` (the tree of `3d37d7c9`); lock `6e10615c` unchanged. With `CONSUMER_BUN` set to the 1.3.0 wrapper, `consumerInstall.test.ts` passed 9/9 (consumer-130-r7.log 14fbdf3d, JUnit 13550ccf). All 19 new wrapper calls reported 1.3.0 (bun130-calls.log, now 38 rows, 86544804).
 
 ## Coverage preflight (A6)
 
@@ -82,6 +95,7 @@ The historical checker `/tmp/krp6/preflight.ts` (e0ed39b3, unavailable) and the 
 - After A10 (r2 map 190ce9ed, 33 clauses): 0 missing, 56 map and 68 doc citations (preflight-2.log e517efe7).
 - After the docs (75 doc citations) and again for the r3 map with A11/A12 before the budget commit: 0 missing.
 - R4, `/home/coder/krp7` (map `map.json` built by `mkmap.py` from the r4 clauses and the accepted C rows): 0 missing at `18b811c3` (37 clauses, 72 map and 77 doc citations; logs/preflight-1.log 9e119b1a), and again at the final docs head.
+- R7 (map `map.json` from `mkmap.py`, r7 clauses A1-A20, 43 clauses, 99 map citations, sha256 `6e98697c`): 0 missing before this doc's commit and again at the final docs head (logs/preflight-r7-*.log).
 - It is rerun after every doc or map edit. A preflight resolves citations only; executed outcomes come from the result's checks.
 
 ## Controls (A8)
