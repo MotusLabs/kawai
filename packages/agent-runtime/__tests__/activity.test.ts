@@ -1,12 +1,15 @@
+// The live-activity reducer (moved from Kawai
+// src/server/__tests__/chatActivity.test.ts with its retired root duplicate,
+// task-f5001d7f A11; cases unchanged).
 import { describe, expect, test } from 'bun:test'
-import type { ChatActivityInput } from '../chat/chatActivity'
+import type { ChatActivityInput } from '../src/common/activity.js'
 import {
   contentBlockToInput,
   initialChatActivityState,
   projectActivity,
   reduceActivity,
   systemFrameToInput,
-} from '../chat/chatActivity'
+} from '../src/common/activity.js'
 
 // Frame shapes below are copied from real wire captures
 // (~/.agentboard/chat-wire/*.jsonl) so parser drift from the CLI's

@@ -1,5 +1,8 @@
+// The Claude CLI turn binder's rules alone (moved from Kawai
+// src/server/__tests__/cliTurnBinding.test.ts with its retired root duplicate,
+// task-f5001d7f A11; cases unchanged).
 import { describe, expect, test } from 'bun:test'
-import { CliTurnBinder, type CliContractViolation } from '../chat/cliTurnBinding'
+import { CliTurnBinder, type CliContractViolation } from '../src/claude/turnBinder.js'
 
 function binder() {
   const violations: CliContractViolation[] = []

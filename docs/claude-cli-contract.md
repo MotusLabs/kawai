@@ -72,8 +72,8 @@ visible.
   `src/server/__tests__/fixtures/cliContract/{prompt,task,cancel}.jsonl`.
 - The same file holds synthetic out-of-contract orders, including those
   behind findings-970c7351 and findings-8388b668.
-- `src/server/__tests__/cliTurnBinding.test.ts` covers the binding rules
-  alone.
+- `packages/agent-runtime/__tests__/claudeTurnBinder.test.ts` covers the
+  binding rules alone, against the package's `src/claude/turnBinder.ts`.
 
 ## Live check when the floor rises
 
