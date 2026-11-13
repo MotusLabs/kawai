@@ -1,6 +1,6 @@
 # Verification: final local assembly
 
-Task task-3c3e3658, R3 (r3#2fbbbe265017). One writer in the final-assembly worktree. Bun 1.4.3 under suite-run for every install, check and hook. Controlled fakes only: nothing here is native 7.4, remote CI 8.3 or owner 8.4 evidence. This is a reviewed LOCAL candidate, not release acceptance.
+Task task-3c3e3658, R4 (r4#9128d8464ba2). One writer in the final-assembly worktree. Bun 1.4.3 under suite-run for every install, check and hook. Controlled fakes only: nothing here is native 7.4, remote CI 8.3 or owner 8.4 evidence. This is a reviewed LOCAL candidate, not release acceptance.
 
 ## Inputs (A1, A2)
 
@@ -15,14 +15,18 @@ Task task-3c3e3658, R3 (r3#2fbbbe265017). One writer in the final-assembly workt
 - From the base, the remaining-proof side changes 109 paths and the C side 24. Only `bun.lock` changed on both sides; its diff against `3f841622` is the companion workspace version `0.0.0` -> `0.1.0`. Every other path keeps its one-sided blob.
 - Stock hook: the lock and manifest escapes ran the full check, which passed and recorded `390bc88a` (merge-commit.log 6558ce33).
 
-## Clean-archive dependency failure and the A10 helper (A10)
+## Restart and evidence status (A13, A14)
+
+A workspace restart wiped /tmp while the first full check at `18b811c3` was running. That run has no verdict and no record: it neither passed nor failed. The restart also deleted everything under /tmp/krp6 and /tmp/krp4: the first archive, every log and JUnit file named in the historical sections below, the maps, the preflight script and the downloaded Bun 1.3.0. Those hashes are historical claims only; the files are unavailable and cannot be inspected. The current evidence is the regenerated set in "Regenerated evidence", kept in persistent storage at /home/coder/krp7.
+
+## Clean-archive dependency failure and the A10 helper (A10; historical /tmp/krp6 logs, unavailable)
 
 - In the archive below, `distribution.test.ts` failed in `beforeAll`: "Cannot find package 'undici-types' imported from packages/agent-runtime", at `helpers/packArtifact.ts` `consumerProject` (consumer-143.log 99bfc026). The other 18 cases in that run passed.
 - Cause: undici-types is a dependency of @types/node only. Under the isolated workspace layout it is linked beside @types/node in `node_modules/.bun/`, never under the package. Worktrees passed only because resolution reached the ancestor `/home/coder/kawai/node_modules`. The helper blob `ba4124e4` is unchanged since the scaffold `7a914d0b`, in `3093157c`, both inputs and the earlier accepted archive, so the failure predates the assembly. It was disclosed before any edit (note 208cacc2), and the failed tree was not retried.
 - A10 (Lead decision): `8aa72741` (tree `84e1c912`) changes only that function. It resolves undici-types from the resolved @types/node directory and keeps the three links, zod and @types/node resolution, consumer tsconfig (`skipLibCheck: false`), packed artifact, titles and assertions. There is no `.bun` path, fallback, dependency, manifest, lock or runtime change. Its stock hook ran 7 affected test files and passed (a10-commit.log 8e78dd0b).
 - After the change, in the same archive: dist-free typecheck passed (tc-2.log c7a55078), and `distribution.test.ts` passed 6/6 (dist-2.log 2ebf934c, JUnit 7a78d2ca).
 
-## Merged archive (A4, V3)
+## First merged archive (A4, V3; historical /tmp/krp6 logs, unavailable)
 
 - /tmp/krp6/cand: a `git archive` of `8436986d` outside repository ancestry, `git init` with an empty hooks path. After A10 it is a scratch commit whose tree is `84e1c912`; ten tracked-but-ignored files were force-added so the tree matches exactly.
 - `bun install --frozen-lockfile` with Bun 1.4.3: 708 packages. Lock `6e10615c` is unchanged, and no tracked path changed (install.log 80ebb410).
@@ -34,7 +38,7 @@ Task task-3c3e3658, R3 (r3#2fbbbe265017). One writer in the final-assembly workt
   - A logging wrapper recorded 19 consumer calls, all reporting 1.3.0 (bun130-calls.log 59f2b746).
 - Input equality for A10: `8436986d` and `84e1c912` differ only in the helper. It is a test file, so it is not an input of the install, typecheck project outputs, builds, `consumerInstall`, release or selector tests. Those stage results carry over by whole input equality, and the affected file was rerun.
 
-## Isolated CI e2e (A5)
+## First isolated CI e2e (A5; historical /tmp/krp6 logs, unavailable)
 
 - Where: /tmp/krp6/cand at scratch tree `84e1c912` with the archive's own frozen install and root build (the A10 helper is not a client or server input). Both CI steps ran under suite-run with an empty private HOME (so a private DB), `CI=1`, tmux unset (the suite's own socket), spare ports 47312/47311, and `--workers=1`. `bun run test:e2e` and the human's server were not used.
 - Main step: 110 tests, 27 passed, 83 skipped (the chat-fixture specs, as in CI), 0 failed (e2e-main.log 26c8c816).
@@ -43,7 +47,7 @@ Task task-3c3e3658, R3 (r3#2fbbbe265017). One writer in the final-assembly workt
 - Inputs: that spec, `tests/e2e/fixtures/`, `src/server/plans/`, `src/server/team/`, `src/client/`, `src/shared/` and `playwright.config.ts` are byte-identical between `72bed5e9` and `84e1c912`. All of `tests/`, `src/client/`, `src/shared/`, `src/server/chat/`, `src/server/plans/`, `src/server/team/` and package `src/` are identical between `c59848f7` and `84e1c912`; the assembly changes only manifests, the lock, examples, tests, scripts and docs.
 - The one failure is the disclosed pre-existing baseline limitation, tracked as task fcbe74c7. Every other affected workflow passed. CI is not green.
 
-## Final-check failure and the eight case budgets (A11, A12)
+## Final-check failure and the eight case budgets (A11, A12; full.log unavailable)
 
 - The first clean exact-head `bun run check --full-properties --no-retry` at `9cf06685` failed: 10897 pass / 1 fail, nothing recorded (full.log 2deb36a2).
   - The one failure was `preCommitHook.integration.test.ts` › `a message-only amend beside an unstaged bun.lock edit runs the full check (I3)`. It hit its 20 s case budget at 20199 ms: the fixture commit returned -1 (killed), and the runner killed one dangling process.
@@ -53,13 +57,31 @@ Task task-3c3e3658, R3 (r3#2fbbbe265017). One writer in the final-assembly workt
   - The eight are `preCommitHook.integration.test.ts` › `an escape path runs the full check, which records the tree (I3)`, `an escape through an unstaged path alone still runs the full check (I3)`, `a failing full check on an escape refuses the commit (I3)`, `a repeated escape whose content key passed reports the recorded pass and runs no step`, `a message-only amend after a full pass runs lint and typecheck only`, `a message-only amend beside an unstaged bun.lock edit runs the full check (I3)`, `a message-only amend whose record is unreadable runs the full check (R3)` and `a message-only amend of an unchecked commit runs the full check, which records the tree`.
   - The diff against `9cf06685` is exactly eight `})` -> `}, 60_000)` lines. Titles, bodies, assertions, the fixture, the 120 s child limit, the hook, the runner, the worker settings and every other timeout are unchanged.
 
+## Regenerated evidence (A13, A14)
+
+Everything here is inspectable under /home/coder/krp7. That directory has no ancestor `node_modules`: none exists in `/home/coder`, `/home` or `/`.
+
+- Tools: the pinned Bun 1.4.3 (`/home/coder/kawai-lead/tools/bun-1.4.3`), and Bun 1.3.0 re-fetched from the official v1.3.0 release (`tools/bun-1.3.0`). Its zip matches the release's SHASUMS256 `60c39d92`, and the binary is `70ce5810`, the same as before the restart. `tools/bun130-wrapper` logs every call.
+- Archive `cand/`: a `git archive` of `3c3a37c3` (the tree of `18b811c3`), committed in its own scratch repository with an empty hooks path and the ten tracked-but-ignored files force-added; the commit's tree is `3c3a37c3`. Commands: `stages.sh` and `e2e.sh`. Logs and JUnit: `logs/`.
+- `bun install --frozen-lockfile`, Bun 1.4.3: 708 packages, lock `6e10615c` unchanged, no tracked change (install.log 78492c13).
+- No `dist` before the root `bun run typecheck`, which includes the package project; it passed (tc.log c7a55078). `bun run build` passed (root-build.log 648a4ad4), and so did the package build (pkg-build.log d322d355).
+- At Bun 1.4.3: `consumerInstall.test.ts` 9/9, `distribution.test.ts` 6/6 (with the A10 helper), `agentRuntimeRelease.test.ts` 4/4 and `affectedPackages.test.ts` 4/4; 23 pass, 0 fail (consumer-143.log 9f7ff38a, JUnit 5eb6005b).
+- At the minimum Bun 1.3.0 (`CONSUMER_BUN` set to the wrapper; pinned runner, as in the release workflow's minimum-consumer job): `consumerInstall.test.ts` 9/9 (consumer-130.log 5c8932d6, JUnit 9c81db7f). All 19 wrapper calls reported 1.3.0 (bun130-calls.log 2d376790).
+- Private CI on the same archive, same isolation as before (empty HOME, `CI=1`, tmux unset, ports 47312/47311, `--workers=1`):
+  - Main step: 27 passed, 83 skipped, 0 failed (e2e-main.log dc76294c).
+  - Chat-fixture step (the CI list): 67 passed, 0 failed (e2e-fixture.log 561ca154).
+  - `plan-supervision.spec.ts` passed here, with no retries configured and none reported. It had failed at `:174` in three earlier runs: `c59848f7`, master `72bed5e9` and `84e1c912`. Its inputs are byte-identical to master, so the case is intermittent with an unknown cause. It stays tracked as task fcbe74c7.
+  - This one pass does not make CI green, and no remote CI ran.
+- Input equality for the final head: after `3c3a37c3`, only `verification-final-assembly.md` changes, a doc read by no stage above.
+
 ## Coverage preflight (A6)
 
-`/tmp/krp6/preflight.ts` (e0ed39b3) uses Kawai's `parseCitation` and `testTitles` against the current worktree. Every map citation and every `file` › `title` in this change's verification docs and tasks.md must resolve.
+The historical checker `/tmp/krp6/preflight.ts` (e0ed39b3, unavailable) and the current `/home/coder/krp7/preflight.ts` use Kawai's `parseCitation` and `testTitles` against the current worktree. Every map citation and every `file` › `title` in this change's verification docs and tasks.md must resolve.
 
 - Before the merge's stock hook (r1 map, 32 clauses): 0 missing, 53 map and 68 doc citations (preflight-1.log 45a63f30).
 - After A10 (r2 map 190ce9ed, 33 clauses): 0 missing, 56 map and 68 doc citations (preflight-2.log e517efe7).
 - After the docs (75 doc citations) and again for the r3 map with A11/A12 before the budget commit: 0 missing.
+- R4, `/home/coder/krp7` (map `map.json` built by `mkmap.py` from the r4 clauses and the accepted C rows): 0 missing at `18b811c3` (37 clauses, 72 map and 77 doc citations; logs/preflight-1.log 9e119b1a), and again at the final docs head.
 - It is rerun after every doc or map edit. A preflight resolves citations only; executed outcomes come from the result's checks.
 
 ## Controls (A8)
