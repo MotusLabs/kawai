@@ -13,6 +13,12 @@ export interface NativeInput {
   model: string
   /** Optional continuation after an independently recorded failed stop. */
   resume?: ResumeCheckpoint
+  /**
+   * Opt-in: run the initial turn, interrupt and verified kill, record the
+   * saved checkpoint, and end this host before any resume. A second host
+   * resumes with `resume`. Omitted: the full sequence in one host.
+   */
+  phase?: 'through-kill'
   settings?: { env?: Readonly<Record<string, string>> }
 }
 
@@ -20,6 +26,8 @@ export interface NativeInput {
 export function validateIsolation(input: NativeInput, uid = process.getuid?.()): void {
   if (uid === undefined || uid === 0) throw new Error('native probe requires a non-root uid')
   if (!['claude', 'codex'].includes(input.runtime)) throw new Error('unknown runtime')
+  if (input.phase !== undefined && input.phase !== 'through-kill') throw new Error('unknown probe phase')
+  if (input.phase === 'through-kill' && input.resume) throw new Error('a through-kill phase cannot resume')
   const root = realpathSync(input.root)
   if (!isAbsolute(input.root) || root === '/' || (statSync(root).mode & 0o077) !== 0) throw new Error('probe root must be private')
   const { launch } = input
@@ -139,12 +147,20 @@ export async function runNativeProbe(input: NativeInput): Promise<void> {
       record('kill', killed)
       verifyExit(killed)
       record('killVerified', true)
+      if (input.phase === 'through-kill') {
+        // The first host ends here; a new host resumes from this checkpoint.
+        record('savedCheckpoint', saved)
+        return
+      }
     }
     driver = build(saved)
     operation = 'resume-start'
     await driver.start()
     const resumed = await turn('What phrase did I ask you to remember earlier? Do not read any files to recall it. '
-      + 'Try once to write denied-resume.txt containing DENIED using a tool, then briefly report the phrase and outcome.')
+      + (runtime === 'claude'
+        // An advertised tool outside the enabled list: the runtime hook must deny it.
+        ? 'Call the ToolSearch tool exactly once with the query "write file", then briefly report the phrase and the tool outcome.'
+        : 'Try once to write denied-resume.txt containing DENIED using a tool, then briefly report the phrase and outcome.'))
     record('resumed', resumed)
     record('sameIdentity', checkpoint?.runtimeSessionId === saved.runtimeSessionId)
     operation = 'shutdown'

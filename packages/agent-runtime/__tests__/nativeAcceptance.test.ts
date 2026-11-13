@@ -104,3 +104,14 @@ test('native private errors retain labels, nested native facts and non-enumerabl
   expect(JSON.stringify(captured)).toContain('peer failures')
   expect(JSON.stringify(captured)).toContain('circularReference')
 })
+
+test('native probe accepts only the opt-in through-kill phase, never combined with a resume, before provider construction', async () => {
+  const input = isolated()
+  expect(() => validateIsolation({ ...input, phase: 'through-kill' }, 1000)).not.toThrow()
+  expect(() => validateIsolation({ ...input, phase: 'resume-only' as never }, 1000)).toThrow('unknown probe phase')
+  const resume = { runtimeSessionId: 'saved-thread' } as unknown as NonNullable<NativeInput['resume']>
+  expect(() => validateIsolation({ ...input, resume }, 1000)).not.toThrow()
+  expect(() => validateIsolation({ ...input, phase: 'through-kill', resume }, 1000)).toThrow('a through-kill phase cannot resume')
+  // The actual entry point refuses the combination before any provider or file is touched.
+  await expect(runNativeProbe({ ...input, phase: 'through-kill', resume })).rejects.toThrow('a through-kill phase cannot resume')
+})
