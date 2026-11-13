@@ -54,15 +54,24 @@ export function extract(tarball: string, target: string): void {
 /**
  * A clean consumer project in the OS temp dir: the packed package plus
  * links to the repository's installed zod, @types/node and undici-types
- * (which @types/node needs) only.
+ * (which @types/node needs) only. undici-types is @types/node's dependency,
+ * not the package's, so it resolves from the resolved @types/node directory:
+ * an isolated install links it only there.
  */
 export function consumerProject(tarball: string): string {
   const root = mkdtempSync(join(tmpdir(), 'agent-runtime-consumer-'))
   extract(tarball, join(root, 'node_modules/@motuslabs/agent-runtime'))
-  for (const dep of ['zod', '@types/node', 'undici-types']) {
+  const directoryOf = (dep: string, from: string) => dirname(Bun.resolveSync(`${dep}/package.json`, from))
+  const nodeTypes = directoryOf('@types/node', PACKAGE_DIR)
+  const links: [string, string][] = [
+    ['zod', directoryOf('zod', PACKAGE_DIR)],
+    ['@types/node', nodeTypes],
+    ['undici-types', directoryOf('undici-types', nodeTypes)],
+  ]
+  for (const [dep, directory] of links) {
     const link = join(root, 'node_modules', dep)
     mkdirSync(dirname(link), { recursive: true })
-    symlinkSync(dirname(Bun.resolveSync(`${dep}/package.json`, PACKAGE_DIR)), link, 'dir')
+    symlinkSync(directory, link, 'dir')
   }
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'consumer', private: true, type: 'module' }))
   writeFileSync(
