@@ -287,6 +287,7 @@ describe('the decision note (D6)', () => {
   }
   const notes = () => store().listForTeam(team.teamId).filter(row => row.tags.includes(CONTEXT_EXHAUSTED_TAG))
 
+  // @covers: context-exhaustion-recovery › The dispatcher is asked to decide › Lead dispatched the work
   test('the lead gets one normal-priority note with the facts to decide; a repeat sends none', async () => {
     const { t, go } = await leadDispatch()
     exhaust('dev-1')
@@ -340,6 +341,49 @@ describe('the decision note (D6)', () => {
     expect(await runtime.lastNote).toBeNull()
     expect(notes()).toEqual([])
     expect(runtime.exhaustionNotes.episodes(team.teamId)).toMatchObject([{ sessionId: 'dev-1', recipientSession: null, noteId: null }])
+  })
+
+  // @covers: context-exhaustion-recovery › The dispatcher is asked to decide › Unassigned work goes to the owner
+  test('unassigned work handed to another lead sends the note to that lead, the owner, and none to the creator', async () => {
+    writeGroup('leads', 'canCreateTasks: true')
+    records.set('lead', record('lead', { groupId: 'leads' }))
+    records.set('lead-2', record('lead-2', { groupId: 'leads' }))
+    const t = await runtime.tasks.create({ kind: 'agent', sessionId: 'lead' }, { title: 'Export', direction: 'd' })
+    records.set('dev-1', record('dev-1', { projectPath: featX, spawned: true, taskId: t.id }))
+    await trackAll()
+    await runtime.tasks.ownership.transfer({ kind: 'agent', sessionId: 'lead' }, { task_id: t.id, to_session: 'lead-2' })
+    exhaust('dev-1')
+    const note = await runtime.lastNote
+    expect([note?.toId, note?.taskId]).toEqual(['lead-2', t.id])
+    expect(notes().map(row => row.toId)).toEqual(['lead-2'])
+    expect(runtime.exhaustionNotes.episodes(team.teamId)).toMatchObject([{ sessionId: 'dev-1', recipientSession: 'lead-2', noteId: note!.id }])
+  })
+
+  // @covers: context-exhaustion-recovery › The dispatcher is asked to decide › Human dispatched the work
+  test('an assignment the human dispatched sends no note, even to a live owner', async () => {
+    writeGroup('leads', 'canCreateTasks: true')
+    records.set('lead', record('lead', { groupId: 'leads' }))
+    const t = await runtime.tasks.create({ kind: 'agent', sessionId: 'lead' }, { title: 'Export', direction: 'd', worktree: featX })
+    records.set('dev-1', record('dev-1', { projectPath: featX, spawned: true, taskId: t.id }))
+    await trackAll()
+    await runtime.assignments.dispatch({ kind: 'human', team }, {
+      taskId: t.id, target: { kind: 'group', id: 'devs' }, instruction: 'go', requestKey: 'k-h',
+    })
+    await pass()
+    exhaust('dev-1')
+    expect(await runtime.lastNote).toBeNull()
+    expect(notes()).toEqual([])
+    expect(runtime.exhaustionNotes.episodes(team.teamId)).toMatchObject([{ sessionId: 'dev-1', recipientSession: null, noteId: null }])
+  })
+
+  // @covers: context-exhaustion-recovery › The dispatcher is asked to decide › Dispatcher itself exhausted
+  test('a dispatcher that is flagged too gets no note; the item stays with the human', async () => {
+    const { t } = await leadDispatch()
+    records.get('lead')!.contextExhausted = FLAG
+    exhaust('dev-1')
+    expect(await runtime.lastNote).toBeNull()
+    expect(notes()).toEqual([])
+    expect(runtime.exhaustionNotes.episodes(team.teamId)).toMatchObject([{ sessionId: 'dev-1', taskId: t.id, recipientSession: null, noteId: null }])
   })
 
   test.each([

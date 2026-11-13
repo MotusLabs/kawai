@@ -115,7 +115,6 @@ describe('manual decisions', () => {
     expect(state(taskId)).toBe('rejected')
     expect(bench.tasks.journal(taskId).at(-1)).toMatchObject({ author: { kind: 'agent', sessionId: 'lead' }, text: 'Rejected the dispute of F1: the test proves it' })
   })
-  // @covers: review-findings › A dispute's decision upholds or rejects the finding › Only the creator decides a manual dispute
   // @covers: review-findings › The verdict is derived from the ledger › A rejected dispute clears fixes requested
   test('a rejected dispute turns every reader\'s verdict to pass; the stored submission is unchanged', async () => {
     const { taskId } = await reviewed(null)
@@ -131,11 +130,41 @@ describe('manual decisions', () => {
     expect(bench.tasks.list(world.team.teamId).find(task => task.id === taskId)?.outstandingResult?.reviewVerdict).toBe('pass')
     expect(bench.tasks.results.listByTask(taskId).flatMap(result => result.findings).map(row => row.verdict)).toEqual(['fail'])
   })
+  // @covers: review-findings › A dispute's decision upholds or rejects the finding › Only the creator decides a manual dispute
   test('a session that is not the creator cannot decide, and the finding stays disputed', async () => {
     const { taskId } = await reviewed(null)
     await tools('dev').task_dispute_findings({ task_id: taskId, disputes: [{ id: 'F1', counter_evidence: 'x' }] })
-    await expect(tools('lead2').task_decide_dispute({ task_id: taskId, finding_id: 'F1', decision: 'reject', rationale: 'r' })).rejects.toThrow('creator or the human')
+    await expect(tools('lead2').task_decide_dispute({ task_id: taskId, finding_id: 'F1', decision: 'reject', rationale: 'r' }))
+      .rejects.toThrow('Only the owner (lead) or the human decides a dispute on this task; nothing was written')
     expect(state(taskId)).toBe('disputed')
+  })
+  // @covers: review-findings › A dispute's decision upholds or rejects the finding › A handed-over task's disputes go to the new owner
+  test('after a handover the dispute mail reaches the new owner, who decides; the creator is refused', async () => {
+    const { taskId } = await reviewed(null)
+    await tools('lead').task_transfer_owner({ task_id: taskId, to_session: 'lead2' })
+    await tools('dev').task_dispute_findings({ task_id: taskId, disputes: [{ id: 'F1', counter_evidence: 'x' }] })
+    const disputeMail = bench.mail.forTask(taskId).filter(message => message.tags.includes('finding-dispute')).map(message => message.toId)
+    expect(disputeMail).toEqual(['lead2'])
+    await expect(tools('lead').task_decide_dispute({ task_id: taskId, finding_id: 'F1', decision: 'reject', rationale: 'r' }))
+      .rejects.toThrow('Only the owner (lead2) or the human decides a dispute')
+    expect(state(taskId)).toBe('disputed')
+    await tools('lead2').task_decide_dispute({ task_id: taskId, finding_id: 'F1', decision: 'reject', rationale: 'the test proves it' })
+    expect(state(taskId)).toBe('rejected')
+    expect(bench.tasks.journal(taskId).at(-1)).toMatchObject({ author: { kind: 'agent', sessionId: 'lead2' }, text: 'Rejected the dispute of F1: the test proves it' })
+  })
+  test('the human decides a manual dispute; a human-created task mails nobody', async () => {
+    const taskId = bench.tasks.create({ teamId: world.team.teamId, title: 'Human', direction: 'Build', creator: { kind: 'human', sessionId: null } }).id
+    const task = bench.tasks.get(taskId)!
+    const result = await results.submit(dev, taskId, { summary: 'r1', commit: 'abc' })
+    results.findingsLedger.submit({
+      teamId: world.team.teamId, task, result, author: { kind: 'agent', sessionId: 'lead2' }, handoffId: null, counted: true,
+      submission: { kind: 'review', findings: [{ level: 'P1', clause: task.identity, evidence: 'src/a.ts:3', impact: 'wrong' }], dispositions: [] },
+    })
+    await tools('dev').task_dispute_findings({ task_id: taskId, disputes: [{ id: 'F1', counter_evidence: 'x' }] })
+    expect(bench.mail.forTask(taskId).filter(message => message.tags.includes('finding-dispute'))).toEqual([])
+    await expect(tools('lead').task_decide_dispute({ task_id: taskId, finding_id: 'F1', decision: 'uphold', rationale: 'r' })).rejects.toThrow('Only the human decides a dispute on this task')
+    await results.decideDispute(human(), taskId, { findingId: 'F1', decision: 'uphold', rationale: 'reproduced' })
+    expect(state(taskId)).toBe('accepted')
   })
   test('a plan change\'s dispute cannot be decided with the tool', async () => {
     const planId = await bench.approvedPlan()
