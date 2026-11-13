@@ -39,7 +39,7 @@ Flagging a session SHALL NOT record a limit event, cool any profile or provider,
 - **THEN** other `glm-flash` sessions stay routable and no cooldown is reported
 
 ### Requirement: The dispatcher is asked to decide
-When a session is flagged while bound to a task, kawai SHALL send one normal-priority direct note tagged `context-exhausted` with that task to the dispatcher of the task's outstanding assignment, else to the task's creator. It SHALL send nothing when that recipient is the human, killed, archived, or itself flagged.
+When a session is flagged while bound to a task, kawai SHALL send one normal-priority direct note tagged `context-exhausted` with that task to the dispatcher of the task's outstanding assignment, else to the task's owner. It SHALL send nothing when that recipient is the human, killed, archived, or itself flagged.
 
 #### Scenario: Lead dispatched the work
 - **WHEN** a dev spawned for a task the lead assigned is flagged
@@ -52,6 +52,10 @@ When a session is flagged while bound to a task, kawai SHALL send one normal-pri
 #### Scenario: Dispatcher itself exhausted
 - **WHEN** the dispatcher session is flagged too
 - **THEN** no note is sent to it, and the attention queue shows the item to the human
+
+#### Scenario: Unassigned work goes to the owner
+- **WHEN** a session bound to a task with no assignment is flagged, after the task's creator handed it to another lead
+- **THEN** that lead, the task's owner, receives the note, and the creator receives none
 
 ### Requirement: The decision note carries the facts to decide
 The note SHALL name the flagged session, its worker, the terminal reason, the dropped message if any, the progress digest since that message's claim, the claim commit, and the session's current HEAD. It SHALL also state whether the task's current revision was acknowledged, and give the usage, reset times, and cooldowns of the providers of the session's group.

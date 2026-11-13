@@ -18,4 +18,4 @@
 ## 4. Verify
 
 - [x] 4.1 Run mutants: revert each creator-to-owner switch in turn (decide, mail, exhaustion fallback), and check that a test fails for each
-- [ ] 4.2 `openspec validate task-owner-remaining-rights --strict` and `bun run check` pass
+- [x] 4.2 `openspec validate task-owner-remaining-rights --strict` and `bun run check` pass
