@@ -56,7 +56,7 @@ Control M-join (A4), at the Claude ownership boundary. Both sources were restore
 - `claudeSession.test.ts` › `M-join: a CLI that closes its stream but keeps running is not reported as exited` fails on a value: state `exited`, expected `active`. `L14: a crash mid-turn reports one process end and one process-ended result; start respawns` fails on its reported end: code 0 at EOF where the crash exited with code 3. Logs: /tmp/krp/mjoin-session.log (sha256 b2ed576beafd69606e6bd7fd69bd8adc6e33144673bf9f89cbc836b426b61994); diff /tmp/krp/mjoin.diff (132db3db235c5ef8d76899832b8579db5f5f93cf8fdba6aa251934f6129ca102).
 - Disclosed: a first form that emitted only the exit event was equivalent for the M-join witness. Its two kills were 20 s timeouts, which are not evidence (/tmp/krp/mjoin-v1-session.log).
 
-Exceptional generation teardown (task-7cfee843): no counterexample was found.
+Exceptional generation teardown (task-7cfee843). No controlled public provider reaches this branch; R3's internal-boundary unit (A12, below) then demonstrated the gap.
 
 - The observation is in `terminateGenerations`. A rejected `owned.terminate()` rejects its `Promise.all` before the other generations' terminations settle, and it skips the `query.close()` loop.
 - `terminate()` rejects only when a leader survives SIGKILL for `killMs` (5 s), or a group member survives the group SIGKILL for `killMs`. `killMs` is not a public option, and SIGKILL cannot be trapped, so no controlled provider reaches this branch.
@@ -74,6 +74,17 @@ Package-source exception (R4 A12/A13; disclosed here before the edit). R3's A12 
   - Then `query.close()` is attempted for every generation, including an ownerless one and one whose terminate rejected. The existing catch-and-ignore of a close throw is unchanged.
   - Outcomes are classified by status, so a rejected `undefined` or `null` still counts as a failure. With no failure, the same facts are returned, sorted by generation. With one failure, the original reason is thrown unchanged. With several, the existing `AgentRuntimeError` (category `stop`) is thrown, its `causes` holding every original reason in supplied order, with duplicates and nested errors intact.
 - `lifecycle.runStop` is unchanged. It keeps the thrown value as one outer cause, then joins jobs and runs the account, as before.
+
+Implemented in `d01a0479` (`generations.ts` only: the `terminateGenerations` body and its doc comment). Its regressions on the actual function, all passing:
+
+- `claudeTerminateGenerations.test.ts` › `the stop settles only after the held peer termination, closes every query, and rejects with the one raw terminate failure` is A12's probe, committed. It asserts the stop is pending and has closed nothing before release, then closes every query and rejects with the same failure object.
+- `claudeTerminateGenerations.test.ts` › `several failures completing in reverse, supplied out of numeric order, reject once with every raw reason in supplied order`. Generations are supplied as 3, 1, 4, 2, 5 and complete in reverse. The reasons are a nested `AgentRuntimeError`, one raw object twice, `undefined` and `null`. The causes match per index (`toBe`) in supplied order, and the nested error keeps its own cause.
+- `claudeTerminateGenerations.test.ts` › `exactly one rejection with an undefined reason throws undefined, judged by status`.
+- `claudeTerminateGenerations.test.ts` › `marks, aborts, ends input, terminates and closes in order, attempts every close past a throwing one and an ownerless one, and returns the same facts by generation` is the zero-failure control, with the same fact objects, sorted.
+- No existing Lifecycle test combined a teardown rejection with a held job and the account. `lifecycle.test.ts` › `a teardown that throws an aggregate still joins a held job and runs the account, keeping the aggregate as one cause` adds that one case; `lifecycle.ts` is unchanged.
+- Public stop paths, at d01a0479's tree before its commit: `claudeStopOrder.test.ts` (the I1, all 60 slices), `claudeSession.test.ts`, `claudeReentrantStop.test.ts`, `claudeDriver.test.ts`, `lifecycle.test.ts` and the new file, 213 pass / 0 fail (/tmp/krp3/a13-tests.log). The commit's stock hook then ran 1518 affected tests across 139 files, all passing.
+
+With the I1, the M-join control and this branch now proved at its internal boundary, 2.2 is checked. Native SIGKILL survival itself is still never induced (limit below).
 
 ## 6.1: Codex host composition
 
@@ -102,9 +113,18 @@ Current merged sources, against the slice results recorded under 6.3 in tasks.md
 - Retained host modules with package counterparts: `contentBlocks.ts` (transcript replay, approval policy, question deadlines) and `TurnQueue.ts` (the SDK availability probe and development fixture). The usage, Codex helper, transport and driver slices recorded under 6.3 stand.
 - tool-call-metrics has not landed, so 6.3's preservation clause for it does not apply.
 
+Row controls (R4 A14), each run on the final relevant inputs (HEAD `d01a0479`) by /tmp/krp3/mutants4.py (sha256 5dd0350f3d09506492b1e53f55242016cc387971c345480de6e497c6eb7ac041). Each mutation replaces one unique span; the source was restored from its saved copy and sha-verified, leaving the tree clean.
+
+- Peer/context enrichment (6.2): Kawai's `claudeRuntime.ts` passes `composePrompt: () => undefined` in place of `promptEnvelope`. This kills, on values, three tests: `chatWorkspaceSend.test.ts` › `a contextual send records, then opens, emits, and enqueues with the context pasted` and › `I3 a slash command keeps its literal text and still dispatches with the context pasted` (`pasted_content` is `undefined`), and `chatSessionDriver.test.ts` › `peer delivery pushes a peer-origin turn and emits display metadata without a user copy` (`origin` is `undefined`). 145 pass / 3 fail. Log /tmp/krp3/enrich.log (8f09bb6a69c92b15a134aee6c6e8a9f49db581167e3ca850ddd405cd11221b96); diff /tmp/krp3/enrich.diff (bae4e2958f8af646b01af426df176c307473bd675b8d2e8da58c3dd5973de9ca).
+- Binder bypass (6.3): the package's `resultSettlement.ts` settles the active turn without the binder's verdict. The production-path `chatSessionDriver.interrupt.test.ts` gives 10 pass / 13 fail, every kill on a value (no timeout). For example, `GUARD (2b1f56bf) (ii) a never-sent uuid is logged and dropped` expected `working` and got `waiting`. Others are `GUARD (2b1f56bf) (i) a late or duplicate result naming a completed turn never closes the current one` and the three recorded-contract probes. Log /tmp/krp3/binder.log (1401dee1db9a2857639c726e8e28d83c653fd389e742fe1070dea20bed68b8bd); diff /tmp/krp3/binder.diff (28355a3da5bf8067c219adbd6f10e85a5ce5b862ec309dad6729074de2b9b661).
+- M-pack (6.2) was not replayed. The decceb record holds `distribution.test.ts` › `control M-pack: a repository-relative import in a shipped file is reported` and › `control: the clean project cannot resolve a Kawai type for a consumer`, both passed. They tamper with an installed real tarball copy, and both run again in this batch's final full check.
+- The policy M-wire half of 6.3's control is batch B's Claude control plus this batch's Codex control (6.1 above).
+
+6.2 and 6.3 are checked: no duplicate implementation remains, the slices' moved cases run against package construction or the package modules, and every named control fails on values.
+
 ## Limits
 
 - Controlled fake CLI and app-server only. Native 7.4, assembly 8.3 and owner 8.4 stay separate gates.
-- The accepted five controls of batch B were not replayed. Only the M-join and M-wire controls ran here.
-- The 2.2 exceptional branch above is argued from source, not executed.
+- The accepted five controls of batch B were not replayed. This task ran four controls: M-join, Codex M-wire, enrichment and binder.
+- The 2.2 rejection branch is proved by the actual-function units with contract-valid rejections. A native leader or group surviving SIGKILL is never induced.
 - Correction to result-18442434: its full record `decceb030c2dce03b307fcdb42e42e80b374a67e3152acd4c6613e3739d79736` (exact head `7895c674` only) does hold per-test outcomes for the package suites. It has 10903 outcomes, all passed, 1048 of them under `packages/agent-runtime/` (including 63 from `claudeStopOrder.test.ts`). The result's claim that package suites are absent from the root record was false.
