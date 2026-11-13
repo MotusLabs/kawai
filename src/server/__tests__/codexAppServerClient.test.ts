@@ -428,7 +428,8 @@ test('an orphan grandchild holding the pipes cannot hold the exit open (R2-1)', 
   // The child exits 3 while its grandchild (sleep 2, pipes inherited)
   // keeps both streams open: the exit settles on the ~250 ms drain bound,
   // not on the closes. The settle-only-on-closes shape this replaces can
-  // only settle when the grandchild dies (~2 s), past this timeout.
+  // only settle when the grandchild dies (~2 s), which the < 1 s assertion
+  // below rejects; the 5 s case budget is owner-approved (task-f5001d7f A18).
   // onExit proves no empty group; the shared stop cleanup joins clears the grandchild.
   const { transport, reportedExit } = startTransport('orphan-grandchild', { drainBoundMs: 250 })
   await transport.request('ping')
@@ -436,7 +437,7 @@ test('an orphan grandchild holding the pipes cannot hold the exit open (R2-1)', 
   const exit = await reportedExit
   expect(exit).toEqual({ kind: 'exited', code: 3, signal: null })
   expect(Date.now() - started).toBeLessThan(1_000)
-}, 1_500)
+}, 5_000)
 
 test('the default drain bound is 1 s, and an unset option uses it (T1)', async () => {
   expect(DRAIN_BOUND_MS).toBe(1_000)

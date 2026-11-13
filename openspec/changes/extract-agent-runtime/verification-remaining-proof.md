@@ -165,6 +165,14 @@ Outcome: the A15+A17 stock commit `e34c9038` (tree `c59848f7`; first landed as `
 - Main step: 110 tests, 27 passed, 83 skipped (the chat-fixture specs, as in CI), 0 failed (e2e-main.log 26c8c816).
 - Chat-fixture step (the CI list): 67 tests, 66 passed, 1 failed: `plan-supervision.spec.ts:174` never shows the recorded 'Narrow' decision card (e2e-fixture.log eb71d801).
 - Baseline: the same spec alone in a clone of master `72bed5e9` with its own frozen install and build fails identically (base-supervision.log 49e74729). The failure predates this batch and is not repaired here; its cause is not investigated.
+- Inputs: the spec, `tests/e2e/fixtures/`, `src/server/plans/`, `src/server/team/`, `src/client/`, `src/shared/` and `playwright.config.ts` are byte-identical between `72bed5e9` and `e34c9038`.
+- Boundary (Lead decision A19): this one pre-existing, unaffected scenario is a disclosed baseline limitation, tracked as task fcbe74c7. The CI run is not green, and nothing else is waived.
+
+## Final-check failure and the R2-1 case budget (A18)
+
+- The first clean-head full check at `d01a5b6d` failed: 10884 pass / 1 fail, nothing recorded (/tmp/krp4/full.log, sha256 28a17cda47c64b32d536cc8926dd7d734a8678808666402f9f6b6aa5f077fed8). `codexAppServerClient.test.ts` 'an orphan grandchild holding the pipes cannot hold the exit open (R2-1)' exceeded its 1500 ms case budget, with an unhandled "the app-server transport is stopping" rejection from the harness cleanup. The file and the package Codex sources are unchanged since `9748e004`. The cause is unknown.
+- One bounded diagnostic run of that file and the hook file at `d01a5b6d`: 43 pass / 0 fail, raw JUnit /tmp/krp5/evidence.junit.xml (90ba58f0). R2-1 recorded 1595.8 ms; what the JUnit time includes is not established. The seven full-check hook cases took 5.751 to 10.784 s against 20 s, so the hook cases need no change.
+- A18 (owner-approved): only that case's overall budget goes from 1500 to 5000 ms, and the stale comment that called the ~2 s orphan "past this timeout" now names the strict < 1000 ms assertion instead. The title, body, both assertions, `drainBoundMs: 250`, the 2 s orphan, exit 3, the request and the cleanup are unchanged. The edited file alone ran 25 pass / 0 fail (/tmp/krp5/a18-tests.log f205ec07).
 
 ## Limits
 
