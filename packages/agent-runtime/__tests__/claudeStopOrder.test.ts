@@ -21,8 +21,9 @@
 // pinned SDK raises for it; any other cause fails the sequence.
 //
 // A last case pins the fixture correction this file needed: the fake's
-// interrupt result now carries the `errors` list the pinned SDK requires, so
-// interrupting a later turn on the same process no longer ends it.
+// interrupt result now carries the `errors` list the pinned SDK requires of
+// every error result, so an interrupt the fake answers with that result no
+// longer throws in the SDK's reader and ends the generation.
 //
 // Cleanup: each sequence's driver is admitted to one ownedAggregate before it
 // is constructed; the sequence's own stop is the joined terminal, and only
@@ -351,11 +352,12 @@ describe('Claude stop: I1 over fixed-seed operation sequences', () => {
   })
 })
 
-describe('Claude interrupt after a completed turn on the same process', () => {
-  // The fake's interrupt result carries the `errors` list the pinned SDK's
-  // error results always have; without it the SDK's reader throws once a turn
-  // has completed on that process, and the CLI generation ends.
-  test('the interrupted turn settles as interrupted, the process stays up, and a kill resolves with its one exit', async () => {
+describe('Claude interrupt answered by an error result', () => {
+  // The fake writes the interrupted turn's error result only once it has read
+  // that turn's prompt, so the test waits for it first. The result carries
+  // the `errors` list every SDKResultError has; without it the pinned SDK's
+  // reader throws and the generation ends as an unexpected exit.
+  test('the interrupted turn settles as interrupted, the generation keeps reading, and a kill resolves with its one exit', async () => {
     const home = fakeClaudeHome()
     const entry: Owned = { driver: null, home, stop: null, expected: null }
     owned.add(entry)
@@ -368,8 +370,8 @@ describe('Claude interrupt after a completed turn on the same process', () => {
     })
     entry.driver = d
     await d.start()
-    expect((await (await d.send('first')).result).finalText).toBe('echo: first')
     const hung = await d.send('hang')
+    await until(() => home.received().some((f) => f.type === 'user' && JSON.stringify(f.message).includes('hang')))
     expect(await d.interrupt()).toEqual({ outcome: 'requested', processExit: false })
     expect((await hung.result).outcome).toBe('interrupted')
     await until(() => home.received().some((f) => (f.request as { subtype?: string } | undefined)?.subtype === 'interrupt'))
