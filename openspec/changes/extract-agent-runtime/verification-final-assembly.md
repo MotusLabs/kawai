@@ -1,6 +1,6 @@
 # Verification: final local assembly
 
-Task task-3c3e3658, R2 (r2#6e6415164d6a). One writer in the final-assembly worktree. Bun 1.4.3 under suite-run for every install, check and hook. Controlled fakes only: nothing here is native 7.4, remote CI 8.3 or owner 8.4 evidence. This is a reviewed LOCAL candidate, not release acceptance.
+Task task-3c3e3658, R3 (r3#2fbbbe265017). One writer in the final-assembly worktree. Bun 1.4.3 under suite-run for every install, check and hook. Controlled fakes only: nothing here is native 7.4, remote CI 8.3 or owner 8.4 evidence. This is a reviewed LOCAL candidate, not release acceptance.
 
 ## Inputs (A1, A2)
 
@@ -43,13 +43,24 @@ Task task-3c3e3658, R2 (r2#6e6415164d6a). One writer in the final-assembly workt
 - Inputs: that spec, `tests/e2e/fixtures/`, `src/server/plans/`, `src/server/team/`, `src/client/`, `src/shared/` and `playwright.config.ts` are byte-identical between `72bed5e9` and `84e1c912`. All of `tests/`, `src/client/`, `src/shared/`, `src/server/chat/`, `src/server/plans/`, `src/server/team/` and package `src/` are identical between `c59848f7` and `84e1c912`; the assembly changes only manifests, the lock, examples, tests, scripts and docs.
 - The one failure is the disclosed pre-existing baseline limitation, tracked as task fcbe74c7. Every other affected workflow passed. CI is not green.
 
+## Final-check failure and the eight case budgets (A11, A12)
+
+- The first clean exact-head `bun run check --full-properties --no-retry` at `9cf06685` failed: 10897 pass / 1 fail, nothing recorded (full.log 2deb36a2).
+  - The one failure was `preCommitHook.integration.test.ts` › `a message-only amend beside an unstaged bun.lock edit runs the full check (I3)`. It hit its 20 s case budget at 20199 ms: the fixture commit returned -1 (killed), and the runner killed one dangling process.
+  - The test, `helpers/hookRepo.ts`, `pre-commit.ts` and `check.ts` were byte-identical to `3f841622`, whose full check passed. The merge hook's full check (`390bc88a`) had also passed the case.
+  - The cause is unknown; no load or other cause is claimed. The failed tree was not rerun.
+- Owner exception (A11, approved in the owner chat as "60 seconds for the eight cases"): eight cases that run a nested full check get an explicit 60 000 ms overall budget.
+  - The eight are `preCommitHook.integration.test.ts` › `an escape path runs the full check, which records the tree (I3)`, `an escape through an unstaged path alone still runs the full check (I3)`, `a failing full check on an escape refuses the commit (I3)`, `a repeated escape whose content key passed reports the recorded pass and runs no step`, `a message-only amend after a full pass runs lint and typecheck only`, `a message-only amend beside an unstaged bun.lock edit runs the full check (I3)`, `a message-only amend whose record is unreadable runs the full check (R3)` and `a message-only amend of an unchecked commit runs the full check, which records the tree`.
+  - The diff against `9cf06685` is exactly eight `})` -> `}, 60_000)` lines. Titles, bodies, assertions, the fixture, the 120 s child limit, the hook, the runner, the worker settings and every other timeout are unchanged.
+
 ## Coverage preflight (A6)
 
 `/tmp/krp6/preflight.ts` (e0ed39b3) uses Kawai's `parseCitation` and `testTitles` against the current worktree. Every map citation and every `file` › `title` in this change's verification docs and tasks.md must resolve.
 
 - Before the merge's stock hook (r1 map, 32 clauses): 0 missing, 53 map and 68 doc citations (preflight-1.log 45a63f30).
 - After A10 (r2 map 190ce9ed, 33 clauses): 0 missing, 56 map and 68 doc citations (preflight-2.log e517efe7).
-- It is rerun after these docs. A preflight resolves citations only; executed outcomes come from the result's checks.
+- After the docs (75 doc citations) and again for the r3 map with A11/A12 before the budget commit: 0 missing.
+- It is rerun after every doc or map edit. A preflight resolves citations only; executed outcomes come from the result's checks.
 
 ## Controls (A8)
 

@@ -102,7 +102,7 @@ describe('the commit hook in a temporary repository', () => {
     expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
     expect(result.output).toContain('escape matched bun.lock; running the full check')
     expect(fixture.records()).toHaveLength(1)
-  })
+  }, 60_000)
 
   test('an escape through an unstaged path alone still runs the full check (I3)', () => {
     stage('src/shared/lone.ts', 'export const lone = 3\n')
@@ -111,7 +111,7 @@ describe('the commit hook in a temporary repository', () => {
     expect(result.code).toBe(0)
     expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
     expect(result.output).toContain('unstaged/untracked paths affected selection: bun.lock')
-  })
+  }, 60_000)
 
   test('a failing full check on an escape refuses the commit (I3)', () => {
     stage('bun.lock', 'lock 4\n')
@@ -120,7 +120,7 @@ describe('the commit hook in a temporary repository', () => {
     expect(result.code).not.toBe(0)
     expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
     expect(fixture.records()).toEqual([])
-  })
+  }, 60_000)
 
   test('a repeated escape whose content key passed reports the recorded pass and runs no step', () => {
     stage('bun.lock', 'lock 5\n')
@@ -130,7 +130,7 @@ describe('the commit hook in a temporary repository', () => {
     expect(result.code).toBe(0)
     expect(fixture.takeLog()).toEqual([])
     expect(result.output).toContain('check: recorded pass')
-  })
+  }, 60_000)
 
   // These two amend createHookRepo's own initial commit, like the R3 case
   // below: its checked `git commit` already leaves a clean index equal to
@@ -147,7 +147,7 @@ describe('the commit hook in a temporary repository', () => {
     expect(result.output).toContain('the index tree has a recorded full pass')
     expect(fixture.records()).toEqual(before)
     expect(fixture.git(['rev-parse', 'HEAD^{tree}']).trim()).toBe(tree)
-  })
+  }, 60_000)
 
   test('a message-only amend beside an unstaged bun.lock edit runs the full check (I3)', () => {
     const tree = fixture.git(['rev-parse', 'HEAD^{tree}']).trim()
@@ -159,7 +159,7 @@ describe('the commit hook in a temporary repository', () => {
     expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
     expect(result.output).toContain('escape matched bun.lock; running the full check')
     expect(fixture.git(['rev-parse', 'HEAD^{tree}']).trim()).toBe(tree)
-  })
+  }, 60_000)
 
   // The amended commit is createHookRepo's own initial commit: the
   // constructor's checked `git commit` already leaves a clean index equal to
@@ -176,7 +176,7 @@ describe('the commit hook in a temporary repository', () => {
     expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
     expect(result.output).toContain('no recorded full pass for the index tree')
     expect(fixture.git(['rev-parse', 'HEAD^{tree}']).trim()).toBe(tree)
-  })
+  }, 60_000)
 
   test('the amend gate reads no record when write-tree fails (R3)', () => {
     expect(indexTreeRecorded(fixture.root, undefined)).toBe(false)
@@ -191,7 +191,7 @@ describe('the commit hook in a temporary repository', () => {
     expect(result.code).toBe(0)
     expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
     expect(fixture.records()).toHaveLength(1)
-  })
+  }, 60_000)
 
   test('a broken unstaged source edit outside the commit refuses it, and the hook names the edit', () => {
     stage('src/shared/lone.ts', 'export const lone = 8\n')
