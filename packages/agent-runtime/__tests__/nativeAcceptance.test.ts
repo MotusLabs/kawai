@@ -49,6 +49,20 @@ test('native probe refuses root, public storage, missing paths and symlink escap
   expect(() => validateIsolation({ ...input, launch: { ...input.launch, cwd: link } }, 1000)).toThrow('escapes')
 })
 
+test('native probe refuses invalid or escaping CODEX_HOME before launch', () => {
+  const input = isolated()
+  input.runtime = 'codex'
+  input.launch.childEnv = { ...input.launch.childEnv, CODEX_HOME: input.launch.homeDir }
+  expect(() => validateIsolation(input, 1000)).not.toThrow()
+  const link = join(input.root, 'codex-escape')
+  symlinkSync(tmpdir(), link)
+  for (const value of ['', '/', input.root, '../relative', link]) {
+    const changed = { ...input, launch: { ...input.launch,
+      childEnv: { ...input.launch.childEnv, CODEX_HOME: value } } }
+    expect(() => validateIsolation(changed, 1000)).toThrow()
+  }
+})
+
 test('native exit verification rejects absent receipts, signal-only acknowledgements and live owned pids', () => {
   const receipt: ProcessExitReceipt = { scope: 'agent-processes', mode: 'kill', js: 'settled', processes: [
     { generation: 1, state: 'exited', pid: 123, code: null, signal: 'SIGTERM', escalated: false, groupCleared: true },
