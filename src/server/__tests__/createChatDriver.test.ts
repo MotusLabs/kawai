@@ -4,10 +4,22 @@
 // with no wired driver throws instead of starting as something else. The
 // in-tree Codex class is gone (task-5906f19c); the codex case shows the
 // package's own construction instead.
-import { describe, expect, test } from 'bun:test'
+//
+// The 6.1 production-composition witness (task-f5001d7f A5) runs the codex
+// record through createChatDriver -> codexRuntime.ts -> the public package
+// factory -> the replaying fake app-server, and checks that every
+// caller-defined input (project, model, network, prompt, team tools, stored
+// thread, wire) reaches the app-server as the package's thread parameters.
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { z } from 'zod'
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import { createChatDriver } from '../chat/provider/createChatDriver'
+import { cleanGitEnv } from '../git/gitCommand'
+import { Script, sentRequest, startHarness, THREAD_ID, until, type Harness } from './codexDriverHarness'
 import { createFakeQuery, flush } from './fixtures/chatDriverHarness'
 
 const deps = {
@@ -69,5 +81,92 @@ describe('createChatDriver', () => {
   test('a runtime with no wired driver throws, naming it', () => {
     // Anything else is a stored value no build of kawai ever wrote.
     expect(() => createChatDriver({ runtime: 'mystery', options: deps } as never)).toThrow(/mystery/)
+  })
+})
+describe('createChatDriver: the codex runtime over the package to a controlled app-server (6.1 M-wire)', () => {
+  // The caller-defined inputs below are Kawai's: the project (inside a Git
+  // repository), the profile's model and network, the system prompt, the team
+  // tool table, the stored thread and the wire recorder. Each must reach the
+  // app-server through createChatDriver -> codexRuntime.ts -> the public
+  // package factory; the expected values are derived from those inputs alone.
+  let dir: string
+  let repo: string
+  let harness: Harness | null = null
+  const git = (cwd: string, ...args: string[]) => {
+    const result = Bun.spawnSync(['git', ...args], { cwd, env: { ...cleanGitEnv(), GIT_CONFIG_NOSYSTEM: '1' } })
+    if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr.toString()}`)
+  }
+  beforeAll(() => {
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-codex-wiring-')))
+    repo = path.join(dir, 'repo')
+    fs.mkdirSync(path.join(repo, 'src'), { recursive: true })
+    git(repo, 'init', '-q', '-b', 'main')
+  })
+  afterEach(async () => {
+    const done = harness?.cleanup()
+    harness = null
+    await done
+  })
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+  const inputs = () => ({
+    projectPath: path.join(repo, 'src'),
+    model: 'gpt-wiring-witness',
+    network: false,
+    getSystemPromptAppend: () => 'wiring witness prompt',
+    teamTools: [{ name: 'send_message', description: 'send a message', schema: z.object({ body: z.string() }), handler: () => ({}) }],
+  })
+
+  test('a fresh codex chat sends its caller-defined cwd, model, prompt, team tools and sandbox policy on thread/start, over the wire it recorded', async () => {
+    harness = startHarness(new Script().boot(), inputs())
+    harness.driver.start()
+    // The thread id arrives through the adapter's callbacks, not the wire.
+    await until(() => harness!.sessionIds.length === 1)
+    const params = sentRequest(harness, 'thread/start') as Record<string, unknown> | undefined
+    const tools = (params?.dynamicTools as Array<{ type?: string; name?: string; tools?: Array<{ name?: string }> }> | undefined) ?? []
+    expect({
+      first: harness.sent[0]?.method,
+      cwd: params?.cwd,
+      model: params?.model,
+      developerInstructions: params?.developerInstructions,
+      approvalPolicy: params?.approvalPolicy,
+      sandbox: params?.sandbox,
+      config: params?.config,
+      tools: tools.map((t) => ({ type: t.type, name: t.name, tools: (t.tools ?? []).map((tool) => tool.name) })),
+    }).toEqual({
+      first: 'initialize',
+      cwd: path.join(repo, 'src'),
+      model: 'gpt-wiring-witness',
+      developerInstructions: 'wiring witness prompt',
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
+      config: { 'sandbox_workspace_write.writable_roots': [path.join(repo, '.git')], 'sandbox_workspace_write.network_access': false },
+      tools: [{ type: 'namespace', name: 'kawai-team', tools: ['send_message'] }],
+    })
+    expect(harness.sessionIds).toEqual([THREAD_ID])
+  })
+
+  test('a stored codex chat resumes its own thread with the caller-defined cwd, model and prompt, and starts none', async () => {
+    harness = startHarness(new Script().boot('thread/resume'), { ...inputs(), resumeThreadId: THREAD_ID })
+    harness.driver.start()
+    await until(() => harness!.transcriptPaths.length === 1)
+    const params = sentRequest(harness, 'thread/resume') as Record<string, unknown> | undefined
+    expect({
+      threadId: params?.threadId,
+      cwd: params?.cwd,
+      model: params?.model,
+      developerInstructions: params?.developerInstructions,
+      approvalPolicy: params?.approvalPolicy,
+      sandbox: params?.sandbox,
+      started: sentRequest(harness, 'thread/start') !== undefined,
+    }).toEqual({
+      threadId: THREAD_ID,
+      cwd: path.join(repo, 'src'),
+      model: 'gpt-wiring-witness',
+      developerInstructions: 'wiring witness prompt',
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
+      started: false,
+    })
   })
 })
