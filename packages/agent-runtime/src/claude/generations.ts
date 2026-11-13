@@ -185,7 +185,15 @@ export function linkedAbort(own: AbortController, caller: AbortController | unde
   return own
 }
 
-/** Mark every owned process, cancel every query with the stop's token, end its input, then terminate each owned process and close each query. */
+/**
+ * Mark every owned process, cancel every query with the stop's token, end its
+ * input, then terminate each owned process and close each query. Every
+ * termination settles and every close is attempted before the stop settles,
+ * even when a termination rejects (task-f5001d7f A13). Outcomes are judged by
+ * status: none rejected returns the facts by generation; one rejected throws
+ * its reason unchanged; several throw one stop error whose causes are every
+ * reason in supplied order.
+ */
 export async function terminateGenerations(generations: readonly Generation[], mode: 'kill' | 'shutdown', bounds: TerminateOptions, stopToken: object): Promise<ProcessExitFact[]> {
   for (const generation of generations) generation.owned?.markTermination()
   for (const generation of generations) {
@@ -197,7 +205,7 @@ export async function terminateGenerations(generations: readonly Generation[], m
     const grace = bounds.graceMs ?? 2000
     await Promise.all(generations.map((g) => (g.owned ? exitWithin(g.owned, grace) : undefined)))
   }
-  const facts = await Promise.all(generations.flatMap((g) => (g.owned ? [g.owned.terminate(bounds)] : [])))
+  const outcomes = await Promise.allSettled(generations.flatMap((g) => (g.owned ? [g.owned.terminate(bounds)] : [])))
   for (const generation of generations) {
     try {
       generation.query?.close()
@@ -205,6 +213,10 @@ export async function terminateGenerations(generations: readonly Generation[], m
       // The transport is already closed.
     }
   }
+  const failures = outcomes.flatMap((outcome) => (outcome.status === 'rejected' ? [outcome.reason as unknown] : []))
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) throw new AgentRuntimeError({ category: 'stop', message: `${failures.length} owned process terminations failed` }, failures)
+  const facts = outcomes.map((outcome) => (outcome as PromiseFulfilledResult<ProcessExitFact>).value)
   return facts.sort((a, b) => a.generation - b.generation)
 }
 

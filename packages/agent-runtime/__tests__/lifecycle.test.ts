@@ -383,6 +383,30 @@ describe('terminal stop and owned jobs (L11-L12, I1)', () => {
     expect((await stop).processes).toEqual([])
   })
 
+  test('a teardown that throws an aggregate still joins a held job and runs the account, keeping the aggregate as one cause', async () => {
+    // The shape terminateGenerations throws for several failed terminations (task-f5001d7f A13).
+    const f = await inState('idle')
+    const held = deferred()
+    void f.lc.jobs.run('tool', () => held.promise)
+    const first = new Error('agent process 101 did not exit after SIGKILL')
+    const aggregate = new AgentRuntimeError({ category: 'stop', message: '2 owned process terminations failed' }, [first, first])
+    const accounted = new Error('accounted after the join')
+    let accountRuns = 0
+    const stop = f.lc.stop('kill', async () => {
+      throw aggregate
+    }, () => (accountRuns++, [accounted]))
+    await tick()
+    expect({ pending: await pending(stop), accountRuns }).toEqual({ pending: true, accountRuns: 0 })
+    held.resolve()
+    const error = await rejection(stop)
+    expect(accountRuns).toBe(1)
+    expect(error.category).toBe('stop')
+    expect(error.causes).toHaveLength(2)
+    expect(error.causes[0]).toBe(aggregate)
+    expect(error.causes[1]).toBe(accounted)
+    expect((error.causes[0] as AgentRuntimeError).causes).toEqual([first, first])
+  })
+
   test('a teardown failure fails the stop', async () => {
     const f = await inState('idle')
     const error = await rejection(f.lc.stop('kill', async () => {
