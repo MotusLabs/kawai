@@ -4,7 +4,14 @@ All notable changes to `@motuslabs/agent-runtime`. Versions follow semver,
 independently of Kawai's application versions. Any breaking change to the
 documented API takes a new major version, even after 0.x.
 
-## Unreleased (0.1.0)
+## 0.1.0
+
+Unreleased candidate. Real native, publication and authenticated consumer
+receipts remain required; this entry is not a release receipt.
+
+- Versioned no-CLI companion, consumer-root alias recipe, explicit environment
+  and permission documentation, headless lifecycle supervisor and separate
+  owner-gated package release preparation.
 
 - Public contract: `AgentDriver`, `TurnHandle`/`TurnResult`, `ResumeCheckpoint`,
   `ProcessExitReceipt`/`InterruptReceipt`, launch, permission, tool and
@@ -85,5 +92,5 @@ documented API takes a new major version, even after 0.x.
   acts on that turn only. Its interrupt can't reach a queued successor or
   one sent from the same callback, which opens afterwards. A Codex wait
   resumes only on a token update that grew a counter.
-- Not yet released: profile helpers arrive in later entries before 0.1.0 is
-  published.
+- Pure OAuth, proxy and Codex environment helpers and explicit session policy;
+  the runtime never discovers credentials or installs a CLI for the caller.

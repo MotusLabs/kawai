@@ -5,6 +5,8 @@ import type { ClaudeAgentDriver, LaunchConfiguration, Logger } from '@motuslabs/
 // allowed, every other tool is denied, and a question gets the host's own
 // prepared answer. Nothing waits for a UI or a timer. If the driver refuses
 // an answer (an empty or unknown one, say), the default denial applies.
+// The caller owns the returned driver and awaits stop in an outside finally,
+// including after start/send/output failure; callbacks never join their owner.
 export function headlessClaude(launch: LaunchConfiguration, logger: Logger, prepared: Record<string, string>): ClaudeAgentDriver {
   const driver: ClaudeAgentDriver = createClaudeDriver({
     launch,

@@ -1,11 +1,10 @@
 // Headless contract consumer (task 1.2, oracle D09): uses only the package's
 // public names, with no tools, context, audit or wire seams, and type-checks
-// both factories against the frozen contract. It declares the factories
-// instead of importing implementations, so it compiles before any driver
-// moves. The packed-artifact test compiles this file unchanged in a clean
-// project with no Kawai sources.
+// both factories against the frozen contract. Declared factories make this
+// a compile-only fixture; examples/headless.ts is the runnable supervisor.
+// The packed-artifact test compiles this file unchanged in a clean project
+// with no Kawai sources.
 import {
-  AgentRuntimeError,
   type AgentDriver,
   type AgentEvent,
   type ClaudePermissions,
@@ -65,7 +64,7 @@ export async function runOnce(
   // Factories build an inert driver, so callbacks may reference it before start().
   let driver: AgentDriver | undefined
   const callbacks = {
-    onEvent: (event: AgentEvent) => console.log(JSON.stringify(event)),
+    onEvent: (event: AgentEvent) => console.log(JSON.stringify({ type: event.type })),
     onRequest: (request: PendingRequest) => {
       if (request.kind === 'approval') driver?.resolveApproval(request.requestId, 'deny')
       else driver?.answerQuestion(request.requestId, {})
@@ -89,16 +88,24 @@ export async function runOnce(
           permissions: headlessCodex,
         })
 
+  let result!: TurnResult
+  let stop!: ProcessExitReceipt
+  const failures: unknown[] = []
   try {
     await driver.start()
     const handle = await driver.send('Summarize README.md in one sentence.')
-    const result = await handle.result
-    const stop = await driver.shutdown()
-    return { result, stop }
+    result = await handle.result
   } catch (error) {
-    if (error instanceof AgentRuntimeError) logger.error(error.toJSON(), 'run failed')
-    // Forced stop: resolves only after the owned processes actually exited.
-    await driver.kill()
-    throw error
+    failures.push(error)
+  } finally {
+    try {
+      // Outside owner always awaits actual exit, also after start/send errors.
+      stop = await driver.shutdown()
+    } catch (error) {
+      failures.push(error)
+    }
   }
+  if (failures.length === 1) throw failures[0]
+  if (failures.length) throw new AggregateError(failures, 'run and stop failed')
+  return { result, stop }
 }

@@ -52,6 +52,7 @@ describe('affected selection over the agent-runtime package (6.4)', () => {
     expect(selection.changedPassFiles).toEqual([])
     expect(selection.declarationFiles.filter((file) => file.startsWith(`${PKG}/`))).toEqual([
       `${PKG}/__tests__/codexExample.test.ts`,
+      `${PKG}/__tests__/consumerInstall.test.ts`,
       `${PKG}/__tests__/distribution.test.ts`,
       `${PKG}/__tests__/inlineRequestsExample.test.ts`,
     ])

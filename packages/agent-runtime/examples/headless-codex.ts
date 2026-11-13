@@ -7,6 +7,8 @@ export interface CheckpointStore {
   save(checkpoint: ResumeCheckpoint): Promise<void>
 }
 
+// Ownership transfers to the caller: always await shutdown() in an outside
+// finally after construction, including when start(), send() or output fails.
 // A headless Codex host. It builds a driver only when the retained Codex home
 // (the launch's homeDir, also its CODEX_HOME) holds a login, and nothing ever
 // waits for a UI: approvals, user input and elicitation are off. A fresh

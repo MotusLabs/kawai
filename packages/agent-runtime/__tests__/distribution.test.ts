@@ -21,9 +21,9 @@ beforeAll(() => {
 }, 120_000)
 
 describe('packed @motuslabs/agent-runtime', () => {
-  test('ships only dist, docs and the manifest', () => {
+  test('ships only dist, public examples, docs and the manifest', () => {
     const extra = tarballEntries(tarball).filter(
-      (entry) => !/^package\/(dist\/.+\.(js|d\.ts)|package\.json|README\.md|CHANGELOG\.md|LICENSE|NOTICE)$/.test(entry),
+      (entry) => !/^package\/(dist\/.+\.(js|d\.ts)|examples\/(headless|headless-codex|inline-requests)\.ts|package\.json|README\.md|CHANGELOG\.md|LICENSE|NOTICE)$/.test(entry),
     )
     expect(extra).toEqual([])
     expect(tarballEntries(tarball)).toContain('package/dist/index.d.ts')
@@ -74,24 +74,33 @@ describe('packed @motuslabs/agent-runtime', () => {
     writeFileSync(
       join(project, 'main.ts'),
       [
-        "import type { LaunchConfiguration, ResumeCheckpoint } from '@motuslabs/agent-runtime'",
+        "import type { AgentDriver, LaunchConfiguration, ResumeCheckpoint } from '@motuslabs/agent-runtime'",
         "import { codexQuotaReport } from '@motuslabs/agent-runtime/usage'",
         "import { headlessCodex } from './headless-codex.js'",
         'const launch = JSON.parse(process.argv[2]!) as LaunchConfiguration',
         'const saved: ResumeCheckpoint[] = []',
         'const logger = { debug() {}, info() {}, warn() {}, error() {} }',
+        'const owned: AgentDriver[] = []; const failures: unknown[] = []',
+        'try {',
         'const driver = headlessCodex(launch, logger, { load: () => null, save: async (c) => void saved.push(c) })!',
+        'owned.push(driver)',
         'await driver.start()',
         "const result = await (await driver.send('packed')).result",
         'const receipt = await driver.shutdown()',
         '// A second home, whose host claims no read: the supplied claim is asked once.',
         'let asked = 0',
         'const denied = headlessCodex(JSON.parse(process.argv[3]!) as LaunchConfiguration, logger, { load: () => null, save: async () => {} }, () => (asked++, false))!',
+        'owned.push(denied)',
         'await denied.start()',
         "await (await denied.send('denied')).result",
         'await denied.shutdown()',
         "const quota = codexQuotaReport({ primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 0 }, secondary: null, rateLimitReachedType: 'rateLimitReached' }, 'report', 'r')",
         'console.log(JSON.stringify({ finalText: result.finalText, saved: saved.length, mode: receipt.mode, quota: quota && [quota.status, quota.source, quota.accountScope], asked }))',
+        '} catch (error) { failures.push(error) } finally {',
+        'const joined = await Promise.allSettled(owned.map(async (d) => d.shutdown()))',
+        'for (const o of joined) if (o.status === "rejected" && !failures.includes(o.reason)) failures.push(o.reason)',
+        '}',
+        'if (failures.length) throw new AggregateError(failures, "consumer and cleanup failed")',
       ].join('\n'),
     )
     const check = tsc('tsconfig.json', project)
