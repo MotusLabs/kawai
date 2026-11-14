@@ -12,26 +12,18 @@
 // counts Z and X dead (task-3c3e3658 R6 A18). The literal-stat table below
 // pins that without catching a transient real X.
 //
-// The zombie is deterministic: `sh -c '(exec true) & echo $!; exec sleep 30'`
-// forks a child that exits at once, then replaces the shell with sleep,
-// which never reaps it. The group leader (sleep) stays alive and is the
-// group's one live member.
+// A private fd gate holds the child until the same parent has exec'd
+// sleep; only then may it exit. Cleanup owns exit, stdout and the extra fd.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { spawn, type ChildProcess } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { liveGroupMembers } from '../src/process/processGroup.js'
 import { alive, statShowsLive } from './helpers/codexDriverHarness.js'
-import { ownedAggregate, ownedOnce, type OwnedOnce } from './helpers/ownedCleanup.js'
+import { ownedAggregate } from './helpers/ownedCleanup.js'
+import { ZombieFixture } from './helpers/zombieFixture.js'
 
-interface Held { child: ChildProcess; exited: Promise<void>; closed: OwnedOnce<void> }
-
-const owned = ownedAggregate<Held, void>({
-  join: (held) =>
-    held.closed.run(async () => {
-      if (held.child.exitCode === null && held.child.signalCode === null) held.child.kill('SIGKILL')
-      await held.exited
-    }),
-  failures: (_held, outcome) => (outcome.status === 'rejected' ? [outcome.reason] : []),
+const owned = ownedAggregate<ZombieFixture, void>({
+  join: (fixture) => fixture.cleanup(),
+  failures: (_fixture, outcome) => outcome.status === 'rejected' ? [outcome.reason] : [],
   message: 'zombie fixture cleanups failed',
 })
 afterEach(() => owned.join())
@@ -56,25 +48,10 @@ const answersSignalZero = (pid: number): boolean => {
 }
 
 async function zombieGroup(): Promise<{ leader: number; zombie: number }> {
-  const child = spawn('/bin/sh', ['-c', '(exec true) & echo $!; exec sleep 30'], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
-  // Joined by cleanup: the actual exit and the end of the child's stdout ('close' follows both).
-  const exited = new Promise<void>((resolve) => child.once('close', () => resolve()))
-  owned.add({ child, exited, closed: ownedOnce<void>() })
-  const line = await new Promise<string>((resolve, reject) => {
-    let out = ''
-    child.stdout!.on('data', (chunk: Buffer) => {
-      out += chunk.toString('utf8')
-      if (out.includes('\n')) resolve(out.trim())
-    })
-    child.once('exit', () => reject(new Error('the zombie fixture exited early')))
-  })
-  const zombie = Number(line)
-  const deadline = Date.now() + 5_000
-  while (state(zombie) !== 'Z') {
-    if (Date.now() > deadline) throw new Error(`pid ${zombie} never became a zombie (state ${state(zombie)})`)
-    await new Promise((resolve) => setTimeout(resolve, 5))
-  }
-  return { leader: child.pid!, zombie }
+  const fixture = new ZombieFixture()
+  owned.add(fixture)
+  await fixture.setup()
+  return fixture.zombie()
 }
 
 describe('zombie liveness (I1 diagnosis)', () => {
