@@ -14,6 +14,9 @@
 // created before the usage horizon (retention, or the team's first recorded
 // turn) has its tokens marked partial.
 // Pure reads; the family modules compute everything else.
+import { readToolMeasurementStatus } from './toolMeasurementStatus'
+export { readToolMeasurementStatus } from './toolMeasurementStatus'
+import type { ToolMeasurementStatus } from '../../shared/processMetrics'
 import type { Database } from 'bun:sqlite'
 import type { LimitEvent } from '../../shared/routing'
 import { LIMIT_EVENT_READ_WINDOW_MS } from '../team/routing/limitEvents'
@@ -75,6 +78,7 @@ export interface MetricMessageEvent {
 }
 
 export interface MetricsInputs {
+  toolMeasurement?:ToolMeasurementStatus
   teamId: string
   /** [loadFrom, end): the window and its baseline. */
   loadFrom: number
@@ -245,7 +249,7 @@ export function loadMetricsInputs(db: Database, teamId: string, loadFrom: number
     const usageHorizon = Math.max(end - TURN_USAGE_RETENTION_MS, firstTurn ? Date.parse(firstTurn) : end)
 
     return {
-      teamId, loadFrom, end, tasks, statusEvents, results, findings, messages, messageEvents, usage,
+      toolMeasurement:readToolMeasurementStatus(db),teamId, loadFrom, end, tasks, statusEvents, results, findings, messages, messageEvents, usage,
       usageHorizon, starts, manifests, limitEvents, providerIds, sessionProfiles }
   })()
 }

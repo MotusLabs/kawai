@@ -5,7 +5,7 @@
 // the newest observed time per measurement source.
 import type { Database } from 'bun:sqlite'
 import type { StoredObservation } from '../../../shared/processObservations'
-import { BoundedLabels } from './boundedLabels'
+import { BoundedLabels, type ToolAdmission } from './boundedLabels'
 import { REGISTRY } from './registry'
 
 const TOKEN_KINDS = ['input', 'output', 'cacheRead', 'cacheCreation']
@@ -28,14 +28,16 @@ const MANAGED_TURN_KINDS = [
 export class ExportAccumulator {
   readonly bounds: BoundedLabels
 
-  constructor(private readonly db: Database) {
-    this.bounds = new BoundedLabels(db)
+  constructor(private readonly db: Database, tools:ToolAdmission&{maxSeries?:number;maxFamily?:number}={}) {
+    this.bounds = new BoundedLabels(db,tools.maxSeries,tools.maxFamily,tools)
   }
 
   add(family: string, values: Record<string, string | null | undefined>, value: number): void {
     if (!Number.isFinite(value) || value < 0) return
     const definition = REGISTRY[family]!
-    const labels = JSON.stringify(this.bounds.labels(family, values))
+    const admitted=this.bounds.labels(family,values)
+    if(!admitted)return
+    const labels=JSON.stringify(admitted)
     const increment = (bucket: string, amount: number) =>
       this.db
         .prepare(
@@ -57,6 +59,19 @@ export class ExportAccumulator {
     const labels = { team: row.teamId, group: row.groupId, provider: row.providerId, model: row.model }
     const d = row.data
     switch (row.kind) {
+      case 'tool':
+        if(d.eligible===true&&d.partial===false&&(d.outcome==='success'||d.outcome==='failed')) {
+          this.add('agent_tool_calls_total',{...labels,tool:String(d.label),
+            outcome:d.outcome,failure_class:d.outcome==='success'?'none':String(d.failureClass)},1)
+        }
+        break
+      case 'tool_streak':
+        if(typeof d.length==='number'&&d.length>0&&['recovered','abandoned','unknown'].includes(String(d.resolution))) {
+          const dims={...labels,tool:String(d.label),resolution:String(d.resolution)}
+          this.add('agent_tool_failure_streaks_total',dims,1)
+          this.add('agent_tool_failure_streak_length',dims,d.length)
+        }
+        break
       case 'acceptance':
         if (d.first === true && typeof d.durationSeconds === 'number') {
           this.add(

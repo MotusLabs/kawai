@@ -46,6 +46,10 @@ export function newToolState(failures: number): ToolState {
     mode: 'observing', firstHistoryUnknown: false, denialIncomplete: false,
     seenRecorderFailures: Number.isSafeInteger(failures) && failures >= 0 ? failures : 0 }
 }
+export function publicToolLabels(catalogue:TeamCatalogue):readonly string[] {
+  return [...new Set(['other','mcp:other',...PUBLIC_BUILT_IN_LABELS,
+    ...[...catalogue.members].slice(0,76).map(name=>name.slice(catalogue.prefix.length))])]
+}
 export function publicToolLabel(tool: ToolRecognition, catalogue: TeamCatalogue): string {
   if (tool.kind === 'builtin') return (PUBLIC_BUILT_IN_LABELS as readonly string[]).includes(tool.name) ? tool.name : 'other'
   if (tool.kind === 'team') {

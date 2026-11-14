@@ -7,8 +7,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import { ChatConnections } from '../chat/ChatConnections'
+import { SessionRegistry } from '../SessionRegistry'
+import type { ChatEvent } from '../../shared/chat'
+import type { ServerMessage } from '../../shared/types'
 import { initDatabase, type SessionDatabase } from '../db'
-import { closeDispatchers, createHarness, flush, initMessage, installManagerCleanup, resultWithWindow, spawned } from './helpers/chatSessionManagerHarness'
+import { managedManager, closeDispatchers, createHarness, flush, initMessage, installManagerCleanup, resultWithWindow, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -147,6 +151,52 @@ describe('ChatSessionManager observation rows', () => {
     const actual=await deniedWitness(false)
     expect(actual.result.failureClass).toBe('other')
     expect(actual.card.toolCallId).toBeUndefined()
+  })
+
+  // @covers: team-process-metrics › Tool metrics › Status change reaches open views without a refresh
+  test('actual manager status getter and committed callback push budget refusal to both warm subscriptions',async()=>{
+    const a=path.join(tempDir,'team-a'),b=path.join(tempDir,'team-b')
+    fs.mkdirSync(a);fs.mkdirSync(b)
+    let connections:ChatConnections|undefined,publications=0
+    const events:{sessionId:string;event:ChatEvent}[]=[]
+    const manager=await managedManager({db,registry:new SessionRegistry(),isDirectory:fs.existsSync,
+      onEvent:(sessionId,event)=>events.push({sessionId,event}),
+      onToolMeasurementStatusChange:()=>{publications++;connections?.publishMetricsAll()}})
+    connections=new ChatConnections(manager)
+    try {
+      const first=manager.createSession({projectPath:a}),second=manager.createSession({projectPath:b})
+      if(!first.ok||!second.ok)throw Error('real manager session setup failed')
+      await manager.teams.track(first.session.id,a);await manager.teams.track(second.session.id,b)
+      const sent:ServerMessage[]=[]
+      const connection={send:(message:ServerMessage)=>sent.push(message)}
+      for(const teamPath of [a,b])await connections.handle(connection,{type:'process-metrics-open',teamPath,window:'7d',slice:null})
+      const snapshots=()=>sent.filter((m):m is Extract<ServerMessage,{type:'process-metrics-snapshot'}>=>m.type==='process-metrics-snapshot')
+      expect(snapshots()).toHaveLength(2)
+      expect(manager.observations.toolStatus().export.state).toBe('active')
+      for(const initial of snapshots())expect(initial.metrics.metrics.length).toBeGreaterThan(0)
+      await new Promise(resolve=>setTimeout(resolve,280))
+      const before=snapshots().slice(-2),count=snapshots().length,publishes=publications
+      db.db.transaction(()=>{
+        for(const family of ['task_stage_duration_seconds','task_acceptance_duration_seconds']){
+          const insert=db.db.prepare("INSERT INTO process_export_totals VALUES (?,?,'admitted',0)")
+          for(let i=0;i<10000;i++)insert.run(family,JSON.stringify({team:'old-'+i}))
+        }
+      })()
+      expect(manager.observations.toolExport.ensure()).toBe(true)
+      expect(manager.observations.toolStatus().export).toMatchObject({state:'budget-unavailable',reason:'series-budget'})
+      // The direct getter assertion discriminates an omitted fourth argument.
+      expect(manager.metrics.read(before[0]!.teamId,'7d',null).toolMeasurement.export.state).toBe('budget-unavailable')
+      await new Promise(resolve=>setTimeout(resolve,280))
+      expect(publications).toBe(publishes+1)
+      expect(snapshots()).toHaveLength(count+2)
+      for(let i=0;i<2;i++){
+        const pushed=snapshots().slice(-2)[i]!
+        expect(pushed.metrics.toolMeasurement.export.state).toBe('budget-unavailable')
+        expect(pushed.metrics.metrics).toBe(before[i]!.metrics.metrics)
+        expect(pushed.metrics.computedAt).toBe(before[i]!.metrics.computedAt)
+        expect(before[i]!.metrics.toolMeasurement.export.state).toBe('active')
+      }
+    }finally{manager.shutdown()}
   })
 
 })

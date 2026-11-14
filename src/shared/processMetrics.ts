@@ -154,15 +154,36 @@ export interface MetricValue extends MetricStat {
   /** Some cohort history predates usage retention, so token values are incomplete. */
   partial: boolean
   /** The tasks and messages behind the value, for drill-down: each opens its task or its message's thread. */
-  drill: { tasks: MetricDrillTask[]; messages: MetricDrillMessage[] }
+  drill: { tasks: MetricDrillTask[]; messages: MetricDrillMessage[]; tasksTotal?:number; messagesTotal?:number }
+  breakdownTotal?:number
   breakdown?: MetricRow[]
   /** Present when a slice was requested and the metric supports it. */
+  slicesTotal?:number
   slices?: MetricRow[]
   /** A slice was requested that this metric's side does not support. */
   notSliceable?: boolean
 }
 
+export interface ToolExportMeasurement {
+  state:'unknown'|'active'|'budget-unavailable'
+  reason:null|'series-budget'|'family-budget'|'missing-reservation'|'invalid-checkpoint'
+  availableSince:string|null
+}
+export interface ToolRecoveryMeasurement {
+  status:'unknown'|'ok'|'pending'|'quarantined'
+  quarantinedCount:number|null
+  pendingCount:number|null
+  checkedAt:string|null
+}
+export interface ToolMeasurementStatus {export:ToolExportMeasurement;recovery:ToolRecoveryMeasurement}
+export function unknownToolMeasurement():ToolMeasurementStatus {
+  return {export:{state:'unknown',reason:null,availableSince:null},
+    recovery:{status:'unknown',quarantinedCount:null,pendingCount:null,checkedAt:null}}
+}
+
 export interface ProcessMetrics {
+  projectionTruncated?:boolean
+  toolMeasurement:ToolMeasurementStatus
   teamId: string
   window: MetricWindow
   slice: MetricSlice | null

@@ -59,6 +59,13 @@ export class MetricsConnections {
     }
   }
 
+  /** Database-wide tool status changes overlay cached numerics for every team. */
+  publishAll() {
+    for(const [connection,views]of this.subscriptions)for(const [teamPath,subscription]of views)
+      this.send(connection,teamPath,subscription,false)
+    for(const [connection,reports]of this.openReports)for(const open of reports.values())this.sendReport(connection,open)
+  }
+
   private sendReport(connection: ChatConnection, open: OpenReport) {
     connection.send({
       type: 'process-report-detail', teamPath: open.teamPath, teamId: open.teamId, reportId: open.reportId,

@@ -1,8 +1,11 @@
-// Export metric registry (process-observability D8): version 1 definitions
+// Export metric registry (process-observability D8): version 2 definitions
 // of every exported family — type, help, label set, histogram buckets — plus
 // the enumerated label values and each definition's expanded series cost.
 // Incompatible semantics require a new metric name, never a replay.
-export const DEFINITION_VERSION = 1
+import { PUBLIC_BUILT_IN_LABELS } from '../observations/toolCalls'
+export const DEFINITION_VERSION = 2
+export const TOOL_FAMILIES = ['agent_tool_calls_total','agent_tool_failure_streaks_total','agent_tool_failure_streak_length'] as const
+export const TOOL_STREAK_BUCKETS = [1,2,3,4,6,10,Infinity]
 export const DURATION_BUCKETS = [1, 5, 15, 60, 300, 900, 3600, 14400, 86400, 604800, Infinity]
 export const TOKEN_BUCKETS = [1000, 4000, 16000, 64000, 128000, 256000, 1000000, Infinity]
 
@@ -27,6 +30,9 @@ const gauge = (help: string, labels: string[] = []): MetricDefinition => ({ type
 const counter = (help: string, labels: string[]): MetricDefinition => ({ type: 'counter', help, labels })
 
 export const REGISTRY: Record<string, MetricDefinition> = {
+  agent_tool_calls_total: counter('Committed eligible tool results; text is classified, never retained.', [...turn,'tool','outcome','failure_class']),
+  agent_tool_failure_streaks_total: counter('Closed tool failure streaks; unknown lengths are observed lower bounds.', [...turn,'tool','resolution']),
+  agent_tool_failure_streak_length: histogram('Observed failures in each closed tool streak.', [...turn,'tool','resolution'],TOOL_STREAK_BUCKETS),
   task_acceptance_duration_seconds: histogram('Creation to first recorded acceptance in seconds.', [
     'team',
     'mechanism',
@@ -97,6 +103,9 @@ export const REGISTRY: Record<string, MetricDefinition> = {
 }
 
 export const ENUMS: Record<string, readonly string[]> = {
+  tool: ['other','mcp:other',...PUBLIC_BUILT_IN_LABELS],
+  failure_class: ['none','denied','input-invalid','blocked','unavailable','precondition','refused','command-failed','other'],
+  resolution: ['recovered','abandoned','unknown'],
   mechanism: ['integration-landing', 'direct-landing', 'manual', 'creator', 'unknown-legacy'],
   outcome: ['success', 'failed', 'interrupted', 'process-ended', 'completed', 'unavailable'],
   trigger: ['auto', 'manual', 'unknown'],

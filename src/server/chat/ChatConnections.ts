@@ -209,6 +209,8 @@ export class ChatConnections {
   }
 
   /** A committed process report or decision: re-send that team's metrics snapshots (never on mail changes). */
+  publishMetricsAll():void {this.metricsConnections.publishAll()}
+
   publishMetrics(teamId: string): void {
     this.metricsConnections.publish(teamId)
   }

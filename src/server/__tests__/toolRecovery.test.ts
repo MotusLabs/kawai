@@ -89,7 +89,7 @@ test('D9 recovery-key failure masks unchanged bytes while admission blocking rem
     service.tick()
     expect(h.store.checkpoint('tool-recovery-quarantine')).toBe(before)
     expect(service.health().toolMeasurement.recovery).toEqual({status:'unknown',quarantinedCount:null,pendingCount:null,checkedAt:null})
-    expect(service.health().toolMeasurement.export).toEqual({state:'unknown',reason:null,availableSince:null})
+    expect(service.health().toolMeasurement.export.state).toBe('active')
     expect(service.chat.blocked.has('bad')).toBe(true)
     expect(h.raw('bad')).toBe('{CORRUPT_CANARY')
     h.db.exec('DROP TRIGGER recovery_key_abort');service.tick()

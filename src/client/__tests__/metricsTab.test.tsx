@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, SendClientMessage, Session } from '@shared/types'
 import {
-  COVERAGE_CAVEAT, METRIC_DEFS, USAGE_CAVEAT,
+  COVERAGE_CAVEAT, METRIC_DEFS, USAGE_CAVEAT, unknownToolMeasurement,
   type MetricId, type MetricValue, type ProcessMetrics,
 } from '@shared/processMetrics'
 import TeamWorkspaceView from '../components/team/TeamWorkspaceView'
@@ -35,7 +35,7 @@ const metric = (id: MetricId, extra: Partial<MetricValue> = {}): MetricValue => 
 
 function snapshot(window: '1d' | '3d' | '7d', overrides: Partial<Record<MetricId, Partial<MetricValue>>> = {}): ProcessMetrics {
   return {
-    teamId: '/repo/.git', window, slice: null,
+    toolMeasurement:unknownToolMeasurement(),teamId: '/repo/.git', window, slice: null,
     periodStart: '2026-10-09T12:00:00.000Z', periodEnd: '2026-10-16T12:00:00.000Z', baselineStart: '2026-10-02T12:00:00.000Z',
     computedAt: '2026-10-16T12:00:00.000Z', minSample: 10,
     metrics: METRIC_DEFS.map(def => metric(def.id, overrides[def.id])),

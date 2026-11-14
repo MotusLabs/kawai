@@ -4,9 +4,10 @@
 // queued mail, series budget — cached for five seconds. Scraping never polls
 // a provider or starts an agent.
 import type { ProcessObservationService } from '../observations/service'
-import { BoundedLabels } from './boundedLabels'
-import { DEFINITION_VERSION } from './registry'
+import { DEFINITION_VERSION, TOOL_FAMILIES } from './registry'
 import { renderMetrics, type Sample } from './renderer'
+
+import { canonicalToolMeasurement } from '../toolMeasurementStatus'
 
 const CACHE_MS = 5000
 
@@ -21,20 +22,22 @@ const QUEUED_MAIL = `SELECT team_id,state,count(*) n FROM team_messages
 type Values = Record<string, string | null | undefined>
 
 export class MetricsSnapshot {
-  private cached: { at: number; text: string } | null = null
+  private cached: { at: number; statusKey:string; text: string } | null = null
 
   constructor(private readonly service: ProcessObservationService) {}
 
   read(): string {
     const { store } = this.service
     const now = store.now()
-    if (this.cached && now - this.cached.at < CACHE_MS) return this.cached.text
+    const status=this.service.toolStatus(),statusKey=canonicalToolMeasurement(status)
+    if (this.cached && this.cached.statusKey===statusKey && now - this.cached.at < CACHE_MS) return this.cached.text
     const text = store.db.transaction(() => {
-      const bounds = new BoundedLabels(store.db)
+      const bounds = this.service.toolExport.bounds
       const gauges = new Map<string, Sample>()
       const gauge = (family: string, values: Values, value: number, combine: 'sum' | 'max' = 'sum') => {
         if (!Number.isFinite(value)) return
         const labels = bounds.labels(family, values)
+        if(!labels)return
         const key = family + JSON.stringify(labels)
         const old = gauges.get(key)
         const combined = old ? (combine === 'sum' ? old.value + value : Math.max(old.value, value)) : value
@@ -79,12 +82,17 @@ export class MetricsSnapshot {
       gauge('export_series_budget', {}, bounds.maxSeries)
       const totals = (
         store.db
-          .prepare("SELECT family,labels,bucket,value FROM process_export_totals WHERE bucket!='admitted'")
+          .prepare("SELECT t.family,t.labels,t.bucket,t.value FROM process_export_totals t WHERE EXISTS (SELECT 1 FROM process_export_totals a WHERE a.family=t.family AND a.labels=t.labels AND a.bucket=\'admitted\') AND t.bucket!='admitted'")
           .all() as { family: string; labels: string; bucket: string; value: number }[]
-      ).map(row => ({ ...row, labels: JSON.parse(row.labels) }))
-      return renderMetrics([...totals, ...gauges.values()])
+      ).filter(row=>status.export.state==='active'||!(TOOL_FAMILIES as readonly string[]).includes(row.family))
+        .map(row => ({ ...row, labels: JSON.parse(row.labels) }))
+      const metadata='# kawai_tool_measurement export='+status.export.state+' recovery='+status.recovery.status+
+        ' quarantined='+String(status.recovery.quarantinedCount??'unknown')+' pending='+String(status.recovery.pendingCount??'unknown')+
+        ' reason='+String(status.export.reason??'none')+' available_since='+String(status.export.availableSince??'unknown')+
+        ' checked_at='+String(status.recovery.checkedAt??'unknown')+'\n'
+      return metadata+renderMetrics([...totals, ...gauges.values()])
     })()
-    this.cached = { at: now, text }
+    this.cached = { at: now, statusKey, text }
     return text
   }
 }

@@ -55,3 +55,24 @@ test('team_metrics is registered on the team server and allowed without cards', 
   await server.instance.close()
   s.db.close()
 })
+
+test('compact and full use the same status while compact bounds large drills without mutating cached numerics',async()=>{
+  const {s,deps}=setup()
+  try{
+    for(let i=0;i<80;i++){
+      const id='long-'+i+'x'.repeat(500)
+      s.task(id,72);s.status(id,'active','done',24)
+    }
+    const tool=metricsHandlers(deps,'chat-lead')
+    const full=await tool.team_metrics({window:'7d',detail:'full'})
+    const before=structuredClone(full)
+    const compact=await tool.team_metrics({window:'7d'})
+    expect(new TextEncoder().encode(JSON.stringify(compact)).length).toBeLessThan(32000)
+    expect(compact.projectionTruncated).toBe(true)
+    expect(compact.toolMeasurement).toEqual(full.toolMeasurement)
+    expect(full).toEqual(before)
+    expect(full.metrics.find(m=>m.id==='lead_time_p50')!.drill.tasks).toHaveLength(81)
+    expect(compact.metrics.find(m=>m.id==='lead_time_p50')!.drill.tasks.length).toBeLessThanOrEqual(50)
+    expect(await tool.team_metrics({window:'7d',detail:'full'})).toEqual(full)
+  }finally{s.db.close()}
+})

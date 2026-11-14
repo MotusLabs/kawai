@@ -13,6 +13,9 @@ import {
   type SourceState,
 } from '../../../shared/processObservations'
 import { ExportAccumulator } from '../export/accumulator'
+import { ToolExportStatus } from '../export/toolExportStatus'
+import { publicToolLabels } from './toolCallState'
+import { bindToolMeasurementStatus, canonicalToolMeasurement, readToolMeasurementStatus } from '../toolMeasurementStatus'
 import { ToolRecoveryHealth } from './toolRecoveryHealth'
 import { TEAM_TOOL_PREFIX, type TeamCatalogue } from './toolCalls'
 import { ChatObservationTracker } from './chatTracker'
@@ -44,7 +47,10 @@ export class ProcessObservationService {
   private readonly tasks = new Set<string>()
   private stopped = false
   private started = false
-  private readonly toolRecovery: ToolRecoveryHealth
+  readonly toolRecovery: ToolRecoveryHealth
+  readonly toolExport: ToolExportStatus
+  private statusTimer:ReturnType<typeof setTimeout>|null=null
+  private statusCanonical=''
 
   constructor(
     db: Database,
@@ -52,13 +58,15 @@ export class ProcessObservationService {
     now: () => number = Date.now,
     private readonly notifyDelayMs = NOTIFY_DEBOUNCE_MS,
     catalogue: TeamCatalogue = { prefix: TEAM_TOOL_PREFIX, members: new Set() },
+    private readonly options:{onEffectiveStatusChange?:()=>void;exportBudgets?:{maxSeries?:number;maxFamily?:number}}={},
   ) {
     this.store = new ObservationStore(db, now)
     this.recorder = new ObservationRecorder(this.store)
     let accumulator: ExportAccumulator | undefined
     this.store.accumulate = row => {
       try {
-        accumulator ??= new ExportAccumulator(db)
+        accumulator ??= new ExportAccumulator(db,{...this.options.exportBudgets,
+          toolValues:publicToolLabels(catalogue),exportActive:()=>this.toolExport.read().state==='active'})
         accumulator.observe(row)
       } catch (error) {
         accumulator = undefined
@@ -67,12 +75,17 @@ export class ProcessObservationService {
     }
     this.reconcile = new ObservationReconciler(db, this.recorder)
     this.chat = new ChatObservationTracker(this.recorder, identity, catalogue, true)
-    this.toolRecovery = new ToolRecoveryHealth(this.store)
+    this.toolRecovery = new ToolRecoveryHealth(this.store,()=>this.statusChanged())
+    this.toolExport = new ToolExportStatus(this.store,()=>this.statusChanged(),{
+      ...this.options.exportBudgets,toolValues:publicToolLabels(catalogue),exportActive:()=>this.toolExport.read().state==='active'})
+    bindToolMeasurementStatus(db,()=>({export:this.toolExport.read(),recovery:this.toolRecovery.read()}))
+    this.statusCanonical=canonicalToolMeasurement(this.toolStatus())
   }
 
   start(subscriptions: ((notify: (taskId?: string) => void) => () => void)[] = []): void {
     if (this.started || this.stopped) return
     this.started = true
+    this.ensureToolExport()
     this.recoverTools()
     for (const subscribe of subscriptions) {
       this.releases.push(subscribe(taskId => this.notify(taskId)))
@@ -97,6 +110,22 @@ export class ProcessObservationService {
     this.pass.unref?.()
   }
 
+  toolStatus() {return readToolMeasurementStatus(this.store.db)}
+  private statusChanged():void {
+    if(this.stopped)return
+    const next=canonicalToolMeasurement(this.toolStatus())
+    if(next===this.statusCanonical)return
+    this.statusCanonical=next
+    if(this.statusTimer)return
+    this.statusTimer=setTimeout(()=>{
+      this.statusTimer=null
+      if(!this.stopped)this.options.onEffectiveStatusChange?.()
+    },this.notifyDelayMs)
+    this.statusTimer.unref?.()
+  }
+  private ensureToolExport():void {
+    if(!this.toolExport.ensure())this.recorder.safe(()=>{throw Error('Tool export status write failed')})
+  }
   private recoverTools(): void {
     this.recorder.safe(() => this.chat.recover())
     if (this.toolRecovery.write(this.chat.inventoryReady,this.chat.quarantined.size,this.chat.pendingRecovery.size) === false) {
@@ -105,7 +134,10 @@ export class ProcessObservationService {
   }
 
   tick(retryRecovery = true): void {
-    if (retryRecovery) this.recoverTools()
+    if (retryRecovery) {
+      if(this.toolExport.read().state!=='active')this.ensureToolExport()
+      this.recoverTools()
+    }
     this.chat.checkpoint()
     this.reconcile.run()
     this.recorder.safe(() => {
@@ -121,7 +153,7 @@ export class ProcessObservationService {
 
   health() {
     return {
-      toolMeasurement: { export: { state: 'unknown' as const, reason: null, availableSince: null }, recovery: this.toolRecovery.read() },
+      toolMeasurement: this.toolStatus(),
       sources: Object.fromEntries(SOURCE_NAMES.map(source => [source, this.sources[source]])),
       failures: this.recorder.failures,
       gapSince: this.recorder.gapSince,
@@ -136,6 +168,8 @@ export class ProcessObservationService {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     if (this.pass) clearTimeout(this.pass)
+    if(this.statusTimer)clearTimeout(this.statusTimer)
+    this.statusTimer=null
     this.pass = null
     for (const release of this.releases) release()
     this.releases.length = 0

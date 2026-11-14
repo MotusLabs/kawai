@@ -9,6 +9,7 @@
 // Refresh) recomputes and replaces the cached entry.
 import type { Database } from 'bun:sqlite'
 import {
+  unknownToolMeasurement, type ToolMeasurementStatus,
   COVERAGE_CAVEAT, METRIC_DEFS, MIN_SAMPLE, USAGE_CAVEAT, WINDOW_MS, sliceAllowed,
   type MetricDef, type MetricSlice, type MetricValue, type MetricWindow, type ProcessMetrics,
 } from '../../shared/processMetrics'
@@ -64,6 +65,7 @@ export function computeMetrics(inputs: MetricsInputs, window: MetricWindow, slic
   const current = observations(metricsContext(inputs, inputs.end - span, inputs.end, resolver))
   const baseline = observations(metricsContext(inputs, inputs.end - 2 * span, inputs.end - span, resolver))
   return {
+    toolMeasurement:inputs.toolMeasurement??unknownToolMeasurement(),
     teamId: inputs.teamId, window, slice,
     periodStart: new Date(inputs.end - span).toISOString(),
     periodEnd: new Date(inputs.end).toISOString(),
@@ -89,16 +91,17 @@ export class MetricsReader {
     private readonly db: Database,
     private readonly now: () => number = Date.now,
     private readonly resolveProvider?: (profileId: string, teamId: string) => string,
+    private readonly toolStatus:()=>ToolMeasurementStatus=unknownToolMeasurement,
   ) {}
 
   read(teamId: string, window: MetricWindow, slice: MetricSlice | null, options: { fresh?: boolean } = {}): ProcessMetrics {
     const key = JSON.stringify([teamId, window, slice])
     const at = this.now()
     const hit = this.cache.get(key)
-    if (hit && !options.fresh && at - hit.at < METRICS_CACHE_MS) return hit.metrics
+    if (hit && !options.fresh && at - hit.at < METRICS_CACHE_MS) return {...hit.metrics,toolMeasurement:this.toolStatus()}
     for (const [k, v] of this.cache) if (at - v.at >= METRICS_CACHE_MS) this.cache.delete(k)
     const metrics = readMetrics(this.db, teamId, window, slice, at, this.resolveProvider)
     this.cache.set(key, { at, metrics })
-    return metrics
+    return {...metrics,toolMeasurement:this.toolStatus()}
   }
 }

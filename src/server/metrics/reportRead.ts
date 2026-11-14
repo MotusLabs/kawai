@@ -5,6 +5,7 @@
 // change, and its outcome once implemented — plus per-window freshness and
 // the unproposed version changes of a window. Computed at read time; nothing
 // here is stored.
+import { readToolMeasurementStatus } from './toolMeasurementStatus'
 import type { Database } from 'bun:sqlite'
 import { METRIC_WINDOWS, WINDOW_MS, type MetricWindow } from '../../shared/processMetrics'
 import type { ProcessProposal, ProcessReport, ReportFreshness, VersionChange } from '../../shared/processReports'
@@ -61,7 +62,7 @@ export function readProposal(context: ReportReadContext, proposal: StoredProposa
 }
 
 export function readReport(context: ReportReadContext, report: StoredReport): ProcessReport {
-  return { ...report, proposals: report.proposals.map(proposal => readProposal(context, proposal)) }
+  return { ...report, snapshot:{...report.snapshot,toolMeasurement:readToolMeasurementStatus(context.db)}, proposals: report.proposals.map(proposal => readProposal(context, proposal)) }
 }
 
 /** The newest report per window and its age in hours at `now`. */

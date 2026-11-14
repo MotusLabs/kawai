@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, SendClientMessage, Session } from '@shared/types'
-import { COVERAGE_CAVEAT, USAGE_CAVEAT, type ProcessMetrics } from '@shared/processMetrics'
+import { COVERAGE_CAVEAT, USAGE_CAVEAT, unknownToolMeasurement, type ProcessMetrics } from '@shared/processMetrics'
 import type { ProcessProposal, ProcessReport, ReportFreshness, VersionChange } from '@shared/processReports'
 import TeamWorkspaceView from '../components/team/TeamWorkspaceView'
 import { handleMetricsMessage } from '../protocol/metricsMessages'
@@ -29,6 +29,7 @@ const sessions = [
 ] as unknown as Session[]
 
 const metrics: ProcessMetrics = {
+  toolMeasurement:unknownToolMeasurement(),
   teamId: '/repo/.git', window: '7d', slice: null, periodStart: '2026-10-09T12:00:00.000Z', periodEnd: '2026-10-16T12:00:00.000Z',
   baselineStart: '2026-10-02T12:00:00.000Z', computedAt: '2026-10-16T12:00:00.000Z', minSample: 10,
   metrics: [{ id: 'finding_fail_rate', value: 0.4, n: 12, insufficient: false, baseline: { value: null, n: 0, insufficient: true }, approximate: false, partial: false, drill: { tasks: [], messages: [] } }],
