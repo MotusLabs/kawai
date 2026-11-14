@@ -114,6 +114,28 @@ test('W8: missing/corrupt marker is unknown until verification and a new interva
     }
   }finally{service.stop();db.close()}
 })
+// @covers: tool-call-metrics › Tool call metrics are exported behind an activation gate › Reactivation starts a new boundary
+test('W8 stored active needs this-process verification; repairing a missing reservation starts a fresh interval',()=>{
+  const db=schemaCopy();let now=AT
+  const first=new ProcessObservationService(db,()=>({}),()=>now)
+  first.start();const old=first.toolStatus().export.availableSince
+  expect(old).toBe(new Date(AT).toISOString());first.stop()
+  const next=new ProcessObservationService(db,()=>({}),()=>now)
+  try{
+    expect(next.store.checkpoint('tool-export-v2')).not.toBeNull()
+    expect(next.toolStatus().export).toEqual({state:'unknown',reason:null,availableSince:null})
+    next.start();expect(next.toolStatus().export.availableSince).toBe(old)
+    const values=totals(db)
+    db.prepare("DELETE FROM process_export_totals WHERE family=? AND bucket='admitted'").run(HIST)
+    expect(next.toolStatus().export.state).toBe('unknown')
+    now+=1000;next.tick()
+    expect(next.toolStatus().export).toEqual({state:'active',reason:null,availableSince:new Date(now).toISOString()})
+    expect(next.toolStatus().export.availableSince).not.toBe(old)
+    expect(totals(db)).toEqual(values)
+    const raw=next.store.checkpoint('tool-export-v2');now+=1000;next.tick()
+    expect(next.store.checkpoint('tool-export-v2')).toBe(raw)
+  }finally{next.stop();db.close()}
+})
 // @covers: tool-call-metrics › Tool call metrics are exported behind an activation gate › Admitted label keeps counting while unavailable
 // @covers: tool-call-metrics › Tool call metrics are exported behind an activation gate › Scrape after pruning
 // @covers: tool-call-metrics › Tool call metrics are exported behind an activation gate › Suppressed families render nothing
