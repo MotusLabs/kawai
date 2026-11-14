@@ -1,3 +1,4 @@
+// @reads: src/server/outbound/redact.ts
 // Redaction (execution-safety-recovery D8) over a fixture corpus: every
 // listed secret shape — tokens, header values, `-u` credentials, URL
 // userinfo, flag values, credential query parameters, and secret-named
@@ -5,7 +6,50 @@
 // `‹redacted›`; a non-secret command is unchanged; and truncation at 4096
 // characters is marked. Reserved example names throughout.
 import { describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import { clip, REDACTED, redact, redactForStore } from '../outbound/redact'
+
+// Literal outputs captured from reviewed 7d6d3978 before changing span storage.
+// One bounded child makes a missing end guard fail without wedging this runner.
+test('flat span boundaries terminate and preserve the reviewed outputs', () => {
+  const cases: Array<[string, string]> = [
+    ["curl -H Cookie:", "curl -H Cookie:"],
+    ["curl -H Cookie: v1", "curl -H Cookie: v1"],
+    ["Cookie:x", "Cookie:‹redacted›"],
+    ["", ""],
+    [" ; | ", " ; | "],
+    ["-H \"Cookie: a", "-H \"Cookie:‹redacted›"],
+    ["-H \"Cookie: a Authorization: b\"", "-H \"Cookie:‹redacted›\""],
+    ["-H \"Cookie: a\" -H \"Authorization: b\"", "-H \"Cookie:‹redacted›\" -H \"Authorization:‹redacted›\""],
+    ["Authorization:\"x \"$'y'z", "Authorization:‹redacted›"],
+    ["curl -H \"Authorization: Bearer AA\\\"BB CC\" tail", "curl -H \"Authorization:‹redacted›\" tail"],
+    ["curl -H $'Authorization: Bearer S3C\\'RETZZ' tail", "curl -H $'Authorization:‹redacted› tail"],
+    ["curl -H Authorization:\\ Bearer\\ X tail", "curl -H Authorization:‹redacted› tail"],
+  ]
+  const source = new URL('../outbound/redact.ts', import.meta.url).pathname
+  const script = `import { redact } from ${JSON.stringify(source)};
+    console.log(JSON.stringify(JSON.parse(await Bun.stdin.text()).map(text => redact(text))))`
+  const child = spawnSync(process.execPath, ['--eval', script], {
+    input: JSON.stringify(cases.map(([input]) => input)),
+    encoding: 'utf8', timeout: 2_000,
+    env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+  })
+  expect(child.error).toBeUndefined()
+  expect(child.signal).toBeNull()
+  expect(child.status).toBe(0)
+  expect(child.stderr).toBe('')
+  expect(JSON.parse(child.stdout)).toEqual(cases.map(([, expected]) => expected))
+})
+
+test('complete Cookie header outputs match the reviewed 20k and 40k strings', () => {
+  for (const [count, length] of [[20_000, 460_034], [40_000, 920_034]] as const) {
+    const input = `curl ${'-H "Cookie: v1" '.repeat(count)}https://example.internal/hook`
+    const expected = `curl ${'-H "Cookie:‹redacted›" '.repeat(count)}https://example.internal/hook`
+    const output = redact(input)
+    expect(output).toBe(expected)
+    expect(output.length).toBe(length)
+  }
+})
 
 describe('redact', () => {
   test('every known token shape', () => {

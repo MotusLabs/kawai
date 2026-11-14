@@ -147,23 +147,29 @@ describe('round 7 regressions and controls (task 3.6)', () => {
 /** The best timing of each fn over interleaved rounds: alternating the two
  * sizes keeps a load spike in one phase from inflating only one side of the
  * ratio, and the minimum of each side is the least noisy reading (warm, full
- * gc before every timed run so a collection never lands inside one). */
-function bestTimes(large: () => unknown, small: () => unknown, rounds = 7): { large: number; small: number } {
+ * gc before every timed run; allocation can still trigger collection inside one). */
+function bestTimes(large: () => unknown, small: () => unknown, rounds = 7): { large: number; small: number; largeRounds: Float64Array; smallRounds: Float64Array } {
   large()
   small()
+  const largeRounds = new Float64Array(rounds)
+  const smallRounds = new Float64Array(rounds)
   let bestLarge = Infinity
   let bestSmall = Infinity
   for (let i = 0; i < rounds; i++) {
     Bun.gc(true)
     let started = performance.now()
     large()
-    bestLarge = Math.min(bestLarge, performance.now() - started)
+    const largeElapsed = performance.now() - started
+    bestLarge = Math.min(bestLarge, largeElapsed)
+    largeRounds[i] = largeElapsed
     Bun.gc(true)
     started = performance.now()
     small()
-    bestSmall = Math.min(bestSmall, performance.now() - started)
+    const smallElapsed = performance.now() - started
+    bestSmall = Math.min(bestSmall, smallElapsed)
+    smallRounds[i] = smallElapsed
   }
-  return { large: bestLarge, small: bestSmall }
+  return { large: bestLarge, small: bestSmall, largeRounds, smallRounds }
 }
 
 // A linear pass doubles; the quadratic header redaction this guard replaced
@@ -176,13 +182,18 @@ const RATIO = 2.8
  * load is far rarer than a phase spike, and `withholdReason`'s true ratio
  * sits near 2.2), and a failure reports every attempt's ratio. */
 function expectAtMostTwice(large: () => unknown, small: () => unknown, attempts = 3): void {
-  const seen: string[] = []
+  const seen: ReturnType<typeof bestTimes>[] = []
   for (let attempt = 0; attempt < attempts; attempt++) {
     const times = bestTimes(large, small)
     if (times.large / times.small < RATIO) return
-    seen.push((times.large / times.small).toFixed(3))
+    seen.push(times)
   }
-  throw new Error(`ratio read at or above ${RATIO} on all ${attempts} attempts: ${seen.join(' ')}`)
+  const ratios = seen.map(times => (times.large / times.small).toFixed(3)).join(' ')
+  const details = seen.map(times => ({
+    large: { min: times.large, index: times.largeRounds.indexOf(times.large), rounds: [...times.largeRounds] },
+    small: { min: times.small, index: times.smallRounds.indexOf(times.small), rounds: [...times.smallRounds] },
+  }))
+  throw new Error(`ratio read at or above ${RATIO} on all ${attempts} attempts: ${ratios}; wall milliseconds: ${JSON.stringify(details)}`)
 }
 
 describe('linearity (task 3.6, D8)', () => {

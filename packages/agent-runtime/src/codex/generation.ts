@@ -45,7 +45,7 @@ export function newGeneration(number: number, transport: AppServerTransport, res
   return { number, transport, resumeTarget, threadId: null, retired: false, stopping: null, ended, end }
 }
 
-export const CLIENT_INFO = { name: 'agent-runtime', title: '@motuslabs/agent-runtime', version: '0.1.0' }
+export const CLIENT_INFO = { name: 'agent-runtime', title: '@motuslabs/agent-runtime', version: '0.1.1' }
 export const CAPABILITIES: JsonObject = { experimentalApi: true, requestAttestation: false }
 
 export interface ThreadOpened {

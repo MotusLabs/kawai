@@ -66,6 +66,7 @@ import { OpenTurns } from './openTurns.js'
 import { composeEnvelope } from './compose.js'
 import { checkSubmission, newTurn, promptMessage, type Turn } from './turns.js'
 import { ClaudeUsageFacts } from './usageFacts.js'
+import { ControlInvocation, genuineQuery, sampleCleanupAtStop } from './sdkControlCleanup.js'
 import { UsageControls } from './usageControls.js'
 import type { ClaudeSessionOptions } from './sessionOptions.js'
 export type { ClaudeQueryFactory, ClaudeSessionOptions } from './sessionOptions.js'
@@ -194,7 +195,7 @@ export class ClaudeSession {
     // Registered before query(): the SDK spawns inside it, and a recorder may reenter stop there.
     this.generations.push(generation)
     try {
-      generation.query = this.options.queryFactory ? this.options.queryFactory({ prompt: generation.input, options }) : sdk.query({ prompt: generation.input, options })
+      generation.query = this.options.queryFactory ? this.options.queryFactory({ prompt: generation.input, options }) : genuineQuery(sdk, { prompt: generation.input, options })
     } catch (error) {
       generation.retired = true
       if (generation.spawn === 'refused') throw this.lifecycle.cancelled('the driver was stopped before its process was created', [error])
@@ -204,10 +205,11 @@ export class ClaudeSession {
     this.frames.commands.beginLoading()
     void this.lifecycle.jobs.run(`generation:${number}`, () => this.consume(generation))
     let initialized: Awaited<ReturnType<Query['initializationResult']>>
+    const initialize = new ControlInvocation(generation, 'initialize')
     try {
-      initialized = await generation.query.initializationResult()
+      initialized = await initialize.call<typeof initialized>()
     } catch (error) {
-      throw await startFailure(generation, this.stopToken, error, (message, causes) => this.lifecycle.cancelled(message, causes))
+      throw await startFailure(generation, this.stopToken, error, (message, causes) => this.lifecycle.cancelled(message, causes), initialize)
     }
     generation.initialized = true
     if (generation === this.current() && Array.isArray(initialized?.commands)) this.frames.commands.applyCommands(initialized.commands as RawChatCommand[])
@@ -510,14 +512,15 @@ export class ClaudeSession {
       // The interrupted turn's boundary re-reads the context report at once, as the retired driver did:
       // the result the CLI owes may never arrive (task-602c71e9 R6, design §2).
       this.controls.probe(generation)
+      const interrupt = new ControlInvocation(generation, 'interrupt')
       void this.lifecycle.jobs.run(
         `interrupt:${generation.number}`,
         async () => {
-          const cancelled = await interruptGeneration(generation)
+          const cancelled = await interruptGeneration(generation, interrupt)
           // Cancelled prompts never run: an interrupted turn whose prompts were all cancelled owes no result.
           if (generation === this.current()) this.binder.promptsWithdrawn(cancelled)
         },
-        { expectedCancellation: (error) => cancelledByStop(generation, this.stopToken, error) },
+        { expectedCancellation: (error) => cancelledByStop(generation, this.stopToken, error) || interrupt.cancelledByCleanup(this.stopToken, error) },
       )
     }
     return receipt
@@ -562,6 +565,9 @@ export class ClaudeSession {
 
   /** Close every input and request, settle open turns as stopped (L11), terminate every owned generation. */
   private async teardown(mode: 'kill' | 'shutdown'): Promise<ProcessExitFact[]> {
+    // First teardown step, before its abort, sends, requests and turn settlement (the lifecycle's stopping
+    // state and callbacks ran before it): each generation's SDK cleanup and owner-exit sample (sdkControlCleanup.ts).
+    sampleCleanupAtStop(this.generations)
     // The lifecycle runs teardown once per stop; its token is minted before any callback below can run.
     this.stopToken = { reason: 'the agent-runtime driver is stopping' }
     const error: AgentErrorInfo = { category: 'stopped', message: 'the driver was stopped' }

@@ -8,7 +8,7 @@ const root = resolve(import.meta.dir, '../../..')
 const read = (path: string) => readFileSync(resolve(root, path), 'utf8')
 const sha = 'a'.repeat(40)
 const eligible = (): ReleaseInput => ({
-  event: 'push', ref: 'refs/tags/agent-runtime-v0.1.0', sha,
+  event: 'push', ref: 'refs/tags/agent-runtime-v0.1.1', sha,
   version: JSON.parse(read('packages/agent-runtime/package.json')).version,
   companionVersion: JSON.parse(read('packages/claude-agent-sdk-no-cli/package.json')).version,
   changelog: read('packages/agent-runtime/CHANGELOG.md'), checks: 'success',
@@ -20,7 +20,7 @@ test('D04 M-release: only an exact trusted tag with checks and all owner evidenc
   expect(releaseErrors(eligible())).toEqual([])
   const refused: Partial<ReleaseInput>[] = [
     { event: 'pull_request' }, { event: 'pull_request_target' }, { event: 'workflow_dispatch' },
-    { ref: 'refs/tags/v0.1.0' }, { ref: 'refs/tags/agent-runtime-v0.1.1' },
+    { ref: 'refs/tags/v0.1.1' }, { ref: 'refs/tags/agent-runtime-v0.1.2' },
     { version: '0.1.0-rc.1' }, { companionVersion: '0.0.0' },
     { changelog: '## 0.1.00\n' }, { changelog: '## Unreleased (0.1.0)' },
     ...['failure', 'cancelled', 'skipped', 'neutral', '', 'true'].map((checks) => ({ checks })),
@@ -36,8 +36,8 @@ test('D04 M-release: only an exact trusted tag with checks and all owner evidenc
 // @covers: agent-runtime-distribution › Releases have an independent compatibility contract › Initial and breaking releases
 test('D05: the candidate version has an independent changelog and requires major migration for breaking changes', () => {
   const entry = eligible()
-  expect(entry.version).toBe('0.1.0')
-  expect(entry.companionVersion).toBe('0.1.0')
+  expect(entry.version).toBe('0.1.1')
+  expect(entry.companionVersion).toBe('0.1.1')
   expect(entry.changelog).toContain('new major version, even after 0.x')
   expect(read('packages/agent-runtime/README.md')).toContain('with\nmigration notes')
 })
@@ -73,7 +73,7 @@ test('release workflow has no PR trigger and credentials exist only after the tr
 
 test('M-release: the actual workflow gate command exits nonzero for mismatches or bypassed acceptance', () => {
   const env = {
-    GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/tags/agent-runtime-v0.1.0', GITHUB_SHA: sha,
+    GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/tags/agent-runtime-v0.1.1', GITHUB_SHA: sha,
     REQUIRED_CHECKS: 'success', ACCEPTED_SHA: sha, NATIVE_SHA: sha, AUTHORIZED_SHA: sha,
   }
   const invoke = (changed: Record<string, string | undefined>) => Bun.spawnSync([process.execPath, 'scripts/agent-runtime-release.ts'], { cwd: root, env: { ...env, ...changed }, stdout: 'pipe', stderr: 'pipe' })

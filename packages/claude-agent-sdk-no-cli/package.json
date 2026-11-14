@@ -1,6 +1,6 @@
 {
   "name": "@motuslabs/claude-agent-sdk-no-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Empty companion for consumer-root overrides of the Claude Agent SDK platform CLI packages. Install the CLI separately.",
   "type": "module",
   "license": "MIT",

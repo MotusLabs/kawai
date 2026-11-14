@@ -1,9 +1,10 @@
 # @motuslabs/agent-runtime
 
 Headless Claude and Codex drivers for Bun >=1.3.0, ESM, with typed turns,
-explicit launch authority and awaited process ownership. Version 0.1.0 is
-unreleased. Native acceptance, publication and authenticated access receipts
-are still required. Node 22 compatibility is optional and unverified.
+explicit launch authority and awaited process ownership. Version 0.1.1 is
+unreleased; the 0.1.0 candidate failed its release verification and was
+never published. Native acceptance, publication and authenticated access
+receipts are still required. Node 22 compatibility is optional and unverified.
 
 ## Installation
 
@@ -15,18 +16,18 @@ After owner publication, put this in the **consumer root** package.json:
 {
   "type": "module",
   "dependencies": {
-    "@motuslabs/agent-runtime": "0.1.0",
+    "@motuslabs/agent-runtime": "0.1.1",
     "@anthropic-ai/claude-agent-sdk": "0.3.289"
   },
   "overrides": {
-    "@anthropic-ai/claude-agent-sdk-linux-x64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.0",
-    "@anthropic-ai/claude-agent-sdk-linux-arm64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.0",
-    "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.0",
-    "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.0",
-    "@anthropic-ai/claude-agent-sdk-darwin-x64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.0",
-    "@anthropic-ai/claude-agent-sdk-darwin-arm64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.0",
-    "@anthropic-ai/claude-agent-sdk-win32-x64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.0",
-    "@anthropic-ai/claude-agent-sdk-win32-arm64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.0"
+    "@anthropic-ai/claude-agent-sdk-linux-x64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.1",
+    "@anthropic-ai/claude-agent-sdk-linux-arm64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.1",
+    "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.1",
+    "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.1",
+    "@anthropic-ai/claude-agent-sdk-darwin-x64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.1",
+    "@anthropic-ai/claude-agent-sdk-darwin-arm64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.1",
+    "@anthropic-ai/claude-agent-sdk-win32-x64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.1",
+    "@anthropic-ai/claude-agent-sdk-win32-arm64": "npm:@motuslabs/claude-agent-sdk-no-cli@0.1.1"
   }
 }
 ```

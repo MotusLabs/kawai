@@ -65,7 +65,7 @@ export function nativeContent(project: string): string[] {
         if (!allowed.includes(entry.name)) violations.push(path.slice(project.length + 1))
         if (entry.name === 'package.json') {
           const manifest = JSON.parse(readFileSync(path, 'utf8'))
-          if (manifest.name !== '@motuslabs/claude-agent-sdk-no-cli' || manifest.version !== '0.1.0' || manifest.scripts || manifest.bin || manifest.dependencies || manifest.optionalDependencies) {
+          if (manifest.name !== '@motuslabs/claude-agent-sdk-no-cli' || manifest.version !== '0.1.1' || manifest.scripts || manifest.bin || manifest.dependencies || manifest.optionalDependencies) {
             violations.push(path.slice(project.length + 1))
           }
         }

@@ -26,7 +26,7 @@ Codex app-server protocol types
   verified for this candidate against the rust-v0.163.0 LICENSE and NOTICE
   in https://github.com/openai/codex; re-verify before each publication.
 
-Compatibility for the 0.1.0 candidate
+Compatibility for the 0.1.1 candidate
 -------------------------------------
   Bun >=1.3.0; current repository check pin 1.4.3.
   Claude Agent SDK 0.3.289 (optional peer); Claude Code floor 2.1.289.

@@ -68,6 +68,9 @@ const handle = (line) => {
       out({ id, result: {} })
       setTimeout(() => process.exit(0), 30)
       break
+    case 'term-sensitive':
+      out({ id, result: {} })
+      break
     case 'term-proof':
       process.on('SIGTERM', () => {})
       // The transport's stop closes stdin before it signals; like the
@@ -156,6 +159,10 @@ const handle = (line) => {
       handle(buffered.slice(0, index))
       buffered = buffered.slice(index + 1)
     }
+  }
+  if (mode === 'term-sensitive') {
+    // Only this mode holds EOF; no signal handler overrides native SIGTERM.
+    setInterval(() => out({ method: 'fixture/stdin-eof', params: {} }), 10)
   }
 })()
 `
@@ -329,8 +336,12 @@ test('a native exit rejects each of two pending requests with the one shared exi
 })
 
 test('stop() ends the child with SIGTERM by default; a planned stop reports no onExit', async () => {
-  const { transport, exits, stop } = startTransport('echo')
-  await transport.request('ping')
+  const { transport, exits, notifications, stop } = startTransport('term-sensitive')
+  expect(await transport.request('ping')).toEqual({})
+  // Observe EOF in the child before stop sends TERM: the fixture must hold it.
+  transport.process!.stdin.end()
+  expect(await until(() => notifications.some(({ method }) => method === 'fixture/stdin-eof'))).toBe(true)
+  expect(transport.process!.exited).toBeNull()
   const fact = await stop()
   expect(fact).toEqual({ generation: 1, state: 'exited', pid: transport.process!.pid!, code: null, signal: 'SIGTERM', escalated: false, groupCleared: true })
   // onExit reports unsolicited exits only; the planned stop's fact is its receipt.

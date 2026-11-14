@@ -52,7 +52,7 @@ test('README recipes match the shipped examples and all eight published consumer
   }
   const manifest = JSON.parse(readme.split('```json\n')[1]!.split('\n```')[0]!)
   expect(Object.keys(manifest.overrides).sort()).toEqual([...platformNames].sort())
-  expect(new Set(Object.values(manifest.overrides))).toEqual(new Set(['npm:@motuslabs/claude-agent-sdk-no-cli@0.1.0']))
+  expect(new Set(Object.values(manifest.overrides))).toEqual(new Set(['npm:@motuslabs/claude-agent-sdk-no-cli@0.1.1']))
   expect(readme).toContain('//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}')
 })
 

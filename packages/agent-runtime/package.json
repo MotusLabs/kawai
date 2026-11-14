@@ -1,6 +1,6 @@
 {
   "name": "@motuslabs/agent-runtime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Headless Claude and Codex agent drivers: explicit launch authority, owned process stop, resumable sessions and typed turn results.",
   "type": "module",
   "license": "MIT",

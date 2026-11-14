@@ -124,7 +124,7 @@ const HEADER_AT = new RegExp(`(^|[^A-Za-z-])(${HEADERS})([ \\t]*):`, 'gi')
 export function redactHeaderWords(text: string): string {
   // Word spans, quote-aware: a word ends at unquoted whitespace or an
   // operator; an unterminated quote runs to the end of input (safe side).
-  const spans: Array<[number, number]> = []
+  const spans: number[] = []
   let i = 0
   while (i < text.length) {
     if (BREAKS.has(text[i]!)) { i++; continue }
@@ -145,7 +145,7 @@ export function redactHeaderWords(text: string): string {
       }
       i++
     }
-    spans.push([start, i])
+    spans.push(start, i)
   }
   let out = ''
   let at = 0
@@ -157,15 +157,16 @@ export function redactHeaderWords(text: string): string {
     const colonEnd = found.index + found[0].length
     // Matches come in increasing order, so the span pointer only moves
     // forward: the lookup is linear over the whole text (L2).
-    while (next < spans.length && spans[next]![1] <= colonEnd) next++
-    const span = spans[next]
-    if (span === undefined || span[0] > colonEnd) continue
+    while (next < spans.length && spans[next + 1]! <= colonEnd) next += 2
+    if (next >= spans.length || spans[next]! > colonEnd) continue
+    const start = spans[next]!
+    const end = spans[next + 1]!
     // Keep the word's own closing quote (`-H "Authorization: …"`), so the
     // stored command stays readable; anything else in the value collapses.
-    const opener = text[span[0]]!
-    const keepsClosing = (opener === '"' || opener === "'") && text[span[1] - 1] === opener
+    const opener = text[start]!
+    const keepsClosing = (opener === '"' || opener === "'") && text[end - 1] === opener
     out += text.slice(at, colonEnd) + REDACTED + (keepsClosing ? opener : '')
-    at = span[1]
+    at = end
     HEADER_AT.lastIndex = at
   }
 }
