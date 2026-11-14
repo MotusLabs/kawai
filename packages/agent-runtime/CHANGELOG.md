@@ -4,7 +4,25 @@ All notable changes to `@motuslabs/agent-runtime`. Versions follow semver,
 independently of Kawai's application versions. Any breaking change to the
 documented API takes a new major version, even after 0.x.
 
+## 0.1.1
+
+Unreleased corrected candidate. Real native, publication and authenticated
+consumer receipts remain required; this entry is not a release receipt.
+
+- Claude stop: a pending context probe, usage pull, interrupt or initialize
+  of a query the pinned SDK 0.3.289 built itself, cut by that SDK's
+  cause-less cleanup ("Query closed before response received") after the
+  stop began, is the stop's own cancellation. It is kept by identity for the
+  native verdict. Any other rejection stays a reported stop failure: a
+  replaced method, a query from queryFactory, a tagged or cause-bearing
+  error, a cleanup begun before the stop, or a process end already observed.
+- No API, option or dependency change from 0.1.0.
+
 ## 0.1.0
+
+Failed candidate: release verification run 43580251925 failed on the stop
+classification above; the tag `agent-runtime-v0.1.0` was never published.
+Its entry below is kept as written.
 
 Unreleased candidate. Real native, publication and authenticated consumer
 receipts remain required; this entry is not a release receipt.
