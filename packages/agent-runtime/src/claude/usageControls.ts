@@ -1,6 +1,8 @@
 // The Claude session's usage control calls (design §6, tasks 5.2/5.3), each
 // an owned job that stop joins. A rejection is kept, unless it is exactly the
-// stop's own cancellation of that generation's query, so stop reports it.
+// stop's own cancellation of that generation's query (its AbortError, or for
+// the context probe the SDK cleanup error sdkControlCleanup.ts recognizes for
+// that call), so stop reports it.
 // None starts once stop has begun.
 // - The context probe (`getContextUsage`) runs after each initialize, each
 //   result, and an interrupt that settles an active turn (at once, not after
@@ -27,6 +29,7 @@ import { parseUsagePull } from '../usage/quota.js'
 import type { QuotaNoData } from '../options.js'
 import type { QuotaReport } from '../usage/types.js'
 import { cancelledByStop, type Generation } from './generations.js'
+import { ControlInvocation } from './sdkControlCleanup.js'
 
 export interface UsageControlsHost {
   lifecycle: DriverLifecycle
@@ -97,18 +100,19 @@ export class UsageControls {
 
   /** Ask the CLI for its context report (after initialize, after each result, and at an active turn's interrupt). */
   probe(generation: Generation): void {
-    const query = generation.query as ControlQuery
-    const probe = query.getContextUsage
-    if (typeof probe !== 'function') return
+    const probe = new ControlInvocation(generation, 'context-probe')
+    if (typeof probe.method() !== 'function') return
     this.run(generation, 'context-probe', async () => {
-      const report = await probe.call(query, { detail: 'summary' })
+      const report = await probe.call<unknown>({ detail: 'summary' })
       if (report && typeof report === 'object' && generation === this.host.current() && !generation.retired) this.host.facts.contextReport(report as ContextReportSlice)
-    })
+    }, probe)
   }
 
-  private run(generation: Generation, label: string, body: () => Promise<void>): void {
+  /** An owned job; its rejection is excluded only as the stop's own cancellation of that generation (or of `control`'s call). */
+  private run(generation: Generation, label: string, body: () => Promise<void>, control?: ControlInvocation): void {
     const state = this.host.lifecycle.state
     if (state === 'stopping' || state === 'stopped') return
-    void this.host.lifecycle.jobs.run(`${label}:${generation.number}`, body, { expectedCancellation: (error) => cancelledByStop(generation, this.host.stopToken(), error) })
+    const expectedCancellation = (error: unknown) => cancelledByStop(generation, this.host.stopToken(), error) || (control?.cancelledByCleanup(this.host.stopToken(), error) ?? false)
+    void this.host.lifecycle.jobs.run(`${label}:${generation.number}`, body, { expectedCancellation })
   }
 }

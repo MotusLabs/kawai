@@ -6,7 +6,9 @@
 // shutdown first gives a leader with closed stdin its grace bound. The
 // AbortErrors a stop's token excludes are kept per generation as
 // projections. The stop's account weighs them against the generation's
-// frozen native evidence.
+// frozen native evidence. So are the SDK's cause-less cleanup rejections of
+// a genuine query's pending controls that sdkControlCleanup.ts recognizes;
+// the SDK is imported through it so its query() is known to be genuine.
 // The task controls and interrupt go through the SDK's runtime methods. Some
 // of those are undeclared or take undeclared options in 0.3.289. It also
 // builds a generation's query options and classifies a failed start,
@@ -21,6 +23,7 @@ import type { ResolvedLaunch } from '../process/launch.js'
 import { nativeCauses } from '../process/nativeVerdict.js'
 import type { OwnedProcess, TerminateOptions } from '../process/ownedProcess.js'
 import { PromptQueue } from './promptQueue.js'
+import { importGenuineSdk } from './sdkControlCleanup.js'
 
 export type SdkModule = typeof import('@anthropic-ai/claude-agent-sdk')
 
@@ -59,6 +62,12 @@ export interface Generation {
    * true until an init reports a capabilities array, which then replaces it.
    */
   cancelQueued: boolean
+  /**
+   * The SDK cleanup state the stop sampled before its first side effect
+   * (sdkControlCleanup.ts): `unsampled` until then, `unknown` when it could
+   * not be read; never defaulted to false.
+   */
+  cleanupAtStop: 'unsampled' | 'unknown' | boolean
   /** Settles once the generation's end has been classified. */
   ended: Promise<void>
   markEnded(): void
@@ -69,7 +78,7 @@ export function newGeneration(number: number, sdk: SdkModule, resumeTarget: stri
   const ended = new Promise<void>((resolve) => (markEnded = resolve))
   return {
     number, query: null as unknown as Query, input: new PromptQueue<SDKUserMessage>(), owned: null, spawn: 'pending', projections: [], retired: false,
-    abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, resumeTarget, initialized: false, identityConfirmed: false, startupErrors: [], cancelQueued: true, ended, markEnded,
+    abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, resumeTarget, initialized: false, identityConfirmed: false, startupErrors: [], cancelQueued: true, cleanupAtStop: 'unsampled', ended, markEnded,
   }
 }
 
@@ -131,7 +140,7 @@ export function cancelledByStop(generation: Generation, stopToken: object | null
 
 export async function loadSdk(): Promise<SdkModule> {
   try {
-    return await import('@anthropic-ai/claude-agent-sdk')
+    return await importGenuineSdk()
   } catch (error) {
     throw new AgentRuntimeError({ category: 'dependency', message: 'the optional peer @anthropic-ai/claude-agent-sdk is not installed' }, [error])
   }

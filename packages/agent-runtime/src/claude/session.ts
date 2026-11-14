@@ -66,6 +66,7 @@ import { OpenTurns } from './openTurns.js'
 import { composeEnvelope } from './compose.js'
 import { checkSubmission, newTurn, promptMessage, type Turn } from './turns.js'
 import { ClaudeUsageFacts } from './usageFacts.js'
+import { genuineQuery, sampleCleanupAtStop } from './sdkControlCleanup.js'
 import { UsageControls } from './usageControls.js'
 import type { ClaudeSessionOptions } from './sessionOptions.js'
 export type { ClaudeQueryFactory, ClaudeSessionOptions } from './sessionOptions.js'
@@ -194,7 +195,7 @@ export class ClaudeSession {
     // Registered before query(): the SDK spawns inside it, and a recorder may reenter stop there.
     this.generations.push(generation)
     try {
-      generation.query = this.options.queryFactory ? this.options.queryFactory({ prompt: generation.input, options }) : sdk.query({ prompt: generation.input, options })
+      generation.query = this.options.queryFactory ? this.options.queryFactory({ prompt: generation.input, options }) : genuineQuery(sdk, { prompt: generation.input, options })
     } catch (error) {
       generation.retired = true
       if (generation.spawn === 'refused') throw this.lifecycle.cancelled('the driver was stopped before its process was created', [error])
@@ -562,6 +563,8 @@ export class ClaudeSession {
 
   /** Close every input and request, settle open turns as stopped (L11), terminate every owned generation. */
   private async teardown(mode: 'kill' | 'shutdown'): Promise<ProcessExitFact[]> {
+    // Before any stop side effect: whether each generation's SDK cleanup had already begun (sdkControlCleanup.ts).
+    sampleCleanupAtStop(this.generations)
     // The lifecycle runs teardown once per stop; its token is minted before any callback below can run.
     this.stopToken = { reason: 'the agent-runtime driver is stopping' }
     const error: AgentErrorInfo = { category: 'stopped', message: 'the driver was stopped' }

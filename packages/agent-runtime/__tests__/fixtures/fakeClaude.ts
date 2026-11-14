@@ -14,6 +14,9 @@
 // `trap3` traps SIGTERM and exits 3 on it, ignoring stdin EOF; `trap143`
 // does the same with exit 143 (as the installed CLI's SIGTERM handler does);
 // `hold-eof` ignores stdin EOF but keeps the default SIGTERM action;
+// `hold-controls <subtype...>` leaves every later control request of those
+// subtypes (such as get_context_usage) unanswered, so it is still pending
+// when a stop begins;
 // `child` starts a helper in this process's own group (not detached, no
 // shared pipes) that outlives this process, appends its pid to
 // $HOME/child-pids, and exits on its own after 20 s at most;
@@ -244,6 +247,8 @@ async function listMcp(uuid: string, server: string) {
 }
 if (log) fs.appendFileSync(log, `${JSON.stringify({ argv: process.argv.slice(2), pid: process.pid })}\n`)
 let holdOnEof = false
+/** Control subtypes this process never answers (`hold-controls`). */
+const heldControls = new Set<string>()
 
 function result(uuid: string, subtype: string, text: string | null, isError = false, turnUsage: unknown = usage, errors?: string[]) {
   write({
@@ -332,6 +337,10 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
       assistant('trapping SIGTERM')
       return result(uuid, 'success', 'trapping SIGTERM')
     }
+    case 'hold-controls':
+      for (const subtype of rest) heldControls.add(subtype)
+      assistant(`holding ${rest.join(' ')}`)
+      return result(uuid, 'success', `holding ${rest.join(' ')}`)
     case 'hold-eof':
       holdOnEof = true
       setInterval(() => {}, 1000)
@@ -381,6 +390,7 @@ function onUser(frame: { uuid?: string; message?: { content?: unknown } }) {
 function onControl(frame: { request_id: string; request: { subtype: string } }) {
   const respond = (response: Record<string, unknown> = {}) =>
     write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response } })
+  if (heldControls.has(frame.request.subtype)) return
   switch (frame.request.subtype) {
     case 'initialize':
       hooks = (frame.request as { hooks?: Record<string, Matcher[]> }).hooks ?? {}
