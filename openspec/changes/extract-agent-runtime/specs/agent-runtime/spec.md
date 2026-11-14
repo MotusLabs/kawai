@@ -50,6 +50,10 @@ Forced stop SHALL prevent further submissions, request termination of every proc
 - **WHEN** callers stop the same driver concurrently while an earlier process generation still has work
 - **THEN** they observe the same terminal stop outcome after all owned generations settle, without orphaned work or duplicate termination results
 
+#### Scenario: Pending provider control cut by the stop
+- **WHEN** a genuine pinned-SDK query's unsignalled control (context probe, usage pull, interrupt or initialize) is pending at the stop's first teardown step, before its cleanup began and before any observed process end, and the SDK's cause-less cleanup rejects it after the stop token
+- **THEN** that rejection is the stop's own cancellation, kept by identity once per control for the native verdict, and any other rejection (a replaced method, a factory query, a tagged or cause-bearing error, a cleanup begun before the sample, an exit already observed) stays a reported failure
+
 ### Requirement: Shutdown preserves resumability
 Shutdown SHALL stop and join the session's owned work without deleting its runtime conversation or transcripts. Callers SHALL be able to resume using the runtime identity and the same supplied home directories after constructing a new driver in another host process.
 

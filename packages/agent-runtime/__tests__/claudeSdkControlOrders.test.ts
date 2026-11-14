@@ -69,6 +69,7 @@ async function releaseAll(pipes: GenuinePipeQueries): Promise<void> {
 const pending = (subtype: string) => (pipes: GenuinePipeQueries) => (pipes.processes[0]?.controls ?? []).filter((frame) => frame.request.subtype === subtype).length
 
 describe('pinned SDK cleanup of every unsignalled control after a stop', () => {
+  // @covers: agent-runtime › Forced stop has an actual exit boundary › Pending provider control cut by the stop
   test('close first: a pending interrupt and both context probes share one cleanup error, each kept by identity', async () => {
     const pipes = await genuinePipeQueries()
     const s = pipeSession(pipes.factory)
@@ -183,6 +184,7 @@ describe('pinned SDK cleanup of every unsignalled control after a stop', () => {
     }
   })
 
+  // @covers: agent-runtime › Forced stop has an actual exit boundary › Pending provider control cut by the stop
   test('EOF first: stdout ends at the abort and the exit is code 0, so the SDK cleanup error after the token is the cancellation', async () => {
     const pipes = await genuinePipeQueries()
     const s = pipeSession(pipes.factory)

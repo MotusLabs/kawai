@@ -6,8 +6,10 @@
 // identity in the generation's projections). A replaced probe method's
 // same-text rejection stays a failure, and a failed native exit still
 // reports the projections. The pipe-process cases run the real SDK with no
-// owned process, so they prove control cancellation only; the fake-CLI case
-// runs the default owned composition, where either cleanup may win.
+// owned process, so they prove control cancellation only (a CONTROLLED owner
+// supplies frozen evidence where installed); the fake-CLI cases (kill,
+// shutdown, trapped 3 and 143; R3) run the default owned composition, where
+// either cleanup may win.
 import { describe, expect, test } from 'bun:test'
 import { AbortError, type Query } from '@anthropic-ai/claude-agent-sdk'
 import { CLEANUP_TEXT } from '../src/claude/sdkControlCleanup.js'
@@ -56,6 +58,7 @@ function isCleanupError(error: unknown): boolean {
 }
 
 describe('pinned SDK pending-control cleanup after a stop', () => {
+  // @covers: agent-runtime › Forced stop has an actual exit boundary › Pending provider control cut by the stop
   test('a pending context probe that our close cuts after kill is the stop cancellation, kept once by identity', async () => {
     const pipes = await genuinePipeQueries()
     const s = pipeSession(pipes.factory)
@@ -88,6 +91,7 @@ describe('pinned SDK pending-control cleanup after a stop', () => {
     }
   })
 
+  // @covers: agent-runtime › Forced stop has an actual exit boundary › Pending provider control cut by the stop
   test('a replaced probe method rejecting the same text once the real cleanup began fails the stop with that error', async () => {
     const pipes = await genuinePipeQueries()
     const independent = new Error(CLEANUP_TEXT)

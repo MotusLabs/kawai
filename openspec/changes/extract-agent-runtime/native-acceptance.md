@@ -404,3 +404,12 @@ Prepare a private JSON `NativeInput` with explicit configured model, executable 
 An explicit `resume` checkpoint permits only the remaining resume turn, useful after a failed stop whose real owned process was independently confirmed gone. It is not an automatic retry or fallback. `sameIdentity` is a convenience host check; the actual resume evidence here additionally compares the native session/thread identities and recalled phrase.
 
 The root guard verifies configured paths and symlink containment, not arbitrary tools' filesystem access. Only probe-owned processes were signalled by runtime stop. No package/core/API, shared design/tasks/README, runner, manifest, lockfile, publication or live-service changes are included. Newer runtime integration pins must audit native-relevant inputs before reusing these observations.
+
+## Release verify failure and SDK control cleanup (task-d6bf9929 R3)
+
+Release run 43580251925 (tag `agent-runtime-v0.1.0`, kept failed and immutable) failed P09 because our `Query.close()` rejected a pending control with the SDK's plain cleanup error. The correction adds no native evidence. Its cases are of three kinds:
+- native-free, where the real SDK runs over in-memory pipes;
+- CONTROLLED, with frozen owner evidence through the real account and verdict;
+- the default owned fake CLI, with kill, shutdown and trapped exits 3/143.
+
+A missing owner in a native-free case proves nothing native. The accepted native sections above are unchanged.
