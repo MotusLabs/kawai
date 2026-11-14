@@ -12,14 +12,20 @@
 // FAKE_EXIT_AFTER_REPLAY=1 exits 0 once the run is replayed; the default
 // stays alive until stdin closes (the driver's end()). FAKE_ENV_NAMES=<file>
 // writes the NAMES of the variables the child received (never a value), so
-// a test can check what a launch withheld.
+// a test can check what a launch withheld. The receipt is published
+// atomically: a complete staged write to an owned same-directory temp path,
+// then rename(2) — a reader either does not see the path or sees the
+// complete sorted NAMES (observation ordering only, no crash-durability
+// claim). FAKE_ENV_NAMES_GATE=<path> (test-only, default off) holds after
+// staging and before the rename, so a test can watch the staged receipt
+// while the destination is still absent.
 //
 // Causality: a recorded response waits until the client sent the request
 // with that id; a recorded server request is emitted and then waits for the
 // client's reply with that id; notifications emit in order. A client request
 // whose method does not match the run's recorded sequence fails loudly
 // (exit 2), so a replay drift is a test failure, not a silent mismatch.
-import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 // The executable gate's probe (codexExecutable.ts): FAKE_VERSION overrides
@@ -34,7 +40,24 @@ if (!process.argv.includes('app-server')) {
   process.exit(2)
 }
 
-if (process.env.FAKE_ENV_NAMES) writeFileSync(process.env.FAKE_ENV_NAMES, Object.keys(process.env).sort().join('\n'))
+const namesPath = process.env.FAKE_ENV_NAMES
+if (namesPath) {
+  const staged = `${namesPath}.${process.pid}.tmp`
+  const gate = process.env.FAKE_ENV_NAMES_GATE
+  try {
+    writeFileSync(staged, Object.keys(process.env).sort().join('\n'))
+    while (gate !== undefined && !existsSync(gate)) await Bun.sleep(10)
+    renameSync(staged, namesPath)
+  } catch (error) {
+    try {
+      rmSync(staged, { force: true })
+    } catch {
+      // The cleanup failure must never replace the original publication
+      // error: rethrow what the publication itself threw.
+    }
+    throw error
+  }
+}
 
 const runNumber = Number(process.env.FAKE_RUN ?? '1')
 const defaultTranscript = fileURLToPath(
