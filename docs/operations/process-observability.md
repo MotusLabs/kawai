@@ -120,7 +120,7 @@ returns 503 for this endpoint alone. Scrapes use a consistent local snapshot
 cached for five seconds, make no network/model calls, and evaluate no advice.
 This feature creates no listener, deployment, cluster service or scraper.
 
-Metric names start with `kawai_`. The version-1 registry is
+Metric names start with `kawai_`. The version-2 registry is
 `src/server/metrics/export/registry.ts`. Observed core families are:
 
 | Families | Type and unit |
@@ -160,3 +160,137 @@ Their registered stage/wait, account quota and incident families have no samples
 until the actual integration contracts land. Raw profile retry/limit records do
 not establish account quota or canonical incident counts. An availability zero
 means missing integration, not zero usage or an idle service.
+
+## Tool measurement
+
+Managed live events add bounded tool measurements without retaining tool input,
+output, raw foreign names, or failure text. A successful result counts as a call
+with failure class `none`; a failure has exactly one class: `denied`,
+`input-invalid`, `blocked`, `unavailable`, `precondition`, `refused`,
+`command-failed`, or `other`. Classification follows anchored wrappers and
+tool-specific rules. Only an approval denial linked through the host's native
+call ID establishes trusted denial. Audit fallbacks, matching input, generic
+errors, cancelled requests and successful results cannot establish it.
+
+Built-ins and exact production catalogue members retain bounded canonical
+identities. Per turn, foreign tools have at most 96 opaque slots; ambiguous
+names and additional names remain unknown. No raw foreign name is persisted.
+The turn admits at most 512 first-seen call IDs and 64 approval-request records
+with terminal tombstones. Duplicates never replace an owner or free capacity.
+Auto-policy grants and questions consume no approval-link capacity. The first
+saturating call closes open streaks unknown once and stops tool measurement.
+
+Consecutive failures of one recognized tool within a turn form a streak.
+Success closes it recovered, normal turn close abandoned, and a recording
+gap, orphan result, restart, replacement or partial close unknown. Unknown
+lengths are observed lower bounds, excluded from exact recovered/abandoned
+claims. Tool result detail stays 14 days; streak facts and turn-end coverage
+scalars stay 90 days. The opening failed call ID stays untruncated in the
+existing identity column; detail pruning does not expire a readable anchor.
+
+The Tools family shows result failure rate, closed-cohort first-attempt success
+for exact team tools, abandoned streak count, and mean failures before recovery.
+First ownership follows call order, never result order or a later retry.
+A valid retained turn-end carrier from the same read snapshot must confirm
+complete coverage. Live, tainted, legacy, missing-carrier and unavailable history
+stays partial or unrecorded, never success or zero. Attribution uses the pinned
+agent start and group/profile/file versions. A tool-only session needs no task
+or token-usage row to appear.
+
+### Recovery and current status
+
+Startup inventories live rows before tracker admission. Each valid row recovers
+in its own transaction; facts, memory maps and row deletion commit together.
+Failure leaves the row and admission block for the existing checkpoint tick to
+retry. Malformed, unusable or scope-mismatched rows stay byte-identical and
+quarantined across restarts; no automatic repair, reset or overwrite occurs.
+Quarantine blocks all tracker metrics of that session, including context,
+settings and compaction. Repeated status or recovery-write failures may taint
+every live turn; this conservative behavior is deliberate.
+
+`toolMeasurement.recovery` carries status `unknown`, `ok`, `pending` or
+`quarantined`, nullable pending/quarantined counts and `checkedAt`.
+`toolMeasurement.export` separately carries state `unknown`, `active` or
+`budget-unavailable`, a bounded reason and nullable `availableSince`.
+Both keys are read consistently and masked by this process's verification
+gates. Stored healthy bytes from another process need current verification.
+A failed write masks the view unknown even when stored bytes did not change;
+successful verification can restore it without rewriting those bytes.
+Unchanged healthy ticks retain timestamp and bytes and produce no view churn.
+
+Health, the Metrics tab, compact and full `team_metrics`, report numeric
+snapshots with current status overlays, and scrapes share this view.
+Numeric metrics cache for 30 seconds; reads overlay current status without
+mutating those numbers. Text captures status before its five-second cache
+lookup. An effective change coalesces one notification to every team's open
+Metrics views. Export activation proves neither collection completeness,
+Delivery source coverage nor provider-usage continuity.
+
+### Tool exports and admission
+
+Registry definition version 2 adds these families with the `kawai_` prefix:
+
+| Family | Meaning |
+| --- | --- |
+| `agent_tool_calls_total` | Committed eligible results, by tool/outcome/failure_class |
+| `agent_tool_failure_streaks_total` | Closed streaks, by tool/resolution |
+| `agent_tool_failure_streak_length` | Histogram of observed failures, by tool/resolution |
+
+Streak buckets are 1, 2, 3, 4, 6, 10 and +Inf; buckets plus count/sum cost nine
+expanded series per labelset. Public tool labels have 96 values: 18 built-ins,
+up to 76 exact team names in production table order, `other` and `unknown`.
+Foreign slots export as coarse `other`, never raw names or unbounded slots.
+Failure classes have nine values; resolutions are recovered, abandoned and
+unknown. Existing opaque team/group/provider/model labels keep their budgets.
+
+Activation is one transaction under the existing 250,000 expanded-series and
+10,000-labelsets-per-family limits. It counts existing weighted series, every
+missing required catch-all, diagnostic and planned family row before inserting
+all reservations with `tool-export-v2`, or none on refusal.
+While unavailable or unknown, already-admitted labels keep committed eligible
+increments. New tool labelsets write nothing, including aliases, catch-alls or
+overflow increments. All three families are suppressed together on scrape;
+non-tool totals continue normally. Reactivation gets a new boundary when
+required, never resets, replays or backfills counters. Pruning and status-only
+transactions add no tool contribution.
+
+These PromQL expressions are examples for operator-owned alerts; thresholds
+and windows need local judgment:
+
+```promql
+# Failed eligible results / all results, with enough recent calls.
+(
+  sum by (tool) (rate(kawai_agent_tool_calls_total{outcome="failed"}[15m]))
+  /
+  sum by (tool) (rate(kawai_agent_tool_calls_total[15m]))
+) > 0.2
+and on (tool)
+sum by (tool) (increase(kawai_agent_tool_calls_total[15m])) >= 10
+
+# New abandoned streaks, excluding unknown lower bounds.
+sum by (tool) (
+  increase(kawai_agent_tool_failure_streaks_total{resolution="abandoned"}[1h])
+) > 0
+```
+
+An absent or suppressed family is unavailable evidence, not an idle tool or
+zero failures. Check collection/export status before interpreting an alert or
+comparing activation boundaries. These examples configure no alert, scraper,
+provider, server or deployment.
+
+### Drill paging and transcript reveal
+
+The inline drill contains at most 50 abandoned entries plus the total and five
+longest recovered streaks. **Show all abandoned streaks** continues through
+**Load next page** until `nextCursor` is null, with no page-count cap.
+Each page has at most 50 entries and the total. Its cursor fixes team, slice,
+window/end, page size, high-water sequence and last closed-time/sequence pair.
+Later inserts do not shift the cohort. Malformed or mismatched cursors, unknown
+teams and page sizes outside 1–50 return a refusal without entries.
+
+Opening a streak selects its chat and reveals `tool:<firstCallId>`, opens the
+tool card and highlights its first failed call. It requests older history at
+most once per reveal. Missing targets report `not-found`, `archived` or
+`unreadable`; an archived but readable target can still reveal.
+A reconnect that only resets an in-flight history request does not consume a
+pending reveal before its designated host can transfer it.

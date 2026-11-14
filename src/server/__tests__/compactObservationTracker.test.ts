@@ -17,6 +17,7 @@ function harness() {
   let now = origin, sequence = 0
   const identity = () => ({ teamId: 'team', sessionId: 'chat' })
   const service = new ProcessObservationService(db, identity, () => now)
+  service.chat.recover() // Timer-free fixture performs its startup inventory.
   const time = (second: number) => { now = origin + second * 1000 }
   /** Emits a chat event; `id` repeats an earlier event's id (a duplicate delivery). */
   const emit = (data: Record<string, unknown>, second: number, id = `e${++sequence}`) => {
@@ -67,7 +68,9 @@ const T1: { id: string; title: string; run: (h: Harness) => void }[] = [
       h.emit({ type: 'tool_call', toolCallId: 'a', tool: 'Bash' }, 1)
       h.emit({ type: 'tool_result', toolCallId: 'a', isError: true }, 42)
       expect(h.rows('tool').map(row => [row.toolCallId, row.data])).toEqual([
-        ['a', { category: 'shell', startedAt: iso(1), durationSeconds: 41, outcome: 'failed', partial: false }],
+        ['a', { category: 'shell', startedAt: iso(1), durationSeconds: 41, outcome: 'failed', partial: false,
+          eligible: true, failureClass: 'command-failed', first: false, identity: 'Bash',
+          identityIncomplete: false, label: 'Bash', toolKind: 'builtin' }],
       ])
       expect(h.live().tools).toEqual({})
     },
@@ -158,6 +161,7 @@ const T1: { id: string; title: string; run: (h: Harness) => void }[] = [
         outcome: 'success', durationSeconds: 60, partial: false, usageAvailable: false,
         thinkingSeconds: 4, requestingSeconds: 0, preparingToolSeconds: 0, runningToolsSeconds: 0,
         respondingSeconds: 0, retryingSeconds: 0, otherPhaseSeconds: 0, unmatchedResolutions: 0,
+        toolCoverageVersion: 1, toolDenialIncomplete: false, toolFirstHistoryUnknown: false, toolStreakTainted: false,
       })
       expect(h.rows('tool').map(row => row.data)).toEqual([
         { category: 'shell', startedAt: iso(4), durationSeconds: 1, outcome: 'unavailable', partial: true },

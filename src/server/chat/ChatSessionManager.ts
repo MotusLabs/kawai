@@ -1,3 +1,6 @@
+import { readToolMeasurementStatus } from '../metrics/toolMeasurementStatus'
+import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
+import { TEAM_TOOL_PREFIX } from '../metrics/observations/toolCalls'
 // Owns the lifecycle of chat sessions: auth-gated creation, lazy driver
 // construction (the SDK query() is spawned by the driver on the first turn),
 // persistence in the chat_sessions table with restore-on-start into the
@@ -184,6 +187,7 @@ export interface ChatSessionManagerOptions {
   onStrategyChange?: (teamId: string) => void
   /** Every committed process report, decision, or link (team-process-metrics D6; wired to the Metrics tab push). */
   onProcessReportChange?: (teamId: string) => void
+  onToolMeasurementStatusChange?:()=>void
   /**
    * A chat session's record changed in a way a team view shows — created,
    * archived, restored, killed, or its status/name/group/task moved
@@ -1221,7 +1225,8 @@ export class ChatSessionManager {
     this.metrics = new MetricsReader(options.db.db, Date.now,
       // The provider cooldown (providers-and-workers D8) resolves in the
       // team's own catalog, so a provider event shows in every profile's tax.
-      (profileId, teamId) => providerOf(profileId, this.catalogCtx(teamId)))
+      (profileId, teamId) => providerOf(profileId, this.catalogCtx(teamId)),
+      ()=>this.observations?.toolStatus()??readToolMeasurementStatus(options.db.db))
     // team_capacity (dispatch-worker-choice D6) reads the router's own objects:
     // the members counter, staffing's reservations, the limit store, the
     // ambient provider resolution, and the provider-keyed usage store.
@@ -1263,7 +1268,8 @@ export class ChatSessionManager {
         groupId: record?.groupId ?? null, profileId: record?.claudeProfileId ?? 'default',
         model: start?.model ?? record?.model ?? null, startId,
       }
-    })
+    }, Date.now, undefined, { prefix: TEAM_TOOL_PREFIX, members: new Set(TEAM_ALLOWED_TOOLS) },
+      {onEffectiveStatusChange:()=>this.options.onToolMeasurementStatusChange?.()})
     this.observations.start([
       notify => this.tasks.store.subscribe(task => notify(task.id)),
       notify => this.mailbox.store.subscribe((_team, message) => notify(message?.taskId ?? undefined)),

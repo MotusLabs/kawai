@@ -9,9 +9,12 @@
 // Refresh) recomputes and replaces the cached entry.
 import type { Database } from 'bun:sqlite'
 import {
+  unknownToolMeasurement, type ToolMeasurementStatus,
   COVERAGE_CAVEAT, METRIC_DEFS, MIN_SAMPLE, USAGE_CAVEAT, WINDOW_MS, sliceAllowed,
   type MetricDef, type MetricSlice, type MetricValue, type MetricWindow, type ProcessMetrics,
 } from '../../shared/processMetrics'
+import { readToolDrill } from './toolDrill'
+import { toolWindow, decorateToolMetric, type ToolWindow } from './toolMetrics'
 import { capacityObservations } from './capacity'
 import { flowObservations } from './flow'
 import { metricsContext, type MetricsContext } from './metricsContext'
@@ -22,16 +25,16 @@ import { StartResolver, aggregate, rows, sliceKey, type Observation } from './sl
 
 export const METRICS_CACHE_MS = 30_000
 
-export function observations(ctx: MetricsContext): Map<string, Observation[]> {
+export function observations(ctx: MetricsContext,toolData=toolWindow(ctx)): Map<string, Observation[]> {
   const byMetric = new Map<string, Observation[]>()
   for (const o of [
     ...flowObservations(ctx), ...qualityObservations(ctx), ...coverageObservations(ctx),
-    ...overheadObservations(ctx), ...capacityObservations(ctx),
+    ...overheadObservations(ctx), ...capacityObservations(ctx), ...toolData.observations,
   ]) byMetric.set(o.metric, [...(byMetric.get(o.metric) ?? []), o])
   return byMetric
 }
 
-function metricValue(def: MetricDef, current: Observation[], baseline: Observation[], slice: MetricSlice | null, inputs: MetricsInputs): MetricValue {
+function metricValue(def: MetricDef, current: Observation[], baseline: Observation[], slice: MetricSlice | null, inputs: MetricsInputs,currentTools:ToolWindow,baselineTools:ToolWindow): MetricValue {
   const manifests = inputs.manifests
   const now = aggregate(def, current)
   const before = aggregate(def, baseline)
@@ -55,22 +58,25 @@ function metricValue(def: MetricDef, current: Observation[], baseline: Observati
         : undefined)
     }
   }
-  return value
+  return decorateToolMetric(def,value,currentTools,baselineTools)
 }
 
 export function computeMetrics(inputs: MetricsInputs, window: MetricWindow, slice: MetricSlice | null, computedAt: number): ProcessMetrics {
   const span = WINDOW_MS[window]
   const resolver = new StartResolver(inputs.starts)
-  const current = observations(metricsContext(inputs, inputs.end - span, inputs.end, resolver))
-  const baseline = observations(metricsContext(inputs, inputs.end - 2 * span, inputs.end - span, resolver))
+  const currentCtx=metricsContext(inputs,inputs.end-span,inputs.end,resolver),baselineCtx=metricsContext(inputs,inputs.end-2*span,inputs.end-span,resolver)
+  const currentTools=toolWindow(currentCtx),baselineTools=toolWindow(baselineCtx)
+  const current = observations(currentCtx,currentTools)
+  const baseline = observations(baselineCtx,baselineTools)
   return {
+    toolMeasurement:inputs.toolMeasurement??unknownToolMeasurement(),
     teamId: inputs.teamId, window, slice,
     periodStart: new Date(inputs.end - span).toISOString(),
     periodEnd: new Date(inputs.end).toISOString(),
     baselineStart: new Date(inputs.end - 2 * span).toISOString(),
     computedAt: new Date(computedAt).toISOString(),
     minSample: MIN_SAMPLE,
-    metrics: METRIC_DEFS.map(def => metricValue(def, current.get(def.id) ?? [], baseline.get(def.id) ?? [], slice, inputs)),
+    metrics: METRIC_DEFS.map(def => metricValue(def, current.get(def.id) ?? [], baseline.get(def.id) ?? [], slice, inputs,currentTools,baselineTools)),
     usageCaveat: USAGE_CAVEAT,
     coverageCaveat: COVERAGE_CAVEAT,
   }
@@ -89,16 +95,21 @@ export class MetricsReader {
     private readonly db: Database,
     private readonly now: () => number = Date.now,
     private readonly resolveProvider?: (profileId: string, teamId: string) => string,
+    private readonly toolStatus:()=>ToolMeasurementStatus=unknownToolMeasurement,
   ) {}
+
+  toolDrill(teamId:string,window:MetricWindow,slice:MetricSlice|null,pageSize:number,cursor:string|null) {
+    return readToolDrill(this.db,teamId,window,slice,pageSize,cursor,this.now())
+  }
 
   read(teamId: string, window: MetricWindow, slice: MetricSlice | null, options: { fresh?: boolean } = {}): ProcessMetrics {
     const key = JSON.stringify([teamId, window, slice])
     const at = this.now()
     const hit = this.cache.get(key)
-    if (hit && !options.fresh && at - hit.at < METRICS_CACHE_MS) return hit.metrics
+    if (hit && !options.fresh && at - hit.at < METRICS_CACHE_MS) return {...hit.metrics,toolMeasurement:this.toolStatus()}
     for (const [k, v] of this.cache) if (at - v.at >= METRICS_CACHE_MS) this.cache.delete(k)
     const metrics = readMetrics(this.db, teamId, window, slice, at, this.resolveProvider)
     this.cache.set(key, { at, metrics })
-    return metrics
+    return {...metrics,toolMeasurement:this.toolStatus()}
   }
 }

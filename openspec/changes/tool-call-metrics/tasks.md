@@ -20,6 +20,9 @@
 
 - [ ] 3.1 Implement the D2 record states over the reserved optional `approval_request.toolCallId` and the existing requestId resolution: pending, denied-await-call, transferred, settled, unlinked/quarantined; cap 64 first-seen with tombstones; `denialIncomplete` bookkeeping.
   - Verify: table tests for W3 (pre-call denial transferred to the admitted call, exactly one denied result), W4 (65th id unlinked + flag, seen 64 settle), duplicate/conflicting/late resolutions, allowed and cancelled settlements, and a link to a quarantined call staying late-only. Kill the mutants that release a pre-call denial's slot, attach a late resolution to a later call, or create a denominator for a no-result card.
+  - Clarified C1/C2/N2: include 70 policy grants then manual native-linked denial; known-question and late-card variants preserve generic dedupe; partial live closes taint first history; untransferred denial sets denialIncomplete without a denominator. Native-absent/audit-fallback-present stays unlinked. Checkpoint failure on the second of two unknown closures rolls both facts and every map back in one per-session transaction.
+
+  - Q1/N1 verification: an actual 129-character opening id survives normal/restart/tick closure via the existing identity column and public anchor; after gap plus deduped call/result/card/resolution, persisted taint and closed state survive a crash with no second insert attempt. Do not loosen scalar validation or change original oracle inputs.
 
 ## 4. Recovery
 
@@ -27,6 +30,8 @@
   - Verify: W6 end-to-end (valid A with an open streak + malformed B, recover twice: exactly one unknown fact for A, B unchanged and blocked, no double-fold); a fresh session for the quarantined row runs but records no tracker metrics; a valid-JSON scope mismatch quarantines; a rolled-back recovery leaves row and gate intact; a failed quarantine-count write leaves health unknown. Kill the mutants that delete or overwrite a bad row, fold twice, or gate on the count write.
 - [ ] 4.2 Expose `health().toolMeasurement.recovery` from the bounded checkpoint (never raw JSON), and surface the same status to team metric reads.
   - Verify: health test asserting the bounded shape and the unknown-on-write-failure rule.
+
+  - Q2 verification: unchanged healthy ticks preserve checkedAt/raw bytes and all-field canonical V; failed/unverified recovery requires a successful THIS-process transaction even for identical bytes. Reuse the existing recovery gate, and prove per-key failure/recovery fan-out in 5.3.
 
 ## 5. Export activation
 

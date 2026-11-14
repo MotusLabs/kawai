@@ -14,8 +14,8 @@ export const WINDOW_MS: Record<MetricWindow, number> = { '1d': DAY_MS, '3d': 3 *
 /** Below this `n` a value is flagged insufficient. */
 export const MIN_SAMPLE = 10
 
-export type MetricFamily = 'flow' | 'quality' | 'coverage' | 'overhead' | 'capacity'
-export const METRIC_FAMILIES: readonly MetricFamily[] = ['flow', 'quality', 'coverage', 'overhead', 'capacity']
+export type MetricFamily = 'flow' | 'quality' | 'coverage' | 'overhead' | 'capacity' | 'tools'
+export const METRIC_FAMILIES: readonly MetricFamily[] = ['flow', 'quality', 'coverage', 'overhead', 'capacity', 'tools']
 
 /** Whose work a metric measures (D4): slicing is allowed only on that side. */
 export type MetricSide = 'author' | 'reviewer' | 'sender' | 'turn' | 'team'
@@ -32,7 +32,7 @@ export type MetricUnit = 'hours' | 'minutes' | 'share' | 'count' | 'tokens'
 export type MetricAggregation = 'p50' | 'p90' | 'mean' | 'sum' | 'ratio' | 'shareOfTotal'
 
 /** A fixed per-metric breakdown shown whatever slice is chosen. */
-export type MetricBreakdown = 'senderGroup' | 'frictionKind' | 'profile' | 'groupProfile'
+export type MetricBreakdown = 'senderGroup' | 'frictionKind' | 'profile' | 'groupProfile' | 'tool' | 'toolClass'
 
 /** `efficiency` metrics always carry a guard; `guard` metrics are someone's guard; `context` metrics neither. */
 export type MetricRole = 'efficiency' | 'guard' | 'context'
@@ -44,6 +44,7 @@ export const METRIC_IDS = [
   'coverage_result', 'coverage_findings', 'accepted_result_share',
   'mail_share', 'task_mail_per_task', 'friction_total', 'friction_per_task',
   'limit_tax_hours', 'tokens_total', 'tokens_per_task',
+  'tool_failure_rate', 'tool_first_attempt_success', 'tool_abandoned_streaks', 'tool_mean_failures_before_recovery',
 ] as const
 export type MetricId = (typeof METRIC_IDS)[number]
 
@@ -84,6 +85,10 @@ export const METRIC_DEFS: readonly MetricDef[] = [
   def({ id: 'limit_tax_hours', label: 'Limit tax (cooling + parked hours)', family: 'capacity', unit: 'hours', side: 'team', role: 'context', guard: null, aggregation: 'sum', breakdown: 'profile', higherIsBetter: false }),
   def({ id: 'tokens_total', label: 'Tokens', family: 'capacity', unit: 'tokens', side: 'turn', role: 'context', guard: null, aggregation: 'sum', breakdown: 'groupProfile', higherIsBetter: null }),
   def({ id: 'tokens_per_task', label: 'Tokens per done task', family: 'capacity', unit: 'tokens', side: 'author', role: 'efficiency', guard: 'first_pass_yield', aggregation: 'mean', breakdown: null, higherIsBetter: false }),
+  def({id:'tool_failure_rate',label:'Tool failure rate',family:'tools',unit:'share',side:'turn',role:'context',guard:null,aggregation:'ratio',breakdown:'toolClass',higherIsBetter:false}),
+  def({id:'tool_first_attempt_success',label:'Team tool first-attempt success',family:'tools',unit:'share',side:'turn',role:'context',guard:null,aggregation:'mean',breakdown:'tool',higherIsBetter:true}),
+  def({id:'tool_abandoned_streaks',label:'Abandoned tool failure streaks',family:'tools',unit:'count',side:'turn',role:'context',guard:null,aggregation:'sum',breakdown:'tool',higherIsBetter:false}),
+  def({id:'tool_mean_failures_before_recovery',label:'Mean failures before tool recovery',family:'tools',unit:'count',side:'turn',role:'context',guard:null,aggregation:'mean',breakdown:'tool',higherIsBetter:false}),
 ]
 
 export const METRIC_DEF_BY_ID: ReadonlyMap<MetricId, MetricDef> = new Map(METRIC_DEFS.map(d => [d.id, d]))
@@ -146,7 +151,11 @@ export interface MetricDrillMessage {
   threadId: string
 }
 
+export interface ToolMetricCoverage {pending:number;tainted:number;unrecorded:number;unavailable:number}
+export interface ToolStreakEntry {factId:number;tool:string;length:number;sessionId:string;turnId:string;firstCallId:string;firstAt:string;closedAt:string}
+export interface ToolStreakDrill {entries:ToolStreakEntry[];total:number;longestRecovered:ToolStreakEntry[]}
 export interface MetricValue extends MetricStat {
+  toolCoverage?:ToolMetricCoverage
   id: MetricId
   baseline: MetricStat
   /** Some inputs came from backfilled transitions (lead time from approximate `done` times). */
@@ -154,15 +163,36 @@ export interface MetricValue extends MetricStat {
   /** Some cohort history predates usage retention, so token values are incomplete. */
   partial: boolean
   /** The tasks and messages behind the value, for drill-down: each opens its task or its message's thread. */
-  drill: { tasks: MetricDrillTask[]; messages: MetricDrillMessage[] }
+  drill: { tasks: MetricDrillTask[]; messages: MetricDrillMessage[]; tasksTotal?:number; messagesTotal?:number; toolStreaks?:ToolStreakDrill }
+  breakdownTotal?:number
   breakdown?: MetricRow[]
   /** Present when a slice was requested and the metric supports it. */
+  slicesTotal?:number
   slices?: MetricRow[]
   /** A slice was requested that this metric's side does not support. */
   notSliceable?: boolean
 }
 
+export interface ToolExportMeasurement {
+  state:'unknown'|'active'|'budget-unavailable'
+  reason:null|'series-budget'|'family-budget'|'missing-reservation'|'invalid-checkpoint'
+  availableSince:string|null
+}
+export interface ToolRecoveryMeasurement {
+  status:'unknown'|'ok'|'pending'|'quarantined'
+  quarantinedCount:number|null
+  pendingCount:number|null
+  checkedAt:string|null
+}
+export interface ToolMeasurementStatus {export:ToolExportMeasurement;recovery:ToolRecoveryMeasurement}
+export function unknownToolMeasurement():ToolMeasurementStatus {
+  return {export:{state:'unknown',reason:null,availableSince:null},
+    recovery:{status:'unknown',quarantinedCount:null,pendingCount:null,checkedAt:null}}
+}
+
 export interface ProcessMetrics {
+  projectionTruncated?:boolean
+  toolMeasurement:ToolMeasurementStatus
   teamId: string
   window: MetricWindow
   slice: MetricSlice | null

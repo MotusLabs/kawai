@@ -19,27 +19,27 @@ function row(tagName = 'ARTICLE'): FakeRow {
   }
 }
 
-function Harness({ sessionId, loaded, sendMessage, eventCount }: {
-  sessionId: string; loaded: boolean; sendMessage?: (message: ClientMessage) => void; eventCount?: number
+function Harness({ sessionId, loaded, sendMessage, eventCount,archived }: {
+  sessionId: string; loaded: boolean; sendMessage?: (message: ClientMessage) => void; eventCount?: number;archived?:boolean
 }) {
   const ref = useRef<RevealContainer | null>(null)
-  useRevealRow({ sessionId, loaded, container: ref, sendMessage, eventCount })
-  return <div ref={ref as never} />
+  const outcome=useRevealRow({ sessionId, loaded, container: ref, sendMessage, eventCount,archived })
+  return <div ref={ref as never} data-outcome={outcome?.status??null} />
 }
 
 const mounted: TestRenderer.ReactTestRenderer[] = []
-function mount(rows: Record<string, FakeRow>, props: { sessionId?: string; loaded?: boolean; sendMessage?: (message: ClientMessage) => void; eventCount?: number } = {}) {
+function mount(rows: Record<string, FakeRow>, props: { sessionId?: string; loaded?: boolean; sendMessage?: (message: ClientMessage) => void; eventCount?: number;archived?:boolean } = {}) {
   const selectors: string[] = []
   const container: RevealContainer = {
     querySelector: selector => {
       selectors.push(selector)
-      const id = /^\[data-anchor-id="(.*)"\]$/.exec(selector)?.[1]?.replace(/\\(["\\])/g, '$1')
+      const id = /^\[data-anchor-id="(.*)"\]$/.exec(selector)?.[1]?.replace(/\\([0-9a-f]{1,6}) |\\(["\\])/g,(_m,hex,escaped)=>hex?String.fromCharCode(parseInt(hex,16)):escaped)
       return (id !== undefined && rows[id]) || null
     },
   }
   let renderer!: TestRenderer.ReactTestRenderer
   const element = (loaded: boolean, eventCount?: number) =>
-    <Harness sessionId={props.sessionId ?? 's1'} loaded={loaded} sendMessage={props.sendMessage} eventCount={eventCount} />
+    <Harness sessionId={props.sessionId ?? 's1'} loaded={loaded} archived={props.archived} sendMessage={props.sendMessage} eventCount={eventCount} />
   act(() => { renderer = TestRenderer.create(element(props.loaded ?? true, props.eventCount), { createNodeMock: () => container }) })
   mounted.push(renderer)
   return {
@@ -56,6 +56,7 @@ describe('useRevealRow', () => {
   beforeEach(() => {
     jest.useFakeTimers()
     useChatStore.getState().clearReveal()
+    useChatStore.setState({sessions:{}})
   })
   afterEach(() => {
     act(() => { for (const renderer of mounted.splice(0)) renderer.unmount() })
@@ -90,9 +91,10 @@ describe('useRevealRow', () => {
     expect(article.open).toBe(false)
   })
 
-  test('a row that is gone is dropped silently', () => {
-    const { selectors } = mount({})
+  test('a row that is gone reports not-found explicitly', () => {
+    const { selectors,renderer } = mount({})
     request('s1', 'hist-missing')
+    expect(renderer.root.findByType('div').props['data-outcome']).toBe('not-found')
     expect(selectors).toEqual(['[data-anchor-id="hist-missing"]'])
     expect(useChatStore.getState().pendingReveal).toBeNull()
   })
@@ -224,4 +226,72 @@ describe('useRevealRow', () => {
     expect(sent).toEqual([])
     expect(useChatStore.getState().pendingReveal).toEqual({ sessionId: 's1', anchorId: 'hist-gone' })
   })
+
+// @covers: team-process-metrics › Tool metric drill-down opens the first failed call › Open an abandoned streak
+test('D7: an archived readable first-call anchor still reveals after tool detail pruning; missing archived and unreadable are explicit',()=>{
+  useChatStore.setState({sessions:{s1:emptyTranscript()}})
+  const target=row('DETAILS'),anchor='tool:'+'x'.repeat(129)
+  const readable=mount({[anchor]:target},{archived:true})
+  request('s1',anchor)
+  expect(readable.renderer.root.findByType('div').props['data-outcome']).toBe('revealed')
+  expect(target.open).toBe(true)
+  expect(target.scrolls).toEqual([{block:'center'}])
+  const missing=mount({},{archived:true,sessionId:'archived'})
+  request('archived','tool:missing')
+  expect(missing.renderer.root.findByType('div').props['data-outcome']).toBe('archived')
+  act(()=>useChatStore.setState({sessions:{unreadable:{...emptyTranscript(),events:[
+    {type:'notice',id:'hist-unavailable',sequence:0,at:'',text:'opaque unavailable notice'},
+  ]}}}))
+  const unreadable=mount({},{sessionId:'unreadable'})
+  request('unreadable','tool:missing')
+  expect(unreadable.renderer.root.findByType('div').props['data-outcome']).toBe('unreadable')
+})
+test('D7: an empty older page wakes a missing reveal without changing eventCount and never loops',()=>{
+  const sent:ClientMessage[]=[]
+  useChatStore.setState({sessions:{s1:{...emptyTranscript(),historyHasOlder:true,historyStartId:'hist-a'}}})
+  const {renderer}=mount({},{eventCount:0,sendMessage:m=>{sent.push(m)}})
+  request('s1','tool:missing')
+  expect(sent).toHaveLength(1)
+  expect(useChatStore.getState().pendingReveal).not.toBeNull()
+  act(()=>useChatStore.getState().applyHistoryPage({type:'chat-history-page',sessionId:'s1',
+    beforeId:'hist-a',events:[],hasOlder:false}))
+  expect(renderer.root.findByType('div').props['data-outcome']).toBe('not-found')
+  expect(useChatStore.getState().pendingReveal).toBeNull()
+  expect(sent).toHaveLength(1)
+})
+
+test('D7 reconnect with unchanged history leaves the same-count reveal pending until a terminal page arrives',()=>{
+  const sent:ClientMessage[]=[]
+  const snapshot=()=>useChatStore.getState().snapshot({
+    type:'chat-snapshot',sessionId:'s1',profileId:'default',status:'waiting',throughSequence:0,
+    events:[],pendingRequests:[],commands:{status:'unavailable',commands:[]},activity:null,
+    contextUsage:null,usage:null,workers:[],backgroundTasks:[],notifications:[],model:null,
+    historyHasOlder:true,historyStartId:'hist-a',
+  })
+  act(snapshot)
+  const {renderer}=mount({},{eventCount:0,sendMessage:m=>{sent.push(m)}})
+  request('s1','tool:missing')
+  const previous=useChatStore.getState().sessions.s1
+  expect(sent).toHaveLength(1)
+  expect(previous?.historyLoading).toBe(true)
+  act(snapshot)
+  expect(useChatStore.getState().sessions.s1).not.toBe(previous)
+  expect(useChatStore.getState().sessions.s1?.historyLoading).toBe(false)
+  expect(useChatStore.getState().pendingReveal).toEqual({sessionId:'s1',anchorId:'tool:missing'})
+  expect(renderer.root.findByType('div').props['data-outcome']).toBeNull()
+  expect(sent).toHaveLength(1)
+  act(()=>useChatStore.getState().applyHistoryPage({type:'chat-history-page',sessionId:'s1',
+    beforeId:'hist-a',events:[],hasOlder:false}))
+  expect(renderer.root.findByType('div').props['data-outcome']).toBe('not-found')
+  expect(useChatStore.getState().pendingReveal).toBeNull()
+  expect(sent).toHaveLength(1)
+})
+test('control characters in a tool anchor use numeric CSS escapes and preserve the exact ID',()=>{
+  const anchor='tool:line\nnext\tlast'+String.fromCharCode(127),target=row('DETAILS')
+  const {selectors}=mount({[anchor]:target})
+  request('s1',anchor)
+  expect(selectors).toEqual(['[data-anchor-id="tool:line\\a next\\9 last\\7f "]'])
+  expect(target.open).toBe(true)
+  expect(target.scrolls).toEqual([{block:'center'}])
+})
 })

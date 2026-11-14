@@ -59,6 +59,13 @@ export class MetricsConnections {
     }
   }
 
+  /** Database-wide tool status changes overlay cached numerics for every team. */
+  publishAll() {
+    for(const [connection,views]of this.subscriptions)for(const [teamPath,subscription]of views)
+      this.send(connection,teamPath,subscription,false)
+    for(const [connection,reports]of this.openReports)for(const open of reports.values())this.sendReport(connection,open)
+  }
+
   private sendReport(connection: ChatConnection, open: OpenReport) {
     connection.send({
       type: 'process-report-detail', teamPath: open.teamPath, teamId: open.teamId, reportId: open.reportId,
@@ -114,6 +121,18 @@ export class MetricsConnections {
       }
     } catch (error) {
       connection.send({ ...base, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  async handleToolDrill(connection:ChatConnection,message:Extract<MetricsClientMessage,{type:'process-tool-drill-page'}>) {
+    const base={type:message.type,teamPath:message.teamPath,window:message.window,slice:message.slice,
+      pageSize:message.pageSize,cursor:message.cursor}
+    try {
+      const team=await this.manager.teamScopes.resolve(message.teamPath)
+      if(!team)throw new Error(unknownTeamError(message.teamPath))
+      connection.send({...base,...this.manager.metrics.toolDrill(team.teamId,message.window,message.slice,message.pageSize,message.cursor)})
+    }catch(error) {
+      connection.send({...base,error:error instanceof Error?error.message:'Tool drill unavailable'})
     }
   }
 

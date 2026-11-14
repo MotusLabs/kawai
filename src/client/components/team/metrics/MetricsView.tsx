@@ -15,6 +15,7 @@ import {
 } from '@shared/processMetrics'
 import { useMetricsStore, type MetricsView as MetricsViewData } from '../../../stores/metricsStore'
 import { emptyTabViewState, useTeamWorkspaceStore } from '../../../stores/teamWorkspaceStore'
+import ToolDrill,{ToolMeasurement} from './ToolDrill'
 import MetricFamily from './MetricFamily'
 import MetricsReports from './MetricsReports'
 import type { NameOf } from './reportLabels'
@@ -150,6 +151,10 @@ export default function MetricsView({
         sendMessage={sendMessage} connected={connected} connectionEpoch={connectionEpoch} nameOf={nameOf} onOpenReport={onOpenReport} />
     </div>}
     {snapshot && reportId === undefined && <div className="mt-2 flex flex-col gap-2">
+      <ToolMeasurement status={snapshot.toolMeasurement}/>
+      {view&&byId.get('tool_abandoned_streaks')?.drill.toolStreaks&&<ToolDrill key={teamPath+chosen+sliceKey+snapshot.computedAt}
+        teamPath={teamPath} view={view} inline={byId.get('tool_abandoned_streaks')!.drill.toolStreaks!}
+        connected={connected&&!view.loading} sendMessage={sendMessage}/>}
       {METRIC_FAMILIES.map(family => <MetricFamily key={family} family={family} metrics={byId} caveat={caveatOf(family)}
         collapsed={tab.collapsedSections.includes(family)} expanded={tab.expanded}
         onToggleCollapsed={() => store.toggleSectionCollapsed(teamPath, 'metrics', family)}

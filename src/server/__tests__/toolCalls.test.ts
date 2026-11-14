@@ -84,6 +84,7 @@ describe('recognition', () => {
     for (const label of PUBLIC_BUILT_IN_LABELS) expect(BUILT_IN_TOOLS as readonly string[]).toContain(label)
   })
 
+// @covers: tool-call-metrics › Tool calls are admitted and identified within bounds › Same team tool in both runtimes
   test('TN2/TN3: an exact full-prefixed member is its suffix in both runtimes, never double-wrapped', () => {
     // Claude names it directly; Codex builds the same string as mcp__<namespace>__<tool>.
     expect(recognizeTool('mcp__kawai-team__task_submit_result', catalogue)).toStrictEqual({ kind: 'team', name: 'task_submit_result' })
@@ -111,10 +112,13 @@ describe('recognition', () => {
     }
   })
 
+// @covers: tool-call-metrics › Tool calls are admitted and identified within bounds › Foreign MCP tool
   test('TN5: another MCP server tool is foreign with label mcp:other', () => {
     expect(recognizeTool('mcp__docs-search__query', catalogue)).toStrictEqual({ kind: 'foreign', label: 'mcp:other' })
   })
 
+// @covers: tool-call-metrics › Tool calls are admitted and identified within bounds › Colliding namespace stays unknown
+// @covers: tool-call-metrics › Tool calls are admitted and identified within bounds › Bare echo stays unknown
   test('TN6 and A1: bare echo, the dynamic namespace, collapsed placeholders and empty names are unknown', () => {
     expect(recognizeTool('echo', catalogue)).toStrictEqual({ kind: 'unknown', reason: 'ambiguous', label: 'other' })
     expect(recognizeTool('mcp__dynamic__echo', catalogue)).toStrictEqual({ kind: 'unknown', reason: 'ambiguous', label: 'mcp:other' })
@@ -160,6 +164,8 @@ describe('classification', () => {
     expect(failedResult('mcp__kawai-team__task_get', 'Input validation error: x', 'denied')).toStrictEqual({ outcome: 'failed', failureClass: 'denied', rule: 'K1' })
   })
 
+// @covers: tool-call-metrics › Tool results are classified once › Success is never reclassified
+// @covers: tool-call-metrics › Tool results are classified once › Successes count in the failure ratio
   test('FC10: a success is only a success, whatever its text or denial', () => {
     for (const trustedDenial of ['denied', 'not-supplied'] as const) {
       const result = classifyToolResult({
@@ -180,6 +186,7 @@ describe('classification', () => {
     expect(failedResult(team, ' Input validation error: x')).toStrictEqual({ outcome: 'failed', failureClass: 'other', rule: 'K14' })
   })
 
+// @covers: tool-call-metrics › Tool results are classified once › Schema refusal
   test('FC3 and FC4: invalid arguments and blocked wrappers', () => {
     expect(failedResult('mcp__kawai-team__task_get', 'Invalid arguments for task_get: x')).toStrictEqual({ outcome: 'failed', failureClass: 'input-invalid', rule: 'K3' })
     expect(failedResult('Read', '<tool_use_error>Blocked: x')).toStrictEqual({ outcome: 'failed', failureClass: 'blocked', rule: 'K5' })
@@ -213,6 +220,8 @@ describe('classification', () => {
     expect(failedResult('Bash', '<tool_use_error>File has not been read yet')).toStrictEqual({ outcome: 'failed', failureClass: 'precondition', rule: 'K9' })
   })
 
+// @covers: tool-call-metrics › Tool results are classified once › Handler refusal
+// @covers: tool-call-metrics › Tool results are classified once › Generic team failure is not a refusal
   test('FC7: only an exact team tool saying "Refused: " is refused', () => {
     expect(failedResult('mcp__kawai-team__task_get', 'Refused: not yours')).toStrictEqual({ outcome: 'failed', failureClass: 'refused', rule: 'K10' })
     expect(failedResult('mcp__kawai-team__task_get', 'Unknown team: t1')).toStrictEqual({ outcome: 'failed', failureClass: 'other', rule: 'K14' })
@@ -230,6 +239,7 @@ describe('classification', () => {
     expect(failedResult('Monitor', 'The command was declined.')).toStrictEqual({ outcome: 'failed', failureClass: 'command-failed', rule: 'K13' })
   })
 
+// @covers: tool-call-metrics › Tool results are classified once › Decline phrases are tool-specific
   test('FC9 and A3: Edit declined is denied; Write and MultiEdit declined stay other', () => {
     expect(failedResult('Edit', 'The file change declined.')).toStrictEqual({ outcome: 'failed', failureClass: 'denied', rule: 'K12' })
     expect(failedResult('Write', 'The file change declined.')).toStrictEqual({ outcome: 'failed', failureClass: 'other', rule: 'K14' })
@@ -237,6 +247,7 @@ describe('classification', () => {
     expect(failedResult('Edit', 'The file change failed.')).toStrictEqual({ outcome: 'failed', failureClass: 'other', rule: 'K14' })
   })
 
+// @covers: tool-call-metrics › Tool results are classified once › Unrecognized failure text
   test('empty or unrecognized output falls back by tool', () => {
     expect(failedResult('Monitor', '')).toStrictEqual({ outcome: 'failed', failureClass: 'command-failed', rule: 'K13' })
     expect(failedResult('Read', '')).toStrictEqual({ outcome: 'failed', failureClass: 'other', rule: 'K14' })

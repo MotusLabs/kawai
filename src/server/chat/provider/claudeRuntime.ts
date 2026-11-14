@@ -414,7 +414,7 @@ class ClaudeChatDriver implements ChatAgentDriver {
         this.cards.set(event.requestId, { tool: event.tool, input: event.input, toolCallId })
         if (TEAM_ALLOWED_TOOLS.includes(event.tool)) this.granted.set(event.requestId, 'silent')
         else if (decideApproval(this.options.getApprovalPolicy?.() ?? 'manual', event.tool) === 'allow') this.granted.set(event.requestId, 'policy')
-        else this.emit({ type: 'approval_request', turnId: event.turnId, requestId: event.requestId, tool: event.tool, input: event.input as Record<string, unknown> }, event.at)
+        else this.emit({ type: 'approval_request', turnId: event.turnId, requestId: event.requestId, tool: event.tool, input: event.input as Record<string, unknown>, ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}) }, event.at)
         break
       }
       case 'question_request':

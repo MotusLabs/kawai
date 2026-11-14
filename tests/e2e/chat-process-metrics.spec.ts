@@ -184,3 +184,91 @@ test('team_metrics 7d sliced by reviewer prompt version matches the Metrics tab'
     for (const metric of expected) expect(byId.get(metric.id), metric.id).toEqual(metric)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+// @covers: team-process-metrics › Tool metric drill-down opens the first failed call › Open an abandoned streak
+test('Tools browser: real failed turn, stable paging, separate status, readable reveal after detail prune and explicit missing target',async({page},info)=>{
+  const root=realpathSync(mkdtempSync(join(tmpdir(),'kawai-tools-browser-')))
+  const groups=join(root,'.kawai/groups')
+  mkdirSync(groups,{recursive:true})
+  writeFileSync(join(groups,'readers.md'),'---\nlabel: Metrics readers\n---\nRead tool metrics')
+  const replies:Array<{total:number;entries:Array<{factId:number}>;nextCursor:string|null}>=[]
+  page.on('websocket',socket=>socket.on('framereceived',frame=>{
+    const message=JSON.parse(String(frame.payload))
+    if(message.type==='process-tool-drill-page'&&!message.error)replies.push(message)
+  }))
+  try {
+    await page.goto('/')
+    const sessionId=await createChat(page,root,'Tool metrics reader','readers','Metrics readers')
+    await runTurn(page,sessionId,'tool fail')
+    await expect(page.getByTestId('chat-view').getByText(/^Turn complete · success · /)).toHaveCount(1)
+    const facts=JSON.parse(bunScript(`
+      import {Database} from 'bun:sqlite';
+      import {ObservationStore} from './src/server/metrics/observations/store';
+      const [file,sessionId]=JSON.parse(await Bun.stdin.text());
+      const db=new Database(file);db.exec('PRAGMA busy_timeout = 5000');
+      const row=db.prepare("SELECT * FROM process_observations WHERE session_id=? AND kind='tool_streak' AND json_extract(data,'$.resolution')='abandoned' ORDER BY seq DESC LIMIT 1").get(sessionId);
+      if(!row)throw Error('real failed turn produced no abandoned streak');
+      const store=new ObservationStore(db);
+      const ids=[row.seq];let missingId;
+      db.transaction(()=>{
+        for(let i=0;i<52;i++){
+          const at=new Date(Date.parse(row.observed_at)-i-1).toISOString();
+          const added=store.record({kind:'tool_streak',sourceKey:'browser-streak-'+i,teamId:row.team_id,
+            sessionId,turnId:'browser-'+i,toolCallId:i===51?'missing-browser-anchor':row.tool_call_id,
+            observedAt:at,data:{tool:'Bash',toolKind:'builtin',label:'Bash',length:2,resolution:'abandoned',
+              firstAt:new Date(Date.parse(at)-1000).toISOString(),closedAt:at}});
+          ids.push(added.seq);if(i===51)missingId=added.seq;
+        }
+        // Age only interval detail, then use the real retention mechanism.
+        db.prepare("UPDATE process_observations SET recorded_at=? WHERE kind='tool' AND session_id=?")
+          .run(new Date(Date.now()-15*86400000).toISOString(),sessionId);
+        store.prune();
+      }).immediate();
+      const detail=db.prepare("SELECT count(*) n FROM process_observations WHERE kind='tool' AND session_id=?").get(sessionId).n;
+      const total=db.prepare("SELECT count(*) n FROM process_observations WHERE kind='tool_streak' AND session_id=? AND json_extract(data,'$.resolution')='abandoned'").get(sessionId).n;
+      process.stdout.write(JSON.stringify({ids,missingId,factId:row.seq,firstCallId:row.tool_call_id,detail,total}));
+      db.close();
+    `,[isolatedDb(),sessionId]))
+    expect(facts.detail).toBe(0)
+    expect(facts.total).toBe(53)
+    const openMetrics=async()=>{
+      await page.evaluate(teamKey=>{window.location.hash='#/team/'+encodeURIComponent(teamKey)+'/metrics/3d'},root)
+      await expect(page.getByTestId('metrics-view')).toBeVisible()
+      await page.getByTestId('metrics-refresh').click()
+      await expect(page.getByTestId('tool-drill-total')).toHaveText('Abandoned streaks: 53')
+    }
+    await openMetrics()
+    const status=page.getByTestId('tool-measurement-status')
+    await expect(status).toContainText('Tool collection recovery:')
+    await expect(status).toContainText('Tool export: active since')
+    await expect(status).toContainText('does not establish collection completeness')
+    await page.getByRole('button',{name:'Show all abandoned streaks',exact:true}).click()
+    await expect.poll(()=>replies.length).toBe(1)
+    expect(replies[0]!.entries).toHaveLength(50)
+    expect(replies[0]!.total).toBe(53)
+    expect(replies[0]!.nextCursor).not.toBeNull()
+    await page.getByRole('button',{name:'Load next page',exact:true}).click()
+    await expect.poll(()=>replies.length).toBe(2)
+    expect(replies[1]!.entries).toHaveLength(3)
+    expect(replies[1]!.total).toBe(53)
+    expect(replies[1]!.nextCursor).toBeNull()
+    expect(replies.flatMap(p=>p.entries.map(e=>e.factId))).toEqual(facts.ids)
+    await expect(page.getByRole('button',{name:'Load next page',exact:true})).toHaveCount(0)
+    await page.getByTestId('metrics-view').screenshot({path:info.outputPath('tools-paging-wide.png')})
+    await page.setViewportSize({width:390,height:844})
+    await expect(status).toBeVisible()
+    await page.screenshot({path:info.outputPath('tools-status-narrow.png')})
+    await page.getByRole('button',{name:'Open abandoned streak '+facts.factId,exact:true}).click()
+    await expect(page.getByTestId('chat-view')).toContainText('Tool metrics reader')
+    const anchor=page.locator('[data-anchor-id="tool:'+facts.firstCallId+'"]')
+    await expect(anchor).toHaveClass(/chat-reveal/)
+    await expect(anchor).toHaveAttribute('open','')
+    await expect(page.getByTestId('chat-reveal-outcome')).toHaveCount(0)
+    await page.screenshot({path:info.outputPath('tools-first-call-revealed.png')})
+    await openMetrics()
+    await page.getByRole('button',{name:'Show all abandoned streaks',exact:true}).click()
+    await page.getByRole('button',{name:'Load next page',exact:true}).click()
+    await page.getByRole('button',{name:'Open abandoned streak '+facts.missingId,exact:true}).click()
+    await expect(page.getByTestId('chat-reveal-outcome')).toHaveText('Tool call reveal: not-found.')
+  }finally{rmSync(root,{recursive:true,force:true})}
+})

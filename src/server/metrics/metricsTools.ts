@@ -7,6 +7,7 @@
 // guard pairing, or sample threshold; those are constants.
 import { z } from 'zod'
 import { METRIC_WINDOWS, isMetricWindow, type MetricSlice, type ProcessMetrics } from '../../shared/processMetrics'
+import { compactMetrics } from './metricsProjection'
 import type { MetricsReader } from './computeMetrics'
 
 export const METRICS_TOOL_NAMES = ['team_metrics'] as const
@@ -15,12 +16,13 @@ export const METRICS_TOOL_NAMES = ['team_metrics'] as const
 export const metricsSchemas = {
   team_metrics: z.object({
     window: z.string(),
+    detail:z.enum(['compact','full']).optional(),
     slice: z.object({ kind: z.string(), file: z.string().optional() }).optional(),
   }),
 }
 
 export const metricsDescriptions: Record<(typeof METRICS_TOOL_NAMES)[number], string> = {
-  team_metrics: `Read your team's development-process metrics for a window (${METRIC_WINDOWS.join(', ')}) ending now: flow, quality, coverage, overhead, and capacity, each with its value, sample size n, insufficient-sample flag (n below 10), the preceding window as baseline, its paired guard metric, and the task and message ids behind it. Optional slice {kind: group | profile | groupFileHash | memoryFile, file?} splits each metric by the agent start on its own side; a metric whose side does not support the slice is marked notSliceable. Read-only.`,
+  team_metrics: `Read your team's development-process metrics for a window (${METRIC_WINDOWS.join(', ')}) ending now: flow, quality, coverage, overhead, and capacity, each with its value, sample size n, insufficient-sample flag (n below 10), the preceding window as baseline, its paired guard metric, and the task and message ids behind it. Optional slice {kind: group | profile | groupFileHash | memoryFile, file?} splits each metric by the agent start on its own side; a metric whose side does not support the slice is marked notSliceable. Optional detail full returns all drill rows; the default compact projection stays below 32 KB and marks truncated collections. Read-only.`,
 }
 
 /** What the tool needs from the server: the caller's team and the shared reader. */
@@ -43,11 +45,12 @@ export function parseSlice(input: { kind: string; file?: string } | undefined): 
 }
 
 export function readTeamMetrics(deps: MetricsToolDeps, sessionId: string, input: unknown): ProcessMetrics {
-  const { window, slice } = metricsSchemas.team_metrics.parse(input)
+  const { window, slice, detail } = metricsSchemas.team_metrics.parse(input)
   if (!isMetricWindow(window)) throw new Error(`Unknown window "${window}". Allowed windows: ${METRIC_WINDOWS.join(', ')}.`)
   const teamId = deps.teamOf(sessionId)
   if (!teamId) throw new Error('This session belongs to no team yet, so there are no team metrics to read.')
-  return deps.reader.read(teamId, window, parseSlice(slice))
+  const metrics=deps.reader.read(teamId, window, parseSlice(slice))
+  return detail==='full'?metrics:compactMetrics(metrics)
 }
 
 export function metricsHandlers(deps: MetricsToolDeps, sessionId: string) {

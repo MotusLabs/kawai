@@ -6,13 +6,13 @@
 // with `.chat-reveal` for two seconds. A row that is not there is given one
 // chance from older history (chat-history-window D5): while older history
 // exists it requests one page with `throughId = anchor` and re-attempts when
-// the page lands; if the entry still is not found it falls back silently —
-// the chat is simply open at its usual place. One request per reveal, no loop.
+// the page lands; a missing row reports not-found, archived, or unreadable.
+// A readable anchor still reveals after observation pruning. One request, no loop.
 // With `mayConsume` (plan-workspace §6.1) the hook reads its host's reveal
 // designation through the claimant subscription, so a designation change —
 // the designated owner unmounting while a reveal is still pending — wakes
 // this already-mounted survivor and it consumes the waiting reveal.
-import { useCallback, useEffect, useRef, useSyncExternalStore, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
 import type { ClientMessage } from '@shared/types'
 import { subscribeRevealDesignation } from '../../stores/chatAttachment'
 import { useChatStore } from '../../stores/chatStore'
@@ -31,10 +31,13 @@ export interface RevealContainer {
   querySelector(selector: string): RevealTarget | null
 }
 
+export interface RevealOutcome {sessionId:string;anchorId:string;status:'revealed'|'not-found'|'archived'|'unreadable'}
+
 export function useRevealRow(options: {
   sessionId: string
   /** The session's transcript has been received (a snapshot landed). */
   loaded: boolean
+  archived?:boolean
   container: RefObject<RevealContainer | null>
   /** Sends the one history page (chat-history-window D5); omit to never page. */
   sendMessage?: (message: ClientMessage) => void
@@ -46,8 +49,12 @@ export function useRevealRow(options: {
    * session consumes the reveal. Omit to always consume.
    */
   mayConsume?: () => boolean
-}): void {
-  const { sessionId, loaded, container, sendMessage, eventCount, mayConsume } = options
+}): RevealOutcome|null {
+  const { sessionId, loaded, archived=false, container, sendMessage, eventCount, mayConsume } = options
+  const [outcome,setOutcome]=useState<RevealOutcome|null>(null)
+  const historyHasOlder=useChatStore(state=>state.sessions[sessionId]?.historyHasOlder)
+  const historyStartId=useChatStore(state=>state.sessions[sessionId]?.historyStartId)
+  const unreadable=useChatStore(state=>state.sessions[sessionId]?.events.some(e=>e.id==='hist-unavailable'&&e.type==='notice')??false)
   const reveal = useChatStore(state => (state.pendingReveal?.sessionId === sessionId ? state.pendingReveal : null))
   const marked = useRef<{ target: RevealTarget; timer: ReturnType<typeof setTimeout> } | null>(null)
   /** The anchor the one page request already went out for. */
@@ -65,11 +72,16 @@ export function useRevealRow(options: {
   useEffect(() => {
     if (!reveal || !loaded) return
     if (mayConsume && !mayConsume()) return
-    const anchor = reveal.anchorId.replace(/["\\]/g, '\\$&')
+    const anchor=Array.from(reveal.anchorId,c=>{
+      const code=c.charCodeAt(0)
+      if(code<32||code===127)return '\\'+code.toString(16)+' '
+      return c==='"'||c==='\\'?'\\'+c:c
+    }).join('')
     const target = container.current?.querySelector(`[data-anchor-id="${anchor}"]`) ?? null
     if (!target) {
+      setOutcome(null)
       const state = useChatStore.getState()
-      const transcript = state.sessions[sessionId]
+      const transcript=state.sessions[sessionId]
       if (sendMessage && transcript?.historyHasOlder === true) {
         if (pagedFor.current !== reveal.anchorId) {
           pagedFor.current = reveal.anchorId
@@ -81,12 +93,14 @@ export function useRevealRow(options: {
         }
         if (transcript.historyLoading) return // a page is already on its way
       }
-      // Nothing older to search: today's no-error fallback.
+      setOutcome({sessionId,anchorId:reveal.anchorId,status:unreadable
+        ?'unreadable':archived?'archived':'not-found'})
       pagedFor.current = null
       state.clearReveal()
       return
     }
     pagedFor.current = null
+    setOutcome({sessionId,anchorId:reveal.anchorId,status:'revealed'})
     useChatStore.getState().clearReveal()
     if (marked.current) {
       clearTimeout(marked.current.timer)
@@ -103,7 +117,7 @@ export function useRevealRow(options: {
     marked.current = { target, timer }
     // `mayConsume` is read live (it is a fresh closure on most renders);
     // `designated` is its stored value and the dep that wakes a survivor.
-  }, [reveal, loaded, container, sessionId, sendMessage, eventCount, designated])
+  }, [reveal, loaded, container, sessionId, sendMessage, eventCount, designated, historyHasOlder, historyStartId, unreadable, archived])
 
   useEffect(() => () => {
     if (!marked.current) return
@@ -111,4 +125,5 @@ export function useRevealRow(options: {
     marked.current.target.classList.remove('chat-reveal')
     marked.current = null
   }, [])
+  return outcome?.sessionId===sessionId?outcome:null
 }

@@ -104,8 +104,12 @@ test('a read is cached per team, window, and slice for 30 s', () => {
   s.task('late', 2)
   s.status('late', 'active', 'done', 1)
   now += 29_000
-  expect(reader.read(TEAM, '7d', null)).toBe(first)
-  expect(reader.read(TEAM, '3d', null)).not.toBe(first)
+  const cached = reader.read(TEAM, '7d', null)
+  expect(cached).not.toBe(first)
+  expect(cached).toEqual(first)
+  expect(cached.metrics).toBe(first.metrics)
+  expect(cached.computedAt).toBe(first.computedAt)
+  expect(reader.read(TEAM, '3d', null).metrics).not.toBe(first.metrics)
   now += 1_000
   expect(metric(reader.read(TEAM, '7d', null), 'lead_time_p50').n).toBe(4)
   s.db.close()

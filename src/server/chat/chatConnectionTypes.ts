@@ -23,6 +23,7 @@ export type ChatConnectionMessage = Extract<
       | `process-metrics-${string}`
       | `process-proposal-${string}`
       | `process-report-${string}`
+      | 'process-tool-drill-page'
   }
 >
 
@@ -131,6 +132,7 @@ export const CHAT_CONNECTION_TYPES = [
   'process-proposal-link',
   'process-report-open',
   'process-report-close',
+  'process-tool-drill-page',
 ] as const satisfies readonly ChatConnectionMessage['type'][]
 
 // Compile-time completeness: every handled type is listed above. The alias
