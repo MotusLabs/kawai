@@ -1,9 +1,10 @@
 // Real shell/pipe controls for the zombie fixture's setup and cleanup.
 // The reaped control forces a permitted old ordering, not the historic CI schedule.
 import { afterEach, expect, spyOn, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { liveGroupMembers } from '../src/process/processGroup.js'
 import { ownedAggregate } from './helpers/ownedCleanup.js'
-import { parseHelperPid, processIdentity, ZombieFixture, type FixtureMode } from './helpers/zombieFixture.js'
+import { parseHelperPid, processIdentity, ZombieFixture, type FixtureMode, type StatReader } from './helpers/zombieFixture.js'
 
 const assertedCleanupFailures = new Map<ZombieFixture, unknown>()
 const owned = ownedAggregate<ZombieFixture, void>({
@@ -13,8 +14,8 @@ const owned = ownedAggregate<ZombieFixture, void>({
 })
 afterEach(() => owned.join())
 
-function create(mode: FixtureMode = 'gated'): ZombieFixture {
-  const fixture = new ZombieFixture(mode)
+function create(mode: FixtureMode = 'gated', read?: StatReader): ZombieFixture {
+  const fixture = new ZombieFixture(mode, read)
   owned.add(fixture)
   return fixture
 }
@@ -212,5 +213,32 @@ test('cleanup aggregates failed joins after attempting the remaining real pipe a
   expect((error as AggregateError).errors).toEqual([exitError, closeError])
   expect(fixture.cleanup()).toBe(cleanup)
   expect(fixture.didClose).toBe(true)
+  expect(liveGroupMembers(fixture.leader)).toEqual([])
+})
+
+test('cleanup retains a proc read failure but still terminates only the directly owned child', async () => {
+  const denied = Object.assign(new Error('owned helper stat denied'), { code: 'EACCES' })
+  let fail = false
+  let fixture: ZombieFixture
+  fixture = create('gated', (path, encoding) => {
+    expect(encoding).toBe('utf8')
+    expect([`/proc/${fixture.leader}/stat`, `/proc/${fixture.helper}/stat`]).toContain(path)
+    if (fail && path === `/proc/${fixture.helper}/stat`) { fail = false; throw denied }
+    return readFileSync(path, encoding)
+  })
+  await fixture.setup()
+  fixture.validateReady()
+  fail = true
+  const signals: number[] = []
+  const kill = process.kill.bind(process)
+  const spy = spyOn(process, 'kill').mockImplementation((pid, signal) => { signals.push(pid); return kill(pid, signal) })
+  let error: unknown
+  try { error = await fixture.cleanup().then(() => null, (caught: unknown) => caught) } finally { spy.mockRestore() }
+  assertedCleanupFailures.set(fixture, error)
+  expect(error).toBeInstanceOf(AggregateError)
+  expect((error as AggregateError).errors).toEqual([denied])
+  expect(signals).toEqual([])
+  expect(fixture.didClose).toBe(true)
+  await Promise.all([fixture.closed, fixture.exited, fixture.gateClosed, fixture.stdoutClosed])
   expect(liveGroupMembers(fixture.leader)).toEqual([])
 })

@@ -6,8 +6,9 @@ import type { Duplex } from 'node:stream'
 import { ownedOnce } from './ownedCleanup.js'
 
 interface Identity { pid: number; state: string; parent: number; group: number; start: string }
+export type StatReader = (path: string, encoding: 'utf8') => string
 
-export function processIdentity(pid: number, read: (path: string, encoding: 'utf8') => string = readFileSync): Identity | null {
+export function processIdentity(pid: number, read: StatReader = readFileSync): Identity | null {
   let stat: string
   try { stat = read(`/proc/${pid}/stat`, 'utf8') } catch (error) {
     if (['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')) return null
@@ -61,7 +62,7 @@ export class ZombieFixture {
   helper = 0
   didClose = false
 
-  constructor(mode: FixtureMode = 'gated') {
+  constructor(mode: FixtureMode = 'gated', private readonly readStat: StatReader = readFileSync) {
     if (realpathSync('/bin/sh') === this.sleep) throw new Error('canonical shell and sleep must differ')
     const heldExec = mode === 'preexec' || mode === 'pid-held'
     // Inherited stdout proves unknown-helper exit too: do not redirect it.
@@ -85,6 +86,7 @@ export class ZombieFixture {
   }
 
   get leader(): number { return this.child.pid ?? 0 }
+  private identity(pid: number): Identity | null { return processIdentity(pid, this.readStat) }
   private get leaderExited(): boolean {
     return this.spawnError !== null || this.child.exitCode !== null || this.child.signalCode !== null
   }
@@ -120,10 +122,10 @@ export class ZombieFixture {
 
   async setup(waitForExec = true): Promise<void> {
     if (!Number.isSafeInteger(this.leader) || this.leader <= 0) throw new Error('fixture never spawned')
-    this.leaderIdentity = processIdentity(this.leader)
+    this.leaderIdentity = this.identity(this.leader)
     if (!live(this.leaderIdentity) || this.leaderIdentity!.group !== this.leader) throw new Error('missing owned leader identity')
     this.helper = await this.readPid()
-    const helper = processIdentity(this.helper)
+    const helper = this.identity(this.helper)
     if (helper && helper.parent === this.leader && helper.group === this.leader) this.helperIdentity = helper
     if (!waitForExec) return // the private fd4 control keeps the shell before exec
     const deadline = Date.now() + 5000
@@ -136,14 +138,14 @@ export class ZombieFixture {
   }
 
   private checkLeader(): void {
-    if (this.leaderExited || !same(processIdentity(this.leader), this.leaderIdentity)) throw new Error('owned leader identity changed or exited')
+    if (this.leaderExited || !same(this.identity(this.leader), this.leaderIdentity)) throw new Error('owned leader identity changed or exited')
   }
 
   /** Also used once by completed adverse-order setup; no poll hides rejection. */
   validateReady(): Identity {
     this.checkLeader()
     if (readlinkSync(`/proc/${this.leader}/exe`) !== this.sleep) throw new Error('leader not exec\'d')
-    const helper = processIdentity(this.helper)
+    const helper = this.identity(this.helper)
     if (!live(helper)) throw new Error('helper missing or nonlive before release')
     if (!same(helper, this.helperIdentity) || helper!.parent !== this.leader || helper!.group !== this.leader) {
       throw new Error('owned helper identity changed before release')
@@ -159,7 +161,7 @@ export class ZombieFixture {
     const deadline = Date.now() + 5000
     for (;;) {
       this.checkLeader()
-      const current = processIdentity(this.helper)
+      const current = this.identity(this.helper)
       if (!same(current, helper)) throw new Error('owned helper identity disappeared or changed after release')
       if (current!.state === 'Z') return { leader: this.leader, zombie: this.helper }
       if (Date.now() > deadline) throw new Error(`pid ${this.helper} never became a zombie (state ${current!.state})`)
@@ -171,13 +173,14 @@ export class ZombieFixture {
 
   private async stop(): Promise<void> {
     const errors: unknown[] = []
+    let sent = false
     const attempt = async (body: () => void | Promise<void>) => {
       try { await body() } catch (error) { errors.push(error) }
     }
     // Keep the blocked helper alive until the signal. Closing fd3 first can
     // empty a leaderless group and make its number reusable.
     await attempt(() => {
-      const helper = this.helperIdentity && processIdentity(this.helper)
+      const helper = this.helperIdentity && this.identity(this.helper)
       const gatedPin = !this.released && live(helper) && same(helper, this.helperIdentity) && helper!.group === this.leader
       if (gatedPin) process.kill(-this.leader, 'SIGKILL')
       else if (!this.leaderExited && this.leader > 0) {
@@ -187,7 +190,11 @@ export class ZombieFixture {
           process.kill(-this.leader, 'SIGKILL')
         } else this.child.kill('SIGKILL') // no verified helper: only direct ownership
       }
+      sent = true
     })
+    // A failed identity read cannot authorize a group signal, but must not
+    // prevent terminating the directly owned child and settling its gates.
+    if (!sent && !this.leaderExited && this.leader > 0) await attempt(() => { this.child.kill('SIGKILL') })
     this.cancelRead?.()
     this.gate.destroy()
     this.execGate?.destroy()
@@ -200,7 +207,7 @@ export class ZombieFixture {
       attempt(async () => {
         const deadline = Date.now() + 5000
         for (;;) {
-          const helper = this.helperIdentity && processIdentity(this.helper)
+          const helper = this.helperIdentity && this.identity(this.helper)
           if (!helper || !same(helper, this.helperIdentity) || !live(helper)) return
           if (Date.now() > deadline) throw new Error('owned helper still live after cleanup')
           await delay()
