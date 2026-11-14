@@ -79,9 +79,12 @@ export function isDocsOnlyCommit(staged: readonly string[]): boolean {
 // modules they import), the entry scripts' import closure outside scripts/
 // (ESCAPE_CLOSURE_FILES; escapeClosure.test.ts walks the closure and fails
 // on a module that does not escape), the test preload, the package
-// manifest, the lockfile, the Bun pin, the bunfig, the hooks, and the root
-// TypeScript configs. The rule errs toward the full check. Evaluated before
-// docs-only classification and before tier exclusion.
+// manifest, the lockfile, the Bun pin, the bunfig, the hooks, the root
+// TypeScript configs, and each workspace package's manifest and TypeScript
+// configs (extract-agent-runtime 6.4: its exports, dependencies and compiler
+// options reach every importer, and no test imports them). The rule errs
+// toward the full check. Evaluated before docs-only classification and
+// before tier exclusion.
 export const ESCAPE_CLOSURE_FILES: ReadonlySet<string> = new Set([
   'src/server/git/gitCommand.ts',
   // The check-record and content-key modules, which the check pipeline and
@@ -109,6 +112,7 @@ export function isEscapeCandidate(candidate: string): boolean {
   if (candidate.startsWith('scripts/') && !candidate.startsWith('scripts/__tests__/')) return true
   if (candidate.startsWith('.githooks/')) return true
   if (!candidate.includes('/') && /^tsconfig(?:\.[^/]+)?\.json$/.test(candidate)) return true
+  if (/^packages\/[^/]+\/(?:package\.json|tsconfig(?:\.[^/]+)?\.json)$/.test(candidate)) return true
   return candidate.includes('__tests__/helpers/')
 }
 

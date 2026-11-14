@@ -2,21 +2,41 @@
 // final kinds and scopes, the latest-exhausted-reset rule, the retry rule,
 // and the provider a recorded event names — with the openrouter-provider
 // 3.1 carve-out that a Codex 402 records no credit event.
+//
+// The mapping is the package's public `codexLimitFailure` (task-ce05430a R2
+// A6), read through Kawai's production view `chatLimitSignal`; a turn's
+// failure is final and a retrying error's is not. The package decides which
+// frames reach it: a failed turn's error, and an `error` notification only
+// when it will retry (the not-retrying case is pinned in the package's
+// codexUsageFacts.test.ts). Kawai keeps `codexLimitProviderId`.
 import { describe, expect, test } from 'bun:test'
-import { codexLimitProviderId, codexLimitScope, codexRetryLimitSignal, codexTurnLimitSignal, latestExhaustedReset } from '../chat/codex/codexLimits'
-import type { RateLimitSnapshot } from '../chat/codex/protocol/v2/RateLimitSnapshot'
+import { codexExhaustedReset, codexLimitFailure, codexLimitScope } from '@motuslabs/agent-runtime/usage'
+import { codexLimitProviderId } from '../chat/codex/codexLimits'
+import { chatLimitSignal } from '../chat/provider/runtimeEvents'
 
 const HOUR = 3_600
 const DAY = 86_400
 
-const snapshot = (primary: Record<string, unknown>, secondary: Record<string, unknown> = { usedPercent: 40, windowDurationMins: 10080, resetsAt: null }): RateLimitSnapshot =>
+const snapshot = (primary: Record<string, unknown>, secondary: Record<string, unknown> = { usedPercent: 40, windowDurationMins: 10080, resetsAt: null }) =>
   ({
     limitId: 'codex', limitName: null, normalModelSlug: null, primary, secondary,
     credits: null, individualLimit: null, spendControlReached: null, planType: 'plus', rateLimitReachedType: null,
-  }) as RateLimitSnapshot
+  })
 
 const failedTurn = (codexErrorInfo: unknown, message = 'limit reached') =>
   ({ status: 'failed', error: { codexErrorInfo, message, additionalDetails: null, misalignment: null } })
+
+/** A turn's final limit signal as Kawai receives it. */
+const codexTurnLimitSignal = (turn: { status?: unknown; error: unknown }, snap: unknown) => {
+  const failure = codexLimitFailure(turn.error, true, snap)
+  return failure ? chatLimitSignal(failure) : null
+}
+
+/** A retrying error notification's non-final signal as Kawai receives it. */
+const codexRetryLimitSignal = (notification: { willRetry?: unknown; error?: unknown } | null, snap: unknown) => {
+  const failure = codexLimitFailure(notification?.error, false, snap)
+  return failure ? chatLimitSignal(failure) : null
+}
 
 describe('codexTurnLimitSignal', () => {
   test('usage limit ends the turn: a final signal with the latest exhausted reset', () => {
@@ -42,7 +62,7 @@ describe('codexTurnLimitSignal', () => {
     expect(codexTurnLimitSignal(failedTurn('usageLimitExceeded'), snapshot({ usedPercent: 99, windowDurationMins: 300, resetsAt: 1000 }))?.
       resetsAt).toBeNull()
     expect(codexTurnLimitSignal(failedTurn('usageLimitExceeded'), null)?.resetsAt).toBeNull()
-    expect(latestExhaustedReset(snapshot({ usedPercent: 100, windowDurationMins: 300, resetsAt: null }))).toBeNull()
+    expect(codexExhaustedReset(snapshot({ usedPercent: 100, windowDurationMins: 300, resetsAt: null }))).toBeNull()
   })
 
   test('an unrelated failure records nothing', () => {
@@ -62,6 +82,16 @@ describe('codexTurnLimitSignal', () => {
     expect(codexTurnLimitSignal(failedTurn('other', 'API Error: 402 This request requires more credits'), null)).toBeNull()
     expect(codexTurnLimitSignal(failedTurn({ responseTooManyFailedAttempts: { httpStatusCode: 402 } }), null)).toBeNull()
   })
+
+  // A17 D-L1 (task-ce05430a): only a valid finite 100 is exhausted; the old
+  // root rule also took anything >= 100.
+  test('only a valid used percent of exactly 100 contributes an exhausted reset', () => {
+    const at = new Date((1000 + HOUR) * 1000).toISOString()
+    expect(codexExhaustedReset(snapshot({ usedPercent: 100, windowDurationMins: 300, resetsAt: 1000 + HOUR }))).toBe(at)
+    for (const usedPercent of [101, 150, Number.POSITIVE_INFINITY, Number.NaN]) {
+      expect({ usedPercent, reset: codexExhaustedReset(snapshot({ usedPercent, windowDurationMins: 300, resetsAt: 1000 + HOUR })) }).toEqual({ usedPercent, reset: null })
+    }
+  })
 })
 
 describe('codexRetryLimitSignal', () => {
@@ -74,7 +104,8 @@ describe('codexRetryLimitSignal', () => {
 
   test('a not-retrying or non-limit error records nothing', () => {
     const error = (codexErrorInfo: unknown) => ({ codexErrorInfo, message: 'x', additionalDetails: null, misalignment: null })
-    expect(codexRetryLimitSignal({ willRetry: false, error: error('rateLimitExceeded') }, null)).toBeNull()
+    // The not-retrying case ({ willRetry: false, error: rateLimitExceeded }) is the package's gate:
+    // packages/agent-runtime/__tests__/codexUsageFacts.test.ts › "a not-retrying limit error is no failure and opens no wait".
     expect(codexRetryLimitSignal({ willRetry: true, error: error('contextWindowExceeded') }, null)).toBeNull()
     expect(codexRetryLimitSignal({ willRetry: true }, null)).toBeNull()
     expect(codexRetryLimitSignal(null, null)).toBeNull()

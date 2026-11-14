@@ -6,7 +6,7 @@ import path from 'node:path'
 import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -137,6 +137,7 @@ describe('ChatSessionManager', () => {
     const created = first.manager.createSession({ projectPath: project, claudeProfileId: 'glm-turbo' })
     expect(created.ok).toBe(true)
     await first.manager.send(created.ok ? created.session.id : '', 'first turn')
+    await spawned(first.handles)
     expect(first.handles[0]!.options.model).toBe('glm-5.3-flash[1m]')
     first.manager.shutdown()
 

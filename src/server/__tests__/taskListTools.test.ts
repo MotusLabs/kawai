@@ -23,10 +23,9 @@ import { TaskStore } from '../team/taskStore'
 import { TaskService } from '../team/TaskService'
 import { taskHandlers } from '../team/taskTools'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
-import { dispatchTeamToolCall } from '../chat/codex/codexTools'
+import { CodexToolSessions } from './codexToolSession'
 import { at, mulberry32 } from './taskJournalFixture'
 
-const THREAD = 'thread-task-list'
 type Outcome = { error: string; value: null } | { error: null; value: any }
 type Registered = Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>
 
@@ -61,12 +60,17 @@ async function viaClaude(sessionId: string, name: string, args: unknown): Promis
   return result.isError ? { error: text, value: null } : { error: null, value: JSON.parse(text) }
 }
 
-/** The Codex runtime: the dynamic-tool dispatch over the same table, which answers success false with text on a refusal. */
+/**
+ * The Codex runtime: Kawai's production Codex composition (createChatDriver
+ * over the package, task-ce05430a G2) serving the fake app-server's
+ * `item/tool/call` on the session's own thread with the same table; a
+ * refusal answers success false with text.
+ */
+const codex = new CodexToolSessions(sessionId => teamToolTable(mailbox, sessionId, services()))
 async function viaCodex(sessionId: string, name: string, args: unknown): Promise<Outcome> {
-  const answer = await dispatchTeamToolCall(teamToolTable(mailbox, sessionId, services()), THREAD,
-    { threadId: THREAD, namespace: 'kawai-team', tool: name, arguments: args } as never)
+  const answer = await codex.call(sessionId, name, args)
   const item = answer.contentItems[0]!
-  const text = item.type === 'inputText' ? item.text : ''
+  const text = item.type === 'inputText' ? item.text ?? '' : ''
   return answer.success ? { error: null, value: JSON.parse(text) } : { error: text, value: null }
 }
 
@@ -100,6 +104,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => server.instance.close()))
+  await codex.closeAll()
 })
 
 const LEAD = { kind: 'agent' as const, sessionId: 'lead' }

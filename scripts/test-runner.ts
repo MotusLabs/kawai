@@ -91,6 +91,8 @@ export interface CollectedFiles {
   clientTests: string[]
   runnerTests: string[]
   sharedTests: string[]
+  /** Workspace packages' own tests (packages/<name>/__tests__). */
+  packageTests: string[]
 }
 
 // The worker-count decision (2.3) lives in lib/workerCount.ts (file-size
@@ -239,7 +241,7 @@ export async function forwardSignalAndReap(
 // Every directory is enumerated as files: a bare directory entry in the main
 // batch would escape excludeSlowTier's per-file filter (review follow-up).
 export async function collectFiles(): Promise<CollectedFiles> {
-  const [serverGlob, sharedGlob, clientGlob, runnerGlob] = UNIT_TEST_GLOBS
+  const [serverGlob, sharedGlob, clientGlob, runnerGlob, ...packageGlobs] = UNIT_TEST_GLOBS
   const serverTests: string[] = []
   for await (const file of new Bun.Glob(serverGlob).scan({ onlyFiles: true })) {
     if (!isRealTmuxFile(file)) {
@@ -262,11 +264,20 @@ export async function collectFiles(): Promise<CollectedFiles> {
     runnerTests.push(file)
   }
 
+  // Every entry after the four source trees is a workspace package glob.
+  const packageTests: string[] = []
+  for (const packageGlob of packageGlobs) {
+    for await (const file of new Bun.Glob(packageGlob).scan({ onlyFiles: true })) {
+      packageTests.push(file)
+    }
+  }
+
   serverTests.sort()
   sharedTests.sort()
   clientTests.sort()
   runnerTests.sort()
-  return { serverTests, clientTests, runnerTests, sharedTests }
+  packageTests.sort()
+  return { serverTests, clientTests, runnerTests, sharedTests, packageTests }
 }
 
 function resolveFileArgs(fileArgs: string[]): { parallel: string[]; realTmux: string[] } {
@@ -385,7 +396,7 @@ async function main() {
     let selection: SelectionRecord | null = null
     if (args.fileArgs.length > 0) {
       const resolved = resolveFileArgs(args.fileArgs)
-      collected = { serverTests: resolved.parallel, clientTests: [], runnerTests: [], sharedTests: [] }
+      collected = { serverTests: resolved.parallel, clientTests: [], runnerTests: [], sharedTests: [], packageTests: [] }
       serialFiles = resolved.realTmux
       mainLabel = 'explicit files'
     } else {

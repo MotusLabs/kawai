@@ -1,7 +1,8 @@
 // The message_delta cost extractor (openrouter-provider D9): only a finite,
-// non-negative number under a message_delta's usage object is a cost.
+// non-negative number under a message_delta's usage object is a cost. The
+// extractor is the public package's (@motuslabs/agent-runtime/usage).
 import { describe, expect, test } from 'bun:test'
-import { messageDeltaCost } from '../chat/providerCost'
+import { messageDeltaCost } from '@motuslabs/agent-runtime/usage'
 
 describe('messageDeltaCost', () => {
   test('a message_delta usage cost is returned as a number', () => {

@@ -8,7 +8,7 @@ import path from 'node:path'
 import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
 import type { ChatSessionRecord } from '../db'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import { NULL_OWNERSHIP } from '../plans/execution/executionOwnership'
 
 async function fixture() {
@@ -33,7 +33,7 @@ async function fixture() {
     getDriver: id => ({ getPendingRequests: () => [], deliver: (peer: { messageId: string }) => {
       pushed.push({ session: id, message: peer.messageId })
       records.get(id)!.status = 'working'
-    } }) as unknown as ChatSessionDriver,
+    } }) as unknown as ChatAgentDriver,
     available: record => record.archivedAt == null, prepare: async () => {},
     restore: id => { records.get(id)!.archivedAt = null },
     watchReceipt: () => {}, archive: id => { const row = records.get(id); if (row) row.archivedAt = new Date().toISOString(); return { ok: true } }, hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false, transcriptFor: () => null, homeDir: root,

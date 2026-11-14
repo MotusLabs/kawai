@@ -2,14 +2,18 @@
 // creation (2.1), timer settlement and clearing (2.2), and hold (2.3) on the
 // driver, over the manual clock (design's timerScheduler seam). The design's
 // "Acceptance oracles" QA-* ids name the row each test pins.
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent, ChatPendingRequest } from '../../shared/chat'
 import {
   createHarness,
   flush,
+  cleanupHarnesses,
 } from './fixtures/chatDriverHarness'
 import { ManualClock } from './fixtures/manualClock'
+
+// Every harness's driver is killed and joined (settled()) after each case.
+afterEach(cleanupHarnesses)
 
 const WAIT_MS = 60_000
 
@@ -87,6 +91,7 @@ test('a fully recommended question gets a deadline: event and snapshot carry aut
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
 
   const request = questionRequests(harness.events).at(-1)!
@@ -116,6 +121,7 @@ test('an unmarked question never gets a deadline (QA-8, QA-U1, QA-P3)', async ()
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes', 'No'] }])
 
   const request = questionRequests(harness.events).at(-1)!
@@ -133,6 +139,7 @@ test('a partially recommended request never gets a deadline (spec: keeps waiting
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   await askQuestion(harness, [
     { question: 'Deploy?', options: ['Yes (Recommended)', 'No'] },
     { question: 'Notify?', options: ['Slack', 'Email'] },
@@ -151,6 +158,7 @@ test('a zero wait sets no deadline even for a full recommendation (QA-S2)', asyn
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
 
   const request = questionRequests(harness.events).at(-1)!
@@ -164,6 +172,7 @@ test('without the option the driver sets no deadline (QA-U4 driver half)', async
   const clock = new ManualClock()
   const harness = createHarness({ timerScheduler: clock })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
 
   const request = questionRequests(harness.events).at(-1)!
@@ -180,6 +189,7 @@ test('multi-select takes every recommended label into the deadline answers (spec
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   await askQuestion(harness, [
     { question: 'Modules?', multiSelect: true, options: ['A (Recommended)', 'B', 'C (Recommended)'] },
   ])
@@ -199,6 +209,7 @@ test('the wait is read per question: a later question uses the new value and the
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }], 'q1')
   const first = questionRequests(harness.events).at(-1)!
   const firstDeadline = first.autoAnswer!.at
@@ -221,6 +232,7 @@ test('the deadline answers with the recommendation, the D3 note, and timeout dec
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   try {
     await flush()
@@ -263,6 +275,7 @@ test('a recommended question arms and settles under either approval policy (spec
       timerScheduler: clock,
     })
     harness.driver.send('ask')
+    await harness.admitted(1) // the package writes the prompt after its async boot
     const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
     try {
       await flush()
@@ -298,6 +311,7 @@ test('a user answer before the deadline wins and no second settlement follows (Q
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   await flush()
   const request = questionRequests(harness.events).at(-1)!
@@ -320,6 +334,7 @@ test('a second user answer after the timeout is refused stale (QA-12)', async ()
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   try {
     await flush()
@@ -344,6 +359,7 @@ test('an abort before the deadline cancels and never auto-answers (QA-5, QA-20)'
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   await flush()
 
@@ -367,6 +383,7 @@ test('a kill before the deadline cancels and never auto-answers (QA-6)', async (
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   await flush()
 
@@ -387,6 +404,7 @@ test('an orderly shutdown settles like a kill and never auto-answers (QA-7)', as
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   await flush()
 
@@ -408,6 +426,7 @@ test('a refused user answer consumes nothing: the deadline still settles first (
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   try {
     await flush()
@@ -438,6 +457,7 @@ test('a process crash before the deadline cancels and never auto-answers (QA-6 c
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   const ask = askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }])
   await flush()
 
@@ -465,15 +485,24 @@ test('a callback arriving after a kill arms no deadline (advisor C1 #3)', async 
     timerScheduler: clock,
   })
   harness.driver.send('ask')
+  await harness.admitted(1) // the package writes the prompt after its async boot
   await flush()
   harness.driver.kill()
-  await askQuestion(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }], 'q-after-kill')
-
-  const request = questionRequests(harness.events).at(-1)!
-  expect(request.autoAnswer).toBeUndefined()
+  // r4 A12: the package's terminal driver denies a post-kill callback and
+  // opens no request (requests.ts), so no question_request exists to carry
+  // an autoAnswer; the original no-deadline facts stay strict.
+  const eventsAtKill = harness.events.length
+  const answer = await askQuestionRaw(harness, [{ question: 'Deploy?', options: ['Yes (Recommended)', 'No'] }], 'q-after-kill').promise
+  await flush()
+  expect(answer).toEqual({ behavior: 'deny', message: 'The session is stopping', interrupt: true })
+  expect(harness.events).toHaveLength(eventsAtKill)
+  expect(questionRequests(harness.events)).toEqual([])
+  expect(harness.driver.getPendingRequests()).toEqual([])
   expect(clock.pendingCount).toBe(0)
   clock.advance(WAIT_MS * 10)
   await flush()
+  expect(clock.pendingCount).toBe(0)
+  expect(harness.events).toHaveLength(eventsAtKill)
   expect(harness.events.some((event) =>
     event.type === 'request_resolved' &&
     (event as { decidedBy?: string }).decidedBy === 'timeout')).toBe(false)

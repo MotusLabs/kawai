@@ -17,7 +17,10 @@
     "types": ["bun-types", "vite/client", "vite-plugin-pwa/client"],
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": ["src/shared/*"],
+      "@motuslabs/agent-runtime": ["packages/agent-runtime/src/index.ts"],
+      "@motuslabs/agent-runtime/events": ["packages/agent-runtime/src/events.ts"],
+      "@motuslabs/agent-runtime/*": ["packages/agent-runtime/src/*/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { createHarness, flush, initMessage, resultWithWindow, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { createHarness, flush, initMessage, resultWithWindow, writeTranscript, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -34,6 +34,7 @@ describe('ChatSessionManager model', () => {
     expect(harness.manager.getSnapshot(id)!.model).toBeNull()
 
     await harness.manager.send(id, 'turn')
+    await spawned(harness.handles)
     const fake = harness.handles[0]!
     fake.push(initMessage('sdk-model-1', 'claude-sonnet-5-5'))
     await flush()
@@ -59,6 +60,7 @@ describe('ChatSessionManager model', () => {
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await seed.manager.send(id, 'turn')
+    await spawned(seed.handles)
     seed.handles[0]!.push(initMessage('sdk-model-1', 'claude-sonnet-5-5'))
     seed.handles[0]!.push(resultWithWindow())
     await flush()
@@ -71,6 +73,7 @@ describe('ChatSessionManager model', () => {
 
     // A /model switch after the restart updates record, row, and snapshot.
     await harness.manager.send(id, 'switched')
+    await spawned(harness.handles)
     harness.handles[0]!.push(initMessage('sdk-model-1', 'sonnet'))
     await flush()
     expect(db.getChatSession(id)!.model).toBe('sonnet')

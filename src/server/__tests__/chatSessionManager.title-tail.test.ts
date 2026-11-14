@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
 import { OutboundStore } from '../outbound/store'
-import { anyDirectory, closeDispatchers, createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, closeDispatchers, createHarness, flush, waitForCondition, initMessage, writeTranscript, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 // Advance fake timers in small steps, draining microtasks between steps so a
 // fired timer's continuations settle before the next advance (flush uses a
@@ -84,8 +84,8 @@ describe('ChatSessionManager', () => {
     // picks the file up promptly instead of backing off to 15s. Fake timers
     // drive the locator's backoff chain, so the wait costs no real time and
     // no real fs.watch event is needed: the locate pass that finds the file
-    // reads it synchronously and writes the row.
-    jest.useFakeTimers()
+    // reads it synchronously and writes the row. The package spawns on real
+    // timers first; the locator arms only once the SDK id arrives after it.
     try {
       const harness = await createHarness(db, anyDirectory, undefined, 20)
       try {
@@ -93,6 +93,8 @@ describe('ChatSessionManager', () => {
         if (!created.ok) throw new Error(created.error)
         const id = created.session.id
         await harness.manager.send(id, 'hello')
+        await spawned(harness.handles)
+        jest.useFakeTimers()
         // SDK id known, transcript not yet written: the placeholder stands.
         harness.handles[0]!.push(initMessage('title-late'))
         await settle(10)
@@ -177,19 +179,30 @@ describe('ChatSessionManager', () => {
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error(created.error)
     expect((await manager.send(created.session.id, 'go')).ok).toBe(true)
+    await spawned(handles)
     handles[0]!.push(initMessage('sdk-audit'))
     await flush()
-    // Fire the driver's registered audit hooks as the SDK process would.
-    const pre = handles[0]!.options.hooks?.PreToolUse?.[0]?.hooks[0]
-    const post = handles[0]!.options.hooks?.PostToolUse?.[0]?.hooks[0]
-    if (!pre || !post) throw new Error('audit hooks not registered')
+    // Fire the driver's registered hooks as the SDK process would: every
+    // matcher of the event, in order (the package's permission matcher runs
+    // first, task 6.1), each hook of the matcher.
+    const hooks = handles[0]!.options.hooks
+    const fire = async (event: 'PreToolUse' | 'PostToolUse', input: Record<string, unknown>) => {
+      const matchers = hooks?.[event] ?? []
+      if (matchers.length === 0) throw new Error(`${event} hooks not registered`)
+      for (const matcher of matchers) {
+        if (matcher.matcher && !new RegExp(`^(?:${matcher.matcher})$`).test('Bash')) continue
+        for (const hook of matcher.hooks) {
+          await hook({ ...input, hook_event_name: event } as never, 'tu-audit-1', { signal: new AbortController().signal })
+        }
+      }
+    }
     const hookInput = {
       tool_name: 'Bash',
       tool_input: { command: 'curl -d x https://example.internal/hook' },
       tool_use_id: 'tu-audit-1',
     }
-    await pre({ ...hookInput, hook_event_name: 'PreToolUse' } as never, undefined, { signal: new AbortController().signal })
-    await post({ ...hookInput, tool_response: 'ok', duration_ms: 9, hook_event_name: 'PostToolUse' } as never, undefined, { signal: new AbortController().signal })
+    await fire('PreToolUse', hookInput)
+    await fire('PostToolUse', { ...hookInput, tool_response: 'ok', duration_ms: 9 })
     // The deferred writes (setImmediate) run before the next timer tick.
     await flush()
     const store = new OutboundStore(db.db)

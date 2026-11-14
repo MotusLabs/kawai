@@ -50,9 +50,9 @@ import { generateSessionName } from '../nameGenerator'
 import { existsSync } from 'node:fs'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
-import type { ChatQueryFactory } from './ChatSessionDriver'
+import type { ChatQueryFactory } from './provider/claudeDriverTypes'
 import { createChatDriver, type ChatDriverSharedOptions } from './provider/createChatDriver'
-import type { ChatAgentDriver, ChatRuntime } from './provider/driver'
+import type { ChatAgentDriver, ChatRuntime, ChatSendOutcome } from './provider/driver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import { historyWindow } from './historyWindow'
 import {
@@ -85,7 +85,8 @@ import { providerOf } from './profileCatalog'
 import { resolvedCatalog } from './catalogMemo'
 import type { MergedProvider } from './catalogMerge'
 import { ensureCodexExecutable } from './codex/codexExecutable'
-import { codexLoginErrorMessage, hasCodexLogin } from './codex/codexAuth'
+import { hasCodexLogin } from '@motuslabs/agent-runtime/codex'
+import { codexLoginErrorMessage } from './codex/codexAuth'
 import { codexLimitProviderId } from './codex/codexLimits'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
@@ -108,7 +109,7 @@ import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
 import { DriverMailGuard } from './driverMailGuard'
 import { TeamMailbox } from '../team/TeamMailbox'
-import { createMailboxServer, teamToolTable, type MailboxServerServices } from '../team/mailboxTools'
+import { teamToolTable, type MailboxServerServices } from '../team/mailboxTools'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import type { ValidationService } from '../plans/validation/ValidationService'
 import type { DecisionService } from '../plans/decisions/DecisionService'
@@ -163,6 +164,7 @@ import { scanTranscriptMeta } from './transcriptMeta'
 import { indexTranscripts, TranscriptPathCache } from './transcriptLocator'
 import { resolveTeam } from '../team/teamIdentity'
 import { validateWorkspaceSend } from './workspaceSendValidation'
+import { RetiredDrivers, type RetiredFailure } from './retiredDrivers'
 import type { WorkspaceMessageContext, WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
 
 export type { ChatQueryFactory }
@@ -384,6 +386,8 @@ export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
   private readonly drivers = new Map<string, ChatAgentDriver>()
+  /** Stopped drivers whose owned work the manager still joins (task 6.1, A5). */
+  private readonly retired = new RetiredDrivers()
   /** In-flight ensureDriver calls, so racing sends never build two drivers. */
   private readonly driverPromises = new Map<
     string,
@@ -1970,7 +1974,9 @@ export class ChatSessionManager {
       if (!driver.sendWorkspaceContext) {
         return { ok: false, error: "This chat's runtime does not carry plan-workspace contexts." }
       }
-      const sent = this.sendDriverText(driver, text, stored)
+      // Admission (task 6.1): the outcome settles when the runtime recorded
+      // the context and enqueued, or refused with nothing opened or emitted.
+      const sent = await this.sendDriverText(driver, text, stored)
       if (!sent.ok) return { ok: false, error: sent.error }
     } else {
       const sent = this.sendDriverText(driver, text)
@@ -1986,10 +1992,12 @@ export class ChatSessionManager {
    * no child composed or started, so the caller sees the refusal instead of
    * a rejection. Every other throw rejects exactly as before.
    */
-  private sendDriverText(driver: ChatAgentDriver, text: string, stored?: WorkspaceMessageContext): { ok: true } | { ok: false; error: string } {
+  private sendDriverText(driver: ChatAgentDriver, text: string, stored: WorkspaceMessageContext): Promise<ChatSendOutcome>
+  private sendDriverText(driver: ChatAgentDriver, text: string): { ok: true } | { ok: false; error: string }
+  private sendDriverText(driver: ChatAgentDriver, text: string, stored?: WorkspaceMessageContext): ChatSendOutcome | Promise<ChatSendOutcome> {
     try {
       // The caller checked sendWorkspaceContext exists whenever stored is set.
-      if (stored) return driver.sendWorkspaceContext!(text, stored)
+      if (stored) return Promise.resolve(driver.sendWorkspaceContext!(text, stored))
       driver.send(text)
       return { ok: true }
     } catch (error) {
@@ -2103,6 +2111,7 @@ export class ChatSessionManager {
       // exited-unexpectedly error a bare close would report.
       driver.interrupt()
       driver.kill()
+      this.retired.retire(sessionId, driver)
       this.observations.chat.processEnded(sessionId)
     }
     this.teamMail.settleRecipient(sessionId)
@@ -2276,7 +2285,11 @@ export class ChatSessionManager {
   kill(sessionId: string): boolean {
     const record = this.records.get(sessionId)
     if (!record) return false
-    this.drivers.get(sessionId)?.kill()
+    const driver = this.drivers.get(sessionId)
+    if (driver) {
+      driver.kill()
+      this.retired.retire(sessionId, driver)
+    }
     this.observations.chat.processEnded(sessionId)
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
@@ -2311,6 +2324,14 @@ export class ChatSessionManager {
     return true
   }
 
+  /**
+   * Every driver this manager stopped has settled its owned work (task 6.1,
+   * A5); lists the raw terminal failures not listed before, once each.
+   */
+  retiredSettled(): Promise<RetiredFailure[]> {
+    return this.retired.settled()
+  }
+
   /** Server shutdown: settle every driver (callbacks cannot survive it). */
   shutdown(): void {
     // Any CLI process group the adapter left running dies with us otherwise.
@@ -2328,6 +2349,7 @@ export class ChatSessionManager {
     this.stopProviderUsageRefresh()
     for (const [id, driver] of this.drivers) {
       driver.shutdown()
+      this.retired.retire(id, driver)
       this.observations.chat.processEnded(id)
     }
     this.drivers.clear()
@@ -2811,12 +2833,15 @@ export class ChatSessionManager {
       const codexExecutable = codex ? (await ensureCodexExecutable()).path : null
       const executable =
         codex || (launch.runtime === 'claude' && launch.executable) ? null : await this.checkExecutable()
-      const queryFactory = codex ? null : await this.resolveQueryFactory()
+      // The SDK must load before a Claude spawn (a broken install refuses the
+      // send); only an injected (test or fixture) factory reaches the driver,
+      // which otherwise composes the package's public construction (6.1).
+      if (!codex) await this.resolveQueryFactory()
+      const queryFactory = codex ? null : this.options.queryFactory ?? null
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       // Both runtimes build their team tools from one table (D6).
       const teamServices = this.teamServices()
-      const teamMcpServer = codex ? null : await createMailboxServer(this.mailbox, record.sessionId, teamServices)
       // The options both runtimes share: identity, the audit observer, the
       // prompt/effort/policy readers, and every output callback.
       const shared: ChatDriverSharedOptions = {
@@ -2944,13 +2969,13 @@ export class ChatSessionManager {
             runtime: 'claude',
             options: {
               ...shared,
-              queryFactory: queryFactory!,
+              ...(queryFactory ? { queryFactory } : {}),
               // The wait is read per question through this getter, so a
               // setting change reaches the next question without rebuilding
               // the driver (question-auto-answer D5, hazard M1).
               getQuestionAutoAnswerMs: () =>
                 (this.options.getQuestionAutoAnswerMinutes?.() ?? 0) * 60_000,
-              ...(teamMcpServer ? { teamMcpServer } : {}),
+              teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               getProviderEnv: () => this.providerEnv(),
               // The secret-name registry observes and persists at every
               // Claude spawn (provider-relay-setup D2), so a name once seen
@@ -2989,6 +3014,7 @@ export class ChatSessionManager {
         this.records.get(record.sessionId)?.archivedAt != null
       ) {
         driver.kill()
+        this.retired.retire(sessionId, driver)
         this.observations.chat.processEnded(sessionId)
         return null
       }

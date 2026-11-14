@@ -17,7 +17,7 @@ import { RETAINED_SECRET_NAMES_KEY, readRetainedNames } from '../chat/secretName
 import { resetCodexExecutableCache } from '../chat/codex/codexExecutable'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
-import { anyDirectory, FakeHandle, closeDispatchers, fakeQueryFactory, flush, initMessage, installManagerCleanup, managedManager } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, closeDispatchers, fakeQueryFactory, flush, initMessage, installManagerCleanup, managedManager, spawned } from './helpers/chatSessionManagerHarness'
 import { FAKE_CODEX, Script, THREAD_ID, until } from './codexDriverHarness'
 
 installManagerCleanup()
@@ -129,6 +129,7 @@ describe('Claude manager refusal (rows 4, 5)', () => {
     // settings file is neutralized by the composed settings layer.
     seedRetained([])
     expect((await manager.send(id, 'second')).ok).toBe(true)
+    await spawned(handles)
     handles[0]!.push(initMessage('sdk-refusal-1'))
     await flush()
     expect(handles.length).toBe(1)

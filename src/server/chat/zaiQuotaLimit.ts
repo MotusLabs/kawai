@@ -10,7 +10,7 @@ import type {
   ChatUsageReport,
   ChatUsageWindow,
 } from '../../shared/chat'
-import { percentValue, toIsoResetsAt } from './usageLimits'
+import { percentValue, toIsoResetsAt } from '@motuslabs/agent-runtime/usage'
 import { providerRowPeriodMs, providerRowUnitWord } from './usageWindowPeriods'
 
 /** Structural slice of a provider quota-limit reply (Z.AI coding plan, SDK-free). */

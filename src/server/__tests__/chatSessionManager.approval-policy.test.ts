@@ -146,9 +146,16 @@ describe('ChatSessionManager', () => {
     await manager.send(id, 'go')
     await flush()
     const controller = new AbortController()
+    // The grant echoes each tool's exact original input (task 6.1 R8 C3): the
+    // expected inputs are frozen deep copies taken before any callback, so an
+    // altered, added, or dropped argument fails the strict comparison.
+    const bashInput = { command: 'ls' }
+    const writeInput = { file_path: '/tmp/x', content: 'x' }
+    const bashOriginal = Object.freeze(structuredClone(bashInput))
+    const writeOriginal = Object.freeze(structuredClone(writeInput))
     const approval = handles[0]!.options.canUseTool!(
       'Bash',
-      { command: 'ls' },
+      bashInput,
       { signal: controller.signal, toolUseID: 'toolu_1', requestId: 'sdk-req-1' }
     )
     await flush()
@@ -157,14 +164,18 @@ describe('ChatSessionManager', () => {
     ).toBe(true)
 
     expect(manager.setApprovalPolicy(id, 'auto')).toEqual({ ok: true })
-    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    expect(await approval).toStrictEqual({ behavior: 'allow', updatedInput: { command: 'ls' } })
+    expect(await approval).toStrictEqual({ behavior: 'allow', updatedInput: bashOriginal })
     // A second tool use arrives after the switch: granted without a card.
     const next = handles[0]!.options.canUseTool!(
       'Write',
-      { file_path: '/tmp/x', content: 'x' },
+      writeInput,
       { signal: controller.signal, toolUseID: 'toolu_2', requestId: 'sdk-req-2' }
     )
-    await expect(next).resolves.toEqual({ behavior: 'allow' })
+    expect(await next).toStrictEqual({ behavior: 'allow', updatedInput: { file_path: '/tmp/x', content: 'x' } })
+    expect(await next).toStrictEqual({ behavior: 'allow', updatedInput: writeOriginal })
+    // Only the pending Bash request raised a card; the Write was granted without one.
+    expect(events.filter(({ event }) => event.type === 'approval_request')).toHaveLength(1)
     const policyResolutions = events
       .map((entry) => entry.event)
       .filter(

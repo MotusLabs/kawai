@@ -2,6 +2,9 @@
   "name": "@motuslabs/kawai",
   "version": "1.0.0",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "description": "Web GUI for tmux optimized for AI agent TUIs",
   "author": "MotusLabs",
   "license": "MIT",
@@ -23,7 +26,7 @@
     "build": "vite build",
     "start": "bun src/server/index.ts",
     "lint": "oxlint . --ignore-pattern src/server/chat/codex/protocol/",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p packages/agent-runtime/tsconfig.json",
     "test": "bun scripts/test-runner.ts",
     "test:ci": "bun scripts/test-runner.ts --skip-real-tmux",
     "check": "bun scripts/check.ts",
@@ -41,6 +44,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.289",
+    "@motuslabs/agent-runtime": "workspace:0.1.0",
     "@base-ui/react": "^1.2.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
@@ -71,6 +75,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
+    "@types/mdast": "4.0.4",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -86,7 +91,8 @@
     "tailwindcss": "^3.4.14",
     "typescript": "^5.7.2",
     "vite": "^8.0.6",
-    "vite-plugin-pwa": "^1.2.0"
+    "vite-plugin-pwa": "^1.2.0",
+    "workbox-window": "7.4.0"
   },
   "overrides": {
     "shell-quote": "^1.11.0",

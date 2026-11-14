@@ -10,7 +10,7 @@
 // outcome without disturbing a session, and no failure of these pulls ever
 // enables the host-login usage pull — the caller suppresses it outright.
 import type { ChatUsageReport, ChatUsageStatus, ChatUsageWindow } from '../../shared/chat'
-import { toIsoResetsAt } from './usageLimits'
+import { toIsoResetsAt } from '@motuslabs/agent-runtime/usage'
 
 /** Origin-relative paths of the two usage endpoints. */
 export const OPENROUTER_KEY_PATH = '/api/v1/key'

@@ -1,3 +1,4 @@
+// @reads: packages/agent-runtime/**
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -65,6 +66,7 @@ describe('planRun', () => {
     clientTests: ['src/client/__tests__/c.test.tsx'],
     runnerTests: ['scripts/__tests__/r.test.ts'],
     sharedTests: ['src/shared/__tests__/s.test.ts'],
+    packageTests: ['packages/demo/__tests__/p.test.ts'],
   }
   const base = {
     workers: 4,
@@ -141,6 +143,7 @@ describe('planRun', () => {
       'scripts/__tests__/r.test.ts',
       'src/shared/__tests__/s.test.ts',
       'src/client/__tests__/c.test.tsx',
+      'packages/demo/__tests__/p.test.ts',
     ])
     // A slow-tier file under src/shared/__tests__ is excluded like any other:
     // the directory itself is never an entry the per-file filter would miss.
@@ -160,12 +163,13 @@ describe('planRun', () => {
 
   test('collectFiles enumerates every source tree as files (follow-up)', async () => {
     const files = await collectFiles()
-    const all = [...files.serverTests, ...files.clientTests, ...files.runnerTests, ...files.sharedTests]
+    const all = [...files.serverTests, ...files.clientTests, ...files.runnerTests, ...files.sharedTests, ...files.packageTests]
     expect(all.length).toBeGreaterThan(100)
     for (const file of all) {
       expect(file.endsWith('.test.ts') || file.endsWith('.test.tsx')).toBe(true)
     }
     expect(files.sharedTests).toContain('src/shared/__tests__/chatTime.test.ts')
+    expect(files.packageTests).toContain('packages/agent-runtime/__tests__/lifecycle.test.ts')
   })
 })
 

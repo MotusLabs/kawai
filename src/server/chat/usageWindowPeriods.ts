@@ -1,55 +1,11 @@
-// Usage-window period lengths (usage-bar-time-pace D1; provider rows
-// zai-usage-window-periods D1–D3): which windows have a known length, so the
-// usage bar can mark how much of a window has elapsed. Server vocabulary like
-// the window keys themselves — the client never maps kinds. Claude plan kinds
-// use a fixed table; provider quota rows use the unit code the row itself
-// states, observed codes only. A window whose length is not known (overage,
-// an unknown provider unit, a kind the server has not seen) gets none rather
-// than a guess; no marker beats a wrong one.
+// Provider quota-row period lengths (usage-bar-time-pace D1;
+// zai-usage-window-periods D1-D3): which provider rows have a known length,
+// so the usage bar can mark how much of a window has elapsed. Rows use the
+// unit code the row itself states, observed codes only; a row whose length
+// is not known gets none rather than a guess. Claude plan-window lengths are
+// the public package's (@motuslabs/agent-runtime/usage windowPeriodMs).
 
 const HOUR_MS = 60 * 60 * 1000
-const FIVE_HOURS_MS = 5 * HOUR_MS
-const SEVEN_DAYS_MS = 7 * 24 * HOUR_MS
-
-/**
- * Base meter kind → period. Push and pull name the windows five_hour /
- * seven_day*; the /usage endpoint names the same windows session /
- * weekly_all / weekly_scoped; pull's per-model rows key as model_scoped.
- */
-const KIND_PERIODS_MS: Record<string, number> = {
-  five_hour: FIVE_HOURS_MS,
-  session: FIVE_HOURS_MS,
-  seven_day: SEVEN_DAYS_MS,
-  seven_day_opus: SEVEN_DAYS_MS,
-  seven_day_sonnet: SEVEN_DAYS_MS,
-  seven_day_oauth_apps: SEVEN_DAYS_MS,
-  seven_day_overage_included: SEVEN_DAYS_MS,
-  weekly_all: SEVEN_DAYS_MS,
-  weekly_scoped: SEVEN_DAYS_MS,
-  model_scoped: SEVEN_DAYS_MS,
-}
-
-/** A /usage row group → period, consulted only for kinds the table lacks. */
-const GROUP_PERIODS_MS: Record<string, number> = {
-  session: FIVE_HOURS_MS,
-  weekly: SEVEN_DAYS_MS,
-}
-
-/**
- * Period length of a Claude plan window keyed `kind`, `kind:<scope>`, or
- * `kind#n`, falling back to a /usage row's group when the kind is unknown;
- * undefined when neither is known.
- */
-export function windowPeriodMs(key: string, group?: string): number | undefined {
-  // Own-key lookups (as zaiRowWord): the key and the group come from the
-  // wire, so an inherited name like 'constructor' must not resolve as a
-  // period — a function would ride the window as its periodMs.
-  const base = key.split(/[:#]/, 1)[0] ?? key
-  if (Object.hasOwn(KIND_PERIODS_MS, base)) return KIND_PERIODS_MS[base]
-  return group && Object.hasOwn(GROUP_PERIODS_MS, group)
-    ? GROUP_PERIODS_MS[group]
-    : undefined
-}
 
 // Provider quota rows (Z.AI coding plan): the only unit codes the endpoint
 // has been observed to send (2026-10-18), each confirmed by a reset horizon

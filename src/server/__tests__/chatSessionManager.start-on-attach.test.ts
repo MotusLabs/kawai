@@ -7,7 +7,7 @@ import type { ChatEvent } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { type ChatQueryFactory } from '../chat/ChatSessionManager'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, initMessage, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
@@ -76,6 +76,7 @@ describe('ChatSessionManager', () => {
       const sessionId = created.session.id
 
       expect(await manager.start(sessionId)).toEqual({ ok: true })
+      await spawned(handles)
       expect(handles).toHaveLength(1)
       // No prompt, no turn: the spawn alone produced no events.
       expect(events).toEqual([])
@@ -130,6 +131,7 @@ describe('ChatSessionManager', () => {
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
       await harnessA.manager.send(sessionId, 'one')
+      await spawned(harnessA.handles)
       harnessA.handles[0]!.push(initMessage('sdk-start-ghost'))
       await flush()
       closeDispatchers()
@@ -159,6 +161,7 @@ describe('ChatSessionManager', () => {
       ])
       expect(started).toEqual({ ok: true })
       expect(sent).toEqual({ ok: true })
+      await spawned(handles)
       expect(handles).toHaveLength(1)
     })
 
@@ -192,6 +195,7 @@ describe('ChatSessionManager', () => {
       // Once the spawn works again, a later start respawns.
       broken = false
       expect(await manager.start(sessionId)).toEqual({ ok: true })
+      await spawned(handles)
       expect(handles).toHaveLength(1)
       manager.shutdown()
     })

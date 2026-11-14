@@ -2,7 +2,7 @@
 // scanner (per-result-suite task 1.1). Every fixture source is embedded as
 // a string, so the repo-wide guard scan (task 1.2) sees only the assertion
 // literals declared in the header below.
-// @reads: AGENTS.md, CLAUDE.md, docs/**, .kawai/**, .github/**, openspec/**
+// @reads: AGENTS.md, CLAUDE.md, docs/**, .kawai/**, .github/**, openspec/**, packages/agent-runtime/**
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -168,12 +168,21 @@ describe('undeclaredReads', () => {
       ['.kawai/', '.kawai/groups/devs.md'],
       ['.github/', '.github/workflows/ci.yml'],
       ['openspec/', 'openspec/changes/demo/proposal.md'],
+      ['packages/agent-runtime/', 'packages/agent-runtime/README.md'],
     ]
     for (const [root, sample] of samples) {
       expect(WATCHED_ROOTS).toContain(root)
       const source = `const p = read('${sample}')`
       expect(undeclaredReads(source)).toEqual([sample])
     }
+  })
+
+  test('a package test reading a fixture beside it must declare that package path (6.4)', () => {
+    const file = 'packages/agent-runtime/__tests__/demo.test.ts'
+    const body = `const HOST = join(import.meta.dir, 'fixtures', 'host.ts')`
+    expect(undeclaredReads(body, file)).toEqual(['packages/agent-runtime/__tests__/fixtures/host.ts'])
+    const declared = `// @reads: packages/agent-runtime/__tests__/fixtures/**\n${body}`
+    expect(undeclaredReads(declared, file)).toEqual([])
   })
 
   test('a path outside the watched roots is ignored', () => {
@@ -237,6 +246,30 @@ describe('listUnitTestFiles', () => {
         'src/server/__tests__/a.test.ts',
         'src/server/__tests__/b.integration.test.ts',
         'src/shared/__tests__/e.test.ts',
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('lists a package test so the guard judges its undeclared read (6.4)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reads-corpus-'))
+    try {
+      const files: Record<string, string> = {
+        'packages/agent-runtime/__tests__/spawns.test.ts': "const HOST = join(import.meta.dir, 'fixtures', 'host.ts')\n",
+        'packages/agent-runtime/__tests__/fixtures/host.ts': 'export {}\n',
+        'packages/agent-runtime/__tests__/helpers/h.ts': 'export {}\n',
+        'packages/agent-runtime/node_modules/dep/__tests__/x.test.ts': 'export {}\n',
+      }
+      for (const [file, content] of Object.entries(files)) {
+        fs.mkdirSync(path.join(root, path.dirname(file)), { recursive: true })
+        fs.writeFileSync(path.join(root, file), content)
+      }
+      const listed = listUnitTestFiles(root)
+      expect(listed).toEqual(['packages/agent-runtime/__tests__/spawns.test.ts'])
+      const entries = listed.map((file) => ({ file, content: fs.readFileSync(path.join(root, file), 'utf8') }))
+      expect(scanTestSources(entries)).toEqual([
+        { file: 'packages/agent-runtime/__tests__/spawns.test.ts', path: 'packages/agent-runtime/__tests__/fixtures/host.ts' },
       ])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })

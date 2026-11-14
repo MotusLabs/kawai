@@ -5,7 +5,7 @@
 import { expect, test } from 'bun:test'
 import type { ChatEvent } from '../../shared/chat'
 import type { StoredObservation } from '../../shared/processObservations'
-import { schemaDb } from './schemaDb'
+import { schemaCopy } from './schemaDb'
 import { ProcessObservationService } from '../metrics/observations/service'
 
 const origin = Date.parse('2026-10-18T00:00:00Z')
@@ -13,7 +13,7 @@ const iso = (second: number) => new Date(origin + second * 1000).toISOString()
 const PHASES = ['thinkingSeconds', 'requestingSeconds', 'preparingToolSeconds', 'runningToolsSeconds', 'respondingSeconds', 'retryingSeconds', 'otherPhaseSeconds']
 
 function harness() {
-  const db = schemaDb()
+  const db = schemaCopy()
   let now = origin, sequence = 0
   const identity = () => ({ teamId: 'team', sessionId: 'chat' })
   const service = new ProcessObservationService(db, identity, () => now)

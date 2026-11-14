@@ -6,13 +6,14 @@ import { afterEach, expect, test } from 'bun:test'
 import { z } from 'zod'
 import type { ChatEvent, ChatUsageReport } from '../../shared/chat'
 import type { ChatLimitSignal } from '../chat/limitSignals'
-import { codexEffort } from '../chat/codex/CodexSessionDriver'
+import type { ChatEffort } from '../chat/provider/driver'
 import { eventTypes, ROLLOUT, Script, sentRequest, startHarness, THREAD_ID, until, type Harness } from './codexDriverHarness'
 
 let harness: Harness | null = null
-afterEach(() => {
-  harness?.cleanup()
+afterEach(async () => {
+  const done = harness?.cleanup()
   harness = null
+  await done
 })
 
 const completedOf = (events: ChatEvent[]) => events.filter((event): event is Extract<ChatEvent, { type: 'turn_completed' }> => event.type === 'turn_completed')
@@ -147,12 +148,30 @@ test('a compaction item reports onCompaction and the compacted notice; usage nam
   expect(sources).toEqual(['model-window-fallback'])
 })
 
-test('effort passes through to the Codex levels the models advertise; numbers are dropped', () => {
-  expect(codexEffort('low')).toBe('low')
-  expect(codexEffort('xhigh')).toBe('xhigh')
-  expect(codexEffort('max')).toBe('max')
-  expect(codexEffort(3)).toBeUndefined()
-  expect(codexEffort(undefined)).toBeUndefined()
+// The retired codexThread.codexEffort mapping, read on the production path
+// (task-ce05430a R2): each send's effort reaches its turn/start unchanged for
+// a named level and is omitted for a number or none.
+test('effort passes through to the Codex levels the models advertise; numbers are dropped', async () => {
+  const cases: Array<{ effort: ChatEffort | undefined; sent: string | undefined }> = [
+    { effort: 'low', sent: 'low' },
+    { effort: 'xhigh', sent: 'xhigh' },
+    { effort: 'max', sent: 'max' },
+    { effort: 3, sent: undefined },
+    { effort: undefined, sent: undefined },
+  ]
+  const script = new Script().boot()
+  cases.forEach((_, n) => script.turn(`ct-${n}`).completed(`ct-${n}`))
+  let current: ChatEffort | undefined
+  harness = startHarness(script, { getEffort: () => current })
+  for (const [n, { effort }] of cases.entries()) {
+    current = effort
+    harness.driver.send(`turn ${n}`)
+    await until(() => completedOf(harness!.events).length === n + 1)
+  }
+  const sent = cases.map((_, n) => sentRequest(harness!, 'turn/start', n)!)
+  expect(sent.map(params => ({ has: 'effort' in params, effort: params.effort }))).toEqual(
+    cases.map(({ sent }) => ({ has: sent !== undefined, effort: sent })),
+  )
 })
 
 test('per-item state lives one turn: a long session keeps only the open turn’s tool calls', async () => {
@@ -198,6 +217,21 @@ test('a rejected dynamic-tool registration refuses the start; no turn is asked',
   expect(harness.transcriptPaths).toEqual([])
   expect(harness.sessionIds).toEqual([])
   expect(sentRequest(harness, 'turn/start')).toBeUndefined()
+  // The refused boot is an owned failure: the joined cleanup reports one
+  // failure object, with the server's own JSON-RPC error as its cause. The
+  // adapter's aggregate names that same object under the failed start and
+  // again under the kill's stop that joined it (accepted 2f205942 behavior,
+  // recorded here, not repaired): one identity, never a second failure.
+  const owned = harness
+  harness = null
+  const failure = await owned.cleanup().then(() => null, (error: unknown) => error)
+  const all = (error: unknown): unknown[] =>
+    error !== null && typeof error === 'object'
+      ? [error, ...[...((error as { causes?: unknown[] }).causes ?? []), ...(error instanceof AggregateError ? error.errors : [])].flatMap(all)]
+      : [error]
+  const starts = [...new Set(all(failure).filter(cause => (cause as Error).message?.startsWith('Codex could not start a thread')))] as Array<Error & { causes?: Array<{ error?: unknown }> }>
+  expect(starts.map(cause => cause.message)).toEqual(['Codex could not start a thread: app-server request 2 (thread/start) failed: dynamic tools rejected'])
+  expect(starts[0]!.causes!.map(cause => cause.error)).toEqual([{ code: -32602, message: 'dynamic tools rejected' }])
 })
 
 test('a second turn reusing a question item id raises the card again', async () => {

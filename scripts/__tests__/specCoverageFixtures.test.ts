@@ -286,3 +286,19 @@ describe('newly archived changes have covered scenarios (5.2)', () => {
     expect(malformedFailures[0]!.kind).toBe('config')
   })
 })
+
+describe('package tests are scanned (extract-agent-runtime 6.4)', () => {
+  test('a package test annotation resolves, an unresolved one fails naming it, and node_modules is never scanned', () => {
+    const root = makeTree()
+    write(root, 'openspec/specs/cap/spec.md', mainSpec('Widget serves', 'It serves'))
+    write(root, 'openspec/coverage.json', CONFIG)
+    annotatedTest(root, 'packages/demo/__tests__/good.test.ts', 'cap › Widget serves › It serves', "test('x', () => {})")
+    annotatedTest(root, 'packages/demo/__tests__/bad.test.ts', 'cap › Widget serves › No such scenario', "test('y', () => {})")
+    annotatedTest(root, 'packages/demo/node_modules/dep/__tests__/dep.test.ts', 'cap › Widget serves › Vendored', "test('z', () => {})")
+    const result = runSpecCoverageGuard(root)
+    expect(result.filesScanned).toBe(2)
+    expect(result.failures.map((failure) => [failure.kind, failure.file, failure.line])).toEqual([
+      ['annotation-unresolved', 'packages/demo/__tests__/bad.test.ts', 1],
+    ])
+  })
+})

@@ -7,6 +7,9 @@
 // during the load writes no memo and the starter reports the session gone —
 // for prepare, the real dispatcher logs its failure and the mail dies unpushed.
 // The synchronous guard left in getSnapshot logs when it reads the file.
+// P2 checks startup alone first: turn completion is held until the startup
+// counts are read, then released so the real receipt settlement runs and is
+// joined (task 6.1 R7, decision 34ebc6e1).
 // S5–S6 (the Codex retry rule) live in codexStartHistoryLoad.integration.test.ts.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
@@ -14,6 +17,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import type { Query } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent } from '../../shared/chat'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
@@ -71,6 +75,35 @@ function createOwner() {
   const releases = new Set<() => void>()
   const pending = new Set<Promise<unknown>>()
 
+  /** Result frames (turn completion) wait on this gate while a sequence holds it. */
+  let completion: Promise<void> = Promise.resolve()
+  const holdCompletion = () => {
+    let open: () => void = () => {}
+    if (!cancelled) completion = new Promise<void>(resolve => { open = resolve })
+    const release = () => { open(); releases.delete(release) }
+    releases.add(release)
+    return { release }
+  }
+  /** The fixture's stream, its result frames delivered only once the gate opens. */
+  const gated = (query: Query): Query => {
+    const proxy: Query = new Proxy(query, {
+      get(target, property) {
+        if (property === Symbol.asyncIterator) return () => proxy
+        if (property === 'next') {
+          return async (...args: []) => {
+            const step = await target.next(...args)
+            if (!step.done && step.value.type === 'result') await completion
+            return step
+          }
+        }
+        const value = Reflect.get(target, property, target) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    return proxy
+  }
+  /** Ids of mail the prepare starters sent, in send order. */
+  const sent: string[] = []
   const track = <T>(operation: Promise<T>): Promise<T> => {
     pending.add(operation)
     const forget = () => { pending.delete(operation) }
@@ -85,7 +118,7 @@ function createOwner() {
   const boot = () => track((async () => {
     const created = new ChatSessionManager({
       db, registry: new SessionRegistry(), onEvent: () => {}, profileCatalogHome: tempDir, authCheck: () => true,
-      queryFactory: params => { spawns += 1; return fixtureQueryFactory(params) }, isDirectory: () => true,
+      queryFactory: params => { spawns += 1; return gated(fixtureQueryFactory(params)) }, isDirectory: () => true,
     })
     manager = created
     await created.whenRestored()
@@ -145,11 +178,12 @@ function createOwner() {
     send: sessionId => track(manager!.send(sessionId, 'next question')),
     start: sessionId => track(manager!.start(sessionId)),
     prepare: sessionId => track((async () => {
-      const sent = await mail(sessionId, 'mail body')
+      const message = await mail(sessionId, 'mail body')
+      sent.push(message.id)
       await manager!.dispatcher.settled()
       // Alone, the mail is pushed; behind another starter's turn it waits,
       // but its pass (and so prepare) has run either way.
-      if (concurrent === 0) await eventually(() => pushed(sent.id))
+      if (concurrent === 0) await eventually(() => pushed(message.id))
     })()),
   }
 
@@ -168,7 +202,7 @@ function createOwner() {
     fs.rmSync(tempDir, { recursive: true, force: true })
   }
   return {
-    boot, seeded, watch, eventually, mail, starters, internals, track, restores, restoreSpies, cleanup,
+    boot, seeded, watch, eventually, mail, starters, internals, track, restores, restoreSpies, cleanup, holdCompletion, sent,
     get spawns() { return spawns },
     get cancelled() { return cancelled },
     set concurrent(value: number) { concurrent = value },
@@ -287,27 +321,56 @@ describe('agent starts await the async history load', () => {
 
   // @covers: chat-sessions › Agent starts load history without blocking the server › History is unchanged
   test('P2 seeded concurrent starters never read a history file synchronously', owned(async invocation => {
-    const { seeded, boot, watch, starters, restoreSpies } = invocation
+    const { seeded, boot, watch, starters, restoreSpies, holdCompletion, sent, eventually } = invocation
     const chats = Array.from({ length: 30 }, () => seeded())
     const manager = await boot()
     const pick = lcg(0x57a7)
     const names = Object.keys(starters)
     let completed = 0
+    const settled = { receipts: 0, waiting: 0 }
     for (let sequence = 0; sequence < 30; sequence += 1) {
       if (invocation.cancelled) break
       const { sessionId, file } = chats[sequence]
       const reads = watch(file)
+      const completion = holdCompletion()
+      sent.splice(0)
       const order = Array.from({ length: 1 + pick(4) }, () => names[pick(names.length)])
       invocation.concurrent = order.length - 1
       await Promise.all(order.map(name => starters[name](sessionId)))
       invocation.concurrent = 0
       const context = `sequence ${sequence}: ${order.join(', ')}`
+      // Startup: no turn has completed yet, so no receipt has been read.
       expect([context, reads.counts]).toEqual([context, { opens: 1, syncReads: 0 }])
       expect([context, texts(manager.getSnapshot(sessionId)!.events).filter(t => t === 'earlier question').length]).toEqual([context, 1])
+
+      // Receipt: turns complete, and each pushed mail settles once against
+      // the transcript (which never gains its row), joined before counting.
+      completion.release()
+      const mails = [...sent]
+      expect([context, mails.length]).toEqual([context, order.filter(name => name === 'prepare').length])
+      const row = (id: string) => manager.mailbox.store.get(id)!
+      const unsettled = () => mails.some(id => row(id).state === 'claimed')
+      await eventually(() => !unsettled())
+      await manager.dispatcher.settled()
+      await eventually(() => !unsettled())
+      const delivered = mails.filter(id => row(id).pushedAt != null)
+      const waiting = mails.filter(id => row(id).pushedAt == null)
+      expect([context, delivered.map(id => [row(id).state, row(id).reason, row(id).claimedBy])])
+        .toEqual([context, delivered.map(() => ['uncertain', 'receipt-unconfirmed-after-delivery', sessionId])])
+      expect([context, waiting.map(id => [row(id).state, row(id).claimedBy ?? null])]).toEqual([context, waiting.map(() => ['queued', null])])
+      // Only the send's open question holds the chat, so only it leaves mail waiting.
+      if (waiting.length > 0) expect([context, order.includes('send'), manager.getSnapshot(sessionId)!.pendingRequests.length > 0]).toEqual([context, true, true])
+      const pushedOrder = [...delivered].sort((a, b) => row(a).pushedAt!.localeCompare(row(b).pushedAt!))
+      expect([context, pushedOrder]).toEqual([context, delivered])
+      expect([context, reads.counts]).toEqual([context, { opens: 1, syncReads: delivered.length }])
+      settled.receipts += delivered.length
+      settled.waiting += waiting.length
       completed += 1
       restoreSpies()
     }
     expect(completed).toBe(30)
+    // Both receipt branches ran: pushed mail settled, and mail waited behind a question.
+    expect([settled.receipts > 0, settled.waiting > 0]).toEqual([true, true])
   }))
 
   test('the synchronous guard logs when a caller skipped the await', owned(async invocation => {

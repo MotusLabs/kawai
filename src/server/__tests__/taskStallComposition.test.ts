@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import { SessionMailbox } from '../team/sessionMailbox'
 import { SessionTeams } from '../team/sessionTeams'
@@ -47,7 +47,7 @@ function compose(database: Database = db, ownership: ExecutionOwnership = NULL_O
   const runtime = new SessionMailbox(database, {
     ownership, onTaskResultWrite: () => {},
     teams: new SessionTeams({ homeDir: dir }), records: () => [], getRecord: () => undefined, available: () => true,
-    getDriver: () => ({ getPendingRequests: () => [], deliver: () => {} }) as unknown as ChatSessionDriver,
+    getDriver: () => ({ getPendingRequests: () => [], deliver: () => {} }) as unknown as ChatAgentDriver,
     prepare: async () => {}, restore: () => {}, watchReceipt: () => {}, archive: () => ({ ok: true }), hasLiveWorkers: () => false,
     hasRunningBackgroundTasks: () => false, transcriptFor: () => null, homeDir: dir, now: () => clock,
     onError: error => { errors.push(error) },

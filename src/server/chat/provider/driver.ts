@@ -1,9 +1,8 @@
 // The runtime-neutral chat driver contract (openspec codex-chat-sessions
 // design D1): the slice of the Claude driver's public surface that the
 // session manager, mailbox, and staffing depend on, plus the output
-// callbacks every driver reports through. ChatSessionDriver implements this
-// interface unchanged; the Codex driver arrives with the change that wires
-// it. No SDK type appears here — the Claude-only extras stay behind the
+// callbacks every driver reports through. The Claude and Codex adapters
+// over the package (claudeRuntime.ts, codexRuntime.ts) implement it. No SDK type appears here — the Claude-only extras stay behind the
 // optional capability method the manager probes for.
 import type {
   ChatActivity,
@@ -159,9 +158,11 @@ export interface ChatAgentDriver {
    * Submit a user turn carrying a plan-workspace context (PR D §4): the
    * driver mints the message uuid, records the context row, and only then
    * opens the turn, emits the visible event, and enqueues. A refused send
-   * opens nothing. A driver without this seam refuses contextual sends.
+   * opens nothing. A driver without this seam refuses contextual sends. A
+   * package adapter answers once the runtime admitted or refused the send
+   * (its pre-submit record runs at that commit), so the caller awaits it.
    */
-  sendWorkspaceContext?(text: string, context: WorkspaceMessageContext): ChatSendOutcome
+  sendWorkspaceContext?(text: string, context: WorkspaceMessageContext): ChatSendOutcome | Promise<ChatSendOutcome>
   /** Deliver a peer envelope as a turn (team mail), carrying its message id. */
   deliver(envelope: ChatPeerMessage): void
   /** Stop the in-flight turn and cancel its pending cards. */
@@ -170,6 +171,12 @@ export interface ChatAgentDriver {
   kill(): void
   /** Flush and stop cleanly (server shutdown), leaving the session resumable. */
   shutdown(): void
+  /**
+   * Package-runtime adapters (task 6.1): joins the driver's owned work after
+   * a kill or shutdown, rejecting with its raw failures once. Called by the
+   * manager from outside any driver callback.
+   */
+  settled?(): Promise<void>
 
   /** A live approval-policy switch applies to the next pending request. */
   onApprovalPolicyChanged(policy: ChatApprovalPolicy): void

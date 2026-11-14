@@ -7,7 +7,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
-import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition, installManagerCleanup } from './helpers/chatSessionManagerHarness'
+import { anyDirectory, FakeHandle, managedManager, closeDispatchers, fakeQueryFactory, createHarness, flush, waitForCondition, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -79,12 +79,14 @@ describe('ChatSessionManager', () => {
     const first = manager.createSession({ projectPath: '/tmp/proj' })
     if (!first.ok) throw new Error('create failed')
     await manager.send(first.session.id, 'hello')
+    await spawned(handles)
     expect(handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://gw.example/a')
 
     providerEnv = { ANTHROPIC_BASE_URL: 'https://gw.example/b' }
     const second = manager.createSession({ projectPath: '/tmp/proj' })
     if (!second.ok) throw new Error('create failed')
     await manager.send(second.session.id, 'hello')
+    await spawned(handles, 1)
     expect(handles[1]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://gw.example/b')
     manager.kill(first.session.id)
     manager.kill(second.session.id)
@@ -99,6 +101,7 @@ describe('ChatSessionManager', () => {
     await manager.send(created.session.id, 'hello')
     delete process.env.OPENROUTER_MANAGEMENT_KEY
     // The shipped catalog names OpenRouter's keys (openrouter-provider D3).
+    await spawned(handles)
     const env = handles[0]!.options.env as Record<string, string | undefined>
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('test-oauth-token')
     expect(env).not.toHaveProperty('OPENROUTER_MANAGEMENT_KEY')
@@ -118,6 +121,7 @@ describe('ChatSessionManager', () => {
     if (!created.ok) throw new Error('create failed')
     const sessionId = created.session.id
     await manager.send(sessionId, 'hello')
+    await spawned(handles)
     expect(handles[0]!.options.spawnClaudeCodeProcess).toBeTypeOf('function')
     expect(handles[0]!.wire).toBe(wireLogs.get(sessionId))
     handles[0]!.wire!.record('in', '{"type":"system"}')
@@ -151,14 +155,47 @@ describe('ChatSessionManager', () => {
     expect(fs.readdirSync(dir)).toEqual([`${kept.session.id}.jsonl`])
   })
 
-  test('without wire logs the SDK spawns its own process', async () => {
+  // The spawner is always the package's owned one (extract-agent-runtime
+  // design §3, decision 34ebc6e1); wire capture only decorates it. Without
+  // capture nothing records, the child still gets the session env, and kill
+  // ends the child it spawned.
+  test('with or without wire logs the SDK spawns through the owned spawner, and kill ends its child', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
-    const { manager, handles } = await createHarness(db)
-    const created = manager.createSession({ projectPath: '/tmp/proj' })
-    if (!created.ok) throw new Error('create failed')
-    await manager.send(created.session.id, 'hello')
-    expect('spawnClaudeCodeProcess' in handles[0]!.options).toBe(false)
-    manager.kill(created.session.id)
+    const wireDir = path.join(tempDir, 'chat-wire')
+    for (const capture of [false, true]) {
+      const wireLogs = capture ? new ChatWireLogs({ dir: wireDir }) : undefined
+      const handles: FakeHandle[] = []
+      const manager = await managedManager({
+        isDirectory: anyDirectory,
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        queryFactory: fakeQueryFactory(handles), ...(wireLogs ? { wireLogs } : {}),
+      })
+      const created = manager.createSession({ projectPath: tempDir })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      await manager.send(sessionId, 'hello')
+      await spawned(handles)
+      const spawn = handles[0]!.options.spawnClaudeCodeProcess
+      expect(spawn).toBeTypeOf('function')
+      expect(handles[0]!.wire).toBe(wireLogs ? wireLogs.get(sessionId) : undefined)
+
+      const marker = path.join(tempDir, `child-${capture}.json`)
+      const script = `require('fs').writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ pid: process.pid, token: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null })); setInterval(() => {}, 1000)`
+      // The SDK's proposed env is ignored: the session's launch env reaches the child.
+      const child = spawn!({ command: process.execPath, args: ['-e', script], cwd: tempDir, env: {}, signal: new AbortController().signal })
+      await waitForCondition(() => fs.existsSync(marker) && fs.readFileSync(marker, 'utf8').length > 0)
+      const { pid, token } = JSON.parse(fs.readFileSync(marker, 'utf8')) as { pid: number; token: string | null }
+      expect(token).toBe('test-oauth-token')
+      expect(child.exitCode).toBeNull()
+      expect(running(pid)).toBe(true)
+
+      manager.kill(sessionId)
+      expect(await manager.retiredSettled()).toEqual([])
+      // The retirement join covers the owned child's exit: no polling for it.
+      expect(running(pid)).toBe(false)
+      if (capture) await waitForCondition(() => !fs.readdirSync(wireDir).some((name) => name.startsWith(sessionId)))
+      else expect(fs.existsSync(wireDir)).toBe(false)
+    }
   })
 
   test('create registers a chat session and persists a row', async () => {
@@ -207,6 +244,7 @@ describe('ChatSessionManager', () => {
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
     await manager.send(id, 'hello')
+    await spawned(handles)
     const handle = handles[0]!
     handle.push({ type: 'assistant', uuid: 'live-a', message: { id: 'message-a', role: 'assistant', content: [{ type: 'text', text: 'unfinished' }] } } as unknown as SDKMessage)
     await flush()
@@ -231,3 +269,13 @@ describe('ChatSessionManager', () => {
   })
 
 })
+
+/** A pid is running unless it is gone or a zombie awaiting its reaper. */
+function running(pid: number): boolean {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+    return stat.slice(stat.lastIndexOf(')') + 2)[0] !== 'Z'
+  } catch {
+    return false
+  }
+}

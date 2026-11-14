@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Database } from 'bun:sqlite'
 import type { ChatSessionRecord } from '../db'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import { runGit } from '../git/gitCommand'
 import { schemaDb } from './schemaDb'
 import { SessionMailbox } from '../team/sessionMailbox'
@@ -101,7 +101,7 @@ beforeEach(async () => {
   runtime = new SessionMailbox(db, {
     ownership: NULL_OWNERSHIP, onTaskResultWrite: () => {},
     teams, records: () => records.values(), getRecord: id => records.get(id), available: record => !record.archivedAt,
-    getDriver: id => ({ getPendingRequests: () => [], deliver: () => { records.get(id)!.status = 'working' } }) as unknown as ChatSessionDriver,
+    getDriver: id => ({ getPendingRequests: () => [], deliver: () => { records.get(id)!.status = 'working' } }) as unknown as ChatAgentDriver,
     prepare: async () => {}, restore: () => {}, watchReceipt: () => {}, archive: () => ({ ok: true }),
     hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false, transcriptFor: () => null,
     homeDir: dir, onError: error => { throw error },

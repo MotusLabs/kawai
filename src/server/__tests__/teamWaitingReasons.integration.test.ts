@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
 import { type ChatSessionRecord, type SessionDatabase } from '../db'
-import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
+import type { ChatAgentDriver } from '../chat/provider/driver'
 import { formatEnvelope } from '../team/envelope'
 import type { GroupCatalog } from '../team/groupCatalog'
 import type { SessionTeams } from '../team/sessionTeams'
@@ -62,7 +62,7 @@ let spawnAt: number[]
 let spawnReleases: Array<(result: SpawnResult) => void> = []
 let records: Map<string, ChatSessionRecord>
 let catalog: GroupCatalog
-let drivers: Map<string, ChatSessionDriver>
+let drivers: Map<string, ChatAgentDriver>
 let pendingCards: Map<string, unknown[]>
 let deliveries: Array<{ sessionId: string; messageId: string }>
 let runtime: SessionMailbox
@@ -94,7 +94,7 @@ const refreshCatalog = async () => { catalog = (await loadTeamGroups(repo, home)
 const record = (sessionId: string, extra: Partial<ChatSessionRecord>): ChatSessionRecord => ({
   sessionId, name: sessionId, projectPath: repo, sdkSessionId: null, status: 'working', createdAt: '', lastActivityAt: '', groupId: 'devs', ...extra,
 })
-const driverFor = (sessionId: string): ChatSessionDriver => {
+const driverFor = (sessionId: string): ChatAgentDriver => {
   const existing = drivers.get(sessionId)
   if (existing) return existing
   const driver = {
@@ -105,7 +105,7 @@ const driverFor = (sessionId: string): ChatSessionDriver => {
       fs.appendFileSync(transcript, JSON.stringify({ type: 'user', message: { content: formatEnvelope(envelope) } }) + '\n')
       records.get(sessionId)!.status = 'working'
     },
-  } as unknown as ChatSessionDriver
+  } as unknown as ChatAgentDriver
   drivers.set(sessionId, driver)
   return driver
 }

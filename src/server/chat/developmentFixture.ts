@@ -13,7 +13,7 @@ import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ChatQueryFactory } from './ChatSessionDriver'
+import type { ChatQueryFactory } from './provider/claudeDriverTypes'
 
 export const chatFixtureEnabled =
   process.env.NODE_ENV === 'development' && process.env.AGENTBOARD_CHAT_FIXTURE === '1'
@@ -39,11 +39,13 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
   let current: string | undefined
   const echo = () => (current ? { user_message_uuid: current, user_message_uuids: [current] } : {})
   const controller = new AbortController()
+  /** The conversation id, a resumed one kept as the CLI keeps it (the package refuses a substituted resume, task 6.1). */
+  const sessionId = typeof options.resume === 'string' && options.resume !== '' ? options.resume : 'fixture'
   /** The background scenario's tasks, answering getTaskOutput/stopTask. */
   const backgroundTasks = new Map<string, { output: string; lines: string[]; stopped?: boolean }>()
   const push = (message: Record<string, unknown>) => {
     if (closed) return
-    const sdkMessage = { uuid: crypto.randomUUID(), session_id: 'fixture', ...message } as SDKMessage
+    const sdkMessage = { uuid: crypto.randomUUID(), session_id: sessionId, ...message } as SDKMessage
     frame('in', sdkMessage)
     events.push(sdkMessage)
     wake?.()
@@ -195,7 +197,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
         push({ type: 'system', subtype: 'task_updated', task_id: quickId, patch: { status: 'completed', end_time: Date.now() } })
         push({ type: 'system', subtype: 'task_notification', task_id: quickId, tool_use_id: quickTool, status: 'completed', summary: 'Background command "Wait then print a marker" completed (exit code 0)', output_file: quickOutput })
         push({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: longId }] })
-        push({ type: 'system', subtype: 'init', cwd: options.cwd ?? '/tmp', session_id: 'fixture', model: 'fixture-model', tools: [], slash_commands: [] })
+        push({ type: 'system', subtype: 'init', cwd: options.cwd ?? '/tmp', session_id: sessionId, model: 'fixture-model', tools: [], slash_commands: [] })
         push({ type: 'system', subtype: 'status', status: 'requesting' })
         push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'text', text: 'The marker printed fixture-shell-done.' }] } })
         push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1, ...resultUsage })
@@ -245,7 +247,8 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       // an allowed push and a foreign-repository gh write for real.
       const runAuditHooks = async (event: 'PreToolUse' | 'PostToolUse', toolUseID: string, input: Record<string, unknown>) => {
         for (const entry of options.hooks?.[event] ?? []) {
-          for (const hook of entry.hooks) await hook(input as never, toolUseID, { signal: controller.signal })
+          // Every hook input names its event, as the CLI's does (the package reads hook_event_name, task 6.1).
+          for (const hook of entry.hooks) await hook({ ...input, hook_event_name: event } as never, toolUseID, { signal: controller.signal })
         }
       }
       for (const command of ['git push origin main', 'gh issue create -R other/repo --title Fixture']) {

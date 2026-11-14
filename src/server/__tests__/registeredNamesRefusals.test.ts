@@ -15,8 +15,6 @@ import { codexSpawnEnv } from '../chat/codexProfiles'
 import { RegisteredNameRefusal, RETAINED_SECRET_NAMES_KEY } from '../chat/secretNameRegistry'
 import { type SessionDatabase } from '../db'
 import { Script, startHarness, until } from './codexDriverHarness'
-import type { CodexClient } from '../chat/codex/codexThread'
-import type { AppServerClientOptions } from '../chat/codex/appServerClient'
 import { freshTestDatabase } from './helpers/testDatabase'
 
 const OR_URL = 'https://relay.example.internal/api'
@@ -221,68 +219,39 @@ describe('Codex home collisions (row 7)', () => {
 
 describe('Codex driver refusal across spawns (row 7)', () => {
   // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
-  test('a CODEX_HOME registered before any spawn refuses the first send with no client', () => {
+  test('a CODEX_HOME registered before any spawn refuses the first send with no client', async () => {
     const harness = startHarness(new Script().boot(), { withheldCredentials: () => new Set(['CODEX_HOME']) })
     try {
       expect(() => harness.driver.send('first')).toThrow(RegisteredNameRefusal)
       expect(harness.sent).toEqual([])
     } finally {
-      harness.cleanup()
+      await harness.cleanup()
     }
   })
 
   // @covers: provider-credentials › Registered secret names stay withheld › A launch-env entry colliding with a registered name stays inert
   test('a CODEX_HOME registered after creation refuses the respawn, not the first spawn', async () => {
     let registered = new Set<string>()
-    const clients: unknown[] = []
-    const harness = startHarness(new Script().boot(), {
+    // The production Codex composition over the replaying fake as a real
+    // default-owned child (task-5906f19c): it exits once replayed, so the next
+    // send must respawn — where the per-spawn refusal now fires.
+    const serverEnv: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', FAKE_EXIT_AFTER_REPLAY: '1' }
+    const harness = startHarness(new Script().boot().turn('ct-1').completed('ct-1'), {
       withheldCredentials: () => new Set(registered),
-      createClient: options => {
-        const client = makeDieingClient(options)
-        clients.push(client)
-        return client
-      },
+      serverEnv,
     })
+    serverEnv.HOME = harness.dir
+    serverEnv.FAKE_TRANSCRIPT = harness.transcript
+    const spawns = () => harness.sent.filter(message => message.method === 'initialize').length
     try {
       harness.driver.send('first')
-      await until(() => clients.length === 1 && (clients[0] as DieingClient).startedThread)
-      expect(clients.length).toBe(1)
+      await until(() => harness.events.some(event => event.type === 'turn_completed') && harness.driver.isDead)
+      expect(spawns()).toBe(1)
       registered = new Set(['CODEX_HOME'])
-      // End the app-server: the next send respawns through ensureClient,
-      // where the per-spawn refusal now fires (correction A's provider).
-      ;(clients[0] as DieingClient).die()
       expect(() => harness.driver.send('second')).toThrow(RegisteredNameRefusal)
-      expect(clients.length).toBe(1)
+      expect(spawns()).toBe(1)
     } finally {
-      harness.cleanup()
+      await harness.cleanup()
     }
   })
 })
-
-/** A minimal CodexClient double: starts a thread, exits when ended. */
-interface DieingClient extends CodexClient {
-  startedThread: boolean
-  /** Simulate the app-server process dying. */
-  die(): void
-}
-function makeDieingClient(options: AppServerClientOptions): DieingClient {
-  const client: DieingClient = {
-    startedThread: false,
-    die() {
-      options.onExit({ code: 0, signal: null })
-    },
-    start() {},
-    end() {},
-    async initialize() {
-      return {}
-    },
-    async request(method: string) {
-      if (method === 'thread/start' || method === 'thread/resume') {
-        client.startedThread = true
-        return { thread: { id: 'th-refusal' } }
-      }
-      return {}
-    },
-  }
-  return client
-}

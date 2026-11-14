@@ -6,9 +6,9 @@
 //   // @reads: AGENTS.md, .kawai/groups/*.md
 //
 // The guard scans a test file's source for string literals naming a
-// repository path under AGENTS.md, CLAUDE.md, docs/, .kawai/, .github/, or
-// openspec/, and reports those its header does not cover. It is a heuristic
-// for the common forms — a literal path — and reads the source through the
+// repository path under AGENTS.md, CLAUDE.md, docs/, .kawai/, .github/,
+// openspec/, or packages/agent-runtime/, and reports those its header does
+// not cover. It is a heuristic for the common forms — a literal path — and reads the source through the
 // TypeScript parser, so comment mentions never count. A literal is a
 // candidate when it appears on its own (tests run from the repository root,
 // so a root-relative literal resolves there), is joined onto a
@@ -35,6 +35,10 @@ export const WATCHED_ROOTS = [
   '.kawai/',
   '.github/',
   'openspec/',
+  // The agent-runtime package (extract-agent-runtime 6.4): a test that runs
+  // or reads a fixture, README or example beside it declares the path, so
+  // the affected selection finds it when that non-imported file changes.
+  'packages/agent-runtime/',
 ] as const
 
 // Parses the `@reads:` header comments from a test file's first
