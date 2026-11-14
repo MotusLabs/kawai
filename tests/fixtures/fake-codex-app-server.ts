@@ -49,7 +49,12 @@ if (namesPath) {
     while (gate !== undefined && !existsSync(gate)) await Bun.sleep(10)
     renameSync(staged, namesPath)
   } catch (error) {
-    rmSync(staged, { force: true })
+    try {
+      rmSync(staged, { force: true })
+    } catch {
+      // The cleanup failure must never replace the original publication
+      // error: rethrow what the publication itself threw.
+    }
     throw error
   }
 }
