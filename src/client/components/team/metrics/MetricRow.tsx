@@ -7,7 +7,7 @@ import { METRIC_DEF_BY_ID, type MetricBreakdown, type MetricRow as MetricRowData
 import { baselineLabel, formatDelta, formatValue, insufficientLabel } from './metricFormat'
 
 const BREAKDOWN_LABELS: Record<MetricBreakdown, string> = {
-  senderGroup: 'By sender group', frictionKind: 'By friction kind', profile: 'By profile', groupProfile: 'By group · profile',
+  senderGroup: 'By sender group', frictionKind: 'By friction kind', profile: 'By profile', groupProfile: 'By group · profile', tool:'By tool', toolClass:'By tool · failure class',
 }
 
 function Rows({ title, rows, metric, testId }: { title: string; rows: MetricRowData[]; metric: MetricValue; testId: string }) {
@@ -42,7 +42,7 @@ export default function MetricRow({ metric, guard, expanded, onToggleDrill, onOp
   const markers = [
     insufficientLabel(metric),
     metric.approximate ? 'approximate (backfilled done times)' : null,
-    metric.partial ? 'partial (history predates usage records)' : null,
+    metric.partial ? def.family==='tools'?'partial or unrecorded tool history':'partial (history predates usage records)' : null,
     metric.notSliceable ? 'not sliceable by this slice' : null,
   ].filter((marker): marker is string => marker !== null)
   const drillCount = metric.drill.tasks.length + metric.drill.messages.length

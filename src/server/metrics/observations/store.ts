@@ -93,7 +93,7 @@ export class ObservationStore {
         'SELECT * FROM process_observations WHERE team_id=? AND seq>? ORDER BY seq LIMIT ?',
       )
       .all(teamId, after, Math.min(1000, Math.max(1, limit)))
-      .map(row => this.map(row as Record<string, unknown>))
+      .map(row => mapStoredObservation(row as Record<string, unknown>))
   }
 
   checkpoint(source: string): string | null {
@@ -139,17 +139,18 @@ export class ObservationStore {
       .all(...kinds, cutoff, limit) as { seq: number }[]
   }
 
-  private map(row: Record<string, unknown>): StoredObservation {
-    const identity = Object.fromEntries(COLUMNS.map(column => [column, row[snake(column)]]))
-    return {
-      ...identity,
-      seq: Number(row.seq),
-      sourceKey: String(row.source_key),
-      kind: row.kind as StoredObservation['kind'],
-      observedAt: String(row.observed_at),
-      recordedAt: String(row.recorded_at),
-      version: Number(row.version),
-      data: JSON.parse(String(row.data)),
-    }
+}
+
+export function mapStoredObservation(row: Record<string, unknown>): StoredObservation {
+  const identity = Object.fromEntries(COLUMNS.map(column => [column, row[snake(column)]]))
+  return {
+    ...identity,
+    seq: Number(row.seq),
+    sourceKey: String(row.source_key),
+    kind: row.kind as StoredObservation['kind'],
+    observedAt: String(row.observed_at),
+    recordedAt: String(row.recorded_at),
+    version: Number(row.version),
+    data: JSON.parse(String(row.data)),
   }
 }

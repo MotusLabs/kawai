@@ -2,6 +2,10 @@
 // @reads: src/server/metrics/observations/service.ts
 import { expect,test } from 'bun:test'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import type { ServerMessage,ClientMessage } from '../../shared/types'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { TeamMailbox } from '../team/TeamMailbox'
@@ -147,4 +151,33 @@ test('W10: a status-only budget refusal pushes both teams without recomputing ca
 test('D8 service imports neither chat transport nor the team tool catalogue owner',()=>{
   const source=fs.readFileSync('src/server/metrics/observations/service.ts','utf8')
   expect(source).not.toMatch(/from\s+['"][^'"]*(?:ChatConnections|mailboxTools)['"]/)
+})
+
+test('D8 both fixed keys share one real WAL read snapshot across an interleaved committed write',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tool-status-read-')),file=path.join(dir,'test.db')
+  const db=schemaDb(file);db.exec('PRAGMA journal_mode=WAL')
+  const writer=new Database(file)
+  const service=new ProcessObservationService(db,()=>({}),()=>END)
+  const original=service.store.checkpoint.bind(service.store);let interleaved=false
+  try{
+    service.start();const before=service.toolStatus(),at=new Date(END+1000).toISOString()
+    service.store.checkpoint=source=>{
+      const value=original(source)
+      if(source==='tool-export-v2'&&!interleaved){
+        interleaved=true
+        writer.transaction(()=>{
+          const exportValue=JSON.parse(value!)
+          writer.prepare("UPDATE process_collection_checkpoints SET value=? WHERE source='tool-export-v2'")
+            .run(JSON.stringify({...exportValue,availableSince:at,changedAt:at}))
+          writer.prepare("UPDATE process_collection_checkpoints SET value=? WHERE source='tool-recovery-quarantine'")
+            .run(JSON.stringify({version:1,status:'quarantined',quarantinedCount:1,pendingCount:0,checkedAt:at}))
+        })()
+      }
+      return value
+    }
+    expect(service.toolStatus()).toEqual(before)
+    expect(interleaved).toBe(true)
+    service.store.checkpoint=original
+    expect(service.toolStatus()).toMatchObject({export:{availableSince:at},recovery:{quarantinedCount:1,checkedAt:at}})
+  }finally{service.store.checkpoint=original;service.stop();writer.close();db.close();fs.rmSync(dir,{recursive:true,force:true})}
 })

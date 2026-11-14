@@ -5,7 +5,7 @@ import { METRIC_DEFS, type MetricFamily as Family, type MetricId, type MetricVal
 import MetricRow from './MetricRow'
 
 const FAMILY_LABELS: Record<Family, string> = {
-  flow: 'Flow', quality: 'Quality', coverage: 'Coverage', overhead: 'Overhead', capacity: 'Capacity',
+  flow: 'Flow', quality: 'Quality', coverage: 'Coverage', overhead: 'Overhead', capacity: 'Capacity', tools:'Tools',
 }
 
 export default function MetricFamily({ family, metrics, caveat, collapsed, expanded, onToggleCollapsed, onToggleDrill, onOpenTask, onOpenThread }: {

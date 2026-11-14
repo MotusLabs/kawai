@@ -17,6 +17,7 @@
 import { readToolMeasurementStatus } from './toolMeasurementStatus'
 export { readToolMeasurementStatus } from './toolMeasurementStatus'
 import type { ToolMeasurementStatus } from '../../shared/processMetrics'
+import { loadToolMetricInputs, type ToolMetricInputs } from './toolMetricInputs'
 import type { Database } from 'bun:sqlite'
 import type { LimitEvent } from '../../shared/routing'
 import { LIMIT_EVENT_READ_WINDOW_MS } from '../team/routing/limitEvents'
@@ -78,6 +79,7 @@ export interface MetricMessageEvent {
 }
 
 export interface MetricsInputs {
+  toolInputs?:ToolMetricInputs
   toolMeasurement?:ToolMeasurementStatus
   teamId: string
   /** [loadFrom, end): the window and its baseline. */
@@ -162,6 +164,7 @@ export function loadMetricsInputs(db: Database, teamId: string, loadFrom: number
   return db.transaction(() => {
     const from = iso(loadFrom)
     const to = iso(end)
+    const toolInputs=loadToolMetricInputs(db,teamId,from,to,end)
     // Phase 1: cohorts by in-window events.
     const firstDone = db.prepare(`SELECT task_id FROM team_task_status_events WHERE team_id = ? AND to_status = 'done'
       GROUP BY task_id HAVING MIN(at) >= ? AND MIN(at) < ?`).all(teamId, from, to) as Array<{ task_id: string }>
@@ -215,6 +218,7 @@ export function loadMetricsInputs(db: Database, teamId: string, loadFrom: number
 
     // Agent starts of every session that did attributed work, and their memory manifests.
     const sessions = new Set<string>()
+    for(const row of [...toolInputs.observations,...toolInputs.closures])if(row.sessionId)sessions.add(row.sessionId)
     for (const result of results) sessions.add(result.submitterSession)
     for (const finding of findings) sessions.add(finding.authorSession)
     for (const row of usage) sessions.add(row.sessionId)
@@ -249,7 +253,7 @@ export function loadMetricsInputs(db: Database, teamId: string, loadFrom: number
     const usageHorizon = Math.max(end - TURN_USAGE_RETENTION_MS, firstTurn ? Date.parse(firstTurn) : end)
 
     return {
-      toolMeasurement:readToolMeasurementStatus(db),teamId, loadFrom, end, tasks, statusEvents, results, findings, messages, messageEvents, usage,
+      toolInputs,toolMeasurement:readToolMeasurementStatus(db),teamId, loadFrom, end, tasks, statusEvents, results, findings, messages, messageEvents, usage,
       usageHorizon, starts, manifests, limitEvents, providerIds, sessionProfiles }
   })()
 }

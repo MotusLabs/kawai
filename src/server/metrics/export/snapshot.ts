@@ -82,7 +82,7 @@ export class MetricsSnapshot {
       gauge('export_series_budget', {}, bounds.maxSeries)
       const totals = (
         store.db
-          .prepare("SELECT t.family,t.labels,t.bucket,t.value FROM process_export_totals t WHERE EXISTS (SELECT 1 FROM process_export_totals a WHERE a.family=t.family AND a.labels=t.labels AND a.bucket=\'admitted\') AND t.bucket!='admitted'")
+          .prepare("SELECT t.family,t.labels,t.bucket,t.value FROM process_export_totals t WHERE EXISTS (SELECT 1 FROM process_export_totals a WHERE a.family=t.family AND a.labels=t.labels AND a.bucket='admitted') AND t.bucket!='admitted'")
           .all() as { family: string; labels: string; bucket: string; value: number }[]
       ).filter(row=>status.export.state==='active'||!(TOOL_FAMILIES as readonly string[]).includes(row.family))
         .map(row => ({ ...row, labels: JSON.parse(row.labels) }))
