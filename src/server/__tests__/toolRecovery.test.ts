@@ -247,3 +247,65 @@ test('Q2: healthy recovery ticks preserve bytes and checkedAt while a new proces
     expect(h.store.checkpoint('tool-recovery-quarantine')).toBe(before)
   } finally {service?.stop();h.db.close()}
 })
+
+// @covers: tool-call-metrics › Unresolved recovery fails closed › Valid row recovers once
+test('D9 legacy core without tm recovers unrecorded atomically once; invalid present tm stays quarantined',()=>{
+  for(const openWork of [false,true]){
+    const h=fixture();let service:ProcessObservationService|undefined
+    try {
+      h.emit('legacy',{type:'turn_started'})
+      if(openWork){
+        h.emit('legacy',{type:'tool_call',toolCallId:'legacy-open',tool:'Bash'})
+        h.emit('legacy',{type:'approval_request',requestId:'legacy-q',tool:'Write',input:{}})
+      }
+      h.advance(3000);h.tracker.checkpoint()
+      const legacy=JSON.parse(h.raw('legacy')!)
+      delete legacy.tm
+      const before=JSON.stringify(legacy)
+      h.db.prepare('UPDATE process_live_observations SET state=? WHERE session_id=?').run(before,'legacy')
+      const bad={...structuredClone(legacy),scope:{...legacy.scope,sessionId:'invalid'},tm:{version:99}}
+      const badRaw=JSON.stringify(bad)
+      h.db.prepare('INSERT INTO process_live_observations VALUES (?,?)').run('invalid',badRaw)
+      expect(JSON.parse(h.raw('legacy')!).tm).toBeUndefined()
+      expect(Object.keys(legacy.tools)).toHaveLength(openWork?1:0)
+      expect(Object.keys(legacy.requests)).toHaveLength(openWork?1:0)
+      h.db.exec("CREATE TRIGGER legacy_abort BEFORE INSERT ON process_observations WHEN NEW.kind='turn_ended' AND NEW.session_id='legacy' BEGIN SELECT RAISE(ABORT,'legacy closure'); END")
+      service=h.service();service.start()
+      expect(h.raw('legacy')).toBe(before)
+      expect(service.chat.blocked.has('legacy')).toBe(true)
+      expect(service.chat.pendingRecovery.has('legacy')).toBe(true)
+      expect(service.chat.quarantined.has('legacy')).toBe(false)
+      expect(h.facts()).toEqual([])
+      expect(h.db.prepare("SELECT count(*) n FROM process_observations WHERE session_id='legacy' AND kind IN ('tool','request','gap')").get()).toEqual({n:0})
+      expect(h.raw('invalid')).toBe(badRaw)
+      expect(service.chat.quarantined.has('invalid')).toBe(true)
+      h.db.exec('DROP TRIGGER legacy_abort')
+      service.tick()
+      expect(h.raw('legacy')).toBeUndefined()
+      expect(service.chat.blocked.has('legacy')).toBe(false)
+      expect(service.chat.pendingRecovery.has('legacy')).toBe(false)
+      const ends=h.db.prepare("SELECT team_id,session_id,turn_id,data FROM process_observations WHERE session_id='legacy' AND kind='turn_ended'").all() as {team_id:string;session_id:string;turn_id:string;data:string}[]
+      expect(ends).toHaveLength(1)
+      expect(ends[0]).toMatchObject({team_id:'team',session_id:'legacy',turn_id:'t'})
+      const closure=JSON.parse(ends[0]!.data)
+      expect(closure).toMatchObject({outcome:'process-ended',partial:true})
+      expect(h.db.prepare("SELECT count(*) n FROM process_observations WHERE session_id='legacy' AND kind='gap'").get()).toEqual({n:1})
+      expect(closure,'legacy coverage cannot fabricate a clean version-1 carrier').toMatchObject({
+        toolCoverageVersion:0,toolFirstHistoryUnknown:true,toolStreakTainted:true,toolDenialIncomplete:null,
+      })
+      expect(h.facts().filter(f=>f.kind==='tool_streak')).toEqual([])
+      for(const kind of ['tool','request']){
+        const rows=h.db.prepare('SELECT data FROM process_observations WHERE session_id=? AND kind=?').all('legacy',kind) as {data:string}[]
+        expect(rows).toHaveLength(openWork?1:0)
+        for(const row of rows)expect(JSON.parse(row.data)).toMatchObject({outcome:'unavailable',partial:true})
+      }
+      service.tick();service.stop();service=h.service();service.start();service.tick()
+      expect(h.facts().filter(f=>f.kind==='turn_ended')).toHaveLength(1)
+      expect(h.facts().filter(f=>f.kind==='tool_streak')).toEqual([])
+      expect(h.db.prepare("SELECT count(*) n FROM process_observations WHERE session_id='legacy' AND kind='gap'").get()).toEqual({n:1})
+      expect(h.raw('invalid')).toBe(badRaw)
+      expect(service.chat.blocked.has('invalid')).toBe(true)
+      expect(service.chat.quarantined.has('invalid')).toBe(true)
+    } finally {service?.stop();h.db.close()}
+  }
+})
