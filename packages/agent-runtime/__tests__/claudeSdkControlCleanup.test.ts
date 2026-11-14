@@ -147,6 +147,54 @@ describe('pinned SDK pending-control cleanup after a stop', () => {
     }
   })
 
+  for (const stop of ['kill', 'shutdown'] as const) {
+    test(`held probes cut at a ${stop} of the default owned process leave a clean stop, every cut one identity`, async () => {
+      const home = fakeClaudeHome()
+      const s = new ClaudeSession({ launch: home.launch(), callbacks: { onEvent: () => {} }, terminate: { graceMs: 2000, killMs: 3000 } })
+      const probes = () => home.received().filter((frame) => (frame.request as { subtype?: string } | undefined)?.subtype === 'get_context_usage').length
+      try {
+        await s.start()
+        await (await s.send('hold-controls get_context_usage')).result
+        await (await s.send('hello')).result
+        await until(() => probes() === 3)
+        const receipt = await s[stop]()
+        expect(receipt.js).toBe('settled')
+        expect(receipt.processes).toHaveLength(1)
+        // Whichever cleanup won, both held probes were cut by one object and nothing failed.
+        const [generation] = generationsOf(s)
+        const cut = generation!.projections[0]
+        expect(cut instanceof AbortError || isCleanupError(cut)).toBe(true)
+        expect(generation!.projections.length).toBeGreaterThanOrEqual(2)
+        for (const projection of generation!.projections) expect(projection).toBe(cut)
+      } finally {
+        await s.kill().catch(() => {})
+      }
+    })
+  }
+
+  test('held probes cut at a shutdown that ends with a trapped exit 3 stay in the native failure by one identity', async () => {
+    const home = fakeClaudeHome()
+    const s = new ClaudeSession({ launch: home.launch(), callbacks: { onEvent: () => {} }, terminate: { graceMs: 300, killMs: 3000 } })
+    const probes = () => home.received().filter((frame) => (frame.request as { subtype?: string } | undefined)?.subtype === 'get_context_usage').length
+    try {
+      await s.start()
+      await (await s.send('hold-controls get_context_usage')).result
+      await (await s.send('trap3')).result
+      await until(() => probes() === 3)
+      const error = await stopFailure(s.shutdown())
+      expect(error.causes).toHaveLength(1)
+      const native = error.causes[0] as NativeExitFailure
+      expect(native).toBeInstanceOf(NativeExitFailure)
+      expect(native.facts).toMatchObject({ generation: 1, code: 3, signal: null, observedBeforeStop: false })
+      const cut = native.causes[0]
+      expect(cut instanceof AbortError || isCleanupError(cut)).toBe(true)
+      expect(native.causes.length).toBeGreaterThanOrEqual(2)
+      for (const projection of native.causes) expect(projection).toBe(cut)
+    } finally {
+      await s.kill().catch(() => {})
+    }
+  })
+
   test('a probe still pending after the owner already observed a clean exit fails the stop with the raw cleanup error', async () => {
     const pipes = await genuinePipeQueries()
     const s = pipeSession(pipes.factory)

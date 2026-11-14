@@ -5,13 +5,21 @@
 // spawned, so these tests prove frame handling, not native exit (the fake CLI
 // tests cover that).
 //
-// Cancellation mirrors the pinned SDK (probed on the real one): once the
-// options' abortController aborts, a pending initialize rejects with the
-// SDK's AbortError ("Operation aborted"), the stream, when it ends, throws
-// that AbortError, and a pending control request (interrupt) rejects with it
-// as the cleanup cause. A close without an abort rejects pending requests
-// with the SDK's plain "Query closed before response received". Every other
-// failure is the test's own error.
+// Its cancellation is SYNTHETIC, not the pinned SDK's model (task-d6bf9929
+// R3 A9). In SDK 0.3.289 an abort only closes the transport: initialize,
+// interrupt and the other unsignalled controls settle only when the Query's
+// cleanup runs, rejecting all of them with its cause (the read path's
+// AbortError) or, with no cause (our close, a clean EOF), with one plain
+// "Query closed before response received" (sdkPipeProcess.ts drives those
+// real orders). This seam instead rejects a pending initialize and every
+// held interrupt AT the abort with its own AbortError ("Operation aborted"),
+// and the stream, when it ends, throws that AbortError: a synthetic
+// abort-time mode that exercises the AbortError branch only. Its close
+// rejects each interrupt still held (one only when the abort did not run
+// first) with a FRESH Error of that text per interrupt, unlike the SDK's
+// one shared object; as a queryFactory query it is never trusted, so that
+// rejection always stays a stop failure. Every other failure is the test's
+// own error.
 import { AbortError, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ClaudeQueryFactory } from '../../src/claude/session.js'
 
@@ -25,10 +33,10 @@ export class ControlledQuery {
   cancelOnInterrupt: string[] = []
   /** When set, interrupt rejects with it (a genuine control failure). */
   interruptFailure: unknown = null
-  /** When true, interrupt never answers until the query is aborted or closed. */
+  /** When true, interrupt never answers until the query is aborted or closed (synthetic: the real SDK waits for its cleanup). */
   holdInterrupt = false
   private readonly heldInterrupts: ((error: unknown) => void)[] = []
-  /** The SDK's cancellation, once the query's abortController aborted. */
+  /** The synthetic abort-time cancellation (an SDK AbortError), once the query's abortController aborted. */
   private aborted: Error | null = null
   /** An independent read failure the stream throws next. */
   private readFailure: unknown = null

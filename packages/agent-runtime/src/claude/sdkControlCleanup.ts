@@ -93,7 +93,7 @@ export function sampleCleanupAtStop(generations: readonly Generation[]): void {
 }
 
 /** Exactly the SDK's plain cleanup error: no subclass, cause, renamed name or telemetry tags. */
-function isCleanupError(error: unknown): error is Error {
+export function isCleanupError(error: unknown): error is Error {
   if (!(error instanceof Error) || Object.getPrototypeOf(error) !== Error.prototype) return false
   if (error.name !== 'Error' || error.message !== CLEANUP_TEXT) return false
   return !['cause', 'name', 'telemetryMessage', 'errorClass', 'errorCode'].some((key) => Object.hasOwn(error, key))

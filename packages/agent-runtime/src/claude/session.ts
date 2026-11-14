@@ -66,7 +66,7 @@ import { OpenTurns } from './openTurns.js'
 import { composeEnvelope } from './compose.js'
 import { checkSubmission, newTurn, promptMessage, type Turn } from './turns.js'
 import { ClaudeUsageFacts } from './usageFacts.js'
-import { genuineQuery, sampleCleanupAtStop } from './sdkControlCleanup.js'
+import { ControlInvocation, genuineQuery, sampleCleanupAtStop } from './sdkControlCleanup.js'
 import { UsageControls } from './usageControls.js'
 import type { ClaudeSessionOptions } from './sessionOptions.js'
 export type { ClaudeQueryFactory, ClaudeSessionOptions } from './sessionOptions.js'
@@ -205,10 +205,11 @@ export class ClaudeSession {
     this.frames.commands.beginLoading()
     void this.lifecycle.jobs.run(`generation:${number}`, () => this.consume(generation))
     let initialized: Awaited<ReturnType<Query['initializationResult']>>
+    const initialize = new ControlInvocation(generation, 'initialize')
     try {
-      initialized = await generation.query.initializationResult()
+      initialized = await initialize.call<typeof initialized>()
     } catch (error) {
-      throw await startFailure(generation, this.stopToken, error, (message, causes) => this.lifecycle.cancelled(message, causes))
+      throw await startFailure(generation, this.stopToken, error, (message, causes) => this.lifecycle.cancelled(message, causes), initialize)
     }
     generation.initialized = true
     if (generation === this.current() && Array.isArray(initialized?.commands)) this.frames.commands.applyCommands(initialized.commands as RawChatCommand[])
@@ -511,14 +512,15 @@ export class ClaudeSession {
       // The interrupted turn's boundary re-reads the context report at once, as the retired driver did:
       // the result the CLI owes may never arrive (task-602c71e9 R6, design §2).
       this.controls.probe(generation)
+      const interrupt = new ControlInvocation(generation, 'interrupt')
       void this.lifecycle.jobs.run(
         `interrupt:${generation.number}`,
         async () => {
-          const cancelled = await interruptGeneration(generation)
+          const cancelled = await interruptGeneration(generation, interrupt)
           // Cancelled prompts never run: an interrupted turn whose prompts were all cancelled owes no result.
           if (generation === this.current()) this.binder.promptsWithdrawn(cancelled)
         },
-        { expectedCancellation: (error) => cancelledByStop(generation, this.stopToken, error) },
+        { expectedCancellation: (error) => cancelledByStop(generation, this.stopToken, error) || interrupt.cancelledByCleanup(this.stopToken, error) },
       )
     }
     return receipt

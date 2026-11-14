@@ -23,7 +23,7 @@ import type { ResolvedLaunch } from '../process/launch.js'
 import { nativeCauses } from '../process/nativeVerdict.js'
 import type { OwnedProcess, TerminateOptions } from '../process/ownedProcess.js'
 import { PromptQueue } from './promptQueue.js'
-import { importGenuineSdk } from './sdkControlCleanup.js'
+import { importGenuineSdk, type ControlInvocation } from './sdkControlCleanup.js'
 
 export type SdkModule = typeof import('@anthropic-ai/claude-agent-sdk')
 
@@ -114,18 +114,20 @@ export function keepStartupFailure(generation: Generation, message: { type: stri
  * The error start rejects with when the generation's initialize failed. The
  * SDK's rejection is never proof that the stop caused it: it stays a failure
  * the stop reports. A proven no-launch (the spawner refused once stop had
- * begun) and the stop's own cancellation are cancellations; a spawn failure
+ * begun) and the stop's own cancellation (its AbortError, or the SDK cleanup
+ * error sdkControlCleanup.ts recognizes for this generation's `initialize`
+ * invocation) are cancellations; a spawn failure
  * is a dependency failure. A process that exited while starting is
  * classified first (L14: exited, one process end); then a resumed launch the
  * CLI refused fails with `resume` (R10: nothing fresh was started), and
  * anything else with `transport`.
  */
-export async function startFailure(generation: Generation, stopToken: object | null, error: unknown, cancelled: (message: string, causes: unknown[]) => AgentRuntimeError): Promise<AgentRuntimeError> {
+export async function startFailure(generation: Generation, stopToken: object | null, error: unknown, cancelled: (message: string, causes: unknown[]) => AgentRuntimeError, initialize?: ControlInvocation): Promise<AgentRuntimeError> {
   generation.retired = true
   const exit = generation.owned?.exited
   if (generation.spawn === 'refused') return cancelled('the driver was stopped before its process was created', [error])
   if (exit?.kind === 'spawn-failed') return new AgentRuntimeError({ category: 'dependency', message: 'the Claude Code executable could not be started' }, [error])
-  if (cancelledByStop(generation, stopToken, error)) return cancelled('the driver was stopped while starting', [error])
+  if (cancelledByStop(generation, stopToken, error) || (initialize?.cancelledByCleanup(stopToken, error) ?? false)) return cancelled('the driver was stopped while starting', [error])
   if (exit || generation.readEnded) await generation.ended
   if (refusedResume(generation)) return new AgentRuntimeError({ category: 'resume', message: 'the runtime refused the resume target or its transcript is unavailable' }, [error])
   return new AgentRuntimeError({ category: 'transport', message: 'the Claude Code process did not initialize' }, [error])
@@ -156,12 +158,12 @@ export async function loadSdk(): Promise<SdkModule> {
 type InterruptWithOptions = (options?: { cancelQueued?: boolean }) => Promise<{ cancelled?: string[] } | undefined>
 
 /**
- * Interrupt the CLI's turn, cancelling what it queued when the generation
- * supports it (else a plain interrupt); resolves to the cancelled prompt UUIDs.
+ * Interrupt the CLI's turn through `control` (one interrupt invocation on
+ * this generation), cancelling what it queued when the generation supports
+ * it (else a plain interrupt); resolves to the cancelled prompt UUIDs.
  */
-export async function interruptGeneration(generation: Generation): Promise<string[]> {
-  const interrupt = generation.query.interrupt as unknown as InterruptWithOptions
-  const ack = await interrupt.call(generation.query, generation.cancelQueued ? { cancelQueued: true } : undefined)
+export async function interruptGeneration(generation: Generation, control: ControlInvocation): Promise<string[]> {
+  const ack = await control.call<Awaited<ReturnType<InterruptWithOptions>>>(generation.cancelQueued ? { cancelQueued: true } : undefined)
   return Array.isArray(ack?.cancelled) ? ack.cancelled : []
 }
 

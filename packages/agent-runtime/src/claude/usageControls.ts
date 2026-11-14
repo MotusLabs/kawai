@@ -1,8 +1,8 @@
 // The Claude session's usage control calls (design §6, tasks 5.2/5.3), each
 // an owned job that stop joins. A rejection is kept, unless it is exactly the
 // stop's own cancellation of that generation's query (its AbortError, or for
-// the context probe the SDK cleanup error sdkControlCleanup.ts recognizes for
-// that call), so stop reports it.
+// the context probe and the SDK usage pull the SDK cleanup error
+// sdkControlCleanup.ts recognizes for that call), so stop reports it.
 // None starts once stop has begun.
 // - The context probe (`getContextUsage`) runs after each initialize, each
 //   result, and an interrupt that settles an active turn (at once, not after
@@ -22,7 +22,6 @@
 // - onQuotaNoData (R2) fires once for a permitted pull that was attempted and
 //   found no method, no plan windows or a rejection. The rejection itself
 //   stays retained; a stop's own cancellation is not no-data.
-import type { Query } from '@anthropic-ai/claude-agent-sdk'
 import type { DriverLifecycle } from '../lifecycle/lifecycle.js'
 import type { ContextReportSlice } from '../usage/context.js'
 import { parseUsagePull } from '../usage/quota.js'
@@ -41,11 +40,6 @@ export interface UsageControlsHost {
   facts: { contextReport(report: ContextReportSlice): void; quotaReport(report: QuotaReport): void }
 }
 
-type ControlQuery = Query & {
-  getContextUsage?: (options: { detail: 'summary' }) => Promise<unknown>
-  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (options: { skipBehaviors: boolean }) => Promise<unknown>
-}
-
 export class UsageControls {
   private pulled = false
 
@@ -56,29 +50,29 @@ export class UsageControls {
     this.probe(generation)
     const claim = this.host.claimUsagePull
     if (claim) {
+      // Only the SDK pull's own rejection can be the stop's cleanup cancellation, never the claim's.
+      const pull = new ControlInvocation(generation, 'quota-pull')
       this.run(generation, 'usage-claim', async () => {
         if (!this.eligible(generation)) return
         const permitted = (await claim()) === true
         if (!permitted || this.host.quotaSource !== 'host-login' || !this.eligible(generation)) return
-        await this.pull(generation)
-      })
+        await this.pull(generation, pull)
+      }, pull)
       return
     }
     if (this.host.quotaSource !== 'host-login' || this.pulled) return
-    const query = generation.query as ControlQuery
-    if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') return
+    const pull = new ControlInvocation(generation, 'quota-pull')
+    if (typeof pull.method() !== 'function') return
     this.pulled = true
-    this.run(generation, 'quota-pull', () => this.pull(generation))
+    this.run(generation, 'quota-pull', () => this.pull(generation, pull), pull)
   }
 
-  /** The permitted pull: a report with windows, else one no-data observation. */
-  private async pull(generation: Generation): Promise<void> {
-    const query = generation.query as ControlQuery
-    const pull = query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
-    if (typeof pull !== 'function') return this.noData()
+  /** The permitted pull (one invocation): a report with windows, else one no-data observation. */
+  private async pull(generation: Generation, pull: ControlInvocation): Promise<void> {
+    if (typeof pull.method() !== 'function') return this.noData()
     let reply: unknown
     try {
-      reply = await pull.call(query, { skipBehaviors: true })
+      reply = await pull.call<unknown>({ skipBehaviors: true })
     } catch (error) {
       // A stop's own cancellation is not no-data: eligibility already excludes a stopping driver.
       if (this.eligible(generation)) this.noData()

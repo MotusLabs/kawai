@@ -20,6 +20,11 @@ export interface ControlFrame {
   request: { subtype: string } & Record<string, unknown>
 }
 
+export interface PipeOptions {
+  /** Leave initialize unanswered, so a start stays pending. */
+  holdInitialize?: boolean
+}
+
 export class PipeProcess {
   readonly stdin = new PassThrough()
   readonly stdout = new PassThrough()
@@ -30,8 +35,10 @@ export class PipeProcess {
   private readonly events = new EventEmitter()
   private buffer = ''
   private readonly waiters: Array<{ subtype: string; resolve: (frame: ControlFrame) => void }> = []
+  /** Runs synchronously inside each recorded kill (the SDK's signal request), e.g. to exit or end stdout. */
+  onKill?: (signal: NodeJS.Signals) => void
 
-  constructor() {
+  constructor(private readonly options: PipeOptions = {}) {
     this.stdin.on('data', (chunk: Buffer) => {
       this.buffer += chunk.toString('utf8')
       let newline: number
@@ -43,7 +50,7 @@ export class PipeProcess {
         if (frame.type !== 'control_request') continue
         const control = frame as ControlFrame
         this.controls.push(control)
-        if (control.request.subtype === 'initialize') this.respond(control, { commands: [], agents: [], models: [], account: {}, output_style: 'default', available_output_styles: [] })
+        if (control.request.subtype === 'initialize' && !this.options.holdInitialize) this.respond(control, { commands: [], agents: [], models: [], account: {}, output_style: 'default', available_output_styles: [] })
         for (const waiter of this.waiters.splice(0)) {
           if (waiter.subtype === control.request.subtype) waiter.resolve(control)
           else this.waiters.push(waiter)
@@ -66,6 +73,11 @@ export class PipeProcess {
     this.write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response } })
   }
 
+  /** The CLI's error reply to a control request (the SDK tags its rejection). */
+  respondError(frame: ControlFrame, error: string): void {
+    this.write({ type: 'control_response', response: { subtype: 'error', request_id: frame.request_id, error } })
+  }
+
   write(message: Record<string, unknown>): void {
     this.stdout.write(`${JSON.stringify(message)}\n`)
   }
@@ -80,6 +92,7 @@ export class PipeProcess {
   /** Records the SDK's signal request; the test decides whether the process ever ends. */
   kill(signal: NodeJS.Signals): boolean {
     this.kills.push(signal)
+    this.onKill?.(signal)
     return true
   }
 
@@ -131,8 +144,8 @@ export interface ControlledOwner {
   terminate(): Promise<ProcessExitFact>
 }
 
-/** An owner that already observed `before` (pre-stop), or whose termination ends with `atStop`. */
-export function controlledOwner(generation: number, end: { before: LeaderExit } | { atStop: LeaderExit }): ControlledOwner {
+/** An owner that already observed `before` (pre-stop), or whose termination ends with `atStop` (once `held` settles). */
+export function controlledOwner(generation: number, end: { before: LeaderExit } | { atStop: LeaderExit }, held?: Promise<void>): ControlledOwner {
   let settle!: (exit: LeaderExit) => void
   const leaderExit = new Promise<LeaderExit>((resolve) => (settle = resolve))
   const owner: ControlledOwner = {
@@ -144,6 +157,8 @@ export function controlledOwner(generation: number, end: { before: LeaderExit } 
       return owner.exited === null
     },
     terminate: async () => {
+      // `held` keeps the termination (and so the stop) pending until the test releases it.
+      await held
       if (owner.exited === null && 'atStop' in end) freeze(end.atStop)
       const exit = owner.exited!
       return exit.kind === 'exited'
@@ -173,13 +188,13 @@ export interface GenuinePipeQueries {
  * private helper the default session uses, over a pipe process instead of
  * the owned spawner. The SDK module is the one loadSdk imported.
  */
-export async function genuinePipeQueries(): Promise<GenuinePipeQueries> {
+export async function genuinePipeQueries(pipe: PipeOptions = {}): Promise<GenuinePipeQueries> {
   const sdk = await loadSdk()
   const out: GenuinePipeQueries = {
     processes: [],
     queries: [],
     factory: ({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => {
-      const process = new PipeProcess()
+      const process = new PipeProcess(pipe)
       out.processes.push(process)
       const query = genuineQuery(sdk, { prompt, options: { ...options, spawnClaudeCodeProcess: () => process as unknown as SpawnedProcess } })
       out.queries.push(query)
