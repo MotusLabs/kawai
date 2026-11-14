@@ -253,8 +253,8 @@ export default function ChatSurface({
     claimReveal(session.id, token)
     return () => releaseReveal(session.id, token)
   }, [revealEnabled, session.id, token])
-  useRevealRow({
-    sessionId: session.id, loaded: transcript !== EMPTY, container: transcriptBox, sendMessage,
+  const revealOutcome=useRevealRow({
+    sessionId: session.id, archived, loaded: transcript !== EMPTY, container: transcriptBox, sendMessage,
     eventCount: transcript.events.length,
     mayConsume: () => revealEnabled && isRevealDesignated(session.id, token),
   })
@@ -294,6 +294,9 @@ export default function ChatSurface({
           anchoring would compensate twice. */}
       <div ref={transcriptBox} className="min-h-0 flex-1 overflow-y-auto p-4" style={{ overflowAnchor: 'none' }}>
         <div className="mx-auto max-w-4xl space-y-4">
+          {revealOutcome&&revealOutcome.status!=='revealed'&&<p role="alert" data-testid="chat-reveal-outcome">
+            Tool call reveal: {revealOutcome.status}.
+          </p>}
           <ChatMessages events={transcript.events} projectPath={session.projectPath}
             sessionId={session.id} sendMessage={sendMessage} connected={connected}
             archived={archived} agentLabel={agentLabelOf(session.agentType)}

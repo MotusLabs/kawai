@@ -14,7 +14,7 @@
 // lands in `opened` (null when the team has none) and is dropped on close.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
-import type { MetricSlice, MetricWindow, ProcessMetrics } from '@shared/processMetrics'
+import type { ToolStreakEntry, MetricSlice, MetricWindow, ProcessMetrics } from '@shared/processMetrics'
 import type { ProcessReport, ReportFreshness, VersionChange } from '@shared/processReports'
 
 export interface MetricsRequest {
@@ -22,7 +22,18 @@ export interface MetricsRequest {
   slice: MetricSlice | null
 }
 
+export interface ToolDrillView {
+  entries:ToolStreakEntry[]
+  total:number|null
+  nextCursor:string|null
+  cursor:string|null
+  loading:boolean
+  error:string|null
+}
+
 export interface MetricsView {
+  toolDrill?:ToolDrillView
+
   open: boolean
   /** True from a request until its snapshot arrives. */
   loading: boolean
@@ -64,6 +75,8 @@ interface MetricsState {
   close: (teamKey: string) => void
   /** Move a view to the chat's new team key; a view already under the new key wins. */
   rekey: (from: string, to: string) => void
+  requestToolPage:(teamKey:string,cursor:string|null)=>Extract<import('@shared/metricsMessages').MetricsClientMessage,{type:'process-tool-drill-page'}>|null
+  applyToolPage:(message:Extract<ServerMessage,{type:'process-tool-drill-page'}>)=>void
   applySnapshot: (message: Extract<ServerMessage, { type: 'process-metrics-snapshot' }>) => void
   /** Arm (or reuse) the slot's command key for `payload` and mark it busy; returns the key. */
   arm: (teamKey: string, slot: string, payload: unknown) => string
@@ -77,13 +90,13 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
   views: {},
   request: (teamKey, request) => set(state => {
     const view = state.views[teamKey] ?? closedMetricsView()
-    return { views: { ...state.views, [teamKey]: { ...view, open: true, loading: true, requested: request } } }
+    return { views: { ...state.views, [teamKey]: { ...view, open: true, loading: true, requested: request,toolDrill:undefined } } }
   }),
   close: teamKey => set(state => {
     const view = state.views[teamKey]
     if (!view?.open) return state
     const commands = Object.fromEntries(Object.entries(view.commands).map(([slot, command]) => [slot, { ...command, busy: false }]))
-    return { views: { ...state.views, [teamKey]: { ...view, open: false, loading: false, commands } } }
+    return { views: { ...state.views, [teamKey]: { ...view, open: false, loading: false, commands,toolDrill:undefined } } }
   }),
   rekey: (from, to) => set(state => {
     const view = state.views[from]
@@ -92,6 +105,23 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
     delete views[from]
     if (!views[to]) views[to] = view
     return { views }
+  }),
+  requestToolPage:(teamKey,cursor)=>{
+    const view=get().views[teamKey]
+    if(!view?.open||!view.requested||view.toolDrill?.loading)return null
+    if(cursor!==null&&view.toolDrill?.nextCursor!==cursor)return null
+    const prior=cursor===null?{entries:[],total:null,nextCursor:null}:view.toolDrill!
+    set(state=>({views:{...state.views,[teamKey]:{...view,toolDrill:{...prior,cursor,loading:true,error:null}}}}))
+    return {type:'process-tool-drill-page',teamPath:teamKey,...view.requested,pageSize:50,cursor}
+  },
+  applyToolPage:message=>set(state=>{
+    const view=state.views[message.teamPath],page=view?.toolDrill
+    if(!view?.open||!page?.loading||!sameRequest(view.requested,message.window,message.slice)||
+      message.pageSize!==50||page.cursor!==message.cursor)return state
+    const next='error'in message?{...page,loading:false,error:message.error}:
+      {...page,loading:false,error:null,total:message.total,nextCursor:message.nextCursor,
+        entries:message.cursor===null?message.entries:[...page.entries,...message.entries]}
+    return {views:{...state.views,[message.teamPath]:{...view,toolDrill:next}}}
   }),
   applySnapshot: message => set(state => {
     const view = state.views[message.teamPath]

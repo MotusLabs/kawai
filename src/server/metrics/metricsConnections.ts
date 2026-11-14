@@ -124,6 +124,18 @@ export class MetricsConnections {
     }
   }
 
+  async handleToolDrill(connection:ChatConnection,message:Extract<MetricsClientMessage,{type:'process-tool-drill-page'}>) {
+    const base={type:message.type,teamPath:message.teamPath,window:message.window,slice:message.slice,
+      pageSize:message.pageSize,cursor:message.cursor}
+    try {
+      const team=await this.manager.teamScopes.resolve(message.teamPath)
+      if(!team)throw new Error(unknownTeamError(message.teamPath))
+      connection.send({...base,...this.manager.metrics.toolDrill(team.teamId,message.window,message.slice,message.pageSize,message.cursor)})
+    }catch(error) {
+      connection.send({...base,error:error instanceof Error?error.message:'Tool drill unavailable'})
+    }
+  }
+
   async handle(connection: ChatConnection, message: Extract<MetricsClientMessage, { type: `process-metrics-${string}` }>) {
     const { teamPath } = message
     const token = {}

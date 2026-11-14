@@ -14,10 +14,22 @@
 // with `report: null` when the team has no such report. The
 // human's proposal commands (team-process-metrics D6) carry a command key and
 // answer `process-proposal-result`; a committed one re-sends the snapshots.
-import type { MetricSlice, MetricWindow, ProcessMetrics } from './processMetrics'
+import type { MetricSlice, MetricWindow, ProcessMetrics, ToolStreakEntry } from './processMetrics'
 import type { ProcessReport, ProposalDecision, ProposalLinkEvent, ReportFreshness, VersionChange } from './processReports'
 
-export type MetricsServerMessage = {
+export interface ToolDrillPage {
+  teamId:string
+  window:MetricWindow
+  slice:MetricSlice|null
+  pageSize:number
+  total:number
+  entries:ToolStreakEntry[]
+  nextCursor:string|null
+}
+
+export type MetricsServerMessage = ({ type:'process-tool-drill-page'; teamPath:string; cursor:string|null } & (ToolDrillPage | {
+  window:MetricWindow; slice:MetricSlice|null; pageSize:number; error:string
+})) | {
   type: 'process-metrics-snapshot'
   teamPath: string
   teamId: string
@@ -55,6 +67,7 @@ export type MetricsServerMessage = {
 export const REPORTS_IN_SNAPSHOT = 20
 
 export type MetricsClientMessage =
+  | { type:'process-tool-drill-page'; teamPath:string; window:MetricWindow; slice:MetricSlice|null; pageSize:number; cursor:string|null }
   | { type: 'process-metrics-open' | 'process-metrics-refresh'; teamPath: string; window: MetricWindow; slice: MetricSlice | null }
   | { type: 'process-metrics-close'; teamPath: string }
   /** Read one report by id and keep receiving it after commits, until closed. */

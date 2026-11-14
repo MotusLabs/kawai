@@ -13,6 +13,7 @@ import {
   COVERAGE_CAVEAT, METRIC_DEFS, MIN_SAMPLE, USAGE_CAVEAT, WINDOW_MS, sliceAllowed,
   type MetricDef, type MetricSlice, type MetricValue, type MetricWindow, type ProcessMetrics,
 } from '../../shared/processMetrics'
+import { readToolDrill } from './toolDrill'
 import { toolWindow, decorateToolMetric, type ToolWindow } from './toolMetrics'
 import { capacityObservations } from './capacity'
 import { flowObservations } from './flow'
@@ -96,6 +97,10 @@ export class MetricsReader {
     private readonly resolveProvider?: (profileId: string, teamId: string) => string,
     private readonly toolStatus:()=>ToolMeasurementStatus=unknownToolMeasurement,
   ) {}
+
+  toolDrill(teamId:string,window:MetricWindow,slice:MetricSlice|null,pageSize:number,cursor:string|null) {
+    return readToolDrill(this.db,teamId,window,slice,pageSize,cursor,this.now())
+  }
 
   read(teamId: string, window: MetricWindow, slice: MetricSlice | null, options: { fresh?: boolean } = {}): ProcessMetrics {
     const key = JSON.stringify([teamId, window, slice])

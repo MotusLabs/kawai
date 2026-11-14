@@ -5,10 +5,11 @@ import { useMetricsStore } from '../stores/metricsStore'
 import { routedTeamPath } from '../utils/teamKeyAliases'
 import type { ServerMessage } from '@shared/types'
 
-export function handleMetricsMessage(message: Extract<ServerMessage, { type: 'process-metrics-snapshot' | 'process-proposal-result' | 'process-report-detail' }>): void {
+export function handleMetricsMessage(message: Extract<ServerMessage, { type: 'process-metrics-snapshot' | 'process-proposal-result' | 'process-report-detail' | 'process-tool-drill-page' }>): void {
   const metrics = useMetricsStore.getState()
   const teamPath = routedTeamPath(message.teamPath, metrics.views)
-  if (message.type === 'process-proposal-result') metrics.applyResult({ ...message, teamPath })
+  if(message.type==='process-tool-drill-page')metrics.applyToolPage({...message,teamPath})
+  else if (message.type === 'process-proposal-result') metrics.applyResult({ ...message, teamPath })
   else if (message.type === 'process-report-detail') metrics.applyReport({ ...message, teamPath })
   else metrics.applySnapshot({ ...message, teamPath })
 }
