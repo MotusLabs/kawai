@@ -200,7 +200,7 @@ test('Tools browser: real failed turn, stable paging, separate status, readable 
     await page.goto('/')
     const sessionId=await createChat(page,root,'Tool metrics reader','readers','Metrics readers')
     await runTurn(page,sessionId,'tool fail')
-    await expect(page.getByText('Turn complete',{exact:true})).toHaveCount(1)
+    await expect(page.getByTestId('chat-view').getByText(/^Turn complete · success · /)).toHaveCount(1)
     const facts=JSON.parse(bunScript(`
       import {Database} from 'bun:sqlite';
       import {ObservationStore} from './src/server/metrics/observations/store';
