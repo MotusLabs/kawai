@@ -19,6 +19,7 @@ const MANAGED_TURN_KINDS = [
   'turn_ended',
   'activity',
   'tool',
+  'tool_streak',
   'request',
   'usage',
   'settings',

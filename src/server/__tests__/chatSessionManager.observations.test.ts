@@ -98,4 +98,55 @@ describe('ChatSessionManager observation rows', () => {
     expect(db.db.prepare("SELECT count(*) AS n FROM process_observation_keys WHERE source_key LIKE 'chat:%'").get()).toEqual({ n: 0 })
     h.manager.shutdown()
   })
+  async function deniedWitness(native:boolean) {
+    const h=await createHarness(db)
+    const created=h.manager.createSession({projectPath:'/tmp/proj'})
+    if(!created.ok)throw Error(created.error)
+    const id=created.session.id
+    expect(h.manager.setApprovalPolicy(id,'manual')).toEqual({ok:true})
+    expect((await h.manager.send(id,'write a file')).ok).toBe(true)
+    await spawned(h.handles)
+    const handle=h.handles[0]!
+    try {
+      handle.push(initMessage('sdk-denial'))
+      // Exact same tool/input populates the adapter's audit fallback even without native ID.
+      handle.push(toolUse('native-c','Write'))
+      await flush()
+      expect(h.events.some(e=>e.event.type==='tool_call'&&e.event.toolCallId==='native-c')).toBe(true)
+      const permission=handle.options.canUseTool!('Write',{},{
+        signal:new AbortController().signal,...(native?{toolUseID:'native-c'}:{}),
+      } as never)
+      await flush()
+      const card=h.events.find(e=>e.event.type==='approval_request')?.event
+      if(!card||card.type!=='approval_request')throw Error('real approval card missing')
+      expect(card.tool).toBe('Write')
+      expect(h.manager.resolveApproval(id,card.requestId,'deny')).toEqual({ok:true})
+      await expect(permission).resolves.toMatchObject({behavior:'deny'})
+      const failed=toolResult('native-c') as unknown as {message:{content:Record<string,unknown>[]}}
+      failed.message.content[0]!.is_error=true
+      failed.message.content[0]!.content='neutral failed result'
+      handle.push(failed as unknown as SDKMessage)
+      handle.push(resultWithWindow())
+      await flush()
+      const rows=db.db.prepare("SELECT kind,data FROM process_observations WHERE session_id=? AND kind IN ('tool','turn_ended') ORDER BY seq").all(id) as {kind:string,data:string}[]
+      const result=rows.filter(r=>r.kind==='tool').map(r=>JSON.parse(r.data))
+      expect(result).toHaveLength(1)
+      expect(result[0]).toMatchObject({eligible:true,outcome:'failed',partial:false})
+      expect(rows.filter(r=>r.kind==='turn_ended')).toHaveLength(1)
+      return {result:result[0],card}
+    } finally {h.manager.shutdown();await flush()}
+  }
+  // @covers: tool-call-metrics › Tool results are classified once › Trusted denial precedes text
+  test('native denial reaches the real SDK adapter manager tracker and one eligible failed result',async()=>{
+    const actual=await deniedWitness(true)
+    expect(actual.result.failureClass).toBe('denied')
+    expect(actual.card.toolCallId).toBe('native-c')
+  })
+  // @covers: tool-call-metrics › Approval evidence retains first-resolution ownership › Audit fallback is not a native link
+  test('native-ID-absent with a matching audit fallback remains unlinked and non-denied',async()=>{
+    const actual=await deniedWitness(false)
+    expect(actual.result.failureClass).toBe('other')
+    expect(actual.card.toolCallId).toBeUndefined()
+  })
+
 })

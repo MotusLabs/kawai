@@ -228,6 +228,7 @@ export type ChatEvent =
     })
   | (ChatTurnEventBase & {
       type: 'approval_request'
+      toolCallId?: string
       requestId: string
       tool: string
       input: unknown

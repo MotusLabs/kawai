@@ -10,6 +10,7 @@ function harness() {
   let now = origin, sequence = 0, taskId: string | null = 'task-a', model = 'model-a';
   const identity = () => ({ teamId: 'team', sessionId: 'chat', taskId, startId: 'start-1', groupId: 'dev', model });
   const service = new ProcessObservationService(db, identity, () => now);
+  service.chat.recover(); // Explicit startup inventory for this timer-free fixture.
   const emit = (data: Record<string, unknown>, second: number) => { now = origin + second * 1000; service.chat.event('chat', { id: `e${++sequence}`, at: new Date(now).toISOString(), turnId: 'turn', ...data } as ChatEvent); };
   const rows = () => service.store.forTeam('team');
   return { db, service, emit, rows, identity, time: (s: number) => { now = origin + s * 1000; }, task: (id: string | null) => { taskId = id; }, model: (value: string) => { model = value; } };

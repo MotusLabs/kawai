@@ -1,3 +1,5 @@
+import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
+import { TEAM_TOOL_PREFIX } from '../metrics/observations/toolCalls'
 // Owns the lifecycle of chat sessions: auth-gated creation, lazy driver
 // construction (the SDK query() is spawned by the driver on the first turn),
 // persistence in the chat_sessions table with restore-on-start into the
@@ -1263,7 +1265,7 @@ export class ChatSessionManager {
         groupId: record?.groupId ?? null, profileId: record?.claudeProfileId ?? 'default',
         model: start?.model ?? record?.model ?? null, startId,
       }
-    })
+    }, Date.now, undefined, { prefix: TEAM_TOOL_PREFIX, members: new Set(TEAM_ALLOWED_TOOLS) })
     this.observations.start([
       notify => this.tasks.store.subscribe(task => notify(task.id)),
       notify => this.mailbox.store.subscribe((_team, message) => notify(message?.taskId ?? undefined)),

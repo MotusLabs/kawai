@@ -20,6 +20,7 @@
 
 - [ ] 3.1 Implement the D2 record states over the reserved optional `approval_request.toolCallId` and the existing requestId resolution: pending, denied-await-call, transferred, settled, unlinked/quarantined; cap 64 first-seen with tombstones; `denialIncomplete` bookkeeping.
   - Verify: table tests for W3 (pre-call denial transferred to the admitted call, exactly one denied result), W4 (65th id unlinked + flag, seen 64 settle), duplicate/conflicting/late resolutions, allowed and cancelled settlements, and a link to a quarantined call staying late-only. Kill the mutants that release a pre-call denial's slot, attach a late resolution to a later call, or create a denominator for a no-result card.
+  - Clarified C1/C2/N2: include 70 policy grants then manual native-linked denial; known-question and late-card variants preserve generic dedupe; partial live closes taint first history; untransferred denial sets denialIncomplete without a denominator. Native-absent/audit-fallback-present stays unlinked. Checkpoint failure on the second of two unknown closures rolls both facts and every map back in one per-session transaction.
 
 ## 4. Recovery
 

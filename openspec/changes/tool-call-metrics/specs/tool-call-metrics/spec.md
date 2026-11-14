@@ -5,7 +5,7 @@ Make tool-call failures of managed chat agents observable by tool and by cause, 
 ## ADDED Requirements
 
 ### Requirement: Tool calls are admitted and identified within bounds
-Every admitted tool call SHALL carry a bounded identity: a CLI built-in or exact `kawai-team` member by name in both runtimes; ambiguous shapes (`mcp__dynamic__…`, extra separators, collapsed agent tools, empty, bare `echo`) `unknown`; any other distinct raw name one of at most 96 opaque live slots, the 97th `unknown`. Only slotted identities are reliable. Admission follows the live-driver contract and fences; replay never enters. Raw names, inputs, and outputs SHALL NOT be stored.
+Every admitted tool call SHALL carry a bounded identity: a CLI built-in or exact `kawai-team` member by name in both runtimes; ambiguous shapes (`mcp__dynamic__…`, extra separators, collapsed agent tools, empty, bare `echo`) `unknown`; any other distinct raw name one of at most 96 opaque live slots, the 97th `unknown`. Only slotted identities are reliable. Admission follows the live-driver contract and fences; replay never enters. Raw foreign/unrecognized names, inputs, and outputs SHALL NOT be stored; specified bounded built-in/exact catalogue identity names are permitted.
 
 #### Scenario: Same team tool in both runtimes
 - **WHEN** a Claude agent calls `mcp__kawai-team__task_submit_result` and a Codex agent calls `task_submit_result` in the `kawai-team` namespace
@@ -153,3 +153,27 @@ On process start, each existing live-checkpoint row SHALL recover in its own tra
 #### Scenario: Count write failure leaves health unknown
 - **WHEN** the quarantine checkpoint write fails
 - **THEN** recovery health reads unknown (not zero and not the previously stored count), and the admission gate still holds for the quarantined session
+
+
+### Requirement: Approval evidence retains first-resolution ownership
+Only actual approvals SHALL occupy metric-link tombstones. Known questions and unmatched allowed/answered/cancelled resolutions keep generic accounting/dedupe without link slots or denialIncomplete. Unmatched denied stays fail-closed; later cards/resolutions cannot reopen an id or infer trust from audit matching.
+
+#### Scenario: Policy grants leave capacity for a manual denial
+- **WHEN** 70 unmatched policy-allowed resolutions precede a manual native-linked denied failed result
+- **THEN** grants use no D2 slot or denialIncomplete and the manual denial links exactly once
+
+#### Scenario: Question and late cards do not fabricate approval evidence
+- **WHEN** a known question or unmatched allowed/answered/cancelled resolves before a late card/resolution for the same id
+- **THEN** generic accounting/dedupe remains correct, the non-denial uses no D2 slot or flag, and no trusted denial reopens or rebinds
+
+#### Scenario: Audit fallback is not a native link
+- **WHEN** a native approval id is absent but audit tool/input matching exists
+- **THEN** the metric approval is unlinked and neutral failed text is not a trusted denial
+
+#### Scenario: Untransferred denial has no denominator
+- **WHEN** denied-await-call never transfers before close
+- **THEN** denialIncomplete is true with no invented call, result, denominator or streak
+
+#### Scenario: Partial live closure taints first history
+- **WHEN** recovery, processEnded or replacement closes a still-live turn
+- **THEN** toolFirstHistoryUnknown is true and existing streaks close unknown once; normally closed facts remain unchanged

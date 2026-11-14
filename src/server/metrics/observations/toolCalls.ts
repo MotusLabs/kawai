@@ -1,5 +1,5 @@
 // Tool-call recognition and result classification (tool-call-metrics D4, D6),
-// a dormant pure foundation: no caller, state, IO, or imports. Recognition
+// pure helpers used by the bounded tracker, with no IO or imports. Recognition
 // names built-ins and exact kawai-team members; every other name yields only a
 // coarse label — a foreign name still needs a slot from a later tracker-owned
 // allocator, and an ambiguous one never gets one. Raw names and output text
