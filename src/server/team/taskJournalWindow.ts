@@ -4,7 +4,8 @@
 // - The detail reads its anchor, the journal, subtask, and message windows,
 //   and their counts in one synchronous read transaction, newest first by
 //   `(created_at, rowid)` with the limits in SQL, then returns each list
-//   oldest first. The other sections stay whole.
+//   oldest first, and the revision rows of taskRevisionWindow (D7). The
+//   other sections stay whole.
 // - Journal text reaches JavaScript only as byte projections of a BLOB cast:
 //   a ≤ 2,000-byte preview here, a ≤ 8,192-byte chunk in the reader. Stored
 //   entries are never rewritten.
@@ -17,6 +18,7 @@ import { partyFromRow } from './actorRow'
 import type { MailboxStore } from './mailboxStore'
 import { refuseSystem } from './systemCaller'
 import type { TaskCaller, TaskService } from './TaskService'
+import { publicationRevisions, revisionDetail, type RevisionWindowRequest } from './taskRevisionWindow'
 import type { TaskStore } from './taskStore'
 
 export const JOURNAL_PREVIEW_BYTES = 2000
@@ -28,7 +30,7 @@ export const SUBTASK_WINDOW = 100
 export const LEDGER_WINDOW = 100
 export const MESSAGE_WINDOW = 50
 
-export interface JournalWindowRequest {
+export interface JournalWindowRequest extends RevisionWindowRequest {
   /** An entry id of the task; the window holds entries strictly older than it. */
   journalBefore?: string
   /** 1–200, default 50. */
@@ -86,7 +88,7 @@ export function journalPreview(totalBytes: number, projected: Uint8Array): Omit<
 }
 
 /** A projected BLOB of the length SQL promised; anything else is refused rather than guessed. */
-function blobOf(value: unknown, length: number): Uint8Array {
+export function blobOf(value: unknown, length: number): Uint8Array {
   if (value instanceof Uint8Array && value.length === length) return value
   if ((value === null || value === undefined) && length === 0) return new Uint8Array(0)
   throw new Error(`Journal projection returned ${value instanceof Uint8Array ? `${value.length} bytes` : typeof value}, expected ${length} bytes`)
@@ -123,17 +125,19 @@ export class TaskJournalWindow {
       const olderRemaining = rows.length > limit
       const subtasks = subtaskIds.reverse().map(row => this.store.summary(this.store.get(row.id)!))
       const messageTotal = this.mail ? counts.messages! : 0
-      const revisions = this.store.revisions(taskId)
+      // D7: the newest 50 revision rows; the publications read their own text-free fields.
+      const revisions = revisionDetail(this.db, taskId, task.revision, window)
       // review-findings-ledger D10: the newest 100 rows, newest raised first.
       const ledger = this.store.ledger(taskId).reverse()
       return {
         task: this.store.summary(task),
-        revisions,
+        revisions: revisions.rows,
+        ...(revisions.text ? { revisionText: revisions.text } : {}),
         journal,
         subtasks,
         assignments: this.store.assignmentsOf(taskId),
         messages,
-        publications: this.store.notices?.publications(task, revisions) ?? [],
+        publications: this.store.notices?.publications(task, publicationRevisions(this.db, taskId)) ?? [],
         acknowledgements: this.store.acknowledgements.list(taskId),
         // Mapped as `TaskStore.detail` maps them; the seal applies after (D4).
         results: this.store.results.listByTask(taskId).map(result => ({
@@ -147,6 +151,7 @@ export class TaskJournalWindow {
           journal: { total: counts.journal!, returned: journal.length, olderRemaining, nextBefore: olderRemaining ? journal[0]!.id : null },
           subtasks: { total: counts.subtasks!, returned: subtasks.length, truncated: counts.subtasks! > subtasks.length },
           messages: { total: messageTotal, returned: messages.length, truncated: messageTotal > messages.length },
+          revisions: revisions.bounds,
         },
       }
     })()

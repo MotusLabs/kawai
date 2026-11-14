@@ -243,8 +243,11 @@ describe('service rules (T5, R6, R10, T14) and the seal', () => {
     await results.handoff(agent('lead'), task.id, { kind: 'review', resultId: last, target: { kind: 'session', id: 'reviewer' }, instructions: 'Review', expectedResponse: null })
     const bounded = await reads.agentGet(agent('reviewer'), task.id)
     const whole = await tasks.get(agent('reviewer'), task.id)
-    expect(bounded.revisions).toEqual(whole.revisions)
-    expect(bounded.revisions).toHaveLength(55)
+    // bounded-metrics-and-task-get D7: the newest 50 revisions as rows, each with the identity the whole read reports.
+    expect(bounded.revisions.map(row => row.revision)).toEqual(whole.revisions.slice(-50).map(revision => revision.revision))
+    expect(bounded.revisions.map(row => row.identity)).toEqual(whole.revisions.slice(-50).map(revision => revision.identity!))
+    expect(bounded.bounds.revisions).toEqual({ total: 55, returned: 50, truncated: true, nextBefore: 6 })
+    expect(whole.revisions).toHaveLength(55)
     expect(bounded.results).toEqual(whole.results)
     expect(bounded.results).toHaveLength(52)
     for (const key of ['assignments', 'publications', 'acknowledgements'] as const) expect(bounded[key]).toEqual(whole[key])

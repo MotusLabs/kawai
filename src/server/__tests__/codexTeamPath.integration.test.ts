@@ -339,7 +339,7 @@ test('a Codex thread registers the journal reader at start; its resume registers
   const tools = new Map<string, { inputSchema: { properties: Record<string, unknown> } }>(
     start.params.dynamicTools[0].tools.map((tool: { name: string }) => [tool.name, tool]),
   )
-  expect(Object.keys(tools.get('task_get')!.inputSchema.properties).sort()).toEqual(['journal_before', 'journal_limit', 'task_id'])
+  expect(Object.keys(tools.get('task_get')!.inputSchema.properties).sort()).toEqual(['journal_before', 'journal_limit', 'revision', 'revisions_before', 'task_id'])
   expect(Object.keys(tools.get('task_journal_read')!.inputSchema.properties).sort()).toEqual(['entry_id', 'offset_bytes', 'task_id'])
   // The rollout Codex wrote, so the restarted manager may resume the thread.
   fs.writeFileSync(rollout, `${JSON.stringify({ timestamp: '2026-10-20T00:00:00.000Z', type: 'session_meta', payload: { id: THREAD_ID } })}\n`)

@@ -32,6 +32,7 @@ import { TeamWorktrees } from '../team/worktreeRoots'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
 import { CodexToolSessions } from './codexToolSession'
 import { at, rawNote } from './taskJournalFixture'
+import { CONTRACT_MARKDOWN } from './convergenceGenerator'
 
 type Outcome = { error: string; value: null } | { error: null; value: any }
 type Registered = Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>
@@ -153,6 +154,7 @@ for (const { runtime, call } of RUNTIMES) {
         journal: { total: 3, returned: 3, olderRemaining: false, nextBefore: null },
         subtasks: { total: 0, returned: 0, truncated: false },
         messages: { total: 1, returned: 1, truncated: false },
+        revisions: { total: 1, returned: 1, truncated: false, nextBefore: null },
       })
     })
 
@@ -172,6 +174,7 @@ for (const { runtime, call } of RUNTIMES) {
         journal: { total: 1198, returned: 50, olderRemaining: true, nextBefore: written[1148] },
         subtasks: { total: 149, returned: 100, truncated: true },
         messages: { total: 60, returned: 50, truncated: true },
+        revisions: { total: 1, returned: 1, truncated: false, nextBefore: null },
       })
       const k = 700
       const t3 = (await call('dev', 'task_get', { task_id: task.id, journal_before: written[k], journal_limit: 100 })).value
@@ -345,7 +348,8 @@ for (const { runtime, call } of RUNTIMES) {
       await results.handoff(agent('lead'), task.id, { kind: 'review', resultId: last, target: { kind: 'session', id: 'reviewer' }, instructions: 'Review', expectedResponse: null })
       const written = notes(task.id, 60)
       const sealed = (await call('reviewer', 'task_get', { task_id: task.id, session_id: 'dev' })).value
-      expect(sealed.revisions).toHaveLength(55)
+      expect(sealed.revisions).toHaveLength(50)
+      expect(sealed.bounds.revisions).toEqual({ total: 55, returned: 50, truncated: true, nextBefore: 6 })
       expect(sealed.results).toHaveLength(52)
       expect(sealed.results.every((result: { coverage: unknown }) => JSON.stringify(result.coverage) === JSON.stringify({ withheld: true, clauses: 1 }))).toBe(true)
       expect(sealed.bounds.journal).toMatchObject({ returned: 50, olderRemaining: true })
@@ -357,6 +361,74 @@ for (const { runtime, call } of RUNTIMES) {
       expect(ids(human.journal)).toEqual(ids(tasks.store.detail(task.id)!.journal))
       expect(human.journal.length).toBeGreaterThanOrEqual(written.length)
       expect(human.results!.every(result => JSON.stringify(result.coverage) === JSON.stringify(coverage))).toBe(true)
+    })
+  })
+
+  describe(`task_get revisions through the ${runtime} adapter (G6–G8)`, () => {
+    /** Revision 1 text-only, 2 onward with a contract; long non-ASCII rationale on 3. */
+    const history = async () => {
+      const task = await newTask()
+      await tasks.amend(agent('lead'), task.id, { direction: 'second é', acceptance: 'accept', contract: CONTRACT_MARKDOWN, rationale: 'why' })
+      await tasks.amend(agent('lead'), task.id, { direction: 'third', rationale: 'é'.repeat(2500) })
+      return task.id
+    }
+
+    // @covers: team-tasks › task_get revisions are rows › Eight revisions
+    // @covers: team-tasks › task_get revisions are rows › Long rationale
+    test('G6, G6d: revision rows carry the whole read\'s identity and byte lengths, never text, and a cut rationale preview', async () => {
+      const id = await history()
+      const { error, value } = await call('dev', 'task_get', { task_id: id })
+      expect(error).toBeNull()
+      const whole = tasks.store.revisions(id)
+      expect(value.revisions.map((row: { revision: number; identity: string; contractHash: string | null }) => [row.revision, row.identity, row.contractHash]))
+        .toEqual(whole.map(revision => [revision.revision, revision.identity, revision.contractHash ?? null]))
+      expect(value.revisions.map((row: { contractHash: string | null }) => row.contractHash === null)).toEqual([true, false, false])
+      expect(value.revisions.every((row: Record<string, unknown>) => !('direction' in row) && !('acceptance' in row) && !('contract' in row))).toBe(true)
+      expect(value.revisions[2]).toMatchObject({ directionBytes: 5, rationale: 'é'.repeat(1000), rationaleBytes: 5000, rationaleCut: true })
+      expect(value.bounds.revisions).toEqual({ total: 3, returned: 3, truncated: false, nextBefore: null })
+      expect(value.revisionText).toBeUndefined()
+      // The publications still carry their whole rationale, and the current direction is read once, in the task.
+      expect(value.publications.find((entry: { revision: number }) => entry.revision === 3).rationale).toBe('é'.repeat(2500))
+      expect(value.task.direction).toBe('third')
+      expect(value.task.identity).toBe(whole[2]!.identity)
+    })
+
+    // @covers: team-tasks › task_get revisions are rows › Long revision history
+    // @covers: team-tasks › task_get reads one revision whole › Reading an earlier revision
+    test('G6a, G6b, G7: 70 revisions page newest 50 then 1–20, and revision 3 reads whole', async () => {
+      const id = await history()
+      db.transaction(() => {
+        for (let n = 4; n <= 70; n++) {
+          db.prepare(`INSERT INTO team_task_revisions (task_id, revision, direction, acceptance, author_kind, author_session, created_at)
+            VALUES (?, ?, ?, NULL, 'agent', 'lead', ?)`).run(id, n, `d${n}`, at(n))
+        }
+        db.prepare('UPDATE team_tasks SET revision = 70 WHERE id = ?').run(id)
+      })()
+      const first = (await call('dev', 'task_get', { task_id: id })).value
+      expect(first.revisions.map((row: { revision: number }) => row.revision)).toEqual(Array.from({ length: 50 }, (_, i) => i + 21))
+      expect(first.bounds.revisions).toEqual({ total: 70, returned: 50, truncated: true, nextBefore: 21 })
+      const second = (await call('dev', 'task_get', { task_id: id, revisions_before: first.bounds.revisions.nextBefore })).value
+      expect(second.revisions.map((row: { revision: number }) => row.revision)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
+      expect(second.bounds.revisions).toEqual({ total: 70, returned: 20, truncated: false, nextBefore: null })
+      const third = (await call('dev', 'task_get', { task_id: id, revision: 3 })).value
+      expect(third.revisionText).toEqual({ revision: 3, direction: 'third', acceptance: 'accept', rationale: 'é'.repeat(2500) })
+      expect(third.revisions).toHaveLength(50)
+    })
+
+    // @covers: team-tasks › task_get revisions are rows › Unknown revision anchor
+    // @covers: team-tasks › task_get reads one revision whole › Unknown revision
+    test('G6c, G8: an unknown or non-integer revisions_before or revision is refused naming it, in the runtime\'s envelope', async () => {
+      const id = await history()
+      for (const [argument, values] of [['revisions_before', [0, 1, 4, 1.5, '2', null]], ['revision', [0, 4, 1.5, '2', null]]] as const) {
+        for (const value of values) {
+          const { error, value: result } = await call('dev', 'task_get', { task_id: id, [argument]: value })
+          expect(result, `${argument} ${String(value)}`).toBeNull()
+          expect(error).toContain(`Unknown revision of this task: ${String(value)}`)
+        }
+      }
+      // The caller and team rules still come first: another team's session reads nothing, even with a valid revision.
+      expect((await call('stranger', 'task_get', { task_id: id, revision: 1 })).error).toContain(`Task not found in this team: ${id}`)
+      expect((await call('dev', 'task_get', { task_id: id, revision: 3, revisions_before: 3 })).value.revisions.map((row: { revision: number }) => row.revision)).toEqual([1, 2])
     })
   })
 }
@@ -393,7 +465,7 @@ describe('system callers and the shared catalogue', () => {
     expect(taskNames(claudeNames)).toEqual([...TASK_TOOL_NAMES].sort())
     expect(taskNames(codexTools.map(tool => tool.name))).toEqual([...TASK_TOOL_NAMES].sort())
     const shape = (name: string) => Object.keys(table.find(tool => tool.name === name)!.schema.shape).sort()
-    expect(shape('task_get')).toEqual(['journal_before', 'journal_limit', 'task_id'])
+    expect(shape('task_get')).toEqual(['journal_before', 'journal_limit', 'revision', 'revisions_before', 'task_id'])
     expect(shape('task_journal_read')).toEqual(['entry_id', 'offset_bytes', 'task_id'])
     const limit = (z.toJSONSchema(table.find(tool => tool.name === 'task_get')!.schema) as { properties: Record<string, Record<string, unknown>> }).properties.journal_limit!
     expect(limit).toMatchObject({ type: 'integer', minimum: 1, maximum: 200 })
@@ -402,7 +474,8 @@ describe('system callers and the shared catalogue', () => {
   test('the descriptions name the paging and the lossless reader and promise no full journal', () => {
     const table = teamToolTable(mailbox, 'dev', services())
     const text = (name: string) => table.find(tool => tool.name === name)!.description
-    for (const term of ['journal_before', 'journal_limit', 'task_journal_read', '2,000 stored bytes', 'totalBytes', 'resumeOffsetBytes']) {
+    for (const term of ['journal_before', 'journal_limit', 'task_journal_read', '2,000 stored bytes', 'totalBytes', 'resumeOffsetBytes',
+      'revisions_before', 'revision (an integer', 'revisionText', 'bounds.revisions', 'contractHash', 'directionBytes', 'rationaleCut']) {
       expect(text('task_get')).toContain(term)
     }
     expect(text('task_journal_read')).toContain('8,192 stored bytes')
