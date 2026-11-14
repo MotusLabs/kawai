@@ -19,7 +19,15 @@ test('ST1-ST9: failures, other tools, turn end and restart preserve conservative
       else {
         const id='c'+n++
         admitCall(s,slots,id,event==='O'?'Read':'Bash',catalogue,at)
-        closed.push(...settleCall(s,id,event==='F','neutral',at).closed.map(f=>[f.resolution,f.length]))
+        const before=structuredClone(s.streaks)
+        const result=settleCall(s,id,event==='F','neutral',at)
+        if(event==='O') {
+          expect(result.eligible).toBe(true)
+          expect(before).toMatchObject([{identity:'Bash',length:1,firstCallId:'c0',firstAt:at}])
+          expect(result.closed,'ST5 other result emits no closure').toEqual([])
+          expect(s.streaks,'ST5 other result preserves exact open owner').toEqual(before)
+        }
+        closed.push(...result.closed.map(f=>[f.resolution,f.length]))
       }
     }
     expect(s.streaks.reduce((n,f)=>n+f.length,0)).toBe(row.open)
@@ -95,4 +103,39 @@ test('D4/public labels: foreign slots and labels are distinct and no raw name su
   const many: TeamCatalogue={prefix:TEAM_TOOL_PREFIX,members:new Set(Array.from({length:100},(_,i)=>TEAM_TOOL_PREFIX+'t'+i))}
   expect(publicToolLabel({kind:'team',name:'t75'},many)).toBe('t75')
   expect(publicToolLabel({kind:'team',name:'t76'},many)).toBe('other')
+})
+
+test('ST5 cross-owner matrix preserves exact opening identity time and length; only the operated tool changes',()=>{
+  const tools=['Bash','Read',TEAM_TOOL_PREFIX+'task_get']
+  const firstAt='2026-11-14T00:00:01.000Z',otherAt='2026-11-14T00:00:02.000Z',endAt='2026-11-14T00:00:03.000Z'
+  for(const own of tools)for(const other of tools)if(own!==other)
+    for(const length of [1,2])for(const bothOpen of [false,true])for(const otherFailed of [false,true]){
+      const s=newToolState(0),slots=new Map<string,number>()
+      for(let i=0;i<length;i++){
+        admitCall(s,slots,'a'+i,own,catalogue,firstAt)
+        settleCall(s,'a'+i,true,'neutral',firstAt)
+      }
+      if(bothOpen){
+        admitCall(s,slots,'b0',other,catalogue,otherAt)
+        settleCall(s,'b0',true,'neutral',otherAt)
+      }
+      const a=structuredClone(s.streaks[0]!)
+      const beforeB=structuredClone(s.streaks.find(v=>v.identity!==a.identity))
+      expect(a).toMatchObject({identity:own===tools[2]?'task_get':own,length,firstCallId:'a0',firstAt})
+      expect(s.streaks).toHaveLength(bothOpen?2:1)
+      admitCall(s,slots,'b1',other,catalogue,endAt)
+      const result=settleCall(s,'b1',otherFailed,'neutral',endAt)
+      expect(result.eligible).toBe(true)
+      expect(s.streaks.find(v=>v.identity===a.identity),'ST5 exact A owner retained').toEqual(a)
+      if(otherFailed){
+        expect(result.closed).toEqual([])
+        expect(s.streaks.find(v=>v.identity!==a.identity)).toMatchObject({
+          identity:other===tools[2]?'task_get':other,length:bothOpen?2:1,
+          firstCallId:bothOpen?'b0':'b1',firstAt:bothOpen?otherAt:endAt,
+        })
+      }else{
+        expect(result.closed).toEqual(beforeB?[{...beforeB,resolution:'recovered',closedAt:endAt}]:[])
+        expect(s.streaks).toEqual([a])
+      }
+    }
 })
