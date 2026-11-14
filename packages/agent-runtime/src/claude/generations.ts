@@ -68,6 +68,12 @@ export interface Generation {
    * not be read; never defaulted to false.
    */
   cleanupAtStop: 'unsampled' | 'unknown' | boolean
+  /**
+   * Whether its owner had already observed the leader's end (any exit, code 0
+   * included) when the stop sampled it; `unsampled` until then. No owner
+   * reads false: that proves no native liveness, only that no exit was seen.
+   */
+  exitedAtStop: 'unsampled' | boolean
   /** Settles once the generation's end has been classified. */
   ended: Promise<void>
   markEnded(): void
@@ -78,7 +84,7 @@ export function newGeneration(number: number, sdk: SdkModule, resumeTarget: stri
   const ended = new Promise<void>((resolve) => (markEnded = resolve))
   return {
     number, query: null as unknown as Query, input: new PromptQueue<SDKUserMessage>(), owned: null, spawn: 'pending', projections: [], retired: false,
-    abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, resumeTarget, initialized: false, identityConfirmed: false, startupErrors: [], cancelQueued: true, cleanupAtStop: 'unsampled', ended, markEnded,
+    abort: new AbortController(), abortError: sdk.AbortError, readEnded: false, resumeTarget, initialized: false, identityConfirmed: false, startupErrors: [], cancelQueued: true, cleanupAtStop: 'unsampled', exitedAtStop: 'unsampled', ended, markEnded,
   }
 }
 

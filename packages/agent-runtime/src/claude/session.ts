@@ -563,7 +563,8 @@ export class ClaudeSession {
 
   /** Close every input and request, settle open turns as stopped (L11), terminate every owned generation. */
   private async teardown(mode: 'kill' | 'shutdown'): Promise<ProcessExitFact[]> {
-    // Before any stop side effect: whether each generation's SDK cleanup had already begun (sdkControlCleanup.ts).
+    // First teardown step, before its abort, sends, requests and turn settlement (the lifecycle's stopping
+    // state and callbacks ran before it): each generation's SDK cleanup and owner-exit sample (sdkControlCleanup.ts).
     sampleCleanupAtStop(this.generations)
     // The lifecycle runs teardown once per stop; its token is minted before any callback below can run.
     this.stopToken = { reason: 'the agent-runtime driver is stopping' }

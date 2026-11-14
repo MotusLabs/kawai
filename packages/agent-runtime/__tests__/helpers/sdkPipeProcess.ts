@@ -4,12 +4,16 @@
 // the SDK's own cleanup orders (exit first, EOF first, our close first) run
 // deterministically. There is no owned process, so a stop's native account
 // is empty: these cases prove control cancellation only, never an owned exit.
+// A test may install a controlled owner whose frozen evidence it chooses, to
+// drive the real stop account; that is controlled evidence, not a native run.
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import type { Options, Query, SDKUserMessage, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk'
 import { genuineQuery } from '../../src/claude/sdkControlCleanup.js'
 import { loadSdk } from '../../src/claude/generations.js'
 import type { ClaudeQueryFactory } from '../../src/claude/session.js'
+import type { ProcessExitFact } from '../../src/contract.js'
+import type { LeaderExit, NativeEvidence } from '../../src/process/ownedProcess.js'
 
 export interface ControlFrame {
   request_id: string
@@ -92,10 +96,68 @@ export class PipeProcess {
   }
 }
 
-/** Ends a pipe process the test left running, so the SDK's own cleanup settles. */
-export function release(process: PipeProcess): void {
+/**
+ * Ends a pipe process the test left running and joins what that releases:
+ * the query's cleanup (closed here if no stop ran it; the SDK bounds its own
+ * wait for the exit) and the SDK transport reading this stdout to its end.
+ */
+export async function release(process: PipeProcess, query: Query): Promise<void> {
   if (process.exitCode === null && process.signalCode === null) process.exit(0)
   process.stdout.end()
+  const internals = query as unknown as { cleanupPromise?: Promise<void> }
+  if (!internals.cleanupPromise) query.close()
+  await internals.cleanupPromise
+  if (!process.stdout.readableEnded) await new Promise<void>((resolve) => process.stdout.once('end', () => resolve()))
+}
+
+/**
+ * A CONTROLLED owner standing in for an owned process in a native-free
+ * session: the test freezes its exit evidence, so the real stop account
+ * (accountGenerations, nativeCauses, nativeVerdict) judges facts the test
+ * chose. It is controlled evidence, never proof of a native exit.
+ */
+export interface ControlledOwner {
+  readonly generation: number
+  readonly pid: number
+  exited: LeaderExit | null
+  evidence: NativeEvidence | null
+  readonly observerFailures: unknown[]
+  readonly signals: NodeJS.Signals[]
+  marked: boolean
+  readonly leaderExit: Promise<LeaderExit>
+  markTermination(): void
+  stderrTail(): string
+  signal(signal: NodeJS.Signals): boolean
+  terminate(): Promise<ProcessExitFact>
+}
+
+/** An owner that already observed `before` (pre-stop), or whose termination ends with `atStop`. */
+export function controlledOwner(generation: number, end: { before: LeaderExit } | { atStop: LeaderExit }): ControlledOwner {
+  let settle!: (exit: LeaderExit) => void
+  const leaderExit = new Promise<LeaderExit>((resolve) => (settle = resolve))
+  const owner: ControlledOwner = {
+    generation, pid: 900000 + generation, exited: null, evidence: null, observerFailures: [], signals: [], marked: false, leaderExit,
+    markTermination: () => void (owner.marked = true),
+    stderrTail: () => '',
+    signal: (signal) => {
+      owner.signals.push(signal)
+      return owner.exited === null
+    },
+    terminate: async () => {
+      if (owner.exited === null && 'atStop' in end) freeze(end.atStop)
+      const exit = owner.exited!
+      return exit.kind === 'exited'
+        ? { generation, state: 'exited', pid: owner.pid, code: exit.code, signal: exit.signal, escalated: false, groupCleared: true }
+        : { generation, state: 'never-started' }
+    },
+  }
+  const freeze = (exit: LeaderExit) => {
+    owner.evidence = { exit, marked: owner.marked, sentAfterMark: owner.marked ? [...owner.signals] : [], errors: [] }
+    owner.exited = exit
+    settle(exit)
+  }
+  if ('before' in end) freeze(end.before)
+  return owner
 }
 
 export interface GenuinePipeQueries {

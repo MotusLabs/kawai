@@ -15,12 +15,14 @@ import { ClaudeSession, type ClaudeQueryFactory } from '../src/claude/session.js
 import { AgentRuntimeError } from '../src/errors.js'
 import { NativeExitFailure } from '../src/process/nativeVerdict.js'
 import { fakeClaudeHome } from './helpers/fakeClaudeHome.js'
-import { genuinePipeQueries, release } from './helpers/sdkPipeProcess.js'
+import { controlledOwner, genuinePipeQueries, release } from './helpers/sdkPipeProcess.js'
 
 interface GenerationView {
   projections: unknown[]
   readEnded: boolean
   cleanupAtStop: unknown
+  exitedAtStop: unknown
+  owned: unknown
 }
 
 const generationsOf = (s: ClaudeSession) => (s as unknown as { generations: GenerationView[] }).generations
@@ -78,8 +80,11 @@ describe('pinned SDK pending-control cleanup after a stop', () => {
       const cut = generation!.projections[0] as Error
       expect(isCleanupError(cut)).toBe(true)
       expect(cut.stack).toContain('performCleanup')
+      // Released after the receipt: the SDK's cleanup and its transport reader of this stdout both complete.
+      await release(process, query)
+      expect(process.stdout.readableEnded).toBe(true)
     } finally {
-      for (const process of pipes.processes) release(process)
+      for (const [i, process] of pipes.processes.entries()) await release(process, pipes.queries[i]!)
     }
   })
 
@@ -111,7 +116,7 @@ describe('pinned SDK pending-control cleanup after a stop', () => {
       expect(cleanupOf(pipes.queries[0]!).cleanupCause).toBeUndefined()
       expect(generation!.projections).toEqual([])
     } finally {
-      for (const process of pipes.processes) release(process)
+      for (const [i, process] of pipes.processes.entries()) await release(process, pipes.queries[i]!)
     }
   })
 
@@ -139,6 +144,60 @@ describe('pinned SDK pending-control cleanup after a stop', () => {
       for (const projection of native.causes) expect(projection).toBe(cut)
     } finally {
       await s.kill().catch(() => {})
+    }
+  })
+
+  test('a probe still pending after the owner already observed a clean exit fails the stop with the raw cleanup error', async () => {
+    const pipes = await genuinePipeQueries()
+    const s = pipeSession(pipes.factory)
+    try {
+      await s.start()
+      const process = pipes.processes[0]!
+      await process.control('get_context_usage')
+      // CONTROLLED owner evidence: the leader exited 0 before the stop; the SDK has not seen it, so its cleanup is still queued.
+      const [generation] = generationsOf(s)
+      const owner = controlledOwner(1, { before: { kind: 'exited', code: 0, signal: null } })
+      generation!.owned = owner
+      expect(cleanupOf(pipes.queries[0]!).cleanupPerformed).toBe(false)
+      const error = await stopFailure(s.kill())
+      expect(generation!.cleanupAtStop).toBe(false)
+      expect(generation!.exitedAtStop).toBe(true)
+      // K1 never signals an owner whose exit was already observed; the clean verdict adds nothing.
+      expect(owner.signals).toEqual([])
+      expect(error.causes).toHaveLength(1)
+      expect(isCleanupError(error.causes[0])).toBe(true)
+      expect((error.causes[0] as Error).stack).toContain('performCleanup')
+      expect(generation!.projections).toEqual([])
+    } finally {
+      for (const [i, process] of pipes.processes.entries()) await release(process, pipes.queries[i]!)
+    }
+  })
+
+  test('an accepted SDK cleanup error stays by identity inside the failure of a controlled failed native exit', async () => {
+    const pipes = await genuinePipeQueries()
+    const s = pipeSession(pipes.factory)
+    try {
+      await s.start()
+      await pipes.processes[0]!.control('get_context_usage')
+      // CONTROLLED owner evidence: alive at the sample; the termination ends with a trapped 143 after the mark (failed).
+      const [generation] = generationsOf(s)
+      const owner = controlledOwner(1, { atStop: { kind: 'exited', code: 143, signal: null } })
+      generation!.owned = owner
+      const error = await stopFailure(s.kill())
+      expect(generation!.exitedAtStop).toBe(false)
+      expect(owner.signals).toEqual(['SIGKILL'])
+      expect(generation!.projections).toHaveLength(1)
+      const cut = generation!.projections[0] as Error
+      expect(isCleanupError(cut)).toBe(true)
+      expect(cut.stack).toContain('performCleanup')
+      expect(error.causes).toHaveLength(1)
+      const native = error.causes[0] as NativeExitFailure
+      expect(native).toBeInstanceOf(NativeExitFailure)
+      expect(native.facts).toEqual({ generation: 1, pid: owner.pid, code: 143, signal: null, observedBeforeStop: false })
+      expect(native.causes).toHaveLength(1)
+      expect(native.causes[0]).toBe(cut)
+    } finally {
+      for (const [i, process] of pipes.processes.entries()) await release(process, pipes.queries[i]!)
     }
   })
 })

@@ -13,8 +13,13 @@
 // rejection is the stop's cancellation only when the invocation was trusted,
 // the error is that invocation's own rejection, the stop's token is the
 // generation's abort reason, the error is exactly the SDK's plain cleanup
-// error, the cleanup had not begun when the stop sampled it (before any stop
-// side effect) and has begun without a cause by the time it is classified.
+// error, and at the stop's sample neither had the cleanup begun nor had the
+// owner observed the leader's end (a pending control after an exit already
+// seen, code 0 included, is a pre-existing failure), while by the time it is
+// classified the cleanup has begun without a cause. The sample is the first
+// step of the session's teardown, before its abort, sends, requests and turn
+// settlement; the lifecycle's own stopping state and its callbacks run
+// before it, so a cleanup begun there samples true and fails closed.
 // Anything else, a queryFactory's query or a replaced method included, is a
 // failure the stop reports. A recognized error is kept by identity in the
 // generation's projections, so a failed native exit still reports it. The
@@ -72,15 +77,18 @@ function cleanupState(query: unknown): { performed: boolean; cause: unknown } | 
 }
 
 /**
- * Sample each generation's cleanup state once, synchronously, before the
- * stop's first side effect. A generation sampled earlier keeps its sample;
- * one without a known state stays unknown, never false.
+ * Sample each generation once, synchronously, as the teardown's first step:
+ * whether its SDK cleanup had begun and whether its owner had observed the
+ * leader's end. A generation sampled earlier keeps its sample; one without a
+ * known cleanup state stays unknown, never false; one created later stays
+ * unsampled.
  */
 export function sampleCleanupAtStop(generations: readonly Generation[]): void {
   for (const generation of generations) {
     if (generation.cleanupAtStop !== 'unsampled') continue
     const state = cleanupState(generation.query)
     generation.cleanupAtStop = state ? state.performed : 'unknown'
+    generation.exitedAtStop = generation.owned !== null && generation.owned.exited !== null
   }
 }
 
@@ -133,7 +141,7 @@ export class ControlInvocation {
     if (!this.trusted || this.rejection === null || this.rejection.error !== error) return false
     if (stopToken === null || generation.abort.signal.reason !== stopToken) return false
     if ((generation.query as unknown) !== this.binding || !isCleanupError(error)) return false
-    if (generation.cleanupAtStop !== false) return false
+    if (generation.cleanupAtStop !== false || generation.exitedAtStop !== false) return false
     const state = cleanupState(this.binding)
     if (!state || !state.performed || state.cause !== undefined) return false
     generation.projections.push(error)
