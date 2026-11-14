@@ -33,7 +33,7 @@ function mount(rows: Record<string, FakeRow>, props: { sessionId?: string; loade
   const container: RevealContainer = {
     querySelector: selector => {
       selectors.push(selector)
-      const id = /^\[data-anchor-id="(.*)"\]$/.exec(selector)?.[1]?.replace(/\\(["\\])/g, '$1')
+      const id = /^\[data-anchor-id="(.*)"\]$/.exec(selector)?.[1]?.replace(/\\([0-9a-f]{1,6}) |\\(["\\])/g,(_m,hex,escaped)=>hex?String.fromCharCode(parseInt(hex,16)):escaped)
       return (id !== undefined && rows[id]) || null
     },
   }
@@ -239,9 +239,9 @@ test('D7: an archived readable first-call anchor still reveals after tool detail
   const missing=mount({},{archived:true,sessionId:'archived'})
   request('archived','tool:missing')
   expect(missing.renderer.root.findByType('div').props['data-outcome']).toBe('archived')
-  useChatStore.setState({sessions:{unreadable:{...emptyTranscript(),events:[
+  act(()=>useChatStore.setState({sessions:{unreadable:{...emptyTranscript(),events:[
     {type:'notice',id:'hist-unavailable',sequence:0,at:'',text:'opaque unavailable notice'},
-  ]}}})
+  ]}}}))
   const unreadable=mount({},{sessionId:'unreadable'})
   request('unreadable','tool:missing')
   expect(unreadable.renderer.root.findByType('div').props['data-outcome']).toBe('unreadable')
@@ -285,5 +285,13 @@ test('D7 reconnect with unchanged history leaves the same-count reveal pending u
   expect(renderer.root.findByType('div').props['data-outcome']).toBe('not-found')
   expect(useChatStore.getState().pendingReveal).toBeNull()
   expect(sent).toHaveLength(1)
+})
+test('control characters in a tool anchor use numeric CSS escapes and preserve the exact ID',()=>{
+  const anchor='tool:line\nnext\tlast'+String.fromCharCode(127),target=row('DETAILS')
+  const {selectors}=mount({[anchor]:target})
+  request('s1',anchor)
+  expect(selectors).toEqual(['[data-anchor-id="tool:line\\a next\\9 last\\7f "]'])
+  expect(target.open).toBe(true)
+  expect(target.scrolls).toEqual([{block:'center'}])
 })
 })

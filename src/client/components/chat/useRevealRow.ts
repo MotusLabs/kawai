@@ -72,7 +72,11 @@ export function useRevealRow(options: {
   useEffect(() => {
     if (!reveal || !loaded) return
     if (mayConsume && !mayConsume()) return
-    const anchor = reveal.anchorId.replace(/["\\]/g, '\\$&').replace(/[\x00-\x1f\x7f]/g,c=>'\\'+c.charCodeAt(0).toString(16)+' ')
+    const anchor=Array.from(reveal.anchorId,c=>{
+      const code=c.charCodeAt(0)
+      if(code<32||code===127)return '\\'+code.toString(16)+' '
+      return c==='"'||c==='\\'?'\\'+c:c
+    }).join('')
     const target = container.current?.querySelector(`[data-anchor-id="${anchor}"]`) ?? null
     if (!target) {
       setOutcome(null)
