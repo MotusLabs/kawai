@@ -258,3 +258,28 @@ test('N1: watch closure is saved before each dedupe return and recovery attempts
     } finally {h.db.close()}
   }
 })
+
+// @covers: tool-call-metrics › Tool calls are admitted and identified within bounds › Replayed history stays outside
+test('PC1 F0 cold and closed histories cannot admit calls results or approval records without a live turn',()=>{
+  const h=harness()
+  try {
+    const history=[
+      {type:'tool_call',toolCallId:'history-c',tool:'Bash'},
+      {type:'tool_result',toolCallId:'history-c',isError:true,output:'neutral'},
+      {type:'approval_request',requestId:'history-q',toolCallId:'history-c',tool:'Write',input:{}},
+      {type:'request_resolved',requestId:'history-q',outcome:'denied'},
+    ]
+    for(const body of history){
+      h.emit(body)
+      expect(h.rows()).toEqual([])
+      expect(h.db.prepare('SELECT count(*) n FROM process_live_observations').get()).toEqual({n:0})
+    }
+    h.emit({type:'turn_started'});h.emit({type:'turn_completed',subtype:'success'})
+    const before=h.rows()
+    for(const body of history){
+      h.emit(body)
+      expect(h.rows()).toEqual(before)
+      expect(h.db.prepare('SELECT count(*) n FROM process_live_observations').get()).toEqual({n:0})
+    }
+  }finally{h.db.close()}
+})

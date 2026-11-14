@@ -139,3 +139,27 @@ test('ST5 cross-owner matrix preserves exact opening identity time and length; o
       }
     }
 })
+
+// @covers: tool-call-metrics › Approval evidence retains first-resolution ownership › Question and late cards do not fabricate approval evidence
+test('Terminal approval tombstones never rebind a late card or denial to a later call',()=>{
+  for(const outcome of ['allowed','cancelled','denied','unlinked']){
+    const s=newToolState(0),slots=new Map<string,number>()
+    if(outcome==='unlinked')resolveApproval(s,'q','denied')
+    else{
+      admitCall(s,slots,'a','Write',catalogue,at)
+      approval(s,'q','a');resolveApproval(s,'q',outcome)
+      settleCall(s,'a',true,'neutral',at)
+    }
+    const terminal=structuredClone(s.links[0]!)
+    expect(terminal.state).not.toBe('pending')
+    admitCall(s,slots,'b','Read',catalogue,at)
+    approval(s,'q','b')
+    expect(s.links).toEqual([terminal])
+    resolveApproval(s,'q','denied')
+    const result=settleCall(s,'b',true,'neutral',at)
+    expect(result.eligible).toBe(true)
+    expect(result.failureClass).toBe('other')
+    expect(result.call?.denied).toBe(false)
+    expect(s.links).toEqual([terminal])
+  }
+})
