@@ -29,7 +29,7 @@ function contextAdapter(window: { env: string | null }, probe?: ContextProbe, on
   const published: Published[] = []
   const order: string[] = []
   const h = compatibilityAdapter({
-    getProviderEnv: () => (window.env === null ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: window.env }),
+    getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: window.env ?? '' }),
     onContextUsage: (usage: ChatContextUsage | null, meta?: { persist?: boolean; thresholdSource?: string }) => {
       published.push({ usage, persist: meta?.persist === true, thresholdSource: meta?.thresholdSource ?? null })
       order.push(`context:${usage?.usedTokens ?? null}/${usage?.thresholdTokens ?? null}`)
