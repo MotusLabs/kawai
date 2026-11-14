@@ -10,7 +10,10 @@ export class ToolCallTracker {
   constructor(private readonly catalogue: TeamCatalogue) {}
   start(turn: LiveTurn, failures: number) { turn.tm = newToolState(failures) }
   watch(turn: LiveTurn, failures: number, at: string, write: (facts: ClosedStreak[]) => void) {
-    if (turn.tm) write(watchFailures(turn.tm, failures, at))
+    if (!turn.tm) return false
+    const changed=!Number.isSafeInteger(failures) || failures<0 || failures!==turn.tm.seenRecorderFailures
+    write(watchFailures(turn.tm, failures, at))
+    return changed
   }
   call(turn: LiveTurn, event: Extract<ChatEvent,{type:'tool_call'}>, write: (facts: ClosedStreak[]) => void): boolean {
     if (!turn.tm) return true

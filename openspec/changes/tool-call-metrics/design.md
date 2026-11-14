@@ -48,6 +48,8 @@ Metric-owned request records are **first-seen ids retained until E/R** (no capac
 
 Every tracker event writes the observation row and mutates ALL added memory (calls, links, markers, streaks, slots, flags) inside the tracker's existing transaction; a throw rolls the database and every map back together, the event is lost, and `recorder.safe` records the failure. `processEnded`/restart/replacement close the live turn and discard its maps; a restart is not proof of uninterrupted history. The taint watch (D5) compares a turn-scoped `seenRecorderFailures` snapshot against the existing `recorder.failures` at every accepted live-turn event and checkpoint, including immediately before turn end; a fresh turn initializes it from the current usable value. An advanced counter, or an unusable comparison, is a recording gap for this turn.
 
+Watch-induced taint, counter advancement and closures are saved in the same event transaction before any call/result/card/resolution dedupe early return; a crash cannot depend on an accidental segment-key collision to prevent a second closure.
+
 ### D4 — Identity versus label (96 opaque live slots)
 
 The raw tool name stays memory-only. Identity rules, first match wins:
@@ -93,7 +95,7 @@ Discriminators: a failed Monitor reading `The command was declined.` is `command
 
 ### D7 — Storage, retention, drill-down paging, reveal
 
-`tool` rows gain `identity`, `label`, and, when failed, `failureClass` (14-day detail — enough for a 7d window plus its 7d baseline). `tool_streak` is a 90-day fact kind `{ tool, length, resolution, firstCallId, firstAt, closedAt }` with the turn's attribution identity and a stable ephemeral key. Raw foreign/unrecognized names, inputs, outputs, and corrupt JSON are never stored, logged, or copied into diagnostics; the specified bounded built-in/exact catalogue identity names are permitted; canaries cover every added state, rollback map, checkpoint serialization, source key, and label.
+`tool` rows gain `identity`, `label`, and, when failed, `failureClass` (14-day detail — enough for a 7d window plus its 7d baseline). `tool_streak` is a 90-day fact kind `{ tool, length, resolution, firstAt, closedAt }`; the existing `toolCallId` identity column holds the untruncated opening failed call id. Public `firstCallId` and reveal anchors derive directly from that identity, never the 128-character-limited measurement data, truncation, a hash, or a replacement with the turn's attribution identity and a stable ephemeral key. Raw foreign/unrecognized names, inputs, outputs, and corrupt JSON are never stored, logged, or copied into diagnostics; the specified bounded built-in/exact catalogue identity names are permitted; canaries cover every added state, rollback map, checkpoint serialization, source key, and label.
 
 Drill-down has two separate surfaces:
 - **Inline drill** (existing projection): the Tools metric's drill inside `ProcessMetrics` and the Delivery D5 `compactMetrics` projection — at most 50 entries plus the total; the default `team_metrics` projection stays compact (below 32 KB). It never claims reachability.
@@ -157,6 +159,8 @@ Wiring: `Accumulator.add` declines before writing unadmitted values; `MetricsSna
 | committed write with identical raw bytes while verified | unchanged | unchanged | no | no |
 
 - **Fan-out.** The proposed service option is `onEffectiveStatusChange`; `ChatSessionManager` passes `onEffectiveStatusChange: () => options.onToolMeasurementStatusChange?.()`; `bootstrap.ts` wires it to a new `ChatConnections.publishMetricsAll()` → `MetricsConnections.publishAll()`, which re-sends EVERY current subscription of every team with `fresh=false` (the keys are database-wide). No report commit or manual refresh is needed, and the service imports neither `ChatConnections` nor `mailboxTools`.
+
+Healthy recovery ticks retain the existing checkedAt and raw bytes while logical status/counts are unchanged. The timestamp remains part of every public projection and canonical(V). A new-process or failed gate must complete a real THIS-process transaction/verification, even with identical bytes, before unmasking. An unchanged verified tick does not rewrite the key or notify; a logical count/status or inventory transition does. The S1 ToolRecoveryHealth gate instance is reused by V.
 
 No new polling framework is added.
 
@@ -227,6 +231,9 @@ W-rule rows, kept beside (never replacing) ST1–ST9:
 | C1-late | known question or unmatched allowed/answered/cancelled resolves, then late card/resolution reuses id | preserve generic accounting/dedupe; no non-denial link slot/flag, no reopened or rebound trusted denial |
 | C2 | still-live turn closes by recovery, processEnded, or replacement | toolFirstHistoryUnknown=true; existing streaks close unknown once; normally closed facts immutable |
 | N2 | denied-await-call never transfers before close | denialIncomplete=true; no invented call/result/denominator/streak |
+| Q1 | opening failed call id is 129 characters; normal close, restart or tick recovery | exact id retained in toolCallId identity/public firstCallId; one closure, row unblocked after commit, other sessions keep recording; scalar guard unchanged |
+| Q2 | healthy tick with unchanged logical status/counts, then failed and identical-byte successful verification | healthy checkedAt/raw/V unchanged; failed gate masks and verified THIS-process transaction unmasks; canonical(V) retains all fields |
+| N1 | recorder gap followed by deduped call/result/card/resolution and crash | watch closure and taint saved atomically before early return; recovery attempts no second streak insert, independent of source-key collision |
 | W5 | 513th distinct call id | SAT once: open streaks close `unknown` once, mode saturated, admitted calls still settle, c513 never eligible |
 | W6 | valid row A (OPEN1) + malformed row B, recovery runs twice | A yields exactly one unknown fact; B stays byte-unchanged and blocked; no double-fold, no silent erase |
 | W7 | activation with E=249,940, M=11, D=35 | 249,986 fits: every reservation and the active marker commit together; from E=249,960 (250,006) the whole set is refused, zero rows inserted, marker `budget-unavailable`/`series-budget` |

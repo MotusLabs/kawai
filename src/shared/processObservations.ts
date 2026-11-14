@@ -39,7 +39,7 @@ export const OBSERVATION_FIELDS = {
   ],
   activity: ['phase', 'startedAt', 'durationSeconds', 'partial'],
   tool: ['category', 'startedAt', 'durationSeconds', 'outcome', 'partial', 'eligible', 'first', 'identity', 'toolKind', 'label', 'failureClass', 'identityIncomplete'],
-  tool_streak: ['tool', 'toolKind', 'label', 'length', 'resolution', 'firstCallId', 'firstAt', 'closedAt'],
+  tool_streak: ['tool', 'toolKind', 'label', 'length', 'resolution', 'firstAt', 'closedAt'],
   request: ['requestKind', 'startedAt', 'durationSeconds', 'outcome', 'partial'],
   context: ['usedTokens', 'thresholdTokens', 'approximate', 'boundary', 'thresholdSource'],
   compaction: ['trigger', 'preTokens', 'postTokens', 'startedAt', 'endedAt', 'durationSeconds', 'outcome'],

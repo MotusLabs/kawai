@@ -89,6 +89,14 @@ Consecutive failed results of one tool within one turn SHALL form a streak; a su
 - **WHEN** a result arrives whose call was never admitted and cannot be
 - **THEN** open streaks close `unknown` once, the turn is tainted for first-attempt purposes, and the orphan never becomes eligible
 
+#### Scenario: Long opening call survives closure and recovery
+- **WHEN** the opening failed call id is 129 characters and the turn closes normally or recovers at start or a later tick
+- **THEN** the exact opening id survives in the existing identity column and public anchor, one closure commits, and the session does not remain permanently pending
+
+#### Scenario: Gap on a duplicate survives restart
+- **WHEN** a recorder gap closes streaks while a call, result, card or resolution is deduplicated, and the process then restarts
+- **THEN** the saved taint and closed state prevent a second streak insert without relying on a source-key collision
+
 ### Requirement: First attempts are measured only for closed, untainted turns
 The first ACTUAL call per turn and exact team tool owns the first-attempt marker. A result is eligible only when its completion lies in the window and a valid same-snapshot `turn_ended` fact shows coverage version 1 without taint; unclosed, tainted, legacy, or missing-carrier turns are excluded (partial or unrecorded), never successes or zeros. Turn close SHALL persist coverage version and taint scalars on the 90-day `turn_ended` fact; a missing or invalid carrier is `unrecorded`.
 

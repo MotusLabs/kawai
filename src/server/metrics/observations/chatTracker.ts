@@ -150,8 +150,9 @@ export class ChatObservationTracker {
       const turn = this.live.get(sessionId)
       if (!turn) return
       if ('turnId' in event && event.turnId !== turn.scope.turnId) return
-      this.toolState.watch(turn, this.recorder.failures, at, facts => this.writeStreaks(turn, facts))
+      const watched=this.toolState.watch(turn, this.recorder.failures, at, facts => this.writeStreaks(turn, facts))
       turn.lastSeen = at
+      if (watched) this.save(sessionId,turn)
       if (event.type === 'peer_message' && turn.repinnable) {
         turn.scope.taskId = event.task?.id ?? null
         turn.scope.taskRevision = event.task?.revision ?? null
@@ -475,8 +476,8 @@ export class ChatObservationTracker {
   private writeStreaks(turn: LiveTurn, facts: ClosedStreak[]): void {
     for (const fact of facts) this.write(turn,this.edgeKey(turn),'tool_streak',fact.closedAt,{
       tool: fact.identity, toolKind: fact.kind, label: fact.label, length: fact.length,
-      resolution: fact.resolution, firstCallId: fact.firstCallId, firstAt: fact.firstAt, closedAt: fact.closedAt,
-    })
+      resolution: fact.resolution, firstAt: fact.firstAt, closedAt: fact.closedAt,
+    }, { toolCallId: fact.firstCallId })
   }
   private save(id: string, turn: LiveTurn): void {
     this.recorder.store.db

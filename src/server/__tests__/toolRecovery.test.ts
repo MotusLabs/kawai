@@ -84,6 +84,8 @@ test('D9 recovery-key failure masks unchanged bytes while admission blocking rem
     const before=h.store.checkpoint('tool-recovery-quarantine')
     expect(service.health().toolMeasurement.recovery.status).toBe('quarantined')
     h.db.exec("CREATE TRIGGER recovery_key_abort BEFORE UPDATE ON process_collection_checkpoints WHEN NEW.source='tool-recovery-quarantine' BEGIN SELECT RAISE(ABORT,'key'); END")
+    // A new process must verify even identical bytes; a healthy old tick has no write.
+    service.stop();service=h.service();service.start()
     service.tick()
     expect(h.store.checkpoint('tool-recovery-quarantine')).toBe(before)
     expect(service.health().toolMeasurement.recovery).toEqual({status:'unknown',quarantinedCount:null,pendingCount:null,checkedAt:null})
@@ -172,4 +174,76 @@ test('R5: unknown activity phase recovers open work once while non-string phases
       expect(service.health().toolMeasurement.recovery).toMatchObject({pendingCount:0,quarantinedCount:badRows.length})
     } finally {service?.stop();h.db.close()}
   }
+})
+
+// @covers: tool-call-metrics › Failure streaks close conservatively › Long opening call survives closure and recovery
+test('Q1: a 129-character opening call survives normal restart and tick closure without blocking other sessions',()=>{
+  for(const mode of ['normal','restart','tick']) {
+    const h=fixture();let service:ProcessObservationService|undefined
+    try {
+      const create=()=>new ProcessObservationService(h.db,id=>({sessionId:id,teamId:'team'}),h.store.now)
+      service=create();service.start()
+      let seq=0
+      const emit=(id:string,body:Record<string,unknown>)=>{
+        h.advance(1000)
+        service!.chat.event(id,{id:'long-e'+(++seq),turnId:'t',at:new Date(h.store.now()).toISOString(),...body} as ChatEvent)
+      }
+      const opening='external-call-'+ 'x'.repeat(115)
+      expect(opening).toHaveLength(129)
+      emit('a',{type:'turn_started'})
+      emit('a',{type:'tool_call',toolCallId:opening,tool:'Bash'})
+      emit('a',{type:'tool_result',toolCallId:opening,isError:true,output:'neutral'})
+      if(mode==='normal') {
+        emit('a',{type:'tool_call',toolCallId:'success',tool:'Bash'})
+        emit('a',{type:'tool_result',toolCallId:'success',output:'ok'})
+        emit('a',{type:'turn_completed',subtype:'success'})
+      } else {
+        service.chat.checkpoint();service.stop()
+        if(mode==='tick')h.db.exec("CREATE TRIGGER long_recovery_abort BEFORE INSERT ON process_observations WHEN NEW.kind='tool_streak' AND NEW.session_id='a' BEGIN SELECT RAISE(ABORT,'first recovery'); END")
+        service=create();service.start()
+        if(mode==='tick') {
+          expect(service.chat.pendingRecovery.has('a')).toBe(true)
+          h.db.exec('DROP TRIGGER long_recovery_abort')
+          service.tick();service.tick()
+        }
+      }
+      const rows=h.db.prepare("SELECT tool_call_id,data FROM process_observations WHERE session_id='a' AND kind='tool_streak'").all() as {tool_call_id:string,data:string}[]
+      expect(rows).toHaveLength(1)
+      expect(rows[0]!.tool_call_id).toBe(opening)
+      expect(JSON.parse(rows[0]!.data)).toMatchObject({length:1,resolution:mode==='normal'?'recovered':'unknown'})
+      expect(JSON.parse(rows[0]!.data).firstCallId).toBeUndefined()
+      expect(h.raw('a')).toBeUndefined()
+      expect(service.chat.pendingRecovery.has('a')).toBe(false)
+      expect(service.chat.blocked.has('a')).toBe(false)
+      const failures=service.recorder.failures
+      emit('other',{type:'turn_started'})
+      emit('other',{type:'tool_call',toolCallId:'other-c',tool:'Read'})
+      emit('other',{type:'tool_result',toolCallId:'other-c',output:'ok'})
+      emit('other',{type:'turn_completed',subtype:'success'})
+      service.tick()
+      expect(service.recorder.failures).toBe(failures)
+      expect(h.db.prepare("SELECT count(*) n FROM process_observations WHERE session_id='other' AND kind='turn_ended'").get()).toEqual({n:1})
+    } finally {service?.stop();h.db.close()}
+  }
+})
+test('Q2: healthy recovery ticks preserve bytes and checkedAt while a new process must verify them',()=>{
+  const h=fixture();let service:ProcessObservationService|undefined
+  try {
+    service=h.service();service.start()
+    const before=h.store.checkpoint('tool-recovery-quarantine')
+    const status=service.health().toolMeasurement.recovery
+    h.db.exec("CREATE TRIGGER stable_recovery BEFORE UPDATE ON process_collection_checkpoints WHEN NEW.source='tool-recovery-quarantine' BEGIN SELECT RAISE(ABORT,'healthy must not rewrite'); END")
+    for(let i=0;i<3;i++) {
+      h.advance(30000);service.tick()
+      expect(h.store.checkpoint('tool-recovery-quarantine')).toBe(before)
+      expect(service.health().toolMeasurement.recovery).toEqual(status)
+      expect(service.recorder.failures).toBe(0)
+    }
+    service.stop();service=h.service();service.start()
+    expect(service.health().toolMeasurement.recovery).toEqual({status:'unknown',quarantinedCount:null,pendingCount:null,checkedAt:null})
+    expect(h.store.checkpoint('tool-recovery-quarantine')).toBe(before)
+    h.db.exec('DROP TRIGGER stable_recovery');service.tick()
+    expect(service.health().toolMeasurement.recovery).toEqual(status)
+    expect(h.store.checkpoint('tool-recovery-quarantine')).toBe(before)
+  } finally {service?.stop();h.db.close()}
 })

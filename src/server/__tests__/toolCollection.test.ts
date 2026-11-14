@@ -222,3 +222,39 @@ test('R1: clean closed first remains eligible and tainted carrier survives detai
     expect(firstAttemptEligible(next,tainted,origin,origin+86400000)).toBe(false)
   } finally {h.db.close()}
 })
+
+// @covers: tool-call-metrics › Failure streaks close conservatively › Gap on a duplicate survives restart
+test('N1: watch closure is saved before each dedupe return and recovery attempts no second insert',()=>{
+  for(const duplicate of ['call','result','card','resolution'] as const) {
+    const h=harness()
+    try {
+      h.emit({type:'turn_started'})
+      h.emit({type:'tool_call',toolCallId:'c',tool:'Bash'})
+      h.emit({type:'tool_result',toolCallId:'c',isError:true,output:'neutral'})
+      h.emit({type:'approval_request',requestId:'q',toolCallId:'c',tool:'Write',input:{}})
+      h.emit({type:'request_resolved',requestId:'q',outcome:'allowed'})
+      h.recorder.safe(()=>{throw Error('gap before duplicate')})
+      const event={
+        call:{type:'tool_call',toolCallId:'c',tool:'Bash'},
+        result:{type:'tool_result',toolCallId:'c',output:'duplicate'},
+        card:{type:'approval_request',requestId:'q',toolCallId:'c',tool:'Write',input:{}},
+        resolution:{type:'request_resolved',requestId:'q',outcome:'denied'},
+      }[duplicate]!
+      h.emit(event)
+      const state=h.state()
+      expect(state.tm.streaks).toEqual([])
+      expect(state.tm.mode).toBe('tainted')
+      expect(state.tm.seenRecorderFailures).toBe(h.recorder.failures)
+      expect(h.rows().filter(r=>r.kind==='tool_streak')).toHaveLength(1)
+      // A BEFORE INSERT abort detects even an attempted colliding ON CONFLICT insert.
+      h.db.exec("CREATE TRIGGER no_reclosed_streak BEFORE INSERT ON process_observations WHEN NEW.kind='tool_streak' BEGIN SELECT RAISE(ABORT,'duplicate closure attempt'); END")
+      const recorder=new ObservationRecorder(h.store)
+      const restarted=new ChatObservationTracker(recorder,()=>({sessionId:'s',teamId:'team'}),catalogue)
+      restarted.recover()
+      expect(restarted.pendingRecovery.size).toBe(0)
+      expect(h.db.prepare("SELECT count(*) n FROM process_live_observations").get()).toEqual({n:0})
+      expect(h.rows().filter(r=>r.kind==='tool_streak')).toHaveLength(1)
+      expect(recorder.failures).toBe(h.recorder.failures)
+    } finally {h.db.close()}
+  }
+})

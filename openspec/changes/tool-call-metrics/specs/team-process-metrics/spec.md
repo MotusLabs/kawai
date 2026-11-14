@@ -31,6 +31,10 @@ Kawai SHALL report per window: failure rate by tool/class; the closed-cohort fir
 - **WHEN** the export families are budget-unavailable
 - **THEN** `team_metrics` reports the measurement status `budget-unavailable` in its compact projection instead of rendering empty tool families as data
 
+#### Scenario: Healthy recovery ticks leave views unchanged
+- **WHEN** healthy ticks have unchanged recovery status and counts
+- **THEN** checkedAt, raw checkpoint bytes and all-field canonical status stay unchanged, with no cache invalidation or push; failed/unverified recovery still requires a successful process verification
+
 ### Requirement: Tool metric drill-down opens the first failed call
 The Tools drill-down SHALL reach every abandoned streak of the window through any number of pages of at most 50 entries, behind a stable cursor bound to team, slice, window end, page size, and a high-water mark, each page carrying the total; the inline drill stays at most 50 plus the total, with the five longest recovered streaks. Opening one SHALL reveal its first failed call, or report `not-found`, `archived`, or `unreadable` instead of clearing silently.
 
