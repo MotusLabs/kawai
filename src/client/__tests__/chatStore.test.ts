@@ -42,6 +42,16 @@ describe('chat store', () => {
     expect(state.events).toHaveLength(1)
   })
 
+  test('assistant text of a different message or turn does not continue the entry (D5)', () => {
+    // The identity boundary: only exactly equal message and turn ids continue
+    // an entry, so adjacent events of another message or another turn each
+    // start their own entry.
+    const newMessage = applyChatEvents(emptyTranscript(), [delta(1, 'One'), { ...delta(2, 'Two'), messageId: 'message-2' }])
+    expect(newMessage.events.map(event => event.type === 'assistant_text' ? event.text : event.type)).toEqual(['One', 'Two'])
+    const newTurn = applyChatEvents(emptyTranscript(), [delta(1, 'One'), { ...delta(2, 'Two'), turnId: 'turn-2' }])
+    expect(newTurn.events.map(event => event.type === 'assistant_text' ? event.text : event.type)).toEqual(['One', 'Two'])
+  })
+
   test('an entry keeps its first valid time through deltas, its final text, and a replay of the same ids (D2)', () => {
     const at = (sequence: number, time: string) => ({ ...delta(sequence, `${sequence}`), at: time })
     const streamed = applyChatEvents(emptyTranscript(), [

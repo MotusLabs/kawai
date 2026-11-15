@@ -19,6 +19,7 @@ import type {
   ChatBackgroundTask,
 } from '@shared/chat'
 import { earliestTime } from '@shared/chatTime'
+import { continuesEntry } from '@shared/chatTranscriptMerge'
 import type { SessionStatus } from '@shared/types'
 
 /** The live activity plus its client-clock anchor (design D6). */
@@ -114,14 +115,13 @@ export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): C
     next.throughSequence = Math.max(next.throughSequence, event.sequence)
     if (event.type === 'assistant_delta' || event.type === 'assistant_text') {
       // One entry per text block (chat-transcript-layout D5): merge only into
-      // the newest entry of this message when nothing followed it, so text
-      // after a tool call becomes its own entry in order. The entry keeps its
-      // earliest valid time (D2) so the clock never moves while it streams.
+      // the newest entry of this message, by the shared continuation
+      // predicate (chatTranscriptMerge.ts), so text after a tool call
+      // becomes its own entry in order. The entry keeps its earliest valid
+      // time (D2) so the clock never moves while it streams.
       const index = next.events.length - 1
       const previous = next.events[index]
-      const merges = previous !== undefined &&
-        (previous.type === 'assistant_text' || previous.type === 'assistant_delta') &&
-        previous.messageId === event.messageId && previous.turnId === event.turnId
+      const merges = continuesEntry(previous, event)
       const previousText = !merges ? '' : previous.type === 'assistant_text' ? previous.text : previous.delta
       const text = event.type === 'assistant_text' ? event.text : previousText + event.delta
       const at = merges ? earliestTime(previous.at, event.at) : event.at
