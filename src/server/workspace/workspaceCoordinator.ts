@@ -220,7 +220,16 @@ export class WorkspaceCoordinator {
       const ownerId = previousWorktreeOwners.get(ownerPath)
       if (!ownerId) continue
       const existing = seedPathsByCommonDir.get(ownerId)
-      if (existing) existing.push(seed.canonicalPath)
+      if (existing) {
+        existing.push(seed.canonicalPath)
+        continue
+      }
+      // Every seed of this owner failed resolution, so the pass created no
+      // entry for it (keys come only from resolved repositories). Recreate it
+      // from the carried seed: dropping it here would silently evict the
+      // repository from the snapshot and its worktrees from the OpenSpec
+      // reuse cache, even though it was discovered before.
+      seedPathsByCommonDir.set(ownerId, [seed.canonicalPath])
     }
 
     // Repositories to rebuild this pass: forced (reconciliation), all (no
