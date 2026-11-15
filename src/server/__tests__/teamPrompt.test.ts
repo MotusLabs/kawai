@@ -71,6 +71,10 @@ describe('buildTeamPrompt', () => {
       // bounded-log-reads-and-task-get D7: task_get is bounded, names its paging, and promises no full journal.
       expect(prompt).toContain('the journal, subtasks, and messages as bounded windows of the newest entries with their totals, each journal entry a byte-bounded preview')
       expect(prompt).toContain('Page older entries with `journal_before` (the returned `nextBefore`) and `journal_limit` (1–200).')
+      // bounded-metrics-and-task-get D7: revisions are rows; the prompt names their anchor and the whole-revision read.
+      expect(prompt).toContain('revisions as the newest 50 text-free rows (identity, byte lengths, rationale preview)')
+      expect(prompt).toContain('Page older revisions with `revisions_before` (`bounds.revisions.nextBefore`), and read one revision\'s direction, acceptance, and rationale whole with `revision`.')
+      expect(prompt).not.toContain('every revision, and results whole')
       expect(prompt).toContain('`mcp__kawai-team__task_journal_read`: read any journal entry whole, in byte chunks from `offset_bytes`')
       expect(prompt).not.toMatch(/whole journal|full journal/)
       expect(prompt).toContain(TASK_JOURNAL_GUIDANCE)
