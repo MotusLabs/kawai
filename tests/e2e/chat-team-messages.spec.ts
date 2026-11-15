@@ -37,7 +37,14 @@ async function createChat(page: Page, root: string, name: string, group: string)
   await dialog.getByLabel('Display Name').fill(name)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText(name)
-  return (await page.locator('[data-session-id^="chat-"]').filter({ hasText: name }).first().getAttribute('data-session-id'))!
+  // Bind to the row this call created — root-scoped, since a retained older
+  // team on the shared server can carry the same display name.
+  const row = page
+    .locator('[data-session-id^="chat-"]')
+    .filter({ has: page.getByTitle(root, { exact: true }) })
+    .filter({ hasText: name })
+  await expect(row).toHaveCount(1)
+  return (await row.getAttribute('data-session-id'))!
 }
 
 /**
@@ -224,6 +231,53 @@ test('E06: named senders, chronological threads, task filtering, and a killed se
     await expect(page.getByTestId('thread-detail').getByTestId('thread-entry')).toHaveCount(2)
     await page.screenshot({ path: info.outputPath('killed-sender.png') })
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+// Sessions of earlier specs stay in the shared server's navigator once their
+// disposable roots are gone (retained repositories), so a helper that picks
+// the first same-name row returns a stale session and every following
+// interaction lands in the wrong team. createChat must bind to the (root,
+// name) row it created — asserted here against a retained older team with
+// identical display names, then through the created lead's downstream team
+// flow (CI 43748650236 failed exactly here, on the old team's views).
+test('createChat binds to the session created for the requested root, not a retained same-name session', async ({ page }, info) => {
+  const retainedRoot = teamRoot()
+  const freshRoot = teamRoot()
+  try {
+    await page.goto('/')
+    const oldLead = await createChat(page, retainedRoot, 'Browser team lead', 'leads')
+    const oldDev = await createChat(page, retainedRoot, 'Browser developer', 'devs')
+    const lead = await createChat(page, freshRoot, 'Browser team lead', 'leads')
+    const dev = await createChat(page, freshRoot, 'Browser developer', 'devs')
+    expect(lead).not.toBe(oldLead)
+    expect(dev).not.toBe(oldDev)
+
+    // Exactly one (root, name) row exists and it carries the returned id; the
+    // retained older team's row is still there, separately.
+    const freshLeadRow = page.locator('[data-session-id^="chat-"]')
+      .filter({ has: page.getByTitle(freshRoot, { exact: true }) })
+      .filter({ hasText: 'Browser team lead' })
+    await expect(freshLeadRow).toHaveCount(1)
+    await expect(freshLeadRow).toHaveAttribute('data-session-id', lead)
+    await expect(page.locator(`[data-session-id="${oldLead}"]`)).toHaveCount(1)
+
+    // The task is seeded into the fresh team; walking the created lead's
+    // chats into its team view must find it there (the stale first-match
+    // helper would open the old team, whose task list has no Export CSV).
+    const ids = seed({ dbPath: process.env.AGENTBOARD_DB_PATH!, team: freshRoot, lead, dev })
+    await page.locator(`[data-session-id="${lead}"]`).click()
+    await page.getByTestId('chat-team-button').click()
+    await page.getByTestId('team-tab-tasks').click()
+    await expect(page.getByTestId('team-tasks')).toBeVisible()
+    await page.locator('[data-task-id]').getByRole('button', { name: 'Export CSV' }).click()
+    const detail = page.getByTestId('task-detail')
+    await expect(detail.getByTestId('message-row')).toHaveCount(2)
+    await expect(detail.locator(`[data-message-id="${ids.first}"]`)).toHaveCount(1)
+    await page.screenshot({ path: info.outputPath('created-session-identity.png') })
+  } finally {
+    rmSync(retainedRoot, { recursive: true, force: true })
+    rmSync(freshRoot, { recursive: true, force: true })
+  }
 })
 
 test('E11 slice: uncertain retry keeps its recipient, history, and survives a restart', async ({ page }, info) => {
