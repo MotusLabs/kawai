@@ -7,16 +7,17 @@
 // visible, and a group definition restored mid-wait updates the reason
 // without any row state change.
 import { expect, test, type Page } from '@playwright/test'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { cleanGitEnv } from '../../src/server/git/gitCommand'
 import { killChat } from './support/chatHeader'
 import { createChat as createResultsChat, createTask, openTeamView, openTasks, openTaskId, reopenTask, resultsTeam, say, seedCheckedResult, seedResult, spawnedSession } from './support/taskResults'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
-async function createChat(page: Page, root: string, name: string, group: string) {
+async function createChat(page: Page, root: string, name: string, group: string, observeAtSelection?: () => Promise<void>) {
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   const projectPath = dialog.getByLabel('Project Path')
@@ -30,18 +31,79 @@ async function createChat(page: Page, root: string, name: string, group: string)
   await dialog.getByLabel('Display Name').fill(name)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText(name)
-  return (await page.locator('[data-session-id^="chat-"]').filter({ hasText: name }).first().getAttribute('data-session-id'))!
+  // Bind to the row this call created — root-scoped, since retained teams
+  // from earlier specs carry the same display names and their repository
+  // sections render before this root's (it is not a Git repository).
+  const row = page
+    .locator('[data-session-id^="chat-"]')
+    .filter({ has: page.getByTitle(root, { exact: true }) })
+    .filter({ hasText: name })
+  await expect(row).toHaveCount(1)
+  // Observation-only seam at the selection boundary: a caller can assert the
+  // raw candidate order here (after this row's count-1, before the id read).
+  // It cannot choose the returned id — the root-scoped read stays authoritative.
+  if (observeAtSelection) await observeAtSelection()
+  return (await row.getAttribute('data-session-id'))!
+}
+
+/**
+ * A duplicate Git-repository team carrying the same lead/developer display
+ * names the first test creates. Its fixed prefix sorts before every other
+ * team root in the workspace snapshot's repository id order — and before
+ * this spec's own non-Git `kawai-teams-browser-` root, which renders in the
+ * fallback sections — so its same-name rows render first: the raw unscoped
+ * name-only candidates the local createChat must not pick (CI 43765541143).
+ */
+function duplicateTeam() {
+  const dup = realpathSync(mkdtempSync(join(tmpdir(), 'kawai-0000-adup-')))
+  mkdirSync(join(dup, '.kawai/groups'), { recursive: true })
+  writeFileSync(join(dup, '.kawai/groups/leads.md'), '---\nlabel: Team leads\n---\nCoordinate work')
+  writeFileSync(join(dup, '.kawai/groups/devs.md'), '---\nlabel: Developers\n---\nBuild features')
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: dup, encoding: 'utf-8', env: cleanGitEnv() })
+    if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`)
+  }
+  git(['init', '-q', dup])
+  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'init'])
+  return dup
 }
 
 test('group picker, badge, peer replay and mailbox controls', async ({ page }, info) => {
   const root = mkdtempSync(join(tmpdir(), 'kawai-teams-browser-'))
+  const dupTeam = duplicateTeam()
   mkdirSync(join(root, '.kawai/groups'), { recursive: true })
   writeFileSync(join(root, '.kawai/groups/devs.md'), '---\nlabel: Developers\n---\nBuild features')
   writeFileSync(join(root, '.kawai/groups/leads.md'), '---\nlabel: Team leads\n---\nCoordinate work')
   try {
     await page.goto('/')
-    const lead = await createChat(page, root, 'Browser team lead', 'leads')
-    const dev = await createChat(page, root, 'Browser developer', 'devs')
+    // Duplicate team first: its repository section renders before this
+    // root's rows (this root is not a Git repository) and its prefix sorts
+    // before every other retained team root, so its same-name rows are the
+    // raw unscoped name-only first candidates at the helper's selection
+    // time — asserted, not assumed (CI 43765541143 failed exactly here on
+    // the old name-first helper's stale recipient).
+    const dupLead = await createChat(page, dupTeam, 'Browser team lead', 'leads')
+    const dupDev = await createChat(page, dupTeam, 'Browser developer', 'devs')
+    const sameLead = page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Browser team lead' })
+    const sameDev = page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Browser developer' })
+    await expect(sameLead.first()).toHaveAttribute('data-session-id', dupLead, { timeout: 30_000 })
+    await expect(sameDev.first()).toHaveAttribute('data-session-id', dupDev, { timeout: 30_000 })
+
+    const lead = await createChat(page, root, 'Browser team lead', 'leads', async () => {
+      // At the selection boundary both rows exist and the raw unscoped
+      // name-only first candidate is still the duplicate team's row.
+      await expect(sameLead.first()).toHaveAttribute('data-session-id', dupLead)
+    })
+    const dev = await createChat(page, root, 'Browser developer', 'devs', async () => {
+      await expect(sameDev.first()).toHaveAttribute('data-session-id', dupDev)
+    })
+    // Identity under that adverse order, before any seeding or messaging:
+    // the returned sessions are this root's, never the first same-name
+    // candidates from the duplicate team.
+    expect(lead).not.toBe(dupLead)
+    expect(dev).not.toBe(dupDev)
+    await expect(page.locator(`[data-session-id="${lead}"]`).getByTitle(root, { exact: true })).toHaveCount(1)
+    await expect(page.locator(`[data-session-id="${dev}"]`).getByTitle(root, { exact: true })).toHaveCount(1)
     await expect(page.locator(`[data-session-id="${dev}"]`).getByTestId('session-group-badge')).toHaveText('Developers')
     await page.screenshot({ path: info.outputPath('team-groups.png') })
     const dbPath = process.env.AGENTBOARD_DB_PATH!
@@ -113,7 +175,10 @@ test('group picker, badge, peer replay and mailbox controls', async ({ page }, i
     await killChat(page)
     await page.locator(`[data-session-id="${lead}"]`).click()
     await killChat(page)
-  } finally { rmSync(root, { recursive: true, force: true }) }
+  } finally {
+    rmSync(dupTeam, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('waiting reasons: starting agent, expandable blockers, dead-letter labels, and a reason-only update', async ({ page }, info) => {

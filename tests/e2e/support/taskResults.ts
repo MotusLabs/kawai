@@ -29,7 +29,7 @@ export function resultsTeam() {
   return { root, worktree }
 }
 
-export async function createChat(page: Page, root: string, name: string, group: string) {
+export async function createChat(page: Page, root: string, name: string, group: string, observeAtSelection?: () => Promise<void>) {
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   await dialog.getByLabel('Project Path').fill(root)
@@ -38,7 +38,20 @@ export async function createChat(page: Page, root: string, name: string, group: 
   await dialog.getByLabel('Display Name').fill(name)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText(name)
-  return (await page.locator('[data-session-id^="chat-"]').filter({ hasText: name }).first().getAttribute('data-session-id'))!
+  // The navigator lists every team ever created on this server, and an older
+  // retained team can carry the same display name: bind the created chat to
+  // its own row — the one whose project badge shows this root — instead of
+  // the first same-name session (the row predicate spawnedSession uses).
+  const row = page
+    .locator('[data-session-id^="chat-"]')
+    .filter({ has: page.getByTitle(root, { exact: true }) })
+    .filter({ hasText: name })
+  await expect(row).toHaveCount(1)
+  // Observation-only seam at the selection boundary: a caller can assert the
+  // raw candidate order here (after this row's count-1, before the id read).
+  // It cannot choose the returned id — the root-scoped read stays authoritative.
+  if (observeAtSelection) await observeAtSelection()
+  return (await row.getAttribute('data-session-id'))!
 }
 
 export async function say(page: Page, session: string, text: string) {
