@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as pollDelay } from 'node:timers/promises'
 import { createChat, git, initOrigin, initPlanRepository, seedPlan, submitRound, validateUntilReady } from './fixtures/planWalkthrough'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
@@ -72,13 +73,13 @@ function decisionTool(root: string, sessionId: string, tool: 'ask' | 'record', i
 }
 
 /**
- * The session the executor's task mail landed on: the spawned dev holding
+ * The session record created for the executor's task: the spawned dev holding
  * the walk-api task. Worktree-scoped routing skips a chat rooted above the
  * worktree, and the reviewer's handoff mail pins the same task, so the group
  * narrows the pick to the implementer. decisionScope resolves a card from
  * `session.taskId`, so the ask must come from this session.
  */
-function taskHolder(root: string): string {
+async function taskHolder(root: string, deadline?: number): Promise<string> {
   const dbPath = process.env.AGENTBOARD_DB_PATH!
   if (!dbPath.startsWith(process.env.E2E_TMUX_TMPDIR!)) throw new Error('Refuse reading a non-isolated database')
   const script = `
@@ -95,15 +96,37 @@ function taskHolder(root: string): string {
     const row = taskId
       ? sessions.db.prepare("SELECT session_id FROM chat_sessions WHERE task_id = ? AND group_id = 'devs' ORDER BY rowid DESC LIMIT 1").get(taskId)
       : null;
-    console.log('HOLDER:' + JSON.stringify({ taskId: taskId ?? null, holder: row?.session_id ?? null }));
+    const assignment = taskId
+      ? sessions.db.prepare("SELECT a.id, a.message_id, a.superseded_by, m.state, m.reason, m.claimed_by FROM team_task_assignments a LEFT JOIN team_messages m ON m.id = a.message_id WHERE a.team_id = ? AND a.task_id = ? ORDER BY a.rowid DESC LIMIT 1").get(teamId, taskId)
+      : null;
+    console.log('HOLDER:' + JSON.stringify({ taskId: taskId ?? null, holder: row?.session_id ?? null, assignment: assignment ?? null }));
     sessions.close();
   `
-  const stdout = execFileSync('bun', ['-e', script], { cwd: process.cwd(), encoding: 'utf8' })
-  const line = stdout.split('\n').find(entry => entry.startsWith('HOLDER:'))
-  if (!line) throw new Error(`taskHolder printed no result: ${stdout}`)
-  const { taskId, holder } = JSON.parse(line.slice('HOLDER:'.length)) as { taskId: string | null; holder: string | null }
-  if (!holder) throw new Error(`no devs session holds the walk-api task ${taskId ?? '(none)'}: the executor's task mail has not been delivered`)
-  return holder
+  let observed: unknown = null
+  for (;;) {
+    if (deadline !== undefined && Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for the scoped dev task holder: ${JSON.stringify(observed)}`)
+    }
+    let stdout: string
+    try {
+      stdout = execFileSync('bun', ['-e', script], {
+        cwd: process.cwd(), encoding: 'utf8',
+        ...(deadline !== undefined ? { timeout: Math.max(1, deadline - Date.now()) } : {}),
+      })
+    } catch (error) {
+      throw new Error(`taskHolder failed; last isolated state: ${JSON.stringify(observed)}`, { cause: error })
+    }
+    const line = stdout.split('\n').find(entry => entry.startsWith('HOLDER:'))
+    if (!line) throw new Error(`taskHolder printed no result: ${stdout}`)
+    const state = JSON.parse(line.slice('HOLDER:'.length)) as { taskId: string | null; holder: string | null }
+    observed = state
+    if (state.holder) return state.holder
+    if (deadline === undefined) throw new Error(`No scoped dev task holder: ${JSON.stringify(state)}`)
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error(`Timed out waiting for the scoped dev task holder: ${JSON.stringify(state)}`)
+    // Poll only ordinary absence; subprocess, database and parsing errors fail immediately.
+    await pollDelay(Math.min(100, remaining))
+  }
 }
 
 test('supervision walkthrough: a Lead-answered card, the owner override, and a convergence diagnosis', async ({ page }, info) => {
@@ -145,7 +168,11 @@ test('supervision walkthrough: a Lead-answered card, the owner override, and a c
     await section.getByTestId('plan-execution-start-confirm').click()
     await expect(section.getByTestId('plan-execution-state')).toContainText('Running', { timeout: 20_000 })
     const worktree = join(root, '.worktrees', 'walk-api')
+    const readinessDeadline = Date.now() + 30_000
     await expect.poll(() => existsSync(worktree), { timeout: 30_000 }).toBe(true)
+    // The root result can cancel queued implementation mail when review starts.
+    // Observe the real scoped developer first, within the same readiness budget.
+    await taskHolder(root, readinessDeadline)
 
     // Round 1 fails its review (the review:fail signature).
     mkdirSync(join(worktree, 'src'), { recursive: true })
@@ -159,7 +186,7 @@ test('supervision walkthrough: a Lead-answered card, the owner override, and a c
     // The implementer of record (the task holder, not the root chat) asks
     // through decision_ask; the card goes to the Lead role group (the asker
     // is outside it).
-    const asked = decisionTool(root, taskHolder(root), 'ask', {
+    const asked = decisionTool(root, await taskHolder(root), 'ask', {
       question: 'Which schema should walk-api ship?', options: ['Narrow', 'Wide'],
     })
     expect(asked.addressed_to).toBe('lead')
