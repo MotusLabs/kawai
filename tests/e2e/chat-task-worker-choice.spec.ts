@@ -34,13 +34,42 @@ function teamRoot() {
   return root
 }
 
+/**
+ * A duplicate-team root carrying the same lead display name. Its fixed prefix
+ * sorts before this spec's `kawai-worker-choice-` root (and every other
+ * `kawai-<letter>` team root) in the workspace snapshot's repository id
+ * order, so the grouped navigator renders its same-name row first — the
+ * unscoped name-only candidate the shared createChat must not pick.
+ */
+function dupRoot() {
+  const dup = realpathSync(mkdtempSync(join(tmpdir(), 'kawai-0000-wdup-')))
+  mkdirSync(join(dup, '.kawai/groups'), { recursive: true })
+  writeFileSync(join(dup, '.kawai/groups/leads.md'), '---\nlabel: Team leads\n---\nCoordinate work')
+  writeFileSync(join(dup, '.kawai/groups/devs.md'), '---\nlabel: Developers\n---\nBuild features')
+  git(['init', '-q', dup])
+  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'init'], dup)
+  return dup
+}
+
 test('a worker chosen in the New task form spawns on that provider; a cooling choice waits in the Mailbox with its reason', async ({ page }, info) => {
   const root = teamRoot()
+  const dupTeam = dupRoot()
   const exportRoot = join(root, '.wt-feat-export')
   const importRoot = join(root, '.wt-feat-import')
   try {
     await page.goto('/')
+    // Duplicate team first: its repository section renders above this team's,
+    // so its same-name row is the unscoped name-only first candidate at the
+    // shared helper's selection time — asserted, not assumed.
+    const dupLead = await createChat(page, dupTeam, 'Browser team lead', 'leads')
+    const sameName = page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Browser team lead' })
+    await expect(sameName.filter({ has: page.getByTitle(dupTeam, { exact: true }) }).first())
+      .toHaveAttribute('data-session-id', dupLead, { timeout: 30_000 })
+    await expect(sameName.filter({ has: page.getByTitle(root, { exact: true }) })).toHaveCount(0)
+
     const lead = await createChat(page, root, 'Browser team lead', 'leads')
+    // Under that adverse order the helper must return this team's session.
+    expect(lead).not.toBe(dupLead)
     await page.locator(`[data-session-id="${lead}"]`).click()
     await openTeamView(page, 'tasks')
     const panel = page.getByTestId('team-tasks')
@@ -109,5 +138,6 @@ test('a worker chosen in the New task form spawns on that provider; a cooling ch
     await expect(ours).toHaveAttribute('data-session-id', member)
   } finally {
     rmSync(root, { recursive: true, force: true })
+    rmSync(dupTeam, { recursive: true, force: true })
   }
 })
