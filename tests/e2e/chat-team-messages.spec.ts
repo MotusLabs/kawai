@@ -49,7 +49,7 @@ function duplicateRoot() {
   return root
 }
 
-async function createChat(page: Page, root: string, name: string, group: string) {
+async function createChat(page: Page, root: string, name: string, group: string, observeAtSelection?: () => Promise<void>) {
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   await dialog.getByLabel('Project Path').fill(root)
@@ -66,6 +66,10 @@ async function createChat(page: Page, root: string, name: string, group: string)
     .filter({ has: page.getByTitle(root, { exact: true }) })
     .filter({ hasText: name })
   await expect(row).toHaveCount(1)
+  // Observation-only seam at the selection boundary: a caller can assert the
+  // raw candidate order here (after this row's count-1, before the id read).
+  // It cannot choose the returned id — the root-scoped read stays authoritative.
+  if (observeAtSelection) await observeAtSelection()
   return (await row.getAttribute('data-session-id'))!
 }
 
@@ -273,16 +277,20 @@ test('createChat binds to the session created for the requested root, not a reta
     const oldLead = await createChat(page, retainedRoot, 'Browser team lead', 'leads')
     const oldDev = await createChat(page, retainedRoot, 'Browser developer', 'devs')
 
-    // Adverse precondition, asserted rather than assumed: the unscoped
+    // Adverse precondition, asserted rather than assumed: the RAW unscoped
     // name-only first candidate for the lead's display name is the duplicate
-    // team's row, and the fresh root has no such row yet.
+    // team's row (no root filter), and the fresh root has no such row yet.
     const sameName = page.locator('[data-session-id^="chat-"]')
       .filter({ hasText: 'Browser team lead' })
-    await expect(sameName.filter({ has: page.getByTitle(retainedRoot, { exact: true }) }).first())
-      .toHaveAttribute('data-session-id', oldLead, { timeout: 30_000 })
+    await expect(sameName.first()).toHaveAttribute('data-session-id', oldLead, { timeout: 30_000 })
     await expect(sameName.filter({ has: page.getByTitle(freshRoot, { exact: true }) })).toHaveCount(0)
 
-    const lead = await createChat(page, freshRoot, 'Browser team lead', 'leads')
+    const lead = await createChat(page, freshRoot, 'Browser team lead', 'leads', async () => {
+      // At the helper's selection boundary the fresh row exists (its
+      // root-scoped count-1 already passed) and the raw unscoped name-only
+      // first candidate is still the duplicate team's row.
+      await expect(sameName.first()).toHaveAttribute('data-session-id', oldLead)
+    })
     const dev = await createChat(page, freshRoot, 'Browser developer', 'devs')
     // Identity under that adverse order: the returned sessions are the fresh
     // team's, never the first same-name candidate from the duplicate root.

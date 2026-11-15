@@ -59,15 +59,20 @@ test('a worker chosen in the New task form spawns on that provider; a cooling ch
   try {
     await page.goto('/')
     // Duplicate team first: its repository section renders above this team's,
-    // so its same-name row is the unscoped name-only first candidate at the
-    // shared helper's selection time — asserted, not assumed.
+    // so its same-name row is the RAW unscoped name-only first candidate at
+    // the shared helper's selection time — asserted, not assumed, with no
+    // root filter before the .first oracle.
     const dupLead = await createChat(page, dupTeam, 'Browser team lead', 'leads')
     const sameName = page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Browser team lead' })
-    await expect(sameName.filter({ has: page.getByTitle(dupTeam, { exact: true }) }).first())
-      .toHaveAttribute('data-session-id', dupLead, { timeout: 30_000 })
+    await expect(sameName.first()).toHaveAttribute('data-session-id', dupLead, { timeout: 30_000 })
     await expect(sameName.filter({ has: page.getByTitle(root, { exact: true }) })).toHaveCount(0)
 
-    const lead = await createChat(page, root, 'Browser team lead', 'leads')
+    const lead = await createChat(page, root, 'Browser team lead', 'leads', async () => {
+      // At the shared helper's selection boundary the fresh row exists (its
+      // root-scoped count-1 already passed) and the raw unscoped name-only
+      // first candidate is still the duplicate team's row.
+      await expect(sameName.first()).toHaveAttribute('data-session-id', dupLead)
+    })
     // Under that adverse order the helper must return this team's session.
     expect(lead).not.toBe(dupLead)
     await page.locator(`[data-session-id="${lead}"]`).click()

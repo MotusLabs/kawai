@@ -29,7 +29,7 @@ export function resultsTeam() {
   return { root, worktree }
 }
 
-export async function createChat(page: Page, root: string, name: string, group: string) {
+export async function createChat(page: Page, root: string, name: string, group: string, observeAtSelection?: () => Promise<void>) {
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   await dialog.getByLabel('Project Path').fill(root)
@@ -47,6 +47,10 @@ export async function createChat(page: Page, root: string, name: string, group: 
     .filter({ has: page.getByTitle(root, { exact: true }) })
     .filter({ hasText: name })
   await expect(row).toHaveCount(1)
+  // Observation-only seam at the selection boundary: a caller can assert the
+  // raw candidate order here (after this row's count-1, before the id read).
+  // It cannot choose the returned id — the root-scoped read stays authoritative.
+  if (observeAtSelection) await observeAtSelection()
   return (await row.getAttribute('data-session-id'))!
 }
 
