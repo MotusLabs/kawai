@@ -53,6 +53,7 @@ describe('windows (T1–T4, T11–T13, T15)', () => {
       journal: { total: 3, returned: 3, olderRemaining: false, nextBefore: null },
       subtasks: { total: 0, returned: 0, truncated: false },
       messages: { total: 1, returned: 1, truncated: false },
+      revisions: { total: 1, returned: 1, truncated: false, nextBefore: null },
     })
   })
 
