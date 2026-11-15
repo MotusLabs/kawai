@@ -21,9 +21,14 @@ function runSequences(withExport:boolean):void {
     const admitted=new Set<string>(),contributions=new Map<string,{calls:number;streaks:number;length:number}>()
     if(service)store.accumulate=row=>{
       const d=row.data,amount={calls:0,streaks:0,length:0}
+      // One read-only status observation per row: the accepts calls below are
+      // synchronous (no DB write or yield between them), so the first observed
+      // export-active boolean holds for every later accepts call in this row.
+      let active:boolean|null=null
       const accepts=(family:string,key:string)=>{
         const id=family+':'+key
-        if(service.toolStatus().export.state==='active'){admitted.add(id);return true}
+        if(active===null)active=service.toolStatus().export.state==='active'
+        if(active){admitted.add(id);return true}
         return admitted.has(id)
       }
       if(row.kind==='tool'&&d.eligible===true&&d.partial===false) {
