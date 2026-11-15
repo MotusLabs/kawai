@@ -18,17 +18,17 @@ function runSequences(withExport:boolean):void {
     const store=new ObservationStore(db,()=>now),recorder=new ObservationRecorder(store)
     const service=withExport?new ProcessObservationService(db,()=>({}),()=>now,250,{prefix:TEAM_TOOL_PREFIX,members:new Set([tools[2]!])}):undefined
     service?.start()
+    // Independent per-case export phase model: active after the start ensure().
+    // It moves only at the already-asserted ensure() transitions below; the two
+    // real status cross-checks compare and never choose or heal this model.
+    let exportActive=true
+    if(service)expect(service.toolStatus().export.state,'phase start '+caseId).toBe('active')
     const admitted=new Set<string>(),contributions=new Map<string,{calls:number;streaks:number;length:number}>()
     if(service)store.accumulate=row=>{
       const d=row.data,amount={calls:0,streaks:0,length:0}
-      // One read-only status observation per row: the accepts calls below are
-      // synchronous (no DB write or yield between them), so the first observed
-      // export-active boolean holds for every later accepts call in this row.
-      let active:boolean|null=null
       const accepts=(family:string,key:string)=>{
         const id=family+':'+key
-        if(active===null)active=service.toolStatus().export.state==='active'
-        if(active){admitted.add(id);return true}
+        if(exportActive){admitted.add(id);return true}
         return admitted.has(id)
       }
       if(row.kind==='tool'&&d.eligible===true&&d.partial===false) {
@@ -59,9 +59,11 @@ function runSequences(withExport:boolean):void {
         if(service&&caseId%2===1&&i===Math.floor(count/2)) {
           db.exec("CREATE TRIGGER export_abort BEFORE UPDATE ON process_collection_checkpoints WHEN NEW.source='tool-export-v2' BEGIN SELECT RAISE(ABORT,'export'); END")
           expect(service.toolExport.ensure()).toBe(false)
+          exportActive=false
         }
         if(service&&caseId%2===1&&i===Math.floor(count*3/4)&&i>Math.floor(count/2)) {
           db.exec('DROP TRIGGER export_abort');expect(service.toolExport.ensure()).toBe(true)
+          exportActive=true
         }
         const op=Math.floor(random()*8),tool=tools[Math.floor(random()*3)]!,short=tool===tools[2]?'task_get':tool
         if(op===5 && turn<turns) {end();start();continue}
@@ -110,6 +112,7 @@ function runSequences(withExport:boolean):void {
         expect(value('agent_tool_failure_streaks_total','value'),'P2 streaks '+caseId).toBe(expectedTotals.streaks)
         expect(value('agent_tool_failure_streak_length','sum'),'P2 sum '+caseId).toBe(expectedTotals.length)
         expect(value('agent_tool_failure_streak_length','count'),'P2 count '+caseId).toBe(expectedTotals.histograms)
+        expect(service.toolStatus().export.state,'phase end '+caseId).toBe(exportActive?'active':'unknown')
         const before=db.prepare("SELECT * FROM process_export_totals WHERE bucket!='admitted' ORDER BY family,labels,bucket").all()
         db.exec('DROP TRIGGER IF EXISTS export_abort');service.toolExport.ensure()
         now+=91*86400000;store.prune()
