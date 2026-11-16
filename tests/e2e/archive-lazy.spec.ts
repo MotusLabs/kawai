@@ -75,6 +75,6 @@ test('archive pages and collapsed selection survive reload and reconnect with co
       return route.fulfill({ json: { rows: [], unknown: ids } })
     })
     await page.reload()
-    await expect(page.getByText('Chat session was not found.', { exact: true })).toBeVisible()
+    await expect(page.getByRole('complementary').getByText('Chat session was not found.', { exact: true })).toBeVisible()
   } finally { await server.stop({ tmuxRoot: root }); rmSync(root, { recursive: true, force: true }) }
 })

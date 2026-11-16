@@ -21,19 +21,26 @@ for (const dir of ['claude', 'codex', 'pi']) mkdirSync(join(root, dir))
 async function connect(digest?: string): Promise<string[]> {
   const url = `ws://127.0.0.1:${port}/ws${digest ? '?workspace=' + digest : ''}`
   const client = `
-    const frames=[]; let state='connecting', done=false;
-    const socket=new WebSocket(process.argv[1]);
-    socket.onopen=()=>{state='open'};
-    const timer=setTimeout(()=>{console.error('probe timeout state='+state+' frames='+frames.map(raw=>JSON.parse(raw).type).join(','));socket.close();process.exitCode=1},20000);
-    socket.onclose=event=>{state='closed:'+event.code;if(!done){clearTimeout(timer);console.error(state);process.exitCode=1}};
-    socket.onerror=()=>{clearTimeout(timer);console.error('probe socket failed '+state);process.exitCode=1};
-    socket.onmessage=event=>{
-      frames.push(String(event.data));
-      const types=frames.map(raw=>JSON.parse(raw).type);
-      if(!done&&types.includes('agent-sessions')&&types.includes('archive-summary')&&(process.argv[2]==='held'||types.includes('workspace-snapshot'))){
-        done=true;clearTimeout(timer);setTimeout(()=>{socket.close();console.log(JSON.stringify(frames))},150);
-      }
-    };
+    (async()=>{
+      const {chromium}=require('@playwright/test');
+      const browser=await chromium.launch({headless:true});
+      try {
+        const page=await browser.newPage();
+        await page.goto(process.argv[1].replace(/^ws:/,'http:').replace(/\\/ws.*$/,'/api/sessions'));
+        const frames=await page.evaluate(({url,held})=>new Promise((resolve,reject)=>{
+          const frames=[];let done=false;const socket=new WebSocket(url);
+          const timer=setTimeout(()=>{socket.close();reject(new Error('browser probe timeout; frames='+frames.map(raw=>JSON.parse(raw).type).join(',')))},20000);
+          socket.onerror=()=>{clearTimeout(timer);reject(new Error('browser probe socket failed'))};
+          socket.onmessage=event=>{
+            frames.push(String(event.data));const types=frames.map(raw=>JSON.parse(raw).type);
+            if(!done&&types.includes('agent-sessions')&&types.includes('archive-summary')&&(held||types.includes('workspace-snapshot'))){
+              done=true;clearTimeout(timer);setTimeout(()=>{socket.close();resolve(frames)},150);
+            }
+          };
+        }),{url:process.argv[1],held:process.argv[2]==='held'});
+        console.log(JSON.stringify(frames));
+      } finally {await browser.close()}
+    })().catch(error=>{console.error(error);process.exitCode=1});
   `
   return new Promise((resolve, reject) => {
     execFile('node', ['-e', client, url, digest ? 'held' : 'first'], { encoding: 'utf8', timeout: 21000 }, (error, stdout, stderr) => {
