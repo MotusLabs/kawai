@@ -162,8 +162,11 @@ Client fetching (`src/client/stores/archivedChatRows.ts`):
 - The kept selection: when the persisted `selectedSessionId` is not in `sessions` after the first `sessions`
   message, App resolves it through the by-id path before the existing "select the first visible target"
   fallback runs. An unknown id clears the selection and shows the not-found notice. A valid archived row or
-  pending resolution remains selected even with Archive collapsed. Existing filtered-out LIVE selection
-  fallback, Team-page deferral, and hibernating selection rules are preserved.
+  current-connection unresolved/pending/error resolution remains selected across every later list and
+  unrelated local kill, even with Archive collapsed. Missing identity without a connection/request retains
+  baseline fallback. Current unknown has one clear-and-notice owner; store and filtered-live fallbacks defer
+  until that owner clears. Explicit selected kill/removal ends ownership even without a held row. Existing
+  filtered-out LIVE fallback, Team-page deferral, hibernating and mobile initial-selection rules are preserved.
 - Once per new connection, its first `sessions` frame invalidates archived rows, pages, cursors, unknown marks
   and pending requests; live duplicates are excluded. Refresh the first page if Archive is expanded and
   resolve selected/rendered references before fallback. Periodic list broadcasts do not reset this cache. Old

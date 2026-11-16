@@ -505,7 +505,9 @@ export default function App() {
     if (teamLocation) return
     if (selectedHibernatingSessionId) return
     if (!selectedSessionId) return
-    if (selectedSession?.archivedAt || (!selectedSession && selectedRowStatus !== 'unknown')) return
+    // Missing-row resolution (including unknown clear/notice) owns this id;
+    // this effect only corrects an actual live row excluded by filters.
+    if (!selectedSession || selectedSession.archivedAt) return
     if (navigationLiveSessions.some((session) => session.id === selectedSessionId)) {
       return
     }
@@ -646,7 +648,7 @@ export default function App() {
     // even if the browser's main thread is busy with WebSocket messages or
     // xterm.js rendering. Without flushSync, React 18 may defer the paint.
     flushSync(() => {
-      if (session?.archivedAt && currentSelected === sessionId) setSelectedSessionId(null)
+      if (currentSelected === sessionId && (!session || session.archivedAt)) setSelectedSessionId(null)
       markSessionExiting(sessionId)
       useSessionStore.setState(state => { const archivedChats = new Map(state.archivedChats); archivedChats.delete(sessionId); return { archivedChats } })
       setSessions(currentSessions.filter(s => s.id !== sessionId))

@@ -4,6 +4,7 @@ import type { AgentSession, HostStatus, Session } from '@shared/types'
 import { sortSessions } from '../utils/sessions'
 import { useSettingsStore } from './settingsStore'
 import { createTabStorage } from '../utils/storage'
+import { rowResolutionOwnsSelection } from './archiveRequestState'
 
 const SESSION_PERSIST_KEY = 'agentboard-session'
 const tabStorage = createTabStorage(SESSION_PERSIST_KEY)
@@ -73,7 +74,7 @@ interface SessionState {
   connectionStatus: ConnectionStatus
   connectionError: string | null
   connectionEpoch: number
-  setSessions: (sessions: Session[], preserveMissingSelection?: boolean) => void
+  setSessions: (sessions: Session[]) => void
   setAgentSessions: (
     active: AgentSession[],
     hibernating: AgentSession[],
@@ -130,7 +131,7 @@ export const useSessionStore = create<SessionState>()(
       remoteAllowAttach: false,
       hostLabel: null,
       preferWindowName: false,
-      setSessions: (sessions, preserveMissingSelection = false) => {
+      setSessions: (sessions) => {
         const state = get()
         const selected = state.selectedSessionId
         const selectedHibernating = state.selectedHibernatingSessionId
@@ -154,7 +155,7 @@ export const useSessionStore = create<SessionState>()(
         let newSelectedId: string | null = selected
         if (
           selected !== null &&
-          !preserveMissingSelection &&
+          !(selectedHibernating === null && rowResolutionOwnsSelection(selected, currentSessions.some(row => row.id === selected))) &&
           !state.archivedChats.has(selected) &&
           !sessions.some((session) => session.id === selected)
         ) {

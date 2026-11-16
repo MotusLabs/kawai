@@ -112,9 +112,10 @@ export function handleSessions(
   }
 
   const firstFrame = beginArchiveConnection(deps.getConnectionEpoch())
-  const selectedRow = selectSessionFromRows(currentSessions, previousSelectedSessionId)
-  const preserveSelection = firstFrame && (!selectedRow || selectedRow.kind === 'chat')
-  session.setSessions(nextSessions, preserveSelection)
+  // A current live row settles its resolution; later removal must retain the
+  // existing live-session fallback rather than an old unresolved marker.
+  for (const row of nextSessions) noteSessionMutation(row.id)
+  session.setSessions(nextSessions)
   // A periodic live list must not retain rows restored while disconnected.
   useSessionStore.setState(state => {
     const archivedChats = new Map(state.archivedChats)

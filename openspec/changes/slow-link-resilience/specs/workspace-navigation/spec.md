@@ -24,7 +24,7 @@ Showing or opening an archived chat the client does not hold, whether referenced
 
 #### Scenario: Reload with an archived chat selected
 - **WHEN** the app reloads with an archived chat as the kept selection and the client does not hold its row
-- **THEN** the client fetches that chat's row and opens the chat even with Archive collapsed
+- **THEN** the client fetches that chat's row and opens the chat even with Archive collapsed, retaining its identity through later session lists and unrelated local kills while current-connection resolution is unresolved, pending or failed
 
 #### Scenario: Team page references archived members
 - **WHEN** the Team page shows tasks whose assignees are 12 archived chats the client does not hold, while `Archive` is collapsed
@@ -32,7 +32,7 @@ Showing or opening an archived chat the client does not hold, whether referenced
 
 #### Scenario: The chat no longer exists
 - **WHEN** the client fetches the row of a chat session the server does not know
-- **THEN** the client shows that the chat was not found instead of waiting indefinitely, and clears a kept selection that named it
+- **THEN** one owner shows that the chat was not found instead of waiting indefinitely and clears a kept selection that named it; intervening list or filtered-live fallback cannot override that termination, and existing mobile initial-selection behavior applies after it clears
 
 ### Requirement: Archive requests follow current connection and lifecycle state
 The first session list of each connection SHALL invalidate archive caches and older HTTP requests, refresh an expanded Archive, and resolve visible references before fallback. Later WS lifecycle mutations SHALL supersede older HTTP rows/unknown replies and clear obsolete unknown marks. Archived/pending selections SHALL survive collapsed Archive; existing live-filter, Team and hibernating fallback SHALL remain. Periodic lists SHALL NOT reset paging.

@@ -59,7 +59,7 @@ as the code it covers. Each scenario test carries its
   `selectSessionById` to `sessionStore.ts`, and handle
   `chat-session-archived` and `archive-summary` in
   `protocol/sessionMessages.ts` without touching the transcript or the
-  snapshot cache. Verify: `src/client/__tests__/archivedSessionStore.test.ts`
+  snapshot cache. Verify: `src/server/__tests__/archivedSessionList.test.ts`
   shows that an open chat stays open when it is archived, that a created
   session appears, and that `archivedCount` follows the messages. Mutant
   to kill: archiving routed through the `session-removed` handler (the
@@ -78,7 +78,7 @@ as the code it covers. Each scenario test carries its
   in a component makes it fail.
 - [ ] 2.5 Build `Archive` in `src/client/utils/workspaceView.ts` from
   `archivedChats` and take its count from `archivedCount`. Hibernating and
-  history rows stay unchanged. Verify: `workspaceView.test.ts` shows a
+  history rows stay unchanged. Verify: `archiveNavigator.test.tsx` shows a
   collapsed `Archive` with count 771 and no rows loaded. Mutant to kill:
   the count taken from loaded rows (it shows 0).
 
@@ -118,10 +118,16 @@ as the code it covers. Each scenario test carries its
 - [ ] 3.4 Resolve the kept selection in `App.tsx`: when it is not in
   `sessions` after the first `sessions` message, fetch it by id before the
   "select the first visible target" fallback runs. Keep archived/pending selection with Archive collapsed;
-  preserve filtered-live fallback, Team deferral and hibernating behavior.
-  Only a current unknown reply clears it
-  and shows the not-found notice. Verify: an annotated test for "Reload
-  with an archived chat selected" and "The chat no longer exists". Mutant
+  preserve filtered-live fallback, Team deferral and hibernating behavior. Apply the
+  current-connection/request ownership rule to every store list replacement and unrelated
+  local kill, including unresolved scheduling gaps and HTTP errors. Current unknown has one
+  clear/notice owner; both store and App fallback defer until it clears. Explicit selected
+  kill/removal terminates ownership even without a held row; no-connection fallback and
+  mobile initial selection retain their existing rules. Verify: actual App/router CX1 tests
+  in `src/client/__tests__/app.test.tsx` cover delayed rows across a second differing list,
+  unrelated kill, reconnect, error/unknown/removal, explicit selected kill, and immediate
+  unknown-versus-list ordering on desktop/mobile; `sessionState.test.ts` covers the
+  scheduling gap and baseline no-connection/live-removal cases. Mutant
   to kill: the fallback running first (the selection moves to another
   chat).
 

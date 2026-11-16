@@ -1,32 +1,22 @@
 // Archive HTTP work is connection-local. Later socket mutations always win.
 import { useEffect } from 'react'
-import { create } from 'zustand'
 import type { Session } from '@shared/types'
-import { useSessionStore, selectSessionById } from './sessionStore'
+import { useSessionStore, selectSessionById, selectSessionFromRows } from './sessionStore'
 import { useWorkspaceStore } from './workspaceStore'
 import { FALLBACK_ARCHIVE_SECTION_KEY } from '@shared/workspace'
-
-type RowStatus = 'pending' | 'unknown' | 'error'
-interface ArchiveRowsState {
-  epoch: number
-  generation: number
-  status: Record<string, RowStatus>
-  loading: boolean
-  pageLoaded: boolean
-  nextCursor: string | null
-  error: string | null
-}
-export const useArchiveRowsStore = create<ArchiveRowsState>(() => ({
-  epoch: -1, generation: 0, status: {}, loading: false, pageLoaded: false,
-  nextCursor: null, error: null,
-}))
+import { useArchiveRowsStore } from './archiveRequestState'
+export { useArchiveRowsStore } from './archiveRequestState'
 let sequence = 0
 const mutations = new Map<string, number>()
 const cursors = new Set<string>()
 const queued = new Set<string>()
-const pendingKills = new Set<string>()
-export function blockSessionRow(id: string): void { pendingKills.add(id); noteSessionMutation(id) }
-export function unblockSessionRow(id: string): void { pendingKills.delete(id) }
+export function blockSessionRow(id: string): void {
+  useArchiveRowsStore.setState(state => ({ blocked: new Set([...state.blocked, id]) }))
+  noteSessionMutation(id)
+}
+export function unblockSessionRow(id: string): void {
+  useArchiveRowsStore.setState(state => { const blocked = new Set(state.blocked); blocked.delete(id); return { blocked } })
+}
 let scheduled = false
 function stamp() { return { generation: useArchiveRowsStore.getState().generation, sequence } }
 function current(id: string, pin: ReturnType<typeof stamp>): boolean {
@@ -43,9 +33,14 @@ export function noteSessionMutation(id: string): void {
 export function beginArchiveConnection(epoch: number): boolean {
   const state = useArchiveRowsStore.getState()
   if (state.epoch === epoch) return false
-  mutations.clear(); pendingKills.clear(); cursors.clear(); queued.clear(); scheduled = false
+  mutations.clear(); cursors.clear(); queued.clear(); scheduled = false
+  const session = useSessionStore.getState()
+  const selected = session.selectedSessionId
+  const previousLive = selectSessionFromRows(session.sessions, selected)
+  const unresolved = selected && (!previousLive || previousLive.kind === 'chat')
   useSessionStore.setState({ archivedChats: new Map() })
-  useArchiveRowsStore.setState({ epoch, generation: state.generation + 1, status: {},
+  useArchiveRowsStore.setState({ epoch, generation: state.generation + 1,
+    status: unresolved ? { [selected]: 'unresolved' } : {}, blocked: new Set(),
     loading: false, pageLoaded: false, nextCursor: null, error: null })
   return true
 }
@@ -58,7 +53,7 @@ export function mergeArchiveRows(rows: Session[], unknown: string[], pin = stamp
   const archivedChats = new Map(state.archivedChats)
   const status = { ...useArchiveRowsStore.getState().status }
   for (const row of rows) {
-    if (!current(row.id, pin) || pendingKills.has(row.id)) continue
+    if (!current(row.id, pin) || useArchiveRowsStore.getState().blocked.has(row.id)) continue
     delete status[row.id]
     if (live.some(held => held.id === row.id)) continue
     if (!row.archivedAt) { archivedChats.delete(row.id); live.push(row); continue }
@@ -66,7 +61,7 @@ export function mergeArchiveRows(rows: Session[], unknown: string[], pin = stamp
     if (!held?.archivedAt || held.archivedAt <= row.archivedAt) archivedChats.set(row.id, row)
   }
   for (const id of unknown) {
-    if (!current(id, pin) || pendingKills.has(id)) continue
+    if (!current(id, pin) || useArchiveRowsStore.getState().blocked.has(id)) continue
     if (live.some(row => row.id === id) || archivedChats.has(id)) continue
     status[id] = 'unknown'
   }
@@ -102,7 +97,7 @@ export function requestSessionRows(ids: string[]): void {
   const state = useSessionStore.getState()
   const status = { ...useArchiveRowsStore.getState().status }
   for (const id of ids) {
-    if (!id || pendingKills.has(id) || selectSessionById(state, id) || status[id]) continue
+    if (!id || useArchiveRowsStore.getState().blocked.has(id) || selectSessionById(state, id) || (status[id] && status[id] !== 'unresolved')) continue
     queued.add(id); status[id] = 'pending'
   }
   useArchiveRowsStore.setState({ status })
@@ -136,6 +131,6 @@ export function useSessionRow(id: string | null | undefined, fallback?: Session)
   const row = cached ?? fallback
   const generation = useArchiveRowsStore(state => state.generation)
   const status = useArchiveRowsStore(state => id ? state.status[id] : undefined)
-  useEffect(() => { if (id && !row && !status) requestSessionRows([id]) }, [id, row, status, generation])
+  useEffect(() => { if (id && !row && (!status || status === 'unresolved')) requestSessionRows([id]) }, [id, row, status, generation])
   return row
 }
