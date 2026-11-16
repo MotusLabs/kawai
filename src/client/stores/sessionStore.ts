@@ -73,7 +73,7 @@ interface SessionState {
   connectionStatus: ConnectionStatus
   connectionError: string | null
   connectionEpoch: number
-  setSessions: (sessions: Session[]) => void
+  setSessions: (sessions: Session[], preserveMissingSelection?: boolean) => void
   setAgentSessions: (
     active: AgentSession[],
     hibernating: AgentSession[],
@@ -130,7 +130,7 @@ export const useSessionStore = create<SessionState>()(
       remoteAllowAttach: false,
       hostLabel: null,
       preferWindowName: false,
-      setSessions: (sessions) => {
+      setSessions: (sessions, preserveMissingSelection = false) => {
         const state = get()
         const selected = state.selectedSessionId
         const selectedHibernating = state.selectedHibernatingSessionId
@@ -154,6 +154,7 @@ export const useSessionStore = create<SessionState>()(
         let newSelectedId: string | null = selected
         if (
           selected !== null &&
+          !preserveMissingSelection &&
           !state.archivedChats.has(selected) &&
           !sessions.some((session) => session.id === selected)
         ) {
@@ -292,3 +293,10 @@ export const useSessionStore = create<SessionState>()(
 export function selectSessionById(state: Pick<SessionState, 'sessions' | 'archivedChats'>, id: string): Session | undefined {
   return state.sessions.find(session => session.id === id) ?? state.archivedChats.get(id)
 }
+
+/** Pure lookup for views passing a combined row collection to label helpers. */
+export function selectSessionFromRows(sessions: Session[], id: string | null): Session | undefined {
+  if (!id) return undefined
+  return selectSessionById({ sessions, archivedChats: EMPTY_ARCHIVED_ROWS }, id)
+}
+const EMPTY_ARCHIVED_ROWS = new Map<string, Session>()

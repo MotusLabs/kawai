@@ -96,12 +96,18 @@ Server:
   - previous live, next archived: emit `chat-session-archived { session, archivedCount }`;
   - previous absent, next archived (boot registration), or previous and next archived: emit no live row and no
     lifecycle list.
-  A restore also emits `archive-summary`. Archived boot rows are counted by the next connect summary. Tmux
+  A restore also emits `archive-summary`. Archived boot rows are counted by the connect summary and one restore-settled summary. Tmux
   updates keep their existing behavior.
 - `removeChatSession` emits `session-removed`, plus `archive-summary { archivedCount }` when the removed
   session was archived.
 - Each connect sends `archive-summary { archivedCount }` right after `sessions`. A restore's `session-update`
   is followed by `archive-summary`.
+
+The existing bootstrap `whenRestored()` chain publishes one current
+`archive-summary` through the hub when initial restoration settles, before
+its fixture setup. Listening is not delayed. Clients connected during
+restoration converge without reconnecting; archived boot rows and metadata
+catch-up stay silent as row events, with no per-row boot summaries.
 
 Client:
 
@@ -341,8 +347,8 @@ present exactly when `Content-Encoding` is.
   restore, remove, plus connect at random points). Seams: the real `SessionRegistry` and `ConnectionHub` with
   fake sockets and the actual client protocol/store. Create/boot use `setChatSession`; archive/restore and
   archived-staying patches use the real `updateSession` path called by `ChatSessionManager.applyPatch`.
-  Include boot archived registration, archived removal and unrelated tmux refresh. Property: after each
-  broadcast, the client's `archivedCount` equals the registry's archived count, the client's live ids equal
+  Include boot archived registration after connect, restore settlement, archived removal and unrelated tmux refresh. Property: after each
+  broadcast, the client's `archivedCount` equals the registry's archived count at published count boundaries and after restoration settles, the client's live ids equal
   `getLive()` ids, and no archived id is in the live list. Seed 0x51ED, cases `propertyCases(200)`.
 - **P2 (paging is complete and duplicate-free).** Generator: seeded archives of 0–300 chats with colliding
   `archivedAt` values, then a page-walk with limits 1–100, with archives and restores interleaved between

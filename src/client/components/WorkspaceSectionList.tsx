@@ -1,3 +1,4 @@
+import { loadArchivePage, useArchiveRowsStore } from '../stores/archivedChatRows'
 // WorkspaceSectionList.tsx - Sectioned workspace navigator: live session
 // rows rendered inside collapsible sections — OpenSpec change sections
 // first, then unmatched worktree sections. Every section, including the
@@ -10,7 +11,7 @@
 // reorder stays within the section; flattened cross-section navigation is
 // computed by the caller from the same view model.
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -301,6 +302,10 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
     ...rowContext
   } = props
 
+  const archiveState = useArchiveRowsStore()
+  useEffect(() => {
+    if (section.kind === 'archive' && !section.collapsed) void loadArchivePage()
+  }, [section.kind, section.collapsed, archiveState.generation])
   const flexBasis = `${Math.round(fraction * 1000) / 10}%`
   const label = FALLBACK_SECTION_LABELS[section.kind]
 
@@ -334,7 +339,13 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
         onToggleHistory={onToggleHistory}
       />
       {!section.collapsed && (
-        <div className="min-h-0 flex-1 overflow-y-auto" data-testid="fallback-pane-scroll">
+        <div className="min-h-0 flex-1 overflow-y-auto" data-testid="fallback-pane-scroll"
+          onScroll={event => {
+            const node = event.currentTarget
+            if (section.kind === 'archive' && node.scrollHeight - node.scrollTop - node.clientHeight < 80) void loadArchivePage()
+          }}>
+          {section.kind === 'archive' && archiveState.loading && <p role="status">Loading archived chats…</p>}
+          {section.kind === 'archive' && archiveState.error && <button type="button" onClick={() => void loadArchivePage()}>Retry loading archived chats</button>}
           {section.kind === 'archive' ? (
             <ArchiveRows
               entries={section.entries}
@@ -398,7 +409,7 @@ function FallbackSectionHeader({
       data-section-kind={section.kind}
       data-section-key={section.key}
       data-collapsed={section.collapsed ? 'true' : 'false'}
-      data-session-count={section.entries.length}
+      data-session-count={section.totalCount ?? section.entries.length}
       data-attention-count={attentionTotal}
       data-hidden-attention-count={hiddenAttention}
     >
@@ -445,9 +456,9 @@ function FallbackSectionHeader({
 
       <span
         className="w-6 shrink-0 text-right text-[11px] tabular-nums text-muted"
-        aria-label={`${section.entries.length} session(s)`}
+        aria-label={`${section.totalCount ?? section.entries.length} session(s)`}
       >
-        {section.entries.length}
+        {section.totalCount ?? section.entries.length}
       </span>
     </div>
   )

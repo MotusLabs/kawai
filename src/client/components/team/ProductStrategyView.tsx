@@ -15,7 +15,7 @@ import { REVISION_STATUS_LABELS, actorLabel, shortHash } from '../chat/strategyL
 import StrategyDraftEditor from './StrategyDraftEditor'
 import StrategyRevisionHistory from './StrategyRevisionHistory'
 import StrategyImpactReview from './StrategyImpactReview'
-import { useSessionStore } from '../../stores/sessionStore'
+import { useReferencedSessions } from '../../hooks/useReferencedSessions'
 import { useStrategyStore, type StrategyAction, type StrategyView } from '../../stores/strategyStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
 import type { StrategySubView } from '../../utils/teamLocation'
@@ -45,7 +45,7 @@ export default function ProductStrategyView({ teamPath, view, sendMessage, conne
   /** Reports sub-view moves so the host can push the location (D3). */
   onNavigate?: (next: { sub: StrategySubView; revision?: number }) => void
 }) {
-  const sessions = useSessionStore(state => state.sessions)
+  const sessions = useReferencedSessions(view)
   // A host without the URL keeps its own sub-view route, revision included,
   // so its Review buttons open the revision they name.
   const [localRoute, setLocalRoute] = useState<{ sub: StrategySubView; revision?: number }>({ sub: sub ?? 'overview' })

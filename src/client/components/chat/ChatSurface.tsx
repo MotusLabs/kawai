@@ -50,7 +50,7 @@ import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
-import { useSessionStore } from '../../stores/sessionStore'
+import { useReferencedSessions } from '../../hooks/useReferencedSessions'
 import { pendingContextSends, type CapturedWorkspaceScope } from '../../stores/planWorkspaceScopeStore'
 import { claimReveal, createHostToken, isRevealDesignated, registryFor, releaseReveal } from '../../stores/chatAttachment'
 import ChatActivityRow from './ChatActivityRow'
@@ -277,7 +277,7 @@ export default function ChatSurface({
     transcript.pendingRequests.length === 0
   // Naming message participants: live rows come from the session list; killed
   // ones keep their name through the wrapper's team directory when loaded.
-  const liveSessions = useSessionStore(state => state.sessions)
+  const liveSessions = useReferencedSessions(transcript)
   const directory = participantDirectory ?? NO_DIRECTORY
   // The conversation column: workers strip, transcript scroller, then the
   // archived Restore bar or the composer. `showStrips={false}` hosts get

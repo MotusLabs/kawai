@@ -1,3 +1,4 @@
+import { selectSessionFromRows } from '../../stores/sessionStore'
 // Labels for the strategy view (product-strategy 5.1–5.3): claim kinds,
 // revision statuses, actors, and short hashes, in the style of
 // teamTaskLabels.
@@ -26,7 +27,7 @@ export const actorLabel = (actor: StrategyActor, sessions: Session[] | Record<st
   actor.kind === 'human' ? 'Human' : sessionLabel(actor.sessionId, sessions)
 
 export function sessionLabel(sessionId: string, sessions: Session[] | Record<string, Session>): string {
-  const row = Array.isArray(sessions) ? sessions.find(session => session.id === sessionId) : sessions[sessionId]
+  const row = Array.isArray(sessions) ? selectSessionFromRows(sessions, sessionId) : sessions[sessionId]
   return row?.name ?? sessionId
 }
 

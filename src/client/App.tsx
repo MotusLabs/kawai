@@ -17,7 +17,8 @@ import CreateWorktreeModal from './components/CreateWorktreeModal'
 import SettingsModal from './components/SettingsModal'
 import UpdatePanel from './components/UpdatePanel'
 import { ToastViewport } from './components/Toast'
-import { useSessionStore } from './stores/sessionStore'
+import { useSessionRow, useArchiveRowsStore, blockSessionRow } from './stores/archivedChatRows'
+import { useSessionStore, selectSessionById } from './stores/sessionStore'
 import { useSessionSearchStore } from './stores/sessionSearchStore'
 import {
   useSettingsStore,
@@ -274,11 +275,16 @@ export default function App() {
     setPendingHibernatingSession,
   ])
 
-  const selectedSession = useMemo(() => {
-    return (
-      sessions.find((session) => session.id === selectedSessionId) || null
-    )
-  }, [selectedSessionId, sessions])
+  const selectedSession = useSessionRow(selectedSessionId) ?? null
+  const selectedRowStatus = useArchiveRowsStore(state => selectedSessionId ? state.status[selectedSessionId] : undefined)
+  const archivedChats = useSessionStore(state => state.archivedChats)
+  const archivedCount = useSessionStore(state => state.archivedCount)
+  useEffect(() => {
+    if (selectedSessionId && selectedRowStatus === 'unknown') {
+      setSelectedSessionId(null)
+      setTransientError('Chat session was not found.')
+    }
+  }, [selectedSessionId, selectedRowStatus, setSelectedSessionId, setTransientError])
   const hibernatingAgentSessions = agentSessions.hibernating ?? []
   const historyAgentSessions = agentSessions.history ?? []
   const filteredHibernatingSessions = useMemo(
@@ -396,6 +402,7 @@ export default function App() {
         {
           filter: { projectFilters, hostFilters },
           collapsedSectionIds: effectiveCollapsedSectionIds,
+          archivedChats: [...archivedChats.values()], archivedCount,
         }
       ),
     [
@@ -405,7 +412,7 @@ export default function App() {
       historyAgentSessions,
       projectFilters,
       hostFilters,
-      effectiveCollapsedSectionIds,
+      effectiveCollapsedSectionIds, archivedChats, archivedCount,
     ]
   )
 
@@ -497,6 +504,7 @@ export default function App() {
     if (teamLocation) return
     if (selectedHibernatingSessionId) return
     if (!selectedSessionId) return
+    if (selectedSession?.archivedAt || (!selectedSession && selectedRowStatus !== 'unknown')) return
     if (navigationLiveSessions.some((session) => session.id === selectedSessionId)) {
       return
     }
@@ -506,6 +514,7 @@ export default function App() {
     hasLoaded,
     teamLocation,
     selectedSessionId,
+    selectedSession, selectedRowStatus,
     selectedHibernatingSessionId,
     navigationLiveSessions,
     selectFirstVisibleTarget,
@@ -623,7 +632,8 @@ export default function App() {
     invalidateSnapshotCache(sessionId)
     // Snapshot session and selection state before removal for kill-failed rollback
     const { sessions: currentSessions, selectedSessionId: currentSelected } = useSessionStore.getState()
-    const session = currentSessions.find(s => s.id === sessionId)
+    const session = selectSessionById(useSessionStore.getState(), sessionId)
+    blockSessionRow(sessionId)
     if (session) {
       pendingKills.current.set(sessionId, {
         session,
@@ -636,6 +646,7 @@ export default function App() {
     // xterm.js rendering. Without flushSync, React 18 may defer the paint.
     flushSync(() => {
       markSessionExiting(sessionId)
+      useSessionStore.setState(state => { const archivedChats = new Map(state.archivedChats); archivedChats.delete(sessionId); return { archivedChats } })
       setSessions(currentSessions.filter(s => s.id !== sessionId))
     })
     sendMessage({ type: 'session-kill', sessionId, source })
@@ -646,7 +657,7 @@ export default function App() {
   // interrupting a turn in flight, same as the chat view header.
   const handleArchiveChat = useCallback(
     (sessionId: string) => {
-      const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+      const session = selectSessionById(useSessionStore.getState(), sessionId)
       if (session) requestChatArchive(session, sendMessage)
     },
     [sendMessage]
@@ -896,9 +907,7 @@ export default function App() {
     // Read sessions from the store at click time: memoized session rows must
     // duplicate from current data, not from a snapshot captured when this
     // callback was created (design D6 audit).
-    const session = useSessionStore
-      .getState()
-      .sessions.find((s) => s.id === sessionId)
+    const session = selectSessionById(useSessionStore.getState(), sessionId)
     if (!session) return
     sendMessage({
       type: 'session-create',

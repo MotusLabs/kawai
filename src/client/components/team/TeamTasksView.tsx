@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import { filterTeamTaskRows, type TeamTaskRow } from '@shared/teamWorkspace'
-import { useSessionStore } from '../../stores/sessionStore'
+import { useReferencedSessions } from '../../hooks/useReferencedSessions'
 import { useTeamTaskStore, type TaskCreatePayload, type TaskView } from '../../stores/teamTaskStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
 import TeamTaskDetail from './TeamTaskDetail'
@@ -47,7 +47,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
   /** Open a participant's chat; the Team page passes the navigator's opener. */
   onOpenSession?: (sessionId: string) => void
 }) {
-  const sessions = useSessionStore(state => state.sessions)
+  const sessions = useReferencedSessions(view)
   const { groups } = useTeamGroups(connected, projectPath)
   const draft = view.draft
   const flow = view.flow

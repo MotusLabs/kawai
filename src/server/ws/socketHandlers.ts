@@ -28,6 +28,7 @@ export function createServerFetch(app: Hono) {
       if (
         server.upgrade(req, {
           data: {
+            workspaceDigest: /^[0-9a-f]{16}$/.test(url.searchParams.get('workspace') ?? '') ? url.searchParams.get('workspace')! : undefined,
             terminal: null,
             currentSessionId: null,
             currentTmuxTarget: null,
@@ -108,8 +109,10 @@ export function createWebSocketHandlers(deps: WebSocketHandlerDeps) {
       })
       const workspaceSnapshot = workspaceCoordinator.getSnapshot()
       if (workspaceSnapshot) {
-        send(ws, { type: 'workspace-snapshot', snapshot: workspaceSnapshot })
+        const digest = workspaceCoordinator.getDigest()!
+        if (ws.data.workspaceDigest !== digest) send(ws, { type: 'workspace-snapshot', snapshot: workspaceSnapshot, digest })
       }
+      if (!workspaceSnapshot) ws.data.pendingWorkspaceDigest = ws.data.workspaceDigest ?? null
       initializePersistentTerminal(terminal, ws)
     },
     message(ws: ServerWebSocket<WSData>, message: string | BufferSource) {

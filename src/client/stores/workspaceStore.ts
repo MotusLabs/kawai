@@ -19,6 +19,7 @@ const MAX_OPERATION_RESULTS = 10
 interface WorkspaceState {
   /** Latest successfully parsed workspace snapshot, or null before the first. */
   snapshot: WorkspaceSnapshot | null
+  digest: string | null
   /** Connection-level workspace error (e.g. disconnect); snapshot data stays. */
   lastError: string | null
   /** Recent operation results, newest first, bounded. */
@@ -34,7 +35,7 @@ interface WorkspaceState {
 
   /** Parse and store a server snapshot; returns false and keeps the previous
    *  snapshot when the payload is malformed. */
-  applySnapshot: (payload: unknown) => boolean
+  applySnapshot: (payload: unknown, digest?: string) => boolean
   /** Clear the snapshot (server confirmed no workspace data). */
   clearSnapshot: () => void
   setLastError: (error: string | null) => void
@@ -48,19 +49,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set, get) => ({
       snapshot: null,
+      digest: null,
       lastError: null,
       operationResults: [],
       collapsedSectionIds: [],
       archiveSectionExpanded: false,
 
-      applySnapshot: (payload) => {
+      applySnapshot: (payload, digest) => {
         const snapshot = parseWorkspaceSnapshot(payload)
         if (!snapshot) return false
-        set({ snapshot, lastError: null })
+        set({ snapshot, digest: digest && /^[0-9a-f]{16}$/.test(digest) ? digest : null, lastError: null })
         return true
       },
 
-      clearSnapshot: () => set({ snapshot: null }),
+      clearSnapshot: () => set({ snapshot: null, digest: null }),
 
       setLastError: (error) => set({ lastError: error }),
 

@@ -47,7 +47,8 @@ as the code it covers. Each scenario test carries its
   `chat-session-archived`, `session-removed` plus `archive-summary`), and
   wire them in `ConnectionHub.wireRegistry`. Verify: the same file covers
   all lifecycle scenarios of `session-updates`, including archived boot
-  registration and archived-staying patches, plus property P1 through the
+  registration after connect, one whenRestored-settled summary through actual
+  bootstrap wiring without delaying listen, unrelated tmux refresh, and archived-staying patches, plus property P1 through the
   actual patch path and client protocol/store (seed
   0x51ED, `propertyCases(200)`). Mutants to kill: `setChatSession` still
   emitting `sessions` (no `sessions` frame may appear for a lifecycle

@@ -47,7 +47,8 @@ and how static assets are delivered.
   link, a dead socket is still caught as quickly as it is today.
 - **Archived chats are not sent on connect.** The session list on connect
   and in broadcasts holds only unarchived sessions. The navigator gets an
-  archive summary instead (the count of archived chats), and it
+  archive summary instead (the count of archived chats), corrected once
+  initial restoration settles for clients already connected, and it
   loads `Archive` rows in pages, newest first, when the section is expanded.
   An archived chat that the app shows elsewhere (a released member on the
   Team page, the selection kept across reloads) is fetched by id.

@@ -284,7 +284,7 @@ export type ServerMessage =
   | { type: 'session-move-to-history-result'; sessionId: string; ok: boolean; session?: AgentSession; error?: string }
   // Workspace messages are additive: older clients can ignore them and all
   // existing session messages/fields are unchanged.
-  | { type: 'workspace-snapshot'; snapshot: WorkspaceSnapshot }
+  | { type: 'workspace-snapshot'; snapshot: WorkspaceSnapshot; digest?: string }
   | { type: 'workspace-operation-result'; result: WorkspaceOperationResult }
   | { type: 'terminal-output'; sessionId: string; data: string }
   | {

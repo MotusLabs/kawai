@@ -437,7 +437,7 @@ describe('connect() zombie socket guard', () => {
     expect(FakeWebSocket.instances).toHaveLength(1) // skipped — too soon
 
     // After 200ms, connect() should destroy ws1 and create ws2
-    ;(manager as unknown as { lastConnectTs: number }).lastConnectTs = Date.now() - 300
+    ;(manager as unknown as { lastConnectTs: number }).lastConnectTs = performance.now() - 300
     manager.connect()
     expect(FakeWebSocket.instances).toHaveLength(2)
     // ws1 should have had its handlers nulled
@@ -1275,7 +1275,7 @@ describe('stall detection', () => {
     // Each iteration: fire the connect timeout, then (for the first 3) fire the
     // backoff timer which triggers a new connect().
     for (let i = 0; i < 4; i++) {
-      const timeoutTimer = timers.find((t) => t.delay === 3000)
+      const timeoutTimer = timers.find((t) => t.delay === Math.min(3000 * 2 ** i, 24000))
       expect(timeoutTimer).toBeDefined()
       consumeTimer(timeoutTimer!)
 
@@ -1302,13 +1302,13 @@ describe('stall detection', () => {
     expect(latestWs.readyState).toBe(FakeWebSocket.CONNECTING)
   })
 
-  test('stall cooldown connect uses resume timeout (8000ms)', () => {
+  test('stall cooldown connect preserves the larger learned timeout (24000ms)', () => {
     const manager = new WebSocketManager()
     manager.connect()
 
     // Drive through 4 consecutive failures to trigger stall
     for (let i = 0; i < 4; i++) {
-      const timeoutTimer = timers.find((t) => t.delay === 3000)
+      const timeoutTimer = timers.find((t) => t.delay === Math.min(3000 * 2 ** i, 24000))
       expect(timeoutTimer).toBeDefined()
       consumeTimer(timeoutTimer!)
 
@@ -1324,9 +1324,8 @@ describe('stall detection', () => {
     expect(cooldown).toBeDefined()
     cooldown!.callback()
 
-    // The stall recovery sets isResumeAttempt=true, so connect timeout
-    // should be 8000ms
-    const resumeTimeout = timers.find((t) => t.delay === 8000)
+    // Stall recovery retains the learned 24s cap above the 8s resume floor.
+    const resumeTimeout = timers.find((t) => t.delay === 24000)
     expect(resumeTimeout).toBeDefined()
   })
 

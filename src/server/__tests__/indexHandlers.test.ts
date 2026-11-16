@@ -229,9 +229,21 @@ class SessionRegistryMock {
     return this.sessions
   }
 
+  getLive() { return this.sessions.filter(session => session.kind !== 'chat' || !session.archivedAt) }
+  archivedChatCount() { return this.sessions.filter(session => session.kind === 'chat' && !!session.archivedAt).length }
   setChatSession(session: Session) {
+    const previous = this.get(session.id)
+    this.sessions = this.sessions.filter(row => row.id !== session.id)
     this.sessions.push(session)
-    this.emit('sessions', this.sessions)
+    this.chatTransition(previous, session)
+  }
+  private chatTransition(previous: Session | undefined, session: Session) {
+    if (session.archivedAt) {
+      if (previous && !previous.archivedAt) this.emit('chat-session-archived', { session, archivedCount: this.archivedChatCount() })
+    } else {
+      this.emit('session-update', session)
+      if (previous?.archivedAt) this.emit('archive-summary', { archivedCount: this.archivedChatCount() })
+    }
   }
 
   removeChatSession(id: string) {
@@ -250,9 +262,11 @@ class SessionRegistryMock {
   updateSession(id: string, patch: Partial<Session>) {
     const index = this.sessions.findIndex((session) => session.id === id)
     if (index === -1) return undefined
-    const updated = { ...this.sessions[index], ...patch }
+    const previous = this.sessions[index]!
+    const updated = { ...previous, ...patch }
     this.sessions[index] = updated
-    this.emit('session-update', updated)
+    if (updated.kind === 'chat') this.chatTransition(previous, updated)
+    else this.emit('session-update', updated)
     return updated
   }
 
@@ -883,6 +897,32 @@ mock.module('../chat/claudeExecutable', () => {
 })
 
 describe('server message handlers', () => {
+  // @covers: session-updates › The session list leaves out archived chats › A client connects before initial restoration settles
+  test('bootstrap restore settlement corrects early socket count without boot rows or delayed listen', async () => {
+    const { ChatSessionManager } = await import('../chat/ChatSessionManager')
+    const original = ChatSessionManager.prototype.whenRestored
+    let settle!: () => void
+    const restored = new Promise<void>(resolve => { settle = resolve })
+    let calls = 0
+    ChatSessionManager.prototype.whenRestored = function () { calls++; return restored }
+    try {
+      const { serveOptions, registryInstance } = await loadIndex()
+      expect(calls).toBeGreaterThan(0)
+      const { ws, sent } = createWs()
+      serveOptions.websocket!.open?.(ws as never)
+      expect(sent).toContainEqual({ type: 'archive-summary', archivedCount: 0 })
+      sent.length = 0
+      registryInstance.setChatSession({ id: 'restoring', name: 'boot', kind: 'chat',
+        source: 'managed', status: 'waiting', projectPath: '/tmp/restore-fixture',
+        createdAt: '2026-01-01', lastActivity: '2026-01-01', archivedAt: '2026-01-01' })
+      expect(sent.filter(row => row.type === 'chat-session-archived' || row.type === 'session-update')).toEqual([])
+      expect(sent.filter(row => row.type === 'archive-summary')).toEqual([])
+      settle()
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(sent.filter(row => row.type === 'archive-summary')).toEqual([{ type: 'archive-summary', archivedCount: 1 }])
+    } finally { settle(); ChatSessionManager.prototype.whenRestored = original }
+  })
+
   test('chat creation and kill route through the manager without creating a tmux window', async () => {
     const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
@@ -965,7 +1005,7 @@ describe('server message handlers', () => {
       const archived = registryInstance.get(sessionId)
       expect(archived?.archivedAt).toBeTruthy()
       const update = sent.find(
-        message => message.type === 'session-update' && message.session.id === sessionId && message.session.archivedAt
+        message => message.type === 'chat-session-archived' && message.session.id === sessionId && message.session.archivedAt
       )
       expect(update).toBeTruthy()
 
@@ -5927,6 +5967,23 @@ describe('server signal handlers', () => {
 })
 
 describe('server fetch handlers', () => {
+  test('archive HTTP routes are mounted in the real bootstrap and sessions remains complete', async () => {
+    const { serveOptions, registryInstance } = await loadIndex()
+    registryInstance.setChatSession({ id: 'boot-archive', name: 'boot archive', kind: 'chat',
+      source: 'managed', status: 'waiting', createdAt: '2026-01-01', lastActivity: '2026-01-01',
+      projectPath: '/tmp/archive-mount', archivedAt: '2026-01-01' })
+    const fetchHandler = serveOptions.fetch!
+    const get = async (route: string) => {
+      const response = await fetchHandler.call({} as Bun.Server<unknown>, new Request('http://localhost' + route), {} as Bun.Server<unknown>)
+      if (!response) throw new Error('Expected HTTP response')
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+    expect((await get('/api/chat/sessions/archived')).rows.map((row: Session) => row.id)).toContain('boot-archive')
+    expect((await get('/api/chat/sessions/rows?ids=boot-archive')).rows[0].name).toBe('boot archive')
+    expect((await get('/api/sessions')).map((row: Session) => row.id)).toContain('boot-archive')
+  })
+
   test('server-info returns tailscale ip when available', async () => {
     spawnSyncImpl = ((...args: Parameters<typeof Bun.spawnSync>) => {
       const command = Array.isArray(args[0]) ? args[0] : [String(args[0])]

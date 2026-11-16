@@ -7,6 +7,10 @@ The session list the server sends on connect and in session-list broadcasts SHAL
 - **WHEN** a client connects to a server with 7 unarchived sessions and 771 archived chat sessions
 - **THEN** the session list holds the 7 unarchived sessions, and the archive summary reports 771 archived chats
 
+#### Scenario: A client connects before initial restoration settles
+- **WHEN** a client connects while persisted archived chats are still being restored
+- **THEN** initial restoration settlement sends one current archive summary to that client without reconnecting, archived row traffic, per-row boot summaries or delaying server listen
+
 ### Requirement: Chat session lifecycle changes are sent one session at a time
 Creating, restoring, archiving or removing a chat session SHALL send connected clients a message about that one session, together with the new archive summary when the number of archived chats changed. It SHALL NOT rebroadcast the whole session list.
 

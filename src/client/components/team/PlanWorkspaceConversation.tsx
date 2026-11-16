@@ -1,3 +1,5 @@
+import { useSessionRow } from '../../stores/archivedChatRows'
+import { selectSessionFromRows } from '../../stores/sessionStore'
 // The repository conversation panel (plan-workspace §6.2–6.4, design D6/D7):
 // the two durable repository roles — Architect (planning conversation) and
 // Lead (coordination conversation) — as tabs over the team's durable
@@ -108,9 +110,9 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
   const repositories = useWorkspaceStore(state => state.snapshot?.repositories)
   const binding = bindings.find(entry => entry.role === role) ?? null
   const otherBinding = bindings.find(entry => entry.role !== role) ?? null
-  const boundSession = binding ? sessions.find(entry => entry.id === binding.sessionId) ?? null : null
+  const boundSession = useSessionRow(binding?.sessionId, selectSessionFromRows(sessions, binding?.sessionId ?? null)) ?? null
   const leadBinding = bindings.find(entry => entry.role === 'lead') ?? null
-  const leadSession = leadBinding ? sessions.find(entry => entry.id === leadBinding.sessionId) ?? null : null
+  const leadSession = useSessionRow(leadBinding?.sessionId, selectSessionFromRows(sessions, leadBinding?.sessionId ?? null)) ?? null
   const sameTeam = (session: Session): boolean => teamKeyOf(session.projectPath, repositories) === teamPath
   // Bindable chats: this team's ordinary chats minus the other role's bound
   // session (the server refuses a duplicate role session; the picker never
@@ -213,8 +215,8 @@ export default function PlanWorkspaceConversation({ teamPath, sessions, connecte
     </div>
     {bindError !== null && <p role="alert" data-testid="conversation-bind-error" className="mt-1 text-chat-meta text-chat-danger">{bindError}</p>}
     {transferConflicts.map((conflict, index) => {
-      const created = sessions.find(entry => entry.id === conflict.attempt.newSessionId)
-      const holder = sessions.find(entry => entry.id === conflict.attempt.previousSessionId)
+      const created = selectSessionFromRows(sessions, conflict.attempt.newSessionId)
+      const holder = selectSessionFromRows(sessions, conflict.attempt.previousSessionId)
       return <p key={index} role="alert" data-testid="conversation-transfer-conflict"
         className="mt-1 text-chat-meta text-chat-danger">
         A reset created {created?.name ?? conflict.attempt.newSessionId}, but the {ROLE_LABELS[conflict.role]} role

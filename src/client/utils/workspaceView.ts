@@ -107,6 +107,8 @@ export interface WorktreeSectionData {
 export type WorkspaceSection = ChangeSectionData | WorktreeSectionData
 
 export interface FallbackSectionData {
+  /** Server archive count plus locally known dormant rows, independent of loaded pages. */
+  totalCount?: number
   kind: 'workspace' | 'remote' | 'archive'
   /** Reserved stable key (FALLBACK_*_SECTION_KEY) backing collapse persistence. */
   key: string
@@ -195,6 +197,8 @@ export function buildWorkspaceView(
   options: {
     filter?: SessionFilter
     collapsedSectionIds?: string[]
+    archivedChats?: Session[]
+    archivedCount?: number
   } = {}
 ): WorkspaceView {
   const filter = options.filter ?? NO_FILTER
@@ -333,7 +337,8 @@ export function buildWorkspaceView(
     )
   }
 
-  for (const session of sessions) {
+  // Live iteration drives placement; archive rows are separately loaded over HTTP.
+  for (const session of [...sessions, ...(options.archivedChats ?? [])]) {
     if (session.archivedAt != null) addTo(archive, liveEntry(session))
     else place(liveEntry(session), session.projectPath, session.remote === true)
   }
@@ -346,6 +351,9 @@ export function buildWorkspaceView(
   }
   for (const agentSession of history) {
     addTo(archive, agentEntry(agentSession, 'history'))
+  }
+  if (options.archivedCount !== undefined) {
+    archive.totalCount = options.archivedCount + archive.entries.filter(entry => entry.kind !== 'live').length
   }
   archive.entries.sort((a, b) => archiveEntrySortKey(b) - archiveEntrySortKey(a))
 

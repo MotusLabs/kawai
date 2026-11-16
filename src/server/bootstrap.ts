@@ -40,6 +40,7 @@ import { RemoteSessionService } from './remote/RemoteSessionService'
 import type { SessionOpsContext } from './sessions/context'
 import { createClaudeProfileRoutes } from './routes/claudeProfiles'
 import { createTeamGroupRoutes } from './routes/teamGroups'
+import { createArchivedChatRoutes } from './routes/archivedChats'
 import { createChatSearchRoutes } from './routes/chatSearch'
 import { createPlanWorkspaceAssetRoutes } from './routes/planWorkspaceAsset'
 import { createPasteFileRoutes } from './routes/pasteFile'
@@ -201,7 +202,7 @@ export function startServer(): void {
   })
   const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs, message => broadcast(message))
   // Restore persisted rows before checking whether the development fixture exists.
-  void chatSessionManager.whenRestored().then(() => {
+  void hub.afterChatRestoration(registry, chatSessionManager).then(() => {
     if (!chatFixtureEnabled || registry.getAll().some(session => session.name === 'Chat fixture')) return
     const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
     if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')
@@ -350,8 +351,8 @@ export function startServer(): void {
 
   const workspaceCoordinatorInstance = new WorkspaceCoordinator({
     getSeeds: () => collectWorkspaceSeeds(),
-    broadcast: (snapshot) => {
-      broadcast({ type: 'workspace-snapshot', snapshot })
+    broadcast: (snapshot, digest) => {
+      hub.publishWorkspaceSnapshot(snapshot, digest)
       workspaceWatcherInstance?.updateTargets(snapshot)
     },
   })
@@ -423,6 +424,7 @@ export function startServer(): void {
     approvalDefault: teamId => chatSessionManager.teamApprovalDefault(teamId),
   }))
   app.route('/api/chat/search', createChatSearchRoutes({ source: chatSessionManager }))
+  app.route('/api/chat/sessions', createArchivedChatRoutes({ registry, whenRestored: () => chatSessionManager.whenRestored() }))
   // The plan workspace's scoped asset route (plan-workspace 2.3): membership
   // and containment before any read; mounted before the static fallback.
   app.route('/api', createPlanWorkspaceAssetRoutes({

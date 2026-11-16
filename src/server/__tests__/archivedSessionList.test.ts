@@ -111,27 +111,71 @@ test('unknown patch and pending kill cannot add a live card', () => {
   expect(useSessionStore.getState().sessions).toEqual([])
 })
 
-test('P1 seed 0x51ED: lifecycle sequences preserve live ids and archive count', () => {
+// @covers: session-updates › The session list leaves out archived chats › A client connects before initial restoration settles
+test('restore settlement corrects an early connection once without archived row traffic', async () => {
+  const f = fixture()
+  let settle!: () => void
+  const restored = new Promise<void>(resolve => { settle = resolve })
+  let calls = 0
+  const publication = f.hub.afterChatRestoration(f.registry, {
+    whenRestored: () => { calls++; return restored },
+  })
+  expect(calls).toBe(1)
+  f.connect()
+  expect(useSessionStore.getState().archivedCount).toBe(0)
+  f.frames.length = 0
+  for (let i = 0; i < 30; i++) f.registry.setChatSession(row(`boot-${i}`, '2026-01-01'))
+  f.registry.updateSession('boot-0', { name: 'caught up metadata' })
+  expect(f.frames).toEqual([])
+  settle()
+  await publication
+  expect(f.frames).toEqual([{ type: 'archive-summary', archivedCount: 30 }])
+  expect(useSessionStore.getState().archivedCount).toBe(30)
+  expect(useSessionStore.getState().sessions).toEqual([])
+  expect(useSessionStore.getState().archivedChats.size).toBe(0)
+  f.frames.length = 0
+  f.registry.updateSession('boot-0', { archivedAt: null })
+  expect(f.frames.map(frame => frame.type)).toEqual(['session-update', 'archive-summary'])
+  expect(useSessionStore.getState().archivedCount).toBe(29)
+})
+
+test('P1 seed 0x51ED: lifecycle sequences preserve live ids and archive count', async () => {
   let seed = 0x51ED
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed >>> 8 }
   for (let c = 0; c < propertyCases(200); c++) {
     useSessionStore.setState(initial, true)
     const f = fixture(); f.connect()
+    let settle!: () => void
+    const publication = f.hub.afterChatRestoration(f.registry, {
+      whenRestored: () => new Promise<void>(resolve => { settle = resolve }),
+    })
+    let publishedCount = 0
     for (let step = 0; step < 200; step++) {
       const id = `chat-${random() % 30}`
       const current = f.registry.get(id)
       f.frames.length = 0
-      switch (random() % 6) {
+      if (step < 10) {
+        f.registry.setChatSession(row(`boot-${step}`, '2026-01-01'))
+        expect(f.frames).toEqual([])
+      } else if (step === 10) {
+        settle(); await publication
+        expect(f.frames.map(frame => frame.type)).toEqual(['archive-summary'])
+      } else switch (random() % 7) {
         case 0: f.registry.setChatSession(row(id)); break
         case 1: f.registry.updateSession(id, { archivedAt: '2026-02-01' }); break
         case 2: f.registry.updateSession(id, { archivedAt: null }); break
         case 3: f.registry.removeChatSession(id); break
         case 4: f.registry.updateSession(id, { name: `step-${step}` }); break
         case 5: f.connect(); break
+        case 6: f.registry.replaceSessions([{ ...row('tmux'), kind: 'terminal', tmuxWindow: 'fixture:1', name: `refresh-${step}` }]); break
       }
       // Each operation is atomic at its message-batch boundary (restore sends two frames).
       expect(useSessionStore.getState().sessions.map(x => x.id).sort()).toEqual(f.registry.getLive().map(x => x.id).sort())
-      expect(useSessionStore.getState().archivedCount).toBe(f.registry.archivedChatCount())
+      for (const frame of f.frames) {
+        if (frame.type === 'archive-summary' || frame.type === 'chat-session-archived') publishedCount = frame.archivedCount
+      }
+      expect(useSessionStore.getState().archivedCount).toBe(publishedCount)
+      if (step >= 10) expect(publishedCount).toBe(f.registry.archivedChatCount())
       if (current?.archivedAt && f.registry.get(id)?.archivedAt) {
         expect(f.frames.filter(x => x.type === 'session-update')).toEqual([])
       }
