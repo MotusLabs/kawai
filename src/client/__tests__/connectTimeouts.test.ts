@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 import { WebSocketManager } from '../hooks/useWebSocket'
 class Socket {
   static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3
@@ -20,6 +21,7 @@ const timers = new Map<number, { callback: () => void; delay: number }>()
 const intervals = new Map<number, { callback: () => void; delay: number }>()
 const original = { window: globalThis.window, document: globalThis.document, WebSocket: globalThis.WebSocket }
 const managers: WebSocketManager[] = []
+const initialWorkspace = useWorkspaceStore.getState()
 function manager() { const m = new WebSocketManager(() => now); managers.push(m); return m }
 function fire(delay: number, map = timers) {
   const entry = [...map].find(([, value]) => value.delay === delay)
@@ -42,7 +44,7 @@ beforeEach(() => {
     },
   })
 })
-afterEach(() => { for (const m of managers.splice(0)) m.disconnect(); Object.assign(globalThis, original) })
+afterEach(() => { for (const m of managers.splice(0)) m.disconnect(); Object.assign(globalThis, original); useWorkspaceStore.setState(initialWorkspace, true) })
 
 // @covers: terminal-streaming › Connect timeouts grow with the link's handshake time › A slow handshake eventually connects
 // @covers: terminal-streaming › Connect timeouts grow with the link's handshake time › Escalation is capped
@@ -103,8 +105,12 @@ test('V1-V8: only armed heartbeat pongs learn the real verification deadline', (
   internal(m).verifyConnection()
   expect([...timers.values()].some(timer => timer.delay === 3000)).toBe(true) // V7 kept across reconnect.
   // V8 dead fast socket: the scheduled deadline initiates reconnection.
-  m.disconnect(); const fast = manager(); fast.connect(); Socket.all.at(-1)!.open()
-  internal(fast).verifyConnection(); now += 1500; fire(1500)
+  m.disconnect(); const fast = manager(); fast.connect(); const fastSocket = Socket.all.at(-1)!; fastSocket.open()
+  fire(20000, intervals); now += 50; fastSocket.pong()
+  expect(internal(fast).srtt).toBe(50)
+  internal(fast).verifyConnection(); now += 1499
+  expect(fast.getStatus()).toBe('connected')
+  now += 1; fire(1500)
   expect(fast.getStatus()).not.toBe('connected')
 })
 
@@ -121,4 +127,13 @@ test('stale, hidden and late pongs cannot pollute heartbeat RTT', () => {
   expect(internal(m).srtt).toBeNull()
   now += 10001; next.pong()
   expect(internal(m).srtt).toBeNull()
+})
+
+test('the actual socket URL carries only the received digest paired with its held snapshot', () => {
+  const digest = '0123456789abcdef'
+  useWorkspaceStore.getState().applySnapshot({ repositories: [], generatedAt: '2026-01-01T00:00:00Z' }, digest)
+  const m = manager(); m.connect()
+  expect(Socket.all.at(-1)?.url).toBe('ws://fixture/ws?workspace=' + digest)
+  m.disconnect(); useWorkspaceStore.getState().clearSnapshot(); m.connect()
+  expect(Socket.all.at(-1)?.url).toBe('ws://fixture/ws')
 })

@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import { Hono } from 'hono'
-import { serveStatic } from 'hono/bun'
+import { staticAssetsMiddleware } from './staticAssets'
 import { config } from './config'
 import { logger, logLevel } from './logger'
 import { ensureTmux } from './prerequisites'
@@ -441,7 +441,7 @@ export function startServer(): void {
   app.route('/api', createPasteRoutes())
 
   const staticDir = process.env.AGENTBOARD_STATIC_DIR || './dist/client'
-  app.use('/*', serveStatic({ root: staticDir }))
+  app.use('/*', staticAssetsMiddleware(staticDir))
 
   // 8. WebSocket routing and Bun.serve; Bun.serve opens only after every
   // subsystem above exists.

@@ -5990,6 +5990,32 @@ describe('server signal handlers', () => {
 })
 
 describe('server fetch handlers', () => {
+  test('bootstrap mounts compressed static assets using the configured absolute root', async () => {
+    const { brotliCompressSync } = await import('node:zlib')
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kawai-static-mount-'))
+    const previous = process.env.AGENTBOARD_STATIC_DIR
+    const source = Buffer.from('console.log("configured root")')
+    try {
+      await fs.mkdir(path.join(root, 'assets'))
+      await fs.writeFile(path.join(root, 'assets', 'index-fixture.js'), source)
+      await fs.writeFile(path.join(root, 'assets', 'index-fixture.js.br'), brotliCompressSync(source))
+      process.env.AGENTBOARD_STATIC_DIR = root
+      const { serveOptions } = await loadIndex()
+      const response = await serveOptions.fetch!.call({} as Bun.Server<unknown>,
+        new Request('http://localhost/assets/index-fixture.js', { headers: { 'Accept-Encoding': 'br' } }), {} as Bun.Server<unknown>)
+      if (!response) throw new Error('Expected configured static response')
+      expect(response.status).toBe(200)
+      expect(response.headers.get('Content-Encoding')).toBe('br')
+      expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
+      expect(response.headers.get('Vary')).toBe('Accept-Encoding')
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(brotliCompressSync(source))
+    } finally {
+      if (previous === undefined) delete process.env.AGENTBOARD_STATIC_DIR
+      else process.env.AGENTBOARD_STATIC_DIR = previous
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   test('archive HTTP routes are mounted in the real bootstrap and sessions remains complete', async () => {
     const { serveOptions, registryInstance } = await loadIndex()
     registryInstance.setChatSession({ id: 'boot-archive', name: 'boot archive', kind: 'chat',

@@ -99,17 +99,7 @@ test('the archived read-only view hides the approval-policy control', async ({ p
   await expect(toggle(page)).toHaveAttribute('aria-checked', 'true')
 
   await archiveChat(page)
-  // Archiving moves the session to the docked Archive pane and the app
-  // auto-selects another live session (pre-existing navigator behavior).
-  // Open the archived chat from the Archive pane to reach its read-only view.
-  await page.getByRole('button', { name: 'Expand Archive section' }).click()
-  // The docked pane's row can sit under list overlays; dispatch its select
-  // handler directly instead of fighting pointer-event interception.
-  await page
-    .locator('[data-session-id^="chat-"]')
-    .filter({ hasText: 'auto-archive' })
-    .first()
-    .evaluate(node => (node as HTMLElement).click())
+  // The selected archived chat remains open read-only without expanding Archive.
   await expect(page.getByTestId('chat-archived-bar')).toBeVisible()
   await expect(page.getByTestId('chat-view')).toContainText('Archived')
   await expect(toggle(page)).toHaveCount(0)
