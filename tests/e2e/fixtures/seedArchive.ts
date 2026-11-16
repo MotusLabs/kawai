@@ -5,10 +5,12 @@ const [dbPath, root, countText] = process.argv.slice(2)
 if (!root || !dbPath || !resolve(dbPath).startsWith(resolve(root) + '/')) throw new Error('Refuse non-private archive seed')
 const count = Number(countText ?? 120)
 const liveCount = Number(process.argv[5] ?? 7)
+const archivedProjectPath = process.argv[6] ?? root
+if (archivedProjectPath !== root && !resolve(archivedProjectPath).startsWith(resolve(root) + '/')) throw new Error('Archive project must stay private')
 const db = initDatabase({ path: dbPath })
 for (let i = 0; i < count; i++) {
   db.insertChatSession({ sessionId: `chat-archive-${String(i).padStart(4, '0')}`, name: `Archived fixture ${i}`,
-    projectPath: root, sdkSessionId: null, status: 'waiting', createdAt: '2026-01-01T00:00:00Z',
+    projectPath: archivedProjectPath, sdkSessionId: null, status: 'waiting', createdAt: '2026-01-01T00:00:00Z',
     lastActivityAt: '2026-01-01T00:00:00Z' })
   db.updateChatSession(`chat-archive-${String(i).padStart(4, '0')}`, { archivedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString() })
 }

@@ -30,7 +30,9 @@ test('synthetic 778/771 connect payload omits archived rows and unchanged worksp
   })
   const messages = (index: number) => connections[index]?.frames.map(raw => JSON.parse(raw)) ?? []
   try {
-    execFileSync('bun', ['tests/e2e/fixtures/seedArchive.ts', env.AGENTBOARD_DB_PATH, root, '771', '6'], { env })
+    // Archived history may outlive its project directory. This fixture avoids
+    // unrelated per-chat Git discovery for 771 identical existing paths.
+    execFileSync('bun', ['tests/e2e/fixtures/seedArchive.ts', env.AGENTBOARD_DB_PATH, root, '771', '6', join(root, 'deleted-archive-project')], { env })
     execFileSync('tmux', ['new-session', '-d', '-s', 'payload-browser', '-n', 'test', '-c', root, 'bash --noprofile --norc'], { env })
     server.spawn('bun', ['src/server/index.ts'], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] })
     let all: Array<{ archivedAt?: string | null }> = []
@@ -62,7 +64,8 @@ test('synthetic 778/771 connect payload omits archived rows and unchanged worksp
     expect(messages(1).some(message => message.type === 'workspace-snapshot')).toBe(false)
     const describe = (index: number) => connections[index]!.frames.map(raw => ({ type: JSON.parse(raw).type, bytes: Buffer.byteLength(raw) }))
     const total = (index: number) => connections[index]!.frames.reduce((sum, raw) => sum + Buffer.byteLength(raw), 0)
-    const report = { synthetic: { total: 778, archived: 771, live: 7, workspace: 'plain temporary directory; no repository/worktree payload' },
+    const report = { synthetic: { total: 778, archived: 771, live: 7,
+      workspace: 'plain temporary directory; no repository/worktree payload', archivedProjects: 'private deleted directory; no Git subprocess per archived row' },
       completeSessionsFrameBytes: Buffer.byteLength(JSON.stringify({ type: 'sessions', sessions: all })),
       first: describe(0), firstBytes: total(0), equalDigestReconnect: describe(1), reconnectBytes: total(1) }
     const destination = process.env.SLOW_LINK_MEASUREMENT_PATH ?? info.outputPath('measurement.json')
