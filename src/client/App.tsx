@@ -348,6 +348,7 @@ export default function App() {
   // workspace snapshot exists; navigation falls back to the flat order
   // otherwise (older server or before the first snapshot).
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot)
+  const showWorkspaceView = workspaceSnapshot !== null || archivedCount > 0
   const collapsedSectionIds = useWorkspaceStore((state) => state.collapsedSectionIds)
   const archiveSectionExpanded = useWorkspaceStore((state) => state.archiveSectionExpanded)
   const toggleSectionCollapsed = useWorkspaceStore((state) => state.toggleSectionCollapsed)
@@ -420,18 +421,18 @@ export default function App() {
   // terminal navigation; falls back to the flat filtered order when no
   // workspace snapshot is available.
   const navigationLiveSessions = useMemo(() => {
-    if (!workspaceSnapshot) return filteredSortedSessions
+    if (!showWorkspaceView) return filteredSortedSessions
     return workspaceView.visibleEntries.flatMap((entry) =>
       entry.kind === 'live' && entry.liveSession ? [entry.liveSession] : []
     )
-  }, [workspaceSnapshot, workspaceView, filteredSortedSessions])
+  }, [showWorkspaceView, workspaceView, filteredSortedSessions])
 
   const navigationHibernatingSessions = useMemo(() => {
-    if (!workspaceSnapshot) return filteredHibernatingSessions
+    if (!showWorkspaceView) return filteredHibernatingSessions
     return workspaceView.visibleEntries.flatMap((entry) =>
       entry.kind === 'hibernating' && entry.agentSession ? [entry.agentSession] : []
     )
-  }, [workspaceSnapshot, workspaceView, filteredHibernatingSessions])
+  }, [showWorkspaceView, workspaceView, filteredHibernatingSessions])
 
   const lastSelectedHibernatingSessionIdRef = useRef<string | null>(
     selectedHibernatingSessionId
@@ -987,7 +988,7 @@ export default function App() {
           onNewSession={handleNewSession}
           loading={!hasLoaded}
           error={connectionError || serverError}
-          workspaceView={workspaceSnapshot ? workspaceView : null}
+          workspaceView={showWorkspaceView ? workspaceView : null}
           onToggleSectionCollapse={toggleSectionCollapsed}
           onNewSessionInWorktree={handleNewSessionInWorktree}
           onCreateChangeWorktree={handleCreateChangeWorktree}
@@ -1044,7 +1045,7 @@ export default function App() {
         historySessions={historyAgentSessions}
         loading={!hasLoaded}
         error={connectionError || serverError}
-        workspaceView={workspaceSnapshot ? workspaceView : null}
+        workspaceView={showWorkspaceView ? workspaceView : null}
         onToggleSectionCollapse={toggleSectionCollapsed}
         onNewSessionInWorktree={handleNewSessionInWorktree}
         onCreateChangeWorktree={handleCreateChangeWorktree}

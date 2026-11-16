@@ -1,5 +1,5 @@
 // One private synthetic 778/771 connect measurement; no live data or services.
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,24 +18,29 @@ const env = { ...process.env, HOME: root, TMUX_TMPDIR: root, TMUX: '', TMUX_SESS
   CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_API_KEY: '', AGENTBOARD_REMOTE_HOSTS: '',
   PORT: String(port), HOSTNAME: '127.0.0.1' }
 for (const dir of ['claude', 'codex', 'pi']) mkdirSync(join(root, dir))
-async function connect(digest?: string) {
-  const frames: string[] = []
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws${digest ? '?workspace=' + digest : ''}`)
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Connect probe timed out; frames=' + frames.map(raw => JSON.parse(raw).type).join(',') + '; server=' + server.diagnostics())), 20_000)
-    socket.onmessage = event => {
-      frames.push(String(event.data))
-      const types = frames.map(raw => JSON.parse(raw).type)
-      if (types.includes('agent-sessions') && types.includes('archive-summary') && (digest || types.includes('workspace-snapshot'))) {
-        clearTimeout(timer); resolve()
+async function connect(digest?: string): Promise<string[]> {
+  const url = `ws://127.0.0.1:${port}/ws${digest ? '?workspace=' + digest : ''}`
+  const client = `
+    const frames=[]; let state='connecting', done=false;
+    const socket=new WebSocket(process.argv[1]);
+    socket.onopen=()=>{state='open'};
+    const timer=setTimeout(()=>{console.error('probe timeout state='+state+' frames='+frames.map(raw=>JSON.parse(raw).type).join(','));socket.close();process.exitCode=1},20000);
+    socket.onclose=event=>{state='closed:'+event.code;if(!done){clearTimeout(timer);console.error(state);process.exitCode=1}};
+    socket.onerror=()=>{clearTimeout(timer);console.error('probe socket failed '+state);process.exitCode=1};
+    socket.onmessage=event=>{
+      frames.push(String(event.data));
+      const types=frames.map(raw=>JSON.parse(raw).type);
+      if(!done&&types.includes('agent-sessions')&&types.includes('archive-summary')&&(process.argv[2]==='held'||types.includes('workspace-snapshot'))){
+        done=true;clearTimeout(timer);setTimeout(()=>{socket.close();console.log(JSON.stringify(frames))},150);
       }
-    }
-    socket.onerror = () => { clearTimeout(timer); reject(new Error('Probe socket failed')) }
+    };
+  `
+  return new Promise((resolve, reject) => {
+    execFile('node', ['-e', client, url, digest ? 'held' : 'first'], { encoding: 'utf8', timeout: 21000 }, (error, stdout, stderr) => {
+      if (error) { reject(new Error(String(error) + '; client=' + stderr + '; server=' + server.diagnostics())); return }
+      try { resolve(JSON.parse(stdout)) } catch { reject(new Error('Invalid probe output: ' + stdout + '; ' + stderr)) }
+    })
   })
-  // Observe the completed initial publication without counting later refreshes.
-  await new Promise(resolve => setTimeout(resolve, 150))
-  socket.close()
-  return frames
 }
 try {
   execFileSync(process.execPath, ['tests/e2e/fixtures/seedArchive.ts', env.AGENTBOARD_DB_PATH, root, '771'], { env })

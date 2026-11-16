@@ -277,6 +277,21 @@ function getKeyHandler() {
 }
 
 describe('App', () => {
+  // @covers: workspace-navigation › Archive loads archived chat rows on demand › Collapsed Archive loads no archived rows
+  test('archive summary renders its collapsed count before the first workspace snapshot', () => {
+    useWorkspaceStore.setState({ snapshot: null, archiveSectionExpanded: false, collapsedSectionIds: [] })
+    act(() => { activeRenderer = TestRenderer.create(<App />) })
+    act(() => {
+      subscribeListener?.({ type: 'sessions', sessions: [baseSession] })
+      subscribeListener?.({ type: 'archive-summary', archivedCount: 771 })
+    })
+    const archiveHeader = activeRenderer!.root.findAllByProps({ 'data-testid': 'fallback-section-header' })
+      .find(header => header.props['data-section-kind'] === 'archive')
+    expect(archiveHeader?.props['data-session-count']).toBe(771)
+    expect(archiveHeader?.props['data-collapsed']).toBe('true')
+    expect(useSessionStore.getState().archivedChats.size).toBe(0)
+  })
+
   // @covers: workspace-navigation › Archived chats are fetched by id when referenced › Reload with an archived chat selected
   test('a pending archived selection resolves before fallback and survives collapsed Archive', async () => {
     let resolve!: (response: Response) => void

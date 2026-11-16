@@ -8,10 +8,13 @@ const db = initDatabase({ path: dbPath })
 for (let i = 0; i < count; i++) {
   db.insertChatSession({ sessionId: `chat-archive-${String(i).padStart(4, '0')}`, name: `Archived fixture ${i}`,
     projectPath: root, sdkSessionId: null, status: 'waiting', createdAt: '2026-01-01T00:00:00Z',
-    lastActivityAt: '2026-01-01T00:00:00Z', archivedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString() })
+    lastActivityAt: '2026-01-01T00:00:00Z' })
+  db.updateChatSession(`chat-archive-${String(i).padStart(4, '0')}`, { archivedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString() })
 }
 // Live rows have the same project shape; no real history or credentials.
 for (let i = 0; i < 7; i++) db.insertChatSession({ sessionId: `chat-live-${i}`, name: `Live fixture ${i}`,
   projectPath: root, sdkSessionId: null, status: 'waiting', createdAt: '2026-01-01T00:00:00Z', lastActivityAt: '2026-01-01T00:00:00Z' })
+const persisted = db.getChatSessions()
+if (persisted.length !== count + 7 || persisted.filter(row => !!row.archivedAt).length !== count) throw new Error('Archive seed did not persist the requested state')
 db.close()
 console.log(JSON.stringify({ archived: count, live: 7, db: join(root, 'agentboard.db') }))
