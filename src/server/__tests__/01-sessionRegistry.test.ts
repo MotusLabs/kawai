@@ -359,7 +359,7 @@ describe('SessionRegistry', () => {
 
     expect(updated).toMatchObject({ id: 'chat-abc', kind: 'chat', status: 'working' })
     expect(registry.get('chat-abc')?.status).toBe('working')
-    expect(updates).toHaveLength(1)
+    expect(updates.map(row => row.status)).toEqual(['waiting', 'working'])
 
     // The update must survive a tmux refresh (session stays in the chat map).
     registry.replaceSessions([makeSession({ id: 'window-1' })])
@@ -377,9 +377,8 @@ describe('SessionRegistry', () => {
     expect(registry.removeChatSession('chat-abc')).toBe(true)
     expect(registry.get('chat-abc')).toBeUndefined()
     expect(registry.get('window-1')).toBeDefined()
-    // Chat removal is not a tmux-world removal event; session-removed is the
-    // kill/broadcast signal the chat manager emits itself.
-    expect(removedIds).toEqual([])
+    // Registry owns the single-session removal broadcast for chats too.
+    expect(removedIds).toEqual(['chat-abc'])
     expect(registry.removeChatSession('chat-abc')).toBe(false)
   })
 

@@ -88,7 +88,8 @@ export function createWebSocketHandlers(deps: WebSocketHandlerDeps) {
         send: (payload) => ws.send(payload),
         isOpen: () => sockets.has(ws),
       })
-      send(ws, { type: 'sessions', sessions: registry.getAll() })
+      send(ws, { type: 'sessions', sessions: registry.getLive() })
+      send(ws, { type: 'archive-summary', archivedCount: registry.archivedChatCount() })
       send(ws, { type: 'host-status', hosts: remote.getHostStatuses() })
       send(ws, {
         type: 'server-config',

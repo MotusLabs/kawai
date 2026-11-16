@@ -5,6 +5,8 @@ import { activityInSameBucket } from '../shared/activityBucket'
 export interface RegistryEvents {
   sessions: (sessions: Session[]) => void
   'session-update': (session: Session) => void
+  'chat-session-archived': (payload: { session: Session; archivedCount: number }) => void
+  'archive-summary': (payload: { archivedCount: number }) => void
   'session-removed': (sessionId: string) => void
   'agent-sessions': (payload: { active: AgentSession[]; hibernating: AgentSession[]; history: AgentSession[] }) => void
   'agent-sessions-active': (active: AgentSession[]) => void
@@ -29,21 +31,32 @@ export class SessionRegistry extends EventEmitter {
     return [...this.sessions.values(), ...this.chatSessions.values()]
   }
 
+  getLive(): Session[] {
+    return this.getAll().filter(session => session.kind !== 'chat' || !session.archivedAt)
+  }
+
+  archivedChatCount(): number {
+    return [...this.chatSessions.values()].filter(session => !!session.archivedAt).length
+  }
+
   get(sessionId: string): Session | undefined {
     return this.sessions.get(sessionId) ?? this.chatSessions.get(sessionId)
   }
 
   /** Register or replace a chat session (not affected by tmux discovery). */
   setChatSession(session: Session): void {
+    const previous = this.chatSessions.get(session.id)
     this.chatSessions.set(session.id, session)
-    this.emit('sessions', this.getAll())
+    this.emitChatTransition(previous, session)
   }
 
   /** Remove a chat session; returns true when it existed. */
   removeChatSession(sessionId: string): boolean {
+    const previous = this.chatSessions.get(sessionId)
     const removed = this.chatSessions.delete(sessionId)
     if (removed) {
-      this.emit('sessions', this.getAll())
+      this.emit('session-removed', sessionId)
+      if (previous?.archivedAt) this.emit('archive-summary', { archivedCount: this.archivedChatCount() })
     }
     return removed
   }
@@ -93,7 +106,7 @@ export class SessionRegistry extends EventEmitter {
     this.sessions = nextMap
 
     if (hasChanges) {
-      this.emit('sessions', this.getAll())
+      this.emit('sessions', this.getLive())
     }
 
     for (const id of removedIds) {
@@ -114,11 +127,23 @@ export class SessionRegistry extends EventEmitter {
 
     if (this.chatSessions.has(sessionId)) {
       this.chatSessions.set(sessionId, updated)
+      this.emitChatTransition(current, updated)
     } else {
       this.sessions.set(sessionId, updated)
+      this.emit('session-update', updated)
     }
-    this.emit('session-update', updated)
     return updated
+  }
+
+  private emitChatTransition(previous: Session | undefined, next: Session): void {
+    if (next.archivedAt) {
+      if (previous && !previous.archivedAt) {
+        this.emit('chat-session-archived', { session: next, archivedCount: this.archivedChatCount() })
+      }
+      return
+    }
+    this.emit('session-update', next)
+    if (previous?.archivedAt) this.emit('archive-summary', { archivedCount: this.archivedChatCount() })
   }
 
   getAgentSessions(): { active: AgentSession[]; hibernating: AgentSession[]; history: AgentSession[] } {

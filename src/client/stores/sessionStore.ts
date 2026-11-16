@@ -53,6 +53,8 @@ export type ConnectionStatus =
 
 interface SessionState {
   sessions: Session[]
+  archivedChats: Map<string, Session>
+  archivedCount: number
   agentSessions: { active: AgentSession[]; hibernating: AgentSession[]; history: AgentSession[] }
   agentSessionsEpoch: number
   hostStatuses: HostStatus[]
@@ -111,6 +113,8 @@ export const useSessionStore = create<SessionState>()(
   persist(
     (set, get) => ({
       sessions: [],
+      archivedChats: new Map(),
+      archivedCount: 0,
       agentSessions: { active: [], hibernating: [], history: [] },
       agentSessionsEpoch: -1,
       hostStatuses: [],
@@ -150,6 +154,7 @@ export const useSessionStore = create<SessionState>()(
         let newSelectedId: string | null = selected
         if (
           selected !== null &&
+          !state.archivedChats.has(selected) &&
           !sessions.some((session) => session.id === selected)
         ) {
           if (selectedHibernating === null) {
@@ -216,11 +221,17 @@ export const useSessionStore = create<SessionState>()(
         })),
       setHostStatuses: (hosts) => set({ hostStatuses: hosts }),
       updateSession: (session) =>
-        set((state) => ({
-          sessions: state.sessions.map((existing) =>
-            existing.id === session.id ? session : existing
-          ),
-        })),
+        set((state) => {
+          if (session.archivedAt) return state
+          const archivedChats = new Map(state.archivedChats)
+          archivedChats.delete(session.id)
+          const exists = state.sessions.some(existing => existing.id === session.id)
+          return {
+            archivedChats,
+            sessions: exists ? state.sessions.map(existing => existing.id === session.id ? session : existing)
+              : [...state.sessions, session],
+          }
+        }),
       setSelectedSessionId: (sessionId) =>
         set((state) => ({
           selectedSessionId: sessionId,
@@ -276,3 +287,8 @@ export const useSessionStore = create<SessionState>()(
     }
   )
 )
+
+/** Registry rows can be live or lazily loaded from Archive. */
+export function selectSessionById(state: Pick<SessionState, 'sessions' | 'archivedChats'>, id: string): Session | undefined {
+  return state.sessions.find(session => session.id === id) ?? state.archivedChats.get(id)
+}

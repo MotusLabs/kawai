@@ -150,8 +150,9 @@ export function handleSessions(
 
 export function handleSessionUpdate(
   message: Extract<ServerMessage, { type: 'session-update' }>,
-  _deps: MessageRouterDeps
+  deps: MessageRouterDeps
 ): void {
+  if (deps.pendingKills.current.has(message.session.id) || message.session.archivedAt) return
   // Detect status transitions for sound notifications
   // Capture previous status BEFORE updating to ensure we have the old value
   const currentSessions = useSessionStore.getState().sessions
@@ -174,6 +175,20 @@ export function handleSessionUpdate(
     pageVisible,
     teamPageOpen
   )
+}
+
+export function handleChatSessionArchived(
+  message: Extract<ServerMessage, { type: 'chat-session-archived' }>,
+): void {
+  useSessionStore.setState(state => {
+    const archivedChats = new Map(state.archivedChats)
+    archivedChats.set(message.session.id, message.session)
+    return {
+      archivedChats,
+      archivedCount: message.archivedCount,
+      sessions: state.sessions.filter(session => session.id !== message.session.id),
+    }
+  })
 }
 
 export function handleSessionCreated(
@@ -200,6 +215,11 @@ export function handleSessionRemoved(
   message: Extract<ServerMessage, { type: 'session-removed' }>,
   deps: MessageRouterDeps
 ): void {
+  useSessionStore.setState(state => {
+    const archivedChats = new Map(state.archivedChats)
+    archivedChats.delete(message.sessionId)
+    return { archivedChats }
+  })
   useChatStore.getState().remove(message.sessionId)
   // Do NOT clear pendingKills here — stale async refreshes (e.g. the
   // periodic 2s refresh) can arrive AFTER session-removed and re-add

@@ -264,6 +264,8 @@ export type ServerMessage =
   | MetricsServerMessage
   | { type: 'sessions'; sessions: Session[] }
   | { type: 'session-update'; session: Session }
+  | { type: 'chat-session-archived'; session: Session; archivedCount: number }
+  | { type: 'archive-summary'; archivedCount: number }
   | { type: 'session-created'; session: Session }
   | { type: 'session-removed'; sessionId: string }
   | { type: 'host-status'; hosts: HostStatus[] }

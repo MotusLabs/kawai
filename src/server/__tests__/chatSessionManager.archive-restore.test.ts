@@ -74,6 +74,8 @@ describe('ChatSessionManager', () => {
       const registry = new SessionRegistry()
       const updates: Array<Session | undefined> = []
       registry.on('session-update', (session) => updates.push(session))
+      const archives: Array<{ session: Session; archivedCount: number }> = []
+      registry.on('chat-session-archived', payload => archives.push(payload))
       const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
@@ -104,7 +106,10 @@ describe('ChatSessionManager', () => {
       expect(manager.getSnapshot(sessionId)).not.toBeNull()
       const published = registry.get(sessionId)
       expect(published?.archivedAt).toBe(row.archivedAt)
-      expect(updates.at(-1)?.archivedAt).toBe(row.archivedAt)
+      expect(archives).toHaveLength(1)
+      expect(archives[0]?.session.archivedAt).toBe(row.archivedAt)
+      expect(archives[0]?.archivedCount).toBe(1)
+      expect(updates.some(session => !!session?.archivedAt)).toBe(false)
 
       // A second archive is a harmless idempotent no-op.
       expect(manager.archive(sessionId)).toEqual({ ok: true })

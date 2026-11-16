@@ -307,7 +307,7 @@ describe('useSessionStore', () => {
     expect(state.connectionError).toBe('boom')
   })
 
-  test('updateSession ignores missing session ids', () => {
+  test('updateSession adds missing session ids', () => {
     const sessions = [
       makeSession({ id: 'first', status: 'waiting' }),
     ]
@@ -317,6 +317,8 @@ describe('useSessionStore', () => {
       .getState()
       .updateSession({ ...sessions[0], id: 'missing', status: 'unknown' })
 
-    expect(useSessionStore.getState().sessions).toEqual(sessions)
+    expect(useSessionStore.getState().sessions).toEqual([
+      ...sessions, { ...sessions[0], id: 'missing', status: 'unknown' },
+    ])
   })
 })

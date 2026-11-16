@@ -45,6 +45,13 @@ export class ConnectionHub {
       this.broadcast({ type: 'session-update', session })
     })
 
+    registry.on('chat-session-archived', (payload) => {
+      this.broadcast({ type: 'chat-session-archived', ...payload })
+    })
+    registry.on('archive-summary', (payload) => {
+      this.broadcast({ type: 'archive-summary', ...payload })
+    })
+
     registry.on('sessions', (sessions) => {
       this.broadcast({ type: 'sessions', sessions })
     })
