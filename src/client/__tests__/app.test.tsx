@@ -320,7 +320,7 @@ describe('App', () => {
   // @covers: workspace-navigation › Archived chats are fetched by id when referenced › The chat no longer exists
   // @covers: workspace-navigation › Archived chats are fetched by id when referenced › Reload with an archived chat selected
   test('CX1: pending archived selection owns later lists and unrelated local kills until authoritative resolution', async () => {
-    const deliver = (message: ServerMessage) => { for (const listener of [...socketSubscribers]) listener(message) }
+    const deliver = (message: ServerMessage) => { for (const listener of Array.from(socketSubscribers)) listener(message) }
     for (const reconnect of [false, true]) for (const outcome of ['row', 'error', 'unknown', 'removed', 'killed', 'user-choice']) {
       const variant = `${reconnect ? 'reconnect' : 'persisted'}:${outcome}`
       const id = `chat-cx1-${variant}`
