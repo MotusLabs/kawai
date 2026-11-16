@@ -27,6 +27,7 @@ test('W1-W5: upgrade digest validation reaches the actual open handler', () => {
   for (const c of [
     { id: 'W1', url: '', present: true, sent: 1 },
     { id: 'W2', url: digest, present: true, sent: 0 },
+    { id: 'W2-upper', url: digest.toUpperCase(), present: true, sent: 0 },
     { id: 'W3', url: '1111111111111111', present: true, sent: 1 },
     { id: 'W4', url: 'zz', present: true, sent: 1 },
     { id: 'W4-long', url: '0123456789abcdef0', present: true, sent: 1 },
@@ -37,7 +38,7 @@ test('W1-W5: upgrade digest validation reaches the actual open handler', () => {
     fetch(new Request(`http://fixture/ws?workspace=${c.url}`), {
       upgrade(_req: Request, options: { data: WSData }) { data = options.data; return true },
     } as unknown as Server<WSData>)
-    expect(data.workspaceDigest, c.id).toBe(/^[a-f0-9]{16}$/.test(c.url) ? c.url : undefined)
+    expect(data.workspaceDigest, c.id).toBe(/^[a-f0-9]{16}$/i.test(c.url) ? c.url.toLowerCase() : undefined)
     const frames: ServerMessage[] = [], hub = new ConnectionHub()
     const ws = socket(data, frames)
     ws.data.terminal = {} as WSData['terminal']

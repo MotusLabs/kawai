@@ -114,6 +114,11 @@ test('stale, hidden and late pongs cannot pollute heartbeat RTT', () => {
   expect(internal(m).srtt).toBeNull()
   hidden = true; old.pong(); expect(internal(m).srtt).toBeNull()
   hidden = false; old.pong(); expect(internal(m).srtt).toBeNull() // hidden pong cleared the arm.
+  const queued = old.onmessage
   m.disconnect(); m.connect(); const next = Socket.all.at(-1)!; next.open()
-  old.pong(); expect(internal(m).srtt).toBeNull()
+  fire(20000, intervals)
+  queued?.({ data: JSON.stringify({ type: 'pong', seq: JSON.parse(next.sent.at(-1)!).seq }) })
+  expect(internal(m).srtt).toBeNull()
+  now += 10001; next.pong()
+  expect(internal(m).srtt).toBeNull()
 })

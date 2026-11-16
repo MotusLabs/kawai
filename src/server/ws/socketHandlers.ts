@@ -28,7 +28,7 @@ export function createServerFetch(app: Hono) {
       if (
         server.upgrade(req, {
           data: {
-            workspaceDigest: /^[0-9a-f]{16}$/.test(url.searchParams.get('workspace') ?? '') ? url.searchParams.get('workspace')! : undefined,
+            workspaceDigest: /^[0-9a-f]{16}$/i.test(url.searchParams.get('workspace') ?? '') ? url.searchParams.get('workspace')!.toLowerCase() : undefined,
             terminal: null,
             currentSessionId: null,
             currentTmuxTarget: null,

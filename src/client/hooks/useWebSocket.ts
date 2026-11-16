@@ -15,7 +15,8 @@
  *   destroying it.  For the common case (short background, healthy socket),
  *   the pong arrives in <100 ms and we avoid creating any new connections.
  *   For zombie sockets (iOS reports readyState OPEN but the socket is dead),
- *   the verify times out after 1.5 s and we fall back to force-reconnect.
+ *   verification waits three smoothed RTTs (1.5–8 s), then falls back to
+ *   force-reconnect if unanswered.
  *   Because force-reconnect only runs when truly needed (not every resume),
  *   zombie TCP connections don't accumulate and the reconnect is more likely
  *   to succeed.
@@ -76,9 +77,8 @@ const PONG_TIMEOUT_MS = 10_000
 
 /**
  * How long to wait for a verification pong on resume before concluding the
- * socket is a zombie and falling back to force-reconnect.  1.5 s is enough
- * for a round-trip on any reasonable network while being short enough that
- * zombie detection feels responsive.
+ * socket is a zombie and falling back to force-reconnect. This is the
+ * default/floor; armed heartbeat samples may raise it to at most 8 s.
  */
 const VERIFY_PONG_TIMEOUT_MS = 1_500
 
@@ -256,7 +256,10 @@ export class WebSocketManager {
           if (parsed.seq === this.pingSeq) {
             if (this.pongTimer !== null && this.heartbeatSentAt !== null && !this.isHidden()) {
               const sample = this.now() - this.heartbeatSentAt
-              this.srtt = this.srtt === null ? sample : this.srtt + (sample - this.srtt) / 8
+              // A frozen page can dispatch a queued pong before its overdue timer.
+              if (sample >= 0 && sample <= PONG_TIMEOUT_MS) {
+                this.srtt = this.srtt === null ? sample : this.srtt + (sample - this.srtt) / 8
+              }
             }
             this.clearPongTimer()
             // If we were waiting for a verification pong, the socket is

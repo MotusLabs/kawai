@@ -58,7 +58,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       applySnapshot: (payload, digest) => {
         const snapshot = parseWorkspaceSnapshot(payload)
         if (!snapshot) return false
-        set({ snapshot, digest: digest && /^[0-9a-f]{16}$/.test(digest) ? digest : null, lastError: null })
+        set({ snapshot, digest: digest && /^[0-9a-f]{16}$/i.test(digest) ? digest : null, lastError: null })
         return true
       },
 
