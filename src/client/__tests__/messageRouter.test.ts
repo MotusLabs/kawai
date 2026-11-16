@@ -20,6 +20,7 @@ import { useTeamLocationStore } from '../hooks/useTeamLocation'
 import { useChatStore } from '../stores/chatStore'
 import { useStrategyStore } from '../stores/strategyStore'
 import { useTeamMessageStore } from '../stores/teamMessageStore'
+import { cacheSnapshot, getCachedSnapshot } from '../terminal/snapshotCache'
 import type { ProductStrategy, StrategyDetail } from '@shared/productStrategy'
 import type { TeamMessage } from '@shared/team'
 
@@ -192,6 +193,27 @@ describe('pending kill lifecycle', () => {
     expect(state.selectedSessionId).toBe('session-1')
     expect(harness.deps.pendingKills.current.has('session-1')).toBe(false)
     expect(harness.transientErrors).toEqual(['kill refused'])
+  })
+
+  test('failed archived deletion restores only the archive row and preserves newer live rows', () => {
+    for (const restored of [false, true]) {
+      const archived: Session = { ...baseSession, kind: 'chat', archivedAt: '2026-01-01T00:00:00Z' }
+      const live: Session = { ...archived, archivedAt: null, name: 'newer restored row' }
+      useSessionStore.setState({ sessions: restored ? [live] : [], archivedChats: new Map(), selectedSessionId: null })
+      const harness = makeDeps()
+      harness.deps.pendingKills.current.set(archived.id, { session: archived, wasSelected: true, epoch: 1 })
+      useChatStore.getState().apply(archived.id, [])
+      cacheSnapshot(archived.id, 'retained terminal snapshot')
+      const transcript = useChatStore.getState().sessions
+      createMessageRouter(harness.deps)({ type: 'kill-failed', sessionId: archived.id, message: 'refused' })
+      const state = useSessionStore.getState()
+      expect(state.sessions).toEqual(restored ? [live] : [])
+      expect(state.archivedChats.get(archived.id)).toEqual(restored ? undefined : archived)
+      expect(state.selectedSessionId).toBe(archived.id)
+      expect(useChatStore.getState().sessions).toBe(transcript)
+      expect(getCachedSnapshot(archived.id)).toBe('retained terminal snapshot')
+      expect(harness.deps.pendingKills.current.size).toBe(0)
+    }
   })
 })
 

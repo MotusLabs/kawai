@@ -15,7 +15,8 @@
  *   destroying it.  For the common case (short background, healthy socket),
  *   the pong arrives in <100 ms and we avoid creating any new connections.
  *   For zombie sockets (iOS reports readyState OPEN but the socket is dead),
- *   the verify times out after 1.5 s and we fall back to force-reconnect.
+ *   verification waits three smoothed RTTs (1.5–8 s), then falls back to
+ *   force-reconnect if unanswered.
  *   Because force-reconnect only runs when truly needed (not every resume),
  *   zombie TCP connections don't accumulate and the reconnect is more likely
  *   to succeed.
@@ -28,11 +29,14 @@
  * - Debounce on forceReconnect (prevents double reconnect from overlapping triggers)
  * - Leaked socket tracking (force-closes all prior sockets to avoid browser limits)
  * - Resume delay (waits for iOS to restore network before first connect attempt)
+ * Connect deadlines double on timeout (3–24 s), learn from visible handshakes,
+ * and resume verification uses armed heartbeat RTT samples (1.5–8 s).
  */
 import { useEffect, useMemo } from 'react'
 import type { ClientMessage, SendClientMessage, ServerMessage, ServerMessageWithDiagnostics } from '@shared/types'
 import type { ConnectionStatus } from '../stores/sessionStore'
 import { useSessionStore } from '../stores/sessionStore'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 import { releaseStrandedWaits } from '../protocol/connectionWaits'
 import { clientLog } from '../utils/clientLog'
 
@@ -73,9 +77,8 @@ const PONG_TIMEOUT_MS = 10_000
 
 /**
  * How long to wait for a verification pong on resume before concluding the
- * socket is a zombie and falling back to force-reconnect.  1.5 s is enough
- * for a round-trip on any reasonable network while being short enough that
- * zombie detection feels responsive.
+ * socket is a zombie and falling back to force-reconnect. This is the
+ * default/floor; armed heartbeat samples may raise it to at most 8 s.
  */
 const VERIFY_PONG_TIMEOUT_MS = 1_500
 
@@ -118,6 +121,11 @@ export class WebSocketManager {
   private pongTimer: number | null = null
   private lastForceReconnectTs = 0
   private lastConnectTs = 0
+  private nextConnectTimeoutMs = CONNECT_TIMEOUT_MS
+  private srtt: number | null = null
+  private heartbeatSentAt: number | null = null
+  private handshakeVisible = true
+  constructor(private readonly now: () => number = () => performance.now()) {}
   private pingSeq = 0
   private connectionEpoch = 0
   /** Consecutive connect attempts that failed (timeout, error, close). */
@@ -158,7 +166,7 @@ export class WebSocketManager {
       // Don't destroy a socket that's still connecting if connect() was called
       // very recently — prevents rapid connect-destroy-connect cycles that
       // cause two onopen events and double terminal-attach.
-      const now = Date.now()
+      const now = this.now()
       if (this.ws.readyState === WebSocket.CONNECTING && now - this.lastConnectTs < 200) {
         clientLog('ws_connect_skip', { reason: 'already_connecting', ...this.wsSnap() })
         return
@@ -175,17 +183,20 @@ export class WebSocketManager {
     this.setStatus('connecting')
 
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const wsUrl = `${scheme}://${window.location.host}/ws`
+    const { snapshot, digest } = useWorkspaceStore.getState()
+    const query = snapshot && digest ? `?workspace=${digest}` : ''
+    const wsUrl = `${scheme}://${window.location.host}/ws${query}`
     clientLog('ws_connect', { url: wsUrl, resume: this.isResumeAttempt, ...this.wsSnap() }, 'info')
 
     const ws = new WebSocket(wsUrl)
     this.ws = ws
-    this.lastConnectTs = Date.now()
+    this.lastConnectTs = this.now()
+    this.handshakeVisible = !this.isHidden()
     this.leakedSockets.add(ws)
 
     // Use a longer timeout for the first attempt after resume — VPN tunnels
     // need extra time and silently drop SYN packets with no error feedback.
-    const timeout = this.isResumeAttempt ? RESUME_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS
+    const timeout = this.isResumeAttempt ? Math.max(RESUME_CONNECT_TIMEOUT_MS, this.nextConnectTimeoutMs) : this.nextConnectTimeoutMs
     this.isResumeAttempt = false
 
     // Guard against connections that hang (common on iOS after background)
@@ -202,6 +213,7 @@ export class WebSocketManager {
           timeoutMs: timeout,
           ...this.wsSnap(),
         }, 'info')
+        this.nextConnectTimeoutMs = Math.min(2 * this.nextConnectTimeoutMs, 24_000)
         this.consecutiveFailures += 1
         this.destroySocket()
         this.scheduleReconnect()
@@ -216,6 +228,7 @@ export class WebSocketManager {
         clientLog('ws_onopen_stale', this.wsSnap(), 'info')
         return
       }
+      if (this.handshakeVisible && !this.isHidden()) this.nextConnectTimeoutMs = Math.max(3_000, Math.min(24_000, 3 * (this.now() - this.lastConnectTs)))
       clientLog('ws_onopen', this.wsSnap(), 'info')
       this.clearConnectTimer()
       this.reconnectAttempts = 0
@@ -228,6 +241,7 @@ export class WebSocketManager {
     }
 
     ws.onmessage = (event) => {
+      if (this.ws !== ws) return
       try {
         const raw = event.data as string
         const t0 = performance.now()
@@ -240,6 +254,13 @@ export class WebSocketManager {
         // Intercept pong — clear timeout only for the current seq.
         if (parsed.type === 'pong') {
           if (parsed.seq === this.pingSeq) {
+            if (this.pongTimer !== null && this.heartbeatSentAt !== null && !this.isHidden()) {
+              const sample = this.now() - this.heartbeatSentAt
+              // A frozen page can dispatch a queued pong before its overdue timer.
+              if (sample >= 0 && sample <= PONG_TIMEOUT_MS) {
+                this.srtt = this.srtt === null ? sample : this.srtt + (sample - this.srtt) / 8
+              }
+            }
             this.clearPongTimer()
             // If we were waiting for a verification pong, the socket is
             // confirmed alive — cancel the verify timeout and resume normal
@@ -405,6 +426,7 @@ export class WebSocketManager {
         this.forceReconnect('visibilitychange', true)
       }
     } else {
+      this.handshakeVisible = false
       // Pause heartbeat when hidden — iOS freezes timers anyway,
       // and pong timeout would false-positive on wake.
       this.stopHeartbeat()
@@ -463,7 +485,7 @@ export class WebSocketManager {
       if (this.ws !== ws) return
       clientLog('ws_verify_timeout', this.wsSnap(), 'info')
       this.forceReconnect('verify_timeout', true)
-    }, VERIFY_PONG_TIMEOUT_MS)
+    }, this.srtt === null ? VERIFY_PONG_TIMEOUT_MS : Math.max(1_500, Math.min(8_000, 3 * this.srtt)))
   }
 
   private cancelVerify() {
@@ -563,6 +585,7 @@ export class WebSocketManager {
       if (!this.send({ type: 'ping', seq: this.pingSeq })) return
       // If no pong within timeout, the socket is dead
       this.clearPongTimer()
+      this.heartbeatSentAt = this.now()
       this.pongTimer = window.setTimeout(() => {
         this.pongTimer = null
         clientLog('ws_pong_timeout', this.wsSnap(), 'info')
@@ -594,6 +617,7 @@ export class WebSocketManager {
   }
 
   private clearPongTimer() {
+    this.heartbeatSentAt = null
     if (this.pongTimer !== null) {
       window.clearTimeout(this.pongTimer)
       this.pongTimer = null

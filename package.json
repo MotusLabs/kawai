@@ -23,7 +23,7 @@
     "dev": "PORT=${PORT:-5050} HOSTNAME=0.0.0.0 concurrently -k \"bun run dev:server\" \"bun run dev:client\"",
     "dev:server": "bun scripts/dev-server.ts",
     "dev:client": "vite --host",
-    "build": "vite build",
+    "build": "vite build && bun scripts/compress-assets.ts",
     "start": "bun src/server/index.ts",
     "lint": "oxlint . --ignore-pattern src/server/chat/codex/protocol/",
     "typecheck": "tsc --noEmit && tsc -p packages/agent-runtime/tsconfig.json",

@@ -6,6 +6,9 @@ import type { ITerminalProxy } from '../terminal'
 import type { TerminalOutputCoalescer } from '../terminal/outputCoalescer'
 
 export interface WSData {
+  workspaceDigest?: string
+  /** undefined after initial negotiation; null means no valid client digest. */
+  pendingWorkspaceDigest?: string | null
   terminal: ITerminalProxy | null
   currentSessionId: string | null
   currentTmuxTarget: string | null

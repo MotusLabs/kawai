@@ -8,6 +8,7 @@ import { useSessionSearchStore } from '../stores/sessionSearchStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useUpdateStore } from '../stores/updateStore'
+import { mergeArchiveRows, useArchiveRowsStore } from '../stores/archivedChatRows'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
 const globalAny = globalThis as typeof globalThis & {
@@ -18,6 +19,8 @@ const globalAny = globalThis as typeof globalThis & {
   localStorage?: Storage
 }
 
+const originalFetch = globalThis.fetch
+const initialArchiveRows = useArchiveRowsStore.getState()
 const originalWindow = globalAny.window
 const originalDocument = globalAny.document
 const originalNavigator = globalAny.navigator
@@ -26,6 +29,7 @@ const originalLocalStorage = globalAny.localStorage
 
 let sendCalls: Array<Record<string, unknown>> = []
 let subscribeListener: ((message: ServerMessage) => void) | null = null
+const socketSubscribers = new Set<(message: ServerMessage) => void>()
 let keyHandlers = new Map<string, EventListener>()
 let activeRenderer: TestRenderer.ReactTestRenderer | null = null
 let mockConnectionEpoch = 0
@@ -78,7 +82,9 @@ mock.module('../hooks/useWebSocket', () => ({
     },
     subscribe: (listener: (message: ServerMessage) => void) => {
       subscribeListener = listener
+      socketSubscribers.add(listener)
       return () => {
+        socketSubscribers.delete(listener)
         subscribeListener = null
       }
     },
@@ -170,8 +176,11 @@ function setupDom() {
 }
 
 beforeEach(() => {
+  useArchiveRowsStore.setState(initialArchiveRows, true)
+  useSessionStore.setState({ archivedChats: new Map(), archivedCount: 0 })
   sendCalls = []
   subscribeListener = null
+  socketSubscribers.clear()
   mockConnectionEpoch = 0
   setupDom()
   activeRenderer = null
@@ -215,6 +224,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  globalThis.fetch = originalFetch
   if (activeRenderer) {
     act(() => {
       activeRenderer?.unmount()
@@ -271,6 +281,145 @@ function getKeyHandler() {
 }
 
 describe('App', () => {
+  // @covers: workspace-navigation › Archive loads archived chat rows on demand › Collapsed Archive loads no archived rows
+  test('archive summary renders its collapsed count before the first workspace snapshot', () => {
+    useWorkspaceStore.setState({ snapshot: null, archiveSectionExpanded: false, collapsedSectionIds: [] })
+    act(() => { activeRenderer = TestRenderer.create(<App />) })
+    act(() => {
+      subscribeListener?.({ type: 'sessions', sessions: [baseSession] })
+      subscribeListener?.({ type: 'archive-summary', archivedCount: 771 })
+    })
+    const archiveHeader = activeRenderer!.root.findAllByProps({ 'data-testid': 'fallback-section-header' })
+      .find(header => header.props['data-section-kind'] === 'archive')
+    expect(archiveHeader?.props['data-session-count']).toBe(771)
+    expect(archiveHeader?.props['data-collapsed']).toBe('true')
+    expect(useSessionStore.getState().archivedChats.size).toBe(0)
+  })
+
+  // @covers: workspace-navigation › Archived chats are fetched by id when referenced › Reload with an archived chat selected
+  test('a pending archived selection resolves before fallback and survives collapsed Archive', async () => {
+    let resolve!: (response: Response) => void
+    globalThis.fetch = ((url: string) => url.includes('/api/chat/sessions/rows?')
+      ? new Promise<Response>(done => { resolve = done }) : Promise.resolve(Response.json({}))) as typeof fetch
+    useSessionStore.setState({ selectedSessionId: 'chat-archived-selection' })
+    await act(async () => {
+      activeRenderer = TestRenderer.create(<App />)
+      await new Promise(done => setTimeout(done, 5))
+    })
+    act(() => subscribeListener?.({ type: 'sessions', sessions: [baseSession] }))
+    expect(useSessionStore.getState().selectedSessionId).toBe('chat-archived-selection')
+    await act(async () => { await new Promise(done => setTimeout(done, 5)) })
+    await act(async () => {
+      resolve(Response.json({ rows: [{ ...baseSession, id: 'chat-archived-selection', kind: 'chat', archivedAt: '2026-01-01' }], unknown: [] }))
+      await new Promise(done => setTimeout(done, 5))
+    })
+    expect(useSessionStore.getState().selectedSessionId).toBe('chat-archived-selection')
+    expect(useSessionStore.getState().archivedChats.has('chat-archived-selection')).toBe(true)
+  })
+
+  // @covers: workspace-navigation › Archived chats are fetched by id when referenced › The chat no longer exists
+  // @covers: workspace-navigation › Archived chats are fetched by id when referenced › Reload with an archived chat selected
+  test('CX1: pending archived selection owns later lists and unrelated local kills until authoritative resolution', async () => {
+    const deliver = (message: ServerMessage) => { for (const listener of Array.from(socketSubscribers)) listener(message) }
+    for (const reconnect of [false, true]) for (const outcome of ['row', 'error', 'unknown', 'removed', 'killed', 'user-choice']) {
+      const variant = `${reconnect ? 'reconnect' : 'persisted'}:${outcome}`
+      const id = `chat-cx1-${variant}`
+      const archived: Session = { ...baseSession, id, kind: 'chat', archivedAt: '2026-01-01' }
+      const other = { ...baseSession, id: 'other' }
+      const nextEpoch = useArchiveRowsStore.getState().epoch + 2
+      useArchiveRowsStore.setState({ epoch: nextEpoch - 1, status: {}, blocked: new Set() })
+      useSessionStore.setState({ sessions: reconnect ? [baseSession] : [], archivedChats: new Map(reconnect ? [[id, archived]] : []),
+        selectedSessionId: id, selectedHibernatingSessionId: null, hasLoaded: reconnect, exitingSessions: new Map() })
+      mockConnectionEpoch = nextEpoch
+      let resolve!: (response: Response) => void
+      globalThis.fetch = ((url: string) => {
+        if (!url.includes('/api/chat/sessions/rows?')) return Promise.resolve(Response.json({}))
+        expect(new URL(url, 'http://fixture').searchParams.get('ids')!.split(',')).toContain(id)
+        return new Promise<Response>(done => { resolve = done })
+      }) as typeof fetch
+      act(() => { activeRenderer = TestRenderer.create(<App />) })
+      await act(async () => {
+        deliver({ type: 'sessions', sessions: [baseSession, other] })
+        for (let frame = 0; frame < 20 && !resolve; frame++) await new Promise(done => setTimeout(done, 5))
+      })
+      expect(typeof resolve, `${variant}: ${JSON.stringify(useArchiveRowsStore.getState().status)}`).toBe('function')
+      act(() => deliver({ type: 'sessions', sessions: [{ ...baseSession, status: 'waiting' }, other] }))
+      expect(useSessionStore.getState().selectedSessionId, variant).toBe(id)
+      act(() => activeRenderer!.root.findAllByType(SessionList)[0]!.props.onKill('other'))
+      expect(useSessionStore.getState().selectedSessionId, variant).toBe(id)
+      if (outcome === 'removed') act(() => deliver({ type: 'session-removed', sessionId: id }))
+      if (outcome === 'killed') act(() => activeRenderer!.root.findAllByType(SessionList)[0]!.props.onKill(id))
+      if (outcome === 'killed') {
+        expect(useSessionStore.getState().selectedSessionId, variant).not.toBe(id)
+        expect(useArchiveRowsStore.getState().blocked.has(id), variant).toBe(true)
+      }
+      if (outcome === 'user-choice') act(() => useSessionStore.getState().setSelectedSessionId(baseSession.id))
+      await act(async () => {
+        resolve(outcome === 'error' ? new Response('unavailable', { status: 503 })
+          : Response.json({ rows: outcome === 'unknown' ? [] : [archived], unknown: outcome === 'unknown' ? [id] : [] }))
+        await new Promise(done => setTimeout(done, 10))
+      })
+      if (outcome === 'row' || outcome === 'error') {
+        act(() => deliver({ type: 'sessions', sessions: [{ ...baseSession, name: 'later list' }] }))
+        expect(useSessionStore.getState().selectedSessionId).toBe(id)
+        expect(useSessionStore.getState().archivedChats.has(id)).toBe(outcome === 'row')
+        if (outcome === 'error') expect(useArchiveRowsStore.getState().status[id]).toBe('error')
+      } else {
+        expect(useSessionStore.getState().selectedSessionId, variant).not.toBe(id)
+        if (outcome === 'killed' || outcome === 'removed') expect(useSessionStore.getState().archivedChats.has(id), variant).toBe(false)
+        if (outcome === 'unknown' || outcome === 'removed') expect(useSessionStore.getState().selectedSessionId).toBeNull()
+        if (outcome === 'user-choice') expect(useSessionStore.getState().selectedSessionId).toBe(baseSession.id)
+      }
+      act(() => { activeRenderer!.unmount(); activeRenderer = null })
+    }
+  })
+
+  // @covers: workspace-navigation › Archived chats are fetched by id when referenced › The chat no longer exists
+  test('CX1: unknown termination owns an immediate later list and preserves mobile initial selection', () => {
+    for (const mobile of [false, true]) {
+      useArchiveRowsStore.setState({ ...initialArchiveRows, epoch: 1, status: { 'chat-unknown': 'pending' } }, true)
+      useSessionStore.setState({ sessions: [baseSession], selectedSessionId: 'chat-unknown', hasLoaded: true,
+        selectedHibernatingSessionId: null, archivedChats: new Map() })
+      const matchMedia = window.matchMedia
+      window.matchMedia = ((query: string) => ({ ...matchMedia(query), matches: mobile && query === '(max-width: 767px)' })) as typeof matchMedia
+      act(() => { activeRenderer = TestRenderer.create(<App />) })
+      act(() => {
+        mergeArchiveRows([], ['chat-unknown'])
+        useSessionStore.getState().setSessions([{ ...baseSession, name: 'different list before effects' }])
+        // Neither store fallback nor the filtered-live effect may win before
+        // the designated unknown owner clears this rendered identity.
+        expect(useSessionStore.getState().selectedSessionId).toBe('chat-unknown')
+      })
+      expect(useSessionStore.getState().selectedSessionId).toBe(mobile ? baseSession.id : null)
+      expect(activeRenderer!.root.findAllByType(SessionList)[0]!.props.error).toBe('Chat session was not found.')
+      act(() => { activeRenderer!.unmount(); activeRenderer = null })
+      window.matchMedia = matchMedia
+    }
+  })
+
+  // @covers: workspace-navigation › Archived chats are fetched by id when referenced › The chat no longer exists
+  test('a current unknown selected row clears the kept id and shows the not-found notice', async () => {
+    globalThis.fetch = (async (url: string) => Response.json(url.includes('/rows?')
+      ? { rows: [], unknown: ['chat-missing-selection'] } : {})) as typeof fetch
+    useSessionStore.setState({ selectedSessionId: 'chat-missing-selection' })
+    await act(async () => {
+      activeRenderer = TestRenderer.create(<App />)
+      await new Promise(done => setTimeout(done, 5))
+      subscribeListener?.({ type: 'sessions', sessions: [] })
+      await new Promise(done => setTimeout(done, 10))
+    })
+    expect(useSessionStore.getState().selectedSessionId).toBeNull()
+    expect(activeRenderer!.root.findAllByType(SessionList)[0]!.props.error).toBe('Chat session was not found.')
+  })
+
+  // @covers: workspace-navigation › Archive requests follow current connection and lifecycle state › A filtered live selection keeps its fallback
+  test('a filtered live selection still falls back to the first visible live session', () => {
+    useSessionStore.setState({ hasLoaded: true, sessions: [baseSession, { ...baseSession, id: 'visible', projectPath: '/visible' }], selectedSessionId: baseSession.id })
+    useSettingsStore.setState({ projectFilters: ['/visible'] })
+    act(() => { activeRenderer = TestRenderer.create(<App />) })
+    expect(useSessionStore.getState().selectedSessionId).toBe('visible')
+  })
+
   test('an update-state push toggles the header chip without a reload', () => {
     let renderer!: TestRenderer.ReactTestRenderer
     act(() => {

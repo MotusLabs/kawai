@@ -1,3 +1,4 @@
+import { selectSessionFromRows } from '../../stores/sessionStore'
 // Display helpers shared by the task list and detail: who an actor is (a
 // session's current name, or its id marked gone once the session was killed).
 import type { Session } from '@shared/types'
@@ -5,7 +6,7 @@ import type { ActingParty } from '@shared/team'
 import type { JournalAuthor } from '@shared/teamTasks'
 
 export function sessionLabel(sessionId: string, sessions: Session[]): string {
-  const session = sessions.find(row => row.id === sessionId)
+  const session = selectSessionFromRows(sessions, sessionId)
   return session ? session.name : `${sessionId} (gone)`
 }
 

@@ -2,7 +2,8 @@
 // wake/hibernate/kill result handling with their pending-selection state.
 // Ordering-sensitive blocks (pendingKills epoch discard, pending-wake
 // matching) moved verbatim from App.tsx — see the inline comments.
-import { useSessionStore } from '../stores/sessionStore'
+import { beginArchiveConnection, mergeArchiveRows, noteSessionMutation, refreshExpandedArchive, unblockSessionRow } from '../stores/archivedChatRows'
+import { useSessionStore, selectSessionFromRows } from '../stores/sessionStore'
 import { useTeamLocationStore } from '../hooks/useTeamLocation'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useChatStore } from '../stores/chatStore'
@@ -53,11 +54,11 @@ export function handleSessions(
   const teamPageOpen = useTeamLocationStore.getState().location !== null
 
   for (const nextSession of message.sessions) {
-    notifySpawnedAttention(currentSessions.find((s) => s.id === nextSession.id), nextSession)
+    notifySpawnedAttention(selectSessionFromRows(currentSessions, nextSession.id), nextSession)
   }
   if (soundOnPermission || soundOnIdle) {
     for (const nextSession of message.sessions) {
-      const prevSession = currentSessions.find((s) => s.id === nextSession.id)
+      const prevSession = selectSessionFromRows(currentSessions, nextSession.id)
       if (prevSession && prevSession.status !== nextSession.status) {
         notifyStatusTransitions(
           prevSession.status,
@@ -102,7 +103,7 @@ export function handleSessions(
     previousSelectedSessionId !== null &&
     previousSelectedHibernatingSessionId === null &&
     !nextSessions.some((session) => session.id === previousSelectedSessionId)
-      ? currentSessions.find((session) => session.id === previousSelectedSessionId)?.agentSessionId?.trim() ?? null
+      ? selectSessionFromRows(currentSessions, previousSelectedSessionId)?.agentSessionId?.trim() ?? null
       : null
 
   if (removedSelectedAgentSessionId) {
@@ -110,7 +111,18 @@ export function handleSessions(
     deps.pendingHibernateSelection.current = removedSelectedAgentSessionId
   }
 
+  const firstFrame = beginArchiveConnection(deps.getConnectionEpoch())
+  // A current live row settles its resolution; later removal must retain the
+  // existing live-session fallback rather than an old unresolved marker.
+  for (const row of nextSessions) noteSessionMutation(row.id)
   session.setSessions(nextSessions)
+  // A periodic live list must not retain rows restored while disconnected.
+  useSessionStore.setState(state => {
+    const archivedChats = new Map(state.archivedChats)
+    for (const row of nextSessions) archivedChats.delete(row.id)
+    return { archivedChats }
+  })
+  if (firstFrame) refreshExpandedArchive()
 
   const pendingWakeSelectionId = deps.pendingWakeSelection.current
   const {
@@ -150,12 +162,14 @@ export function handleSessions(
 
 export function handleSessionUpdate(
   message: Extract<ServerMessage, { type: 'session-update' }>,
-  _deps: MessageRouterDeps
+  deps: MessageRouterDeps
 ): void {
+  noteSessionMutation(message.session.id)
+  if (deps.pendingKills.current.has(message.session.id) || message.session.archivedAt) return
   // Detect status transitions for sound notifications
   // Capture previous status BEFORE updating to ensure we have the old value
   const currentSessions = useSessionStore.getState().sessions
-  const prevSession = currentSessions.find((s) => s.id === message.session.id)
+  const prevSession = selectSessionFromRows(currentSessions, message.session.id)
   const prevStatus = prevSession?.status
   const nextStatus = message.session.status
   // Read selection/visibility/team location before the update is applied
@@ -176,14 +190,30 @@ export function handleSessionUpdate(
   )
 }
 
+export function handleChatSessionArchived(
+  message: Extract<ServerMessage, { type: 'chat-session-archived' }>,
+): void {
+  noteSessionMutation(message.session.id)
+  useSessionStore.setState(state => {
+    const archivedChats = new Map(state.archivedChats)
+    archivedChats.set(message.session.id, message.session)
+    return {
+      archivedChats,
+      archivedCount: message.archivedCount,
+      sessions: state.sessions.filter(session => session.id !== message.session.id),
+    }
+  })
+}
+
 export function handleSessionCreated(
   message: Extract<ServerMessage, { type: 'session-created' }>,
   _deps: MessageRouterDeps
 ): void {
+  noteSessionMutation(message.session.id)
   // Add session to list immediately (don't wait for async refresh)
   const session = useSessionStore.getState()
   const currentSessions = session.sessions
-  if (!currentSessions.some((s) => s.id === message.session.id)) {
+  if (!selectSessionFromRows(currentSessions, message.session.id)) {
     session.setSessions([message.session, ...currentSessions])
   }
   session.setSelectedSessionId(message.session.id)
@@ -200,6 +230,13 @@ export function handleSessionRemoved(
   message: Extract<ServerMessage, { type: 'session-removed' }>,
   deps: MessageRouterDeps
 ): void {
+  noteSessionMutation(message.sessionId)
+  useSessionStore.setState(state => {
+    const archivedChats = new Map(state.archivedChats)
+    archivedChats.delete(message.sessionId)
+    return { archivedChats, ...(!selectSessionFromRows(state.sessions, message.sessionId) && state.selectedSessionId === message.sessionId
+      ? { selectedSessionId: null } : {}) }
+  })
   useChatStore.getState().remove(message.sessionId)
   // Do NOT clear pendingKills here — stale async refreshes (e.g. the
   // periodic 2s refresh) can arrive AFTER session-removed and re-add
@@ -312,7 +349,7 @@ export function handleSessionWakeResult(
     // Add woken session to list immediately
     const session = useSessionStore.getState()
     const currentSessions = session.sessions
-    if (!currentSessions.some((s) => s.id === message.session!.id)) {
+    if (!selectSessionFromRows(currentSessions, message.session!.id)) {
       session.setSessions([message.session, ...currentSessions])
     }
     session.setSelectedSessionId(message.session.id)
@@ -339,15 +376,18 @@ export function handleKillFailed(
   message: Extract<ServerMessage, { type: 'kill-failed' }>,
   deps: MessageRouterDeps
 ): void {
+  unblockSessionRow(message.sessionId)
   // Restore optimistically removed session from pending-kill snapshot
   // (not exitingSessions, which may have been cleared by animation timer)
   const pending = deps.pendingKills.current.get(message.sessionId)
   if (pending) {
+    noteSessionMutation(message.sessionId)
     const session = useSessionStore.getState()
     const currentSessions = session.sessions
     // Guard: a `sessions` broadcast may have re-added the session already
-    if (!currentSessions.some(s => s.id === message.sessionId)) {
-      session.setSessions([pending.session, ...currentSessions])
+    if (!selectSessionFromRows(currentSessions, message.sessionId)) {
+      if (pending.session.archivedAt) mergeArchiveRows([pending.session], [])
+      else session.setSessions([pending.session, ...currentSessions])
     }
     if (pending.wasSelected) {
       session.setSelectedSessionId(message.sessionId)

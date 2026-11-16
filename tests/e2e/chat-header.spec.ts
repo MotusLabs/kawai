@@ -112,11 +112,16 @@ test('kill asks first: Cancel and Escape keep the chat, Kill removes it', async 
   await expect(page.getByTestId('chat-view')).toHaveCount(0)
 })
 
+// @covers: chat-header › Session actions live in a session menu › Menu for an archived chat
+// @covers: workspace-navigation › Archive loads archived chat rows on demand › Collapsed Archive loads no archived rows
 test('an archived chat menu has no Archive entry', async ({ page }) => {
   await createChat(page, 'Header archived')
   await openSessionMenu(page)
   await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
-  await expect(page.getByTestId('chat-view')).toHaveCount(0)
+  // C3/D4 keeps the selected archived chat open while Archive is collapsed.
+  await expect(page.getByTestId('chat-name')).toHaveText('Header archived')
+  await expect(page.getByTestId('chat-archived-bar')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Expand Archive section' })).toBeVisible()
   await page.getByRole('button', { name: 'Expand Archive section' }).click()
   // Archived rows drag-disable themselves, so force the click through.
   await page.getByTestId('archive-rows').getByText('Header archived').click({ force: true })
@@ -125,6 +130,7 @@ test('an archived chat menu has no Archive entry', async ({ page }) => {
   expect(await menuItemNames(page)).toEqual(['Rename', 'Debug', 'Kill session'])
   await page.keyboard.press('Escape')
   await killChat(page)
+  await expect(page.getByTestId('chat-view')).toHaveCount(0)
 })
 
 // Header width steps (chat-header-layout D6), at the default 15px chat font.

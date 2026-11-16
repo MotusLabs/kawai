@@ -140,8 +140,17 @@ or property that would have caught it, and the source finding.
   through the production composition, and its mutant removes the wiring
   (`src/server/__tests__/restartSupersededSubmissions.test.ts` › "OG1:
   through the production composition the old holder's findings are refused
-  restart-superseded and the new claimant's pass (kills M1)").
-- **Source finding.** findings-6a6a844d.
+  restart-superseded and the new claimant's pass (kills M1)"). The same
+  class recurs for a build-step CLI entry covered only by its imported
+  helper: `scripts/__tests__/compressAssets.test.ts` › "compress-assets
+  CLI entry (production path, M1) > the real script writes both siblings
+  that decode exactly, originals preserved" and its missing-root refusal
+  test spawn the real `scripts/compress-assets.ts` through a private
+  `dist/client` fixture; the disabled-entry mutant (`if (false)`) and the
+  script-relative wrong-root mutant fail both, while the helper tests
+  alone stay green (kills M1).
+- **Source finding.** findings-6a6a844d; repeated by findings-1ac449bc F1
+  (task-958c8293, slow-link-resilience task 5.1, scripts/compress-assets.ts).
 
 ### A scope wrapper tested only by direct calls (findings-f4b1ebad B1)
 

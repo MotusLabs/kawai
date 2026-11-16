@@ -10,7 +10,7 @@ export function handleWorkspaceSnapshot(
 ): void {
   // Malformed snapshots keep the last valid one (stale retention);
   // reconnects resupply the latest snapshot on open.
-  useWorkspaceStore.getState().applySnapshot(message.snapshot)
+  useWorkspaceStore.getState().applySnapshot(message.snapshot, message.digest)
 }
 
 /**

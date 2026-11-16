@@ -644,7 +644,7 @@ export default function SessionList({
     fraction: number,
     onFractionChange: (fraction: number) => void
   ) =>
-    section && section.entries.length > 0 ? (
+    section && (section.totalCount ?? section.entries.length) > 0 ? (
       <FallbackSectionPane
         section={section}
         fraction={fraction}

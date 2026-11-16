@@ -63,15 +63,8 @@ test('a draft survives archive and restore but not a page reload', async ({ page
   await createChat(page, 'Drafts C')
   await composer(page).fill('draft after restore')
 
-  // Archiving closes the view; the session collects in the docked Archive pane.
+  // Archiving keeps the selected transcript open even while Archive is collapsed.
   await archiveChat(page)
-  await expect(page.getByTestId('chat-view')).toHaveCount(0)
-  await page.getByRole('button', { name: 'Expand Archive section' }).click()
-  // Archived rows drag-disable themselves (dnd-kit marks the wrapper
-  // aria-disabled), so force the click through to the row's own handler.
-  const archivedRow = page.getByTestId('archive-rows')
-    .locator('[data-session-id^="chat-"]', { hasText: 'Drafts C' }).first()
-  await archivedRow.click({ force: true })
   await expect(page.getByTestId('chat-archived-bar')).toBeVisible()
   await expect(composer(page)).toHaveCount(0)
   await page.screenshot({ path: info.outputPath('archived-hides-composer.png') })

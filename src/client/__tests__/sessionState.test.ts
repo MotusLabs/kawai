@@ -3,6 +3,8 @@ import type { AgentSession, Session } from '@shared/types'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { sortSessions } from '../utils/sessions'
+import { useArchiveRowsStore } from '../stores/archiveRequestState'
+import { beginArchiveConnection, blockSessionRow } from '../stores/archivedChatRows'
 
 const baseSession: Session = {
   id: 'session-1',
@@ -35,6 +37,7 @@ function makeAgentSession(overrides: Partial<AgentSession> = {}): AgentSession {
 }
 
 beforeEach(() => {
+  useArchiveRowsStore.setState(useArchiveRowsStore.getInitialState(), true)
   useSessionStore.setState({
     sessions: [],
     agentSessions: { active: [], hibernating: [], history: [] },
@@ -53,6 +56,20 @@ beforeEach(() => {
     showSessionIdPrefix: false,
     hostFilters: [],
   })
+})
+
+test('unresolved selection owns the scheduling gap but known live removal and explicit kill retain fallback', () => {
+  useSessionStore.setState({ sessions: [], selectedSessionId: 'archived-unresolved' })
+  beginArchiveConnection(1)
+  useSessionStore.getState().setSessions([baseSession])
+  expect(useSessionStore.getState().selectedSessionId).toBe('archived-unresolved')
+  blockSessionRow('archived-unresolved')
+  useSessionStore.getState().setSessions([{ ...baseSession, name: 'changed list' }])
+  expect(useSessionStore.getState().selectedSessionId).toBe(baseSession.id)
+  useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id })
+  const next = { ...baseSession, id: 'next' }
+  useSessionStore.getState().setSessions([next])
+  expect(useSessionStore.getState().selectedSessionId).toBe('next')
 })
 
 describe('sortSessions', () => {
@@ -307,7 +324,7 @@ describe('useSessionStore', () => {
     expect(state.connectionError).toBe('boom')
   })
 
-  test('updateSession ignores missing session ids', () => {
+  test('updateSession adds missing session ids', () => {
     const sessions = [
       makeSession({ id: 'first', status: 'waiting' }),
     ]
@@ -317,6 +334,8 @@ describe('useSessionStore', () => {
       .getState()
       .updateSession({ ...sessions[0], id: 'missing', status: 'unknown' })
 
-    expect(useSessionStore.getState().sessions).toEqual(sessions)
+    expect(useSessionStore.getState().sessions).toEqual([
+      ...sessions, { ...sessions[0], id: 'missing', status: 'unknown' },
+    ])
   })
 })

@@ -5,6 +5,7 @@
 // app's lifetime instead of re-subscribing on selection changes.
 import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
+import { useSessionStore } from '../stores/sessionStore'
 import { handleChatMessage } from './chatMessages'
 import { handleTeamMessage } from './teamMessages'
 import { handleStrategyMessage } from './strategyMessages'
@@ -19,6 +20,7 @@ import {
   handleUpdateState,
 } from './serverMessages'
 import {
+  handleChatSessionArchived,
   handleAgentSessions,
   handleAgentSessionsActive,
   handleKillFailed,
@@ -43,6 +45,14 @@ export function createMessageRouter(
   deps: MessageRouterDeps
 ): (message: ServerMessage) => void {
   return (message) => {
+    if (message.type === 'chat-session-archived') {
+      handleChatSessionArchived(message)
+      return
+    }
+    if (message.type === 'archive-summary') {
+      useSessionStore.setState({ archivedCount: message.archivedCount })
+      return
+    }
     if (message.type.startsWith('chat-')) {
       handleChatMessage(message as Extract<ServerMessage, { type: `chat-${string}` }>, deps)
       return

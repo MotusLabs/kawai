@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import { Hono } from 'hono'
-import { serveStatic } from 'hono/bun'
+import { staticAssetsMiddleware } from './staticAssets'
 import { config } from './config'
 import { logger, logLevel } from './logger'
 import { ensureTmux } from './prerequisites'
@@ -40,6 +40,7 @@ import { RemoteSessionService } from './remote/RemoteSessionService'
 import type { SessionOpsContext } from './sessions/context'
 import { createClaudeProfileRoutes } from './routes/claudeProfiles'
 import { createTeamGroupRoutes } from './routes/teamGroups'
+import { createArchivedChatRoutes } from './routes/archivedChats'
 import { createChatSearchRoutes } from './routes/chatSearch'
 import { createPlanWorkspaceAssetRoutes } from './routes/planWorkspaceAsset'
 import { createPasteFileRoutes } from './routes/pasteFile'
@@ -201,7 +202,7 @@ export function startServer(): void {
   })
   const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs, message => broadcast(message))
   // Restore persisted rows before checking whether the development fixture exists.
-  void chatSessionManager.whenRestored().then(() => {
+  void hub.afterChatRestoration(registry, chatSessionManager).then(() => {
     if (!chatFixtureEnabled || registry.getAll().some(session => session.name === 'Chat fixture')) return
     const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
     if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')
@@ -350,8 +351,8 @@ export function startServer(): void {
 
   const workspaceCoordinatorInstance = new WorkspaceCoordinator({
     getSeeds: () => collectWorkspaceSeeds(),
-    broadcast: (snapshot) => {
-      broadcast({ type: 'workspace-snapshot', snapshot })
+    broadcast: (snapshot, digest) => {
+      hub.publishWorkspaceSnapshot(snapshot, digest)
       workspaceWatcherInstance?.updateTargets(snapshot)
     },
   })
@@ -373,6 +374,8 @@ export function startServer(): void {
   }
 
   registry.on('sessions', () => refreshWorkspaceSeeds())
+  // Chat source changes no longer broadcast a sessions list, but still seed discovery.
+  registry.on('chat-sources-changed', () => refreshWorkspaceSeeds())
   registry.on('agent-sessions', () => refreshWorkspaceSeeds())
   refreshWorkspaceSeeds()
 
@@ -423,6 +426,7 @@ export function startServer(): void {
     approvalDefault: teamId => chatSessionManager.teamApprovalDefault(teamId),
   }))
   app.route('/api/chat/search', createChatSearchRoutes({ source: chatSessionManager }))
+  app.route('/api/chat/sessions', createArchivedChatRoutes({ registry, whenRestored: () => chatSessionManager.whenRestored() }))
   // The plan workspace's scoped asset route (plan-workspace 2.3): membership
   // and containment before any read; mounted before the static fallback.
   app.route('/api', createPlanWorkspaceAssetRoutes({
@@ -437,7 +441,7 @@ export function startServer(): void {
   app.route('/api', createPasteRoutes())
 
   const staticDir = process.env.AGENTBOARD_STATIC_DIR || './dist/client'
-  app.use('/*', serveStatic({ root: staticDir }))
+  app.use('/*', staticAssetsMiddleware(staticDir))
 
   // 8. WebSocket routing and Bun.serve; Bun.serve opens only after every
   // subsystem above exists.

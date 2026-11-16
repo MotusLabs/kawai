@@ -8,6 +8,7 @@
 // (bounded-openspec-discovery D2-D4), and each pass logs one
 // `workspace_openspec_pass` debug line.
 
+import { createHash } from 'node:crypto'
 import {
   type WorkspaceRepository,
   type WorkspaceSnapshot,
@@ -74,7 +75,7 @@ export interface WorkspaceCoordinatorOptions {
   /** Current seed project paths (live, hibernating, history, on-demand). */
   getSeeds(): string[]
   /** Publish a structurally changed snapshot to connected clients. */
-  broadcast(snapshot: WorkspaceSnapshot): void
+  broadcast(snapshot: WorkspaceSnapshot, digest: string): void
   discovery?: WorkspaceDiscoveryApi
   openspecRunner?: OpenspecCommandRunner
   /** Clock for the OpenSpec reuse limit (tests inject a fake). */
@@ -94,7 +95,9 @@ interface RepositoryCacheEntry {
 export class WorkspaceCoordinator {
   private readonly options: WorkspaceCoordinatorOptions
   private readonly discovery: WorkspaceDiscoveryApi
-  private snapshot: WorkspaceSnapshot | null = null
+  private current: { snapshot: WorkspaceSnapshot; digest: string } | null = null
+  private get snapshot(): WorkspaceSnapshot | null { return this.current?.snapshot ?? null }
+  getDigest(): string | null { return this.current?.digest ?? null }
   private cache = new Map<string, RepositoryCacheEntry>()
   private refreshing = false
   private pendingPass = false
@@ -285,12 +288,12 @@ export class WorkspaceCoordinator {
     const listedWorktrees = new Set(repositories.flatMap((repository) => repository.worktrees.map((worktree) => worktree.path)))
     this.openspecCache.retainOnly(listedWorktrees)
     this.logOpenSpecPass(listedWorktrees.size, performance.now() - passStartedAt)
-    this.snapshot = {
-      repositories,
-      generatedAt: new Date().toISOString(),
+    this.current = {
+      snapshot: { repositories, generatedAt: new Date().toISOString() },
+      digest: createHash('sha256').update(JSON.stringify(repositories)).digest('hex').slice(0, 16),
     }
     if (structuralChange) {
-      this.options.broadcast(this.snapshot)
+      this.options.broadcast(this.current.snapshot, this.current.digest)
     }
   }
 

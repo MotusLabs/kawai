@@ -39,10 +39,33 @@ export class ConnectionHub {
     coalescer.sendOrdered(message)
   }
 
+  /** Only the initial unavailable-snapshot comparison is deferred. */
+  publishWorkspaceSnapshot(snapshot: import('../../shared/types').WorkspaceSnapshot, digest: string): void {
+    for (const socket of this.sockets) {
+      const deferred = socket.data.pendingWorkspaceDigest
+      delete socket.data.pendingWorkspaceDigest
+      if (deferred !== undefined && deferred === digest) continue
+      this.send(socket, { type: 'workspace-snapshot', snapshot, digest })
+    }
+  }
+
+  /** Keep early connections current after the initial asynchronous boot restore. */
+  async afterChatRestoration(registry: SessionRegistry, manager: { whenRestored(): Promise<void> }): Promise<void> {
+    await manager.whenRestored()
+    this.broadcast({ type: 'archive-summary', archivedCount: registry.archivedChatCount() })
+  }
+
   /** Forward registry change events to every connected client. */
   wireRegistry(registry: SessionRegistry): void {
     registry.on('session-update', (session) => {
       this.broadcast({ type: 'session-update', session })
+    })
+
+    registry.on('chat-session-archived', (payload) => {
+      this.broadcast({ type: 'chat-session-archived', ...payload })
+    })
+    registry.on('archive-summary', (payload) => {
+      this.broadcast({ type: 'archive-summary', ...payload })
     })
 
     registry.on('sessions', (sessions) => {

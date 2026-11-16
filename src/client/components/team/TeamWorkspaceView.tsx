@@ -8,7 +8,8 @@
 // through `useTeamLocationStore` so Back and Forward move with it.
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { SendClientMessage, ServerMessage } from '@shared/types'
-import { useSessionStore } from '../../stores/sessionStore'
+import { useReferencedSessions } from '../../hooks/useReferencedSessions'
+import { useSessionStore, selectSessionFromRows } from '../../stores/sessionStore'
 import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
@@ -85,7 +86,8 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, subs
   // render (App already gates mounting on a location existing).
   const storedLocation = useTeamLocationStore(state => state.location)
   const currentLocation = storedLocation ?? location
-  const sessions = useSessionStore(state => state.sessions)
+  const liveRows = useSessionStore(state => state.sessions)
+  const archivedRows = useSessionStore(state => state.archivedChats)
   const hasLoaded = useSessionStore(state => state.hasLoaded)
   const repositories = useWorkspaceStore(state => state.snapshot?.repositories)
   const workspace = useTeamWorkspaceStore(state => state.views[teamKey])
@@ -105,8 +107,8 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, subs
   // chat's team key (the same population the server accepts, D1); anything
   // else opens the tab's default view with a notice (D3) and no subscription.
   const known = useMemo(
-    () => knownTeamKeys(repositories, sessions),
-    [repositories, sessions],
+    () => knownTeamKeys(repositories, [...liveRows, ...archivedRows.values()]),
+    [repositories, liveRows, archivedRows],
   )
   const unknown = hasLoaded && !known.has(teamKey)
   useEffect(() => {
@@ -223,12 +225,16 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, subs
     if (!metricsOpen) return
     resolveMetricsWindow(teamKey, currentLocation.window, window => navigate({ teamKey, tab: 'metrics', window }, { replace: true }))
   }, [metricsOpen, teamKey, currentLocation.window, navigate])
+  const sessions = useReferencedSessions(messagesOpen ? messages : mailboxOpen ? mailbox
+    : tasksOpen ? tasks : plansOpen ? plans : auditOpen ? audit : metricsOpen ? metrics
+    : currentLocation.tab === 'members' ? workspaceData : currentLocation.tab === 'strategy' ? strategy : null)
   // Report authors and link actors by name; a killed session shows its id.
-  const sessionName = useCallback((sessionId: string) => sessions.find(row => row.id === sessionId)?.name ?? sessionId, [sessions])
+  const sessionName = useCallback((sessionId: string) => selectSessionFromRows(sessions, sessionId)?.name ?? sessionId, [sessions])
 
+  // Recipient dropdowns iterate live rows; rendered archived identities resolve by id.
   const liveSessions = useMemo(
-    () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
-    [sessions],
+    () => liveRows.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
+    [liveRows],
   )
   // The groups list feeds the Messages composer and the Mailbox hand-off.
   const groups = useTeamGroups(messagesOpen || mailboxOpen, teamKey)

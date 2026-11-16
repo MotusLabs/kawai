@@ -4,11 +4,12 @@ import { useState } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import type { ToolStreakDrill,ToolStreakEntry,ToolMeasurementStatus } from '@shared/processMetrics'
 import { useMetricsStore,type MetricsView } from '../../../stores/metricsStore'
-import { useSessionStore } from '../../../stores/sessionStore'
+import { useReferencedSessions } from '../../../hooks/useReferencedSessions'
+import { useSessionStore, selectSessionById } from '../../../stores/sessionStore'
 import { useChatStore } from '../../../stores/chatStore'
 
 export function openToolStreak(entry:ToolStreakEntry):string|null {
-  if(!useSessionStore.getState().sessions.some(s=>s.id===entry.sessionId))return 'not-found'
+  if(!selectSessionById(useSessionStore.getState(), entry.sessionId))return 'not-found'
   useSessionStore.getState().setSelectedSessionId(entry.sessionId)
   useChatStore.getState().requestReveal(entry.sessionId,'tool:'+entry.firstCallId)
   return null
@@ -27,6 +28,7 @@ export default function ToolDrill({teamPath,view,inline,connected,sendMessage}:{
   const [error,setError]=useState<string|null>(null)
   const page=view.toolDrill
   const rows=page?.entries??inline.entries
+  useReferencedSessions({ rows, recovered: inline.longestRecovered })
   const ask=(cursor:string|null)=>{
     const message=useMetricsStore.getState().requestToolPage(teamPath,cursor)
     if(message)sendMessage(message)
