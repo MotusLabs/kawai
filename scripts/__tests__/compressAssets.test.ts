@@ -7,9 +7,10 @@
 // emits beside them (PNG, ICO, WOFF2). P3 is deterministic over the tree,
 // so it needs no seed. The real-build round trip over dist/client is
 // verified outside the suite (V2), not here.
-// @reads: package.json
+// @reads: package.json, scripts/compress-assets.ts
 import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -38,17 +39,21 @@ interface Fixture {
   bytes: Map<string, Buffer> // relative path → exact bytes on disk
 }
 
-function makeFixture(): Fixture {
-  const root = mkdtempSync(path.join(tmpdir(), 'compress-assets-'))
+function writeTree(base: string): Map<string, Buffer> {
   const bytes = new Map<string, Buffer>()
   for (const [relative, content] of [...Object.entries(ELIGIBLE_FILES), ...Object.entries(INELIGIBLE_FILES)]) {
-    const absolute = path.join(root, relative)
+    const absolute = path.join(base, relative)
     mkdirSync(path.dirname(absolute), { recursive: true })
     const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8')
     writeFileSync(absolute, buffer)
     bytes.set(relative, Buffer.from(buffer))
   }
-  return { root, bytes }
+  return bytes
+}
+
+function makeFixture(): Fixture {
+  const root = mkdtempSync(path.join(tmpdir(), 'compress-assets-'))
+  return { root, bytes: writeTree(root) }
 }
 
 // Every regular file under root, as sorted paths relative to root.
@@ -143,5 +148,54 @@ describe('compress-assets (task 5.1, D6)', () => {
   test('A2: the build script compresses after vite build', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }
     expect(pkg.scripts.build).toBe('vite build && bun scripts/compress-assets.ts')
+  })
+})
+
+// The production entry: package.json runs `bun scripts/compress-assets.ts`
+// as a child process, so at least one oracle must reach the seam through
+// that entry (oracle-hazards M1), not only the imported helper.
+const SCRIPT = path.resolve(import.meta.dir, '..', 'compress-assets.ts')
+
+function runScript(cwd: string): { status: number; stdout: string; stderr: string } {
+  const result = spawnSync(process.execPath, [SCRIPT], { cwd, encoding: 'utf8' })
+  return { status: result.status ?? -1, stdout: result.stdout, stderr: result.stderr }
+}
+
+describe('compress-assets CLI entry (production path, M1)', () => {
+  // @covers: web-asset-delivery › Static assets are served compressed › An asset without a compressed copy
+  test('the real script writes both siblings that decode exactly, originals preserved', () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'compress-assets-cli-'))
+    try {
+      const dist = path.join(cwd, 'dist', 'client')
+      const bytes = writeTree(dist)
+      const result = runScript(cwd)
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain('compress-assets:')
+      for (const [relative, original] of bytes) {
+        const absolute = path.join(dist, relative)
+        expect(readFileSync(absolute)).toEqual(original)
+        if (!isEligibleAsset(relative)) {
+          expect(existsSync(`${absolute}.br`)).toBe(false)
+          expect(existsSync(`${absolute}.gz`)).toBe(false)
+          continue
+        }
+        expect(brotliDecompressSync(readFileSync(`${absolute}.br`))).toEqual(original)
+        expect(gunzipSync(readFileSync(`${absolute}.gz`))).toEqual(original)
+      }
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  test('a cwd without dist/client refuses with exit 1', () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'compress-assets-cli-empty-'))
+    try {
+      const result = runScript(cwd)
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('no build output')
+      expect(result.stdout).not.toContain('compress-assets: wrote')
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
   })
 })
