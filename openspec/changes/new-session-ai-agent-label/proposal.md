@@ -24,4 +24,6 @@ None.
 
 `src/client/components/NewSessionModal.tsx`, directly related descriptions in `src/client/__tests__/newSessionModal.test.tsx`, and the opening instructions in `docs/claude-session-profiles.md`. No backend, stored identifiers, protocols, or runtime selection changes.
 
-The committed base labels this option `Chat` (`src/client/components/NewSessionModal.tsx:549`, `<option value="chat">Chat</option>`). Implementation changes that one line to `AI agent` on an isolated future implementation branch; unrelated edits on main and in any working tree are out of scope and preserved. No implementation edits are part of this proposal.
+The committed base labels this option `Chat` (`src/client/components/NewSessionModal.tsx:552`, `<option value="chat">Chat</option>`). Implementation changes that one line to `AI agent` on an isolated future implementation branch; unrelated edits on main and in any working tree are out of scope and preserved. No implementation edits are part of this proposal.
+
+Source refresh: observations above are pinned to `714cf8da`. Automated UI1/UI2/UI3/DOC1 acceptance and the future implementation contract are in `design.md`; all three original delta scenarios are unchanged. This artifact refresh authorizes no implementation.
