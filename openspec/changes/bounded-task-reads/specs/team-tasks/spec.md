@@ -173,7 +173,7 @@ The `task_get` and `task_journal_read` descriptions, the system prompt's task no
 
 #### Scenario: Prompt names the paging
 - **WHEN** an agent starts with the team prompt
-- **THEN** its task note describes `task_get` as bounded and names `journal_before`, `journal_limit`, `task_journal_read`, `subtasks_before`, `messages_before`, `full_messages`, `revisions_before`, `revision`, `results_before`, `result_id`, and `task_result_diff_read`
+- **THEN** its task note describes `task_get` as bounded and names `journal_before`, `journal_limit`, `task_journal_read`, `subtasks_before`, `messages_before`, `full_messages`, `revisions_before`, `revision`, `results_before`, `result_id`, `task_result_diff_read`, `assignments_before`, `publications_before`, and `acknowledgements_before`
 
 #### Scenario: Header stops promising the full journal
 - **WHEN** task mail is delivered
