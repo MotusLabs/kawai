@@ -2,7 +2,7 @@
 // wake/hibernate/kill result handling with their pending-selection state.
 // Ordering-sensitive blocks (pendingKills epoch discard, pending-wake
 // matching) moved verbatim from App.tsx — see the inline comments.
-import { beginArchiveConnection, noteSessionMutation, refreshExpandedArchive, unblockSessionRow } from '../stores/archivedChatRows'
+import { beginArchiveConnection, mergeArchiveRows, noteSessionMutation, refreshExpandedArchive, unblockSessionRow } from '../stores/archivedChatRows'
 import { useSessionStore, selectSessionFromRows } from '../stores/sessionStore'
 import { useTeamLocationStore } from '../hooks/useTeamLocation'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -380,11 +380,13 @@ export function handleKillFailed(
   // (not exitingSessions, which may have been cleared by animation timer)
   const pending = deps.pendingKills.current.get(message.sessionId)
   if (pending) {
+    noteSessionMutation(message.sessionId)
     const session = useSessionStore.getState()
     const currentSessions = session.sessions
     // Guard: a `sessions` broadcast may have re-added the session already
     if (!selectSessionFromRows(currentSessions, message.sessionId)) {
-      session.setSessions([pending.session, ...currentSessions])
+      if (pending.session.archivedAt) mergeArchiveRows([pending.session], [])
+      else session.setSessions([pending.session, ...currentSessions])
     }
     if (pending.wasSelected) {
       session.setSelectedSessionId(message.sessionId)
