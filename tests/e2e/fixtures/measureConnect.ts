@@ -22,7 +22,7 @@ async function connect(digest?: string) {
   const frames: string[] = []
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws${digest ? '?workspace=' + digest : ''}`)
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Connect probe timed out')), 20_000)
+    const timer = setTimeout(() => reject(new Error('Connect probe timed out; frames=' + frames.map(raw => JSON.parse(raw).type).join(',') + '; server=' + server.diagnostics())), 20_000)
     socket.onmessage = event => {
       frames.push(String(event.data))
       const types = frames.map(raw => JSON.parse(raw).type)
@@ -63,4 +63,8 @@ try {
   if (!destination?.startsWith('/tmp/')) throw new Error('Measurement output must be private /tmp artifact')
   writeFileSync(destination, JSON.stringify(report, null, 2) + '\n')
   console.log(JSON.stringify(report))
+} catch (error) {
+  const destination = process.argv[2]
+  if (destination?.startsWith('/tmp/')) writeFileSync(destination.replace(/\.json$/, '.failure.json'), JSON.stringify({ error: String(error), server: server.diagnostics() }, null, 2))
+  throw error
 } finally { await server.stop({ tmuxRoot: root }); rmSync(root, { recursive: true, force: true }) }

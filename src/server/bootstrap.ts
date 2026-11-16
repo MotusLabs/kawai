@@ -374,6 +374,8 @@ export function startServer(): void {
   }
 
   registry.on('sessions', () => refreshWorkspaceSeeds())
+  // Chat source changes no longer broadcast a sessions list, but still seed discovery.
+  registry.on('chat-sources-changed', () => refreshWorkspaceSeeds())
   registry.on('agent-sessions', () => refreshWorkspaceSeeds())
   refreshWorkspaceSeeds()
 

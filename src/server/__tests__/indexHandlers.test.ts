@@ -236,6 +236,7 @@ class SessionRegistryMock {
     this.sessions = this.sessions.filter(row => row.id !== session.id)
     this.sessions.push(session)
     this.chatTransition(previous, session)
+    this.emit('chat-sources-changed', undefined)
   }
   private chatTransition(previous: Session | undefined, session: Session) {
     if (session.archivedAt) {
@@ -249,6 +250,7 @@ class SessionRegistryMock {
   removeChatSession(id: string) {
     this.sessions = this.sessions.filter(session => session.id !== id)
     this.emit('session-removed', id)
+    this.emit('chat-sources-changed', undefined)
   }
 
   getAgentSessions() {
@@ -897,6 +899,27 @@ mock.module('../chat/claudeExecutable', () => {
 })
 
 describe('server message handlers', () => {
+  test('chat creation and removal still invalidate workspace discovery seeds without list broadcasts', async () => {
+    const { WorkspaceCoordinator } = await import('../workspace/workspaceCoordinator')
+    const original = WorkspaceCoordinator.prototype.requestRefresh
+    const seeds: string[][] = []
+    WorkspaceCoordinator.prototype.requestRefresh = function (projectPath?: string) {
+      seeds.push((this as unknown as { options: { getSeeds(): string[] } }).options.getSeeds())
+      return original.call(this, projectPath)
+    }
+    try {
+      const { registryInstance } = await loadIndex()
+      const baseline = seeds.length
+      registryInstance.setChatSession({ id: 'source-change', name: 'source', kind: 'chat', source: 'managed',
+        status: 'waiting', projectPath: '/tmp/new-chat-workspace-source', createdAt: '2026-01-01', lastActivity: '2026-01-01' })
+      expect(seeds.slice(baseline).some(paths => paths.includes('/tmp/new-chat-workspace-source'))).toBe(true)
+      const beforeRemove = seeds.length
+      registryInstance.removeChatSession('source-change')
+      expect(seeds.length).toBeGreaterThan(beforeRemove)
+      expect(seeds.at(-1)).not.toContain('/tmp/new-chat-workspace-source')
+    } finally { WorkspaceCoordinator.prototype.requestRefresh = original }
+  })
+
   // @covers: session-updates › The session list leaves out archived chats › A client connects before initial restoration settles
   test('bootstrap restore settlement corrects early socket count without boot rows or delayed listen', async () => {
     const { ChatSessionManager } = await import('../chat/ChatSessionManager')

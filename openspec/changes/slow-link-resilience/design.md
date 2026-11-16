@@ -109,6 +109,9 @@ its fixture setup. Listening is not delayed. Clients connected during
 restoration converge without reconnecting; archived boot rows and metadata
 catch-up stay silent as row events, with no per-row boot summaries.
 
+Workspace discovery retains its internal source invalidation on chat set/remove
+through `chat-sources-changed`; the hub does not send that event to clients.
+
 Client:
 
 - `session-update` adds a session the client does not hold yet; today it ignores one. Additions exclude

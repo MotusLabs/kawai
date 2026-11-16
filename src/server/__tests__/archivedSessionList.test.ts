@@ -102,6 +102,17 @@ test('patch archive and restore preserve the selected transcript and cached snap
   expect(getCachedSnapshot('chat')).toBeUndefined()
 })
 
+test('chat source notifications preserve discovery invalidation without socket list traffic', () => {
+  const f = fixture(); f.connect(); f.frames.length = 0
+  let changed = 0
+  f.registry.on('chat-sources-changed', () => changed++)
+  f.registry.setChatSession(row('new-source'))
+  f.registry.setChatSession(row('boot-source', '2026-01-01'))
+  f.registry.removeChatSession('new-source')
+  expect(changed).toBe(3)
+  expect(f.frames.filter(frame => frame.type === 'sessions')).toEqual([])
+})
+
 test('unknown patch and pending kill cannot add a live card', () => {
   const f = fixture(); f.connect(); f.frames.length = 0
   expect(f.registry.updateSession('missing', { archivedAt: null })).toBeUndefined()

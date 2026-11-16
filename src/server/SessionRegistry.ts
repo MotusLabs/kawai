@@ -4,6 +4,7 @@ import { activityInSameBucket } from '../shared/activityBucket'
 
 export interface RegistryEvents {
   sessions: (sessions: Session[]) => void
+  'chat-sources-changed': () => void
   'session-update': (session: Session) => void
   'chat-session-archived': (payload: { session: Session; archivedCount: number }) => void
   'archive-summary': (payload: { archivedCount: number }) => void
@@ -48,6 +49,7 @@ export class SessionRegistry extends EventEmitter {
     const previous = this.chatSessions.get(session.id)
     this.chatSessions.set(session.id, session)
     this.emitChatTransition(previous, session)
+    this.emit('chat-sources-changed')
   }
 
   /** Remove a chat session; returns true when it existed. */
@@ -57,6 +59,7 @@ export class SessionRegistry extends EventEmitter {
     if (removed) {
       this.emit('session-removed', sessionId)
       if (previous?.archivedAt) this.emit('archive-summary', { archivedCount: this.archivedChatCount() })
+      this.emit('chat-sources-changed')
     }
     return removed
   }
