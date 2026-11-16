@@ -111,6 +111,20 @@ test('unknown patch and pending kill cannot add a live card', () => {
   expect(useSessionStore.getState().sessions).toEqual([])
 })
 
+test('removing an open archived row clears its selection and retained transcript', () => {
+  const f = fixture(); f.connect()
+  f.registry.setChatSession(row('archived-kill'))
+  useSessionStore.getState().setSelectedSessionId('archived-kill')
+  useChatStore.setState({ sessions: { 'archived-kill': emptyTranscript() } })
+  f.registry.updateSession('archived-kill', { archivedAt: '2026-02-01' })
+  expect(useSessionStore.getState().selectedSessionId).toBe('archived-kill')
+  f.registry.removeChatSession('archived-kill')
+  expect(useSessionStore.getState().selectedSessionId).toBeNull()
+  expect(useSessionStore.getState().archivedChats.size).toBe(0)
+  expect(useChatStore.getState().sessions['archived-kill']).toBeUndefined()
+  expect(useSessionStore.getState().archivedCount).toBe(0)
+})
+
 // @covers: session-updates › The session list leaves out archived chats › A client connects before initial restoration settles
 test('restore settlement corrects an early connection once without archived row traffic', async () => {
   const f = fixture()

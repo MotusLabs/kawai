@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import type { Session } from '@shared/types'
 import { useSessionStore } from '../stores/sessionStore'
-import { beginArchiveConnection, loadArchivePage, mergeArchiveRows, noteSessionMutation, requestSessionRows, useArchiveRowsStore } from '../stores/archivedChatRows'
+import { beginArchiveConnection, blockSessionRow, loadArchivePage, mergeArchiveRows, noteSessionMutation, requestSessionRows, useArchiveRowsStore } from '../stores/archivedChatRows'
 const initial = useSessionStore.getState()
 const archiveInitial = useArchiveRowsStore.getState()
 const originalFetch = globalThis.fetch
@@ -108,4 +108,13 @@ test('HTTP failure releases page loading and a reconnect clears unknown marks', 
   mergeArchiveRows([], ['missing'])
   beginArchiveConnection(2)
   expect(useArchiveRowsStore.getState().status).toEqual({})
+})
+
+test('HTTP rows cannot resurrect pending kills until the next connection', () => {
+  blockSessionRow('killed')
+  mergeArchiveRows([row('killed', null), row('archived-killed')], [])
+  expect(useSessionStore.getState().sessions).toEqual([])
+  beginArchiveConnection(2)
+  mergeArchiveRows([row('killed', null)], [])
+  expect(useSessionStore.getState().sessions[0]?.id).toBe('killed')
 })

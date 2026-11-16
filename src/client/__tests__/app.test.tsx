@@ -8,6 +8,7 @@ import { useSessionSearchStore } from '../stores/sessionSearchStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useUpdateStore } from '../stores/updateStore'
+import { useArchiveRowsStore } from '../stores/archivedChatRows'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
 const globalAny = globalThis as typeof globalThis & {
@@ -18,6 +19,8 @@ const globalAny = globalThis as typeof globalThis & {
   localStorage?: Storage
 }
 
+const originalFetch = globalThis.fetch
+const initialArchiveRows = useArchiveRowsStore.getState()
 const originalWindow = globalAny.window
 const originalDocument = globalAny.document
 const originalNavigator = globalAny.navigator
@@ -170,6 +173,8 @@ function setupDom() {
 }
 
 beforeEach(() => {
+  useArchiveRowsStore.setState(initialArchiveRows, true)
+  useSessionStore.setState({ archivedChats: new Map(), archivedCount: 0 })
   sendCalls = []
   subscribeListener = null
   mockConnectionEpoch = 0
@@ -215,6 +220,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  globalThis.fetch = originalFetch
   if (activeRenderer) {
     act(() => {
       activeRenderer?.unmount()
@@ -271,6 +277,50 @@ function getKeyHandler() {
 }
 
 describe('App', () => {
+  // @covers: workspace-navigation › Archived chats are fetched by id when referenced › Reload with an archived chat selected
+  test('a pending archived selection resolves before fallback and survives collapsed Archive', async () => {
+    let resolve!: (response: Response) => void
+    globalThis.fetch = ((url: string) => url.includes('/api/chat/sessions/rows?')
+      ? new Promise<Response>(done => { resolve = done }) : Promise.resolve(Response.json({}))) as typeof fetch
+    useSessionStore.setState({ selectedSessionId: 'chat-archived-selection' })
+    await act(async () => {
+      activeRenderer = TestRenderer.create(<App />)
+      await new Promise(done => setTimeout(done, 5))
+    })
+    act(() => subscribeListener?.({ type: 'sessions', sessions: [baseSession] }))
+    expect(useSessionStore.getState().selectedSessionId).toBe('chat-archived-selection')
+    await act(async () => { await new Promise(done => setTimeout(done, 5)) })
+    await act(async () => {
+      resolve(Response.json({ rows: [{ ...baseSession, id: 'chat-archived-selection', kind: 'chat', archivedAt: '2026-01-01' }], unknown: [] }))
+      await new Promise(done => setTimeout(done, 5))
+    })
+    expect(useSessionStore.getState().selectedSessionId).toBe('chat-archived-selection')
+    expect(useSessionStore.getState().archivedChats.has('chat-archived-selection')).toBe(true)
+  })
+
+  // @covers: workspace-navigation › Archived chats are fetched by id when referenced › The chat no longer exists
+  test('a current unknown selected row clears the kept id and shows the not-found notice', async () => {
+    globalThis.fetch = (async (url: string) => Response.json(url.includes('/rows?')
+      ? { rows: [], unknown: ['chat-missing-selection'] } : {})) as typeof fetch
+    useSessionStore.setState({ selectedSessionId: 'chat-missing-selection' })
+    await act(async () => {
+      activeRenderer = TestRenderer.create(<App />)
+      await new Promise(done => setTimeout(done, 5))
+      subscribeListener?.({ type: 'sessions', sessions: [] })
+      await new Promise(done => setTimeout(done, 10))
+    })
+    expect(useSessionStore.getState().selectedSessionId).toBeNull()
+    expect(activeRenderer!.root.findAllByType(SessionList)[0]!.props.error).toBe('Chat session was not found.')
+  })
+
+  // @covers: workspace-navigation › Archive requests follow current connection and lifecycle state › A filtered live selection keeps its fallback
+  test('a filtered live selection still falls back to the first visible live session', () => {
+    useSessionStore.setState({ hasLoaded: true, sessions: [baseSession, { ...baseSession, id: 'visible', projectPath: '/visible' }], selectedSessionId: baseSession.id })
+    useSettingsStore.setState({ projectFilters: ['/visible'] })
+    act(() => { activeRenderer = TestRenderer.create(<App />) })
+    expect(useSessionStore.getState().selectedSessionId).toBe('visible')
+  })
+
   test('an update-state push toggles the header chip without a reload', () => {
     let renderer!: TestRenderer.ReactTestRenderer
     act(() => {

@@ -1,0 +1,17 @@
+// Synthetic data only, run by Bun before the fixture server starts.
+import { initDatabase } from '../../../src/server/db'
+import { join, resolve } from 'node:path'
+const [dbPath, root, countText] = process.argv.slice(2)
+if (!root || !dbPath || !resolve(dbPath).startsWith(resolve(root) + '/')) throw new Error('Refuse non-private archive seed')
+const count = Number(countText ?? 120)
+const db = initDatabase({ path: dbPath })
+for (let i = 0; i < count; i++) {
+  db.insertChatSession({ sessionId: `chat-archive-${String(i).padStart(4, '0')}`, name: `Archived fixture ${i}`,
+    projectPath: root, sdkSessionId: null, status: 'waiting', createdAt: '2026-01-01T00:00:00Z',
+    lastActivityAt: '2026-01-01T00:00:00Z', archivedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString() })
+}
+// Live rows have the same project shape; no real history or credentials.
+for (let i = 0; i < 7; i++) db.insertChatSession({ sessionId: `chat-live-${i}`, name: `Live fixture ${i}`,
+  projectPath: root, sdkSessionId: null, status: 'waiting', createdAt: '2026-01-01T00:00:00Z', lastActivityAt: '2026-01-01T00:00:00Z' })
+db.close()
+console.log(JSON.stringify({ archived: count, live: 7, db: join(root, 'agentboard.db') }))

@@ -233,7 +233,8 @@ export function handleSessionRemoved(
   useSessionStore.setState(state => {
     const archivedChats = new Map(state.archivedChats)
     archivedChats.delete(message.sessionId)
-    return { archivedChats }
+    return { archivedChats, ...(!selectSessionFromRows(state.sessions, message.sessionId) && state.selectedSessionId === message.sessionId
+      ? { selectedSessionId: null } : {}) }
   })
   useChatStore.getState().remove(message.sessionId)
   // Do NOT clear pendingKills here — stale async refreshes (e.g. the

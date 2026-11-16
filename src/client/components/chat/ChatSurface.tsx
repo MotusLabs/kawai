@@ -277,7 +277,7 @@ export default function ChatSurface({
     transcript.pendingRequests.length === 0
   // Naming message participants: live rows come from the session list; killed
   // ones keep their name through the wrapper's team directory when loaded.
-  const liveSessions = useReferencedSessions(transcript)
+  const liveSessions = useReferencedSessions(transcript.events.filter(event => event.type === 'peer_message'))
   const directory = participantDirectory ?? NO_DIRECTORY
   // The conversation column: workers strip, transcript scroller, then the
   // archived Restore bar or the composer. `showStrips={false}` hosts get

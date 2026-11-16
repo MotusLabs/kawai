@@ -1,3 +1,4 @@
+import { useSessionRow } from '../../stores/archivedChatRows'
 // A message participant named for display (team-message-threads D3): the
 // session's current name, or a killed session's recorded name with `(gone)`,
 // or the human. The role (group) badge and the raw id ride along — the id is
@@ -29,7 +30,9 @@ export function participantLabelFor(props: Pick<ParticipantNameProps, 'sessionId
 }
 
 export default function ParticipantName(props: ParticipantNameProps) {
-  const label = participantLabelFor(props)
+  const provided = props.sessions?.some(row => row.id === props.sessionId)
+  const row = useSessionRow(provided ? null : props.sessionId)
+  const label = participantLabelFor(row ? { ...props, sessions: [row, ...(props.sessions ?? [])] } : props)
   const open = props.onOpen && !label.gone && label.id !== null
   return <span className="inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1" data-testid="participant">
     {open
