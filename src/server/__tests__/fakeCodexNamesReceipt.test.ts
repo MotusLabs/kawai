@@ -10,9 +10,13 @@
 // exact-equality completeness. A faithful direct-write control — the old
 // producer, verbatim, in a throwaway variant script — runs the same oracle
 // with its violation arm asserted, proving the oracle rejects that
-// publication after setup rather than through a setup timeout.
-// Synchronization never waits on an expected env name: the witnesses are
-// the staged path, the gate file and the final path only.
+// publication after setup rather than through a setup timeout. That proof
+// is final-path existence alone, whatever bytes it holds: the direct write
+// exposes the path at open before its write lands (CI 43910736214 read ['']
+// there), so a completeness read waits behind the child's exit — the
+// completion witness — or never runs, and the pre-fix protocol is kept
+// verbatim as the failing reproduction's reference. Witnesses: the staged
+// path, the gate file, the final path and the child's exit, never a name.
 // @reads: tests/fixtures/**
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
@@ -33,6 +37,20 @@ const SECRET_VALUE = 'synthetic-secret-value-never-real'
  * between this template and the variant's payload. */
 const DIRECT_WRITE_VARIANT = `import { existsSync, writeFileSync } from 'node:fs'
 writeFileSync(process.env.FAKE_ENV_NAMES!, Object.keys(process.env).sort().join(String.fromCharCode(10)))
+const gate = process.env.FAKE_ENV_NAMES_GATE
+if (gate) while (!existsSync(gate)) await Bun.sleep(10)
+`
+
+/** A deterministic zero/partial publisher: openSync makes the destination
+ * visible with zero bytes, writeSync lands only a strict prefix of the
+ * receipt's first sorted name, and the script then holds at the gate — it
+ * never completes. This is the CI race's empty destination, constructed:
+ * the corrected oracle must witness the violation from existence alone,
+ * while the pre-fix protocol fails on it every time. */
+const PARTIAL_WRITE_VARIANT = `import { closeSync, existsSync, openSync, writeSync } from 'node:fs'
+const fd = openSync(process.env.FAKE_ENV_NAMES!, 'w')
+writeSync(fd, Object.keys(process.env).sort()[0]!.slice(0, 4))
+closeSync(fd)
 const gate = process.env.FAKE_ENV_NAMES_GATE
 if (gate) while (!existsSync(gate)) await Bun.sleep(10)
 `
@@ -89,21 +107,40 @@ async function releaseAndJoin(child: Child): Promise<void> {
   await joinBounded(child)
 }
 
+/** How the oracle's completeness phase reads the released receipt:
+ * - 'consumer-protocol': the consumers' existence/read protocol — valid only
+ *   for the atomic producer, whose existence implies complete bytes.
+ * - 'completion-witness': behind the child's exit — the direct-write control
+ *   wrote before it held at the gate and exits once released, so its exit is
+ *   the process witness that the non-atomic write landed, and the read then
+ *   cannot race the write window CI read [''] in.
+ * - 'none': no completeness phase — for a producer that never completes
+ *   (the zero/partial control), whose violation is proven by existence
+ *   alone. The gate stays unwritten; the caller's cleanup releases it. */
+type Completeness = 'consumer-protocol' | 'completion-witness' | 'none'
+
 /** The shared receipt oracle: one setup witness — stage-ready for the fixed
  * producer, premature destination under a direct-publication regression —
- * then the absence assertion evaluated after setup, the release, and the
- * consumers' existence/read protocol with exact-equality completeness. With
- * `expectViolation` the absence assertion's violation is asserted instead:
- * how the finite control proves the oracle rejects direct publication after
- * setup rather than at a staging timeout. */
-async function runSharedReceiptOracle(child: Child, setupWitness: () => boolean, expectViolation: boolean): Promise<void> {
+ * then the absence assertion evaluated after setup, and, unless `completeness`
+ * is 'none', the release and one completeness read with exact-equality proof.
+ * With `expectViolation` the absence assertion's violation is asserted
+ * instead: how the finite controls prove the oracle rejects premature
+ * publication after setup rather than at a staging timeout. The violation
+ * proof is existence-only — it never inspects the destination's bytes, so a
+ * zero or partial publication is witnessed exactly like a complete
+ * premature one. */
+async function runSharedReceiptOracle(child: Child, setupWitness: () => boolean, expectViolation: boolean, completeness: Completeness): Promise<void> {
   await until(setupWitness, 2_000)
   const premature = fs.existsSync(child.namesFile)
   if (expectViolation) expect(premature).toBe(true)
   else expect(premature).toBe(false)
-  // Release, then read through the consumers' existence/read protocol.
+  if (completeness === 'none') return
+  // Release, then read: through the consumers' existence/read protocol for
+  // the atomic producer, or behind the child-exit completion witness for
+  // the non-atomic one.
   fs.writeFileSync(child.gateFile, '')
-  await until(() => fs.existsSync(child.namesFile))
+  if (completeness === 'completion-witness') await child.proc.exited
+  else await until(() => fs.existsSync(child.namesFile))
   const receipt = fs.readFileSync(child.namesFile, 'utf8').split('\n')
   // Complete publication: exactly the child env's sorted names. A partial,
   // empty or mis-joined receipt cannot satisfy this equality.
@@ -114,6 +151,23 @@ async function runSharedReceiptOracle(child: Child, setupWitness: () => boolean,
   expect(JSON.stringify(receipt)).not.toContain(SECRET_VALUE)
 }
 
+/** The oracle's pre-fix violation protocol, verbatim where it matters: after
+ * witnessing premature existence it released the gate, waited for the final
+ * path, read it and demanded the atomic completeness equality from the
+ * intentionally non-atomic producer. CI 43910736214 failed exactly this step
+ * (line 110: expected the sorted five names, received ['']) because the read
+ * raced the direct write's open-to-write window. Kept as the failing
+ * reproduction's reference; `observed` reports the bytes it read so the
+ * reproduction can prove they were genuinely incomplete. */
+async function runLegacyViolationProtocol(child: Child, observed: { receipt?: string[] }): Promise<void> {
+  await until(() => fs.existsSync(child.namesFile), 2_000)
+  fs.writeFileSync(child.gateFile, '')
+  await until(() => fs.existsSync(child.namesFile))
+  const receipt = fs.readFileSync(child.namesFile, 'utf8').split('\n')
+  observed.receipt = receipt
+  expect(receipt).toEqual(Object.keys(child.env).sort())
+}
+
 describe('fake codex env-name receipt publication', () => {
   test('the receipt appears only complete: absent while staged, complete after release', async () => {
     const child = makeChild()
@@ -122,7 +176,7 @@ describe('fake codex env-name receipt publication', () => {
       // fixture only the staged path appears; a direct-publication
       // regression reveals the destination instead — and fails the absence
       // assertion inside the oracle, never this wait.
-      await runSharedReceiptOracle(child, () => fs.existsSync(stagedPath(child)) || fs.existsSync(child.namesFile), false)
+      await runSharedReceiptOracle(child, () => fs.existsSync(stagedPath(child)) || fs.existsSync(child.namesFile), false, 'consumer-protocol')
     } finally {
       await releaseAndJoin(child)
     }
@@ -137,8 +191,63 @@ describe('fake codex env-name receipt publication', () => {
     try {
       // The same oracle, violation arm: the faithful control's setup
       // witness is the premature destination itself, and the absence
-      // assertion rejects after setup — never as a staging timeout.
-      await runSharedReceiptOracle(child, () => fs.existsSync(child.namesFile), true)
+      // assertion rejects after setup — never as a staging timeout. The
+      // completeness read waits behind the child's exit: the control wrote
+      // before it held, so exit proves the write landed and the equality
+      // proves the variant stayed faithful — without demanding the atomic
+      // visibility guarantee it intentionally lacks.
+      await runSharedReceiptOracle(child, () => fs.existsSync(child.namesFile), true, 'completion-witness')
+    } finally {
+      await releaseAndJoin(child)
+    }
+  })
+
+  test('a held zero/partial publication is witnessed as a violation without any completeness demand', async () => {
+    const child = makeChild((dir) => {
+      const variant = path.join(dir, 'partial-write-variant.ts')
+      fs.writeFileSync(variant, PARTIAL_WRITE_VARIANT)
+      return variant
+    })
+    try {
+      // Corrected protocol, violation arm, no completeness phase: the
+      // premature destination is the violation whatever bytes it holds —
+      // here zero bytes or a four-byte fragment, never the receipt. The
+      // oracle must not fail the control for the producer's intentional
+      // incompleteness (the mechanism behind the CI failure).
+      await runSharedReceiptOracle(child, () => fs.existsSync(child.namesFile), true, 'none')
+      // Held and unreleased, the destination's bytes are genuinely
+      // incomplete: strictly fewer lines than the receipt. Proves the
+      // tolerated state was real, not vacuous.
+      const held = fs.readFileSync(child.namesFile, 'utf8').split('\n')
+      expect(held.length).toBeLessThan(Object.keys(child.env).sort().length)
+    } finally {
+      await releaseAndJoin(child)
+    }
+  })
+
+  test('the pre-fix protocol fails that control: it demanded complete bytes from an incomplete publication', async () => {
+    const child = makeChild((dir) => {
+      const variant = path.join(dir, 'partial-write-variant.ts')
+      fs.writeFileSync(variant, PARTIAL_WRITE_VARIANT)
+      return variant
+    })
+    try {
+      // The corrected oracle passes this producer: existence-only violation
+      // proof, no completeness phase.
+      await runSharedReceiptOracle(child, () => fs.existsSync(child.namesFile), true, 'none')
+      // The pre-fix protocol, on the same held producer, fails exactly as CI
+      // did: at the completeness equality, after reading the genuinely
+      // incomplete destination — never at a wait (the read happened).
+      const observed: { receipt?: string[] } = {}
+      let legacyFailed = false
+      try {
+        await runLegacyViolationProtocol(child, observed)
+      } catch {
+        legacyFailed = true
+      }
+      expect(legacyFailed).toBe(true)
+      expect(observed.receipt).toBeDefined()
+      expect(observed.receipt!.length).toBeLessThan(Object.keys(child.env).sort().length)
     } finally {
       await releaseAndJoin(child)
     }
