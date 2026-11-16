@@ -225,10 +225,13 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, subs
     if (!metricsOpen) return
     resolveMetricsWindow(teamKey, currentLocation.window, window => navigate({ teamKey, tab: 'metrics', window }, { replace: true }))
   }, [metricsOpen, teamKey, currentLocation.window, navigate])
-  const sessions = useReferencedSessions({ workspaceData, strategy, messages, mailbox, tasks, audit, metrics })
+  const sessions = useReferencedSessions(messagesOpen ? messages : mailboxOpen ? mailbox
+    : tasksOpen ? tasks : plansOpen ? plans : auditOpen ? audit : metricsOpen ? metrics
+    : currentLocation.tab === 'members' ? workspaceData : currentLocation.tab === 'strategy' ? strategy : null)
   // Report authors and link actors by name; a killed session shows its id.
   const sessionName = useCallback((sessionId: string) => selectSessionFromRows(sessions, sessionId)?.name ?? sessionId, [sessions])
 
+  // Recipient dropdowns iterate live rows; rendered archived identities resolve by id.
   const liveSessions = useMemo(
     () => liveRows.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
     [liveRows],

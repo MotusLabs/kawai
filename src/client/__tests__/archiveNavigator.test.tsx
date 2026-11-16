@@ -6,7 +6,7 @@ import { buildWorkspaceView } from '../utils/workspaceView'
 import { FALLBACK_ARCHIVE_SECTION_KEY } from '@shared/workspace'
 import { useSessionStore } from '../stores/sessionStore'
 import { useArchiveRowsStore, beginArchiveConnection } from '../stores/archivedChatRows'
-import { useReferencedSessions } from '../hooks/useReferencedSessions'
+import { sessionReferences, useReferencedSessions } from '../hooks/useReferencedSessions'
 import type { Session } from '@shared/types'
 const initial = useSessionStore.getState(), initialArchive = useArchiveRowsStore.getState()
 const original = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch }
@@ -75,10 +75,18 @@ test('rendered archived assignees resolve in one batch while Archive stays colla
     return Response.json({ rows: ids.map(row), unknown: [] })
   }) as typeof fetch
   function Assignees() {
-    const rows = useReferencedSessions(ids.map(sessionId => ({ assignee: { sessionId } })))
+    const rows = useReferencedSessions(ids.map(sessionId => ({ assignee: { targetKind: 'session', targetId: sessionId } })))
     return <p>{ids.map(id => rows.filter(row => row.id === id)[0]?.name ?? 'loading').join(',')}</p>
   }
   await act(async () => { renderer = TestRenderer.create(<Assignees />); await delay(); await delay() })
   expect(urls).toHaveLength(1)
   expect(renderer!.root.findByType('p').children.join('')).toBe(ids.join(','))
+})
+
+test('reference inventory includes session targets and participants while excluding group targets', () => {
+  expect(sessionReferences({ assignments: [{ targetKind: 'session', targetId: 'target' },
+    { targetKind: 'group', targetId: 'group' }], participants: ['participant'],
+    mail: { fromSession: 'sender', toKind: 'session', toId: 'recipient' },
+    ownerSession: 'owner', sessionIds: ['listed'], autoRequestedBy: ['requester'] }).sort())
+    .toEqual(['listed', 'owner', 'participant', 'recipient', 'requester', 'sender', 'target'])
 })

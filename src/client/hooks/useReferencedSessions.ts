@@ -7,11 +7,18 @@ export function sessionReferences(value: unknown): string[] {
   const ids = new Set<string>(), seen = new Set<object>()
   function visit(entry: unknown, key = ''): void {
     if (typeof entry === 'string') {
-      if (/sessionId$|^(claimedBy|ownerSession)$/i.test(key)) ids.add(entry)
+      if (/sessionId$|^(claimedBy|ownerSession|fromSession)$/i.test(key)) ids.add(entry)
       return
     }
     if (!entry || typeof entry !== 'object' || seen.has(entry)) return
     seen.add(entry)
+    if (Array.isArray(entry) && /^(participants|sessionIds|autoRequestedBy)$/.test(key)) {
+      for (const id of entry) if (typeof id === 'string') ids.add(id)
+    }
+    const target = entry as Record<string, unknown>
+    if (target.targetKind === 'session' && typeof target.targetId === 'string') ids.add(target.targetId)
+    if (target.toKind === 'session' && typeof target.toId === 'string') ids.add(target.toId)
+    if (target.kind === 'session' && typeof target.id === 'string') ids.add(target.id)
     for (const [childKey, child] of Object.entries(entry)) visit(child, childKey)
   }
   visit(value)
