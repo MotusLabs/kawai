@@ -90,7 +90,7 @@ and how static assets are delivered.
   connect URL), the session store and its message handlers (archived chats
   held apart from the live list, lookups by id that cover both), the
   navigator `Archive` section (count from the summary, paged loading), and
-  the call sites that look sessions up by id (13 files today).
+  the call sites that look sessions up by id (inventory current hooks, stores and components).
 - Server: `src/server/ws/socketHandlers.ts` (connect messages, digest
   comparison), `src/server/SessionRegistry.ts` and `ws/ConnectionHub.ts`
   (unarchived list, single-session broadcasts, archive summary), two new
@@ -102,8 +102,10 @@ and how static assets are delivered.
 - Wire: `sessions` no longer includes archived chats, `session-update` adds
   a session the client does not hold yet, and a new message reports an
   archived chat with the new archive count. Client and server ship together
-  in one build, and the service worker installs the matching client, so
-  there is no compatibility window to support. The workspace digest is
+  in one build. An already-loaded old client may miss created/restored rows
+  or retain archived cards until refresh; update polling/service workers
+  give no instantaneous or strict bounded replacement guarantee. No new
+  compatibility shim or wire version is introduced. The workspace digest is
   additive. `GET /api/sessions` is unchanged.
 - Out of scope: anything about chat history and liveness, which
   `fast-chat-switching` owns. That includes a time-based (for example

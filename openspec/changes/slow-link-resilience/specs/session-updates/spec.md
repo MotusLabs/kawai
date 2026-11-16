@@ -25,3 +25,15 @@ Creating, restoring, archiving or removing a chat session SHALL send connected c
 #### Scenario: A chat session is removed
 - **WHEN** an unarchived chat session is removed
 - **THEN** clients receive a single-session removal, and no session-list message is sent
+
+#### Scenario: An archived chat is registered at boot
+- **WHEN** an already archived chat is registered while restoring server state
+- **THEN** it contributes to the archive count but emits no live row or session-list message
+
+#### Scenario: An archived chat is patched without restoration
+- **WHEN** an archived chat receives a metadata patch and remains archived
+- **THEN** no live session update or session-list message is sent
+
+#### Scenario: Archive and restore use the patch path
+- **WHEN** a chat is archived and restored through the session manager's patch path
+- **THEN** clients receive the same single-session transitions and archive counts as replacement registration, without losing the open transcript or snapshot cache

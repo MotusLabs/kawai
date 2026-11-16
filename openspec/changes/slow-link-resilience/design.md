@@ -2,8 +2,7 @@
 
 ## Context
 
-See proposal.md (Why) for the measurements. Facts from the code that shape
-the approach:
+See proposal.md (Why) for the measurements. Facts from the code that shape the approach:
 
 - **Connecting.** `WebSocketManager` (`src/client/hooks/useWebSocket.ts`)
   opens a socket with a fixed `CONNECT_TIMEOUT_MS = 3_000`, or 8 s for the
@@ -17,9 +16,10 @@ the approach:
   `removeChatSession` emit the whole list; `ConnectionHub.wireRegistry`
   broadcasts it as `sessions`. Archiving a chat is `applyPatch` with
   `archivedAt` set and `status: 'waiting'` (`ChatSessionManager`), so an
-  archived chat never waits for permission.
-- **Client session store.** `sessionStore.sessions` is the one list that 46
-  reads in 13 client files use to find sessions by id (the chat view, worker
+  archived chat never waits for permission. Archive/restore patches reach
+  `updateSession`, while creation and boot registration use `setChatSession`.
+- **Client session store.** `sessionStore.sessions` is the live list used
+  across client hooks, stores and components to find sessions by id (the chat view, worker
   and task rows, the Team page). `workspaceView.ts` puts every session with
   `archivedAt` in `Archive`. `updateSession` only replaces a session it
   already holds. `session-removed` also drops the chat transcript and its
@@ -74,36 +74,34 @@ the approach:
 - An attempt waits `max(next, RESUME_CONNECT_TIMEOUT_MS)` when it is the
   first attempt after a resume, otherwise `next`.
 
-Other errors (`onerror`/`onclose` before open) leave `next` unchanged. Only
-a timeout means the link was too slow for the timeout, and a refused
-connection says nothing about speed. The value lives only in memory, so a
-reload starts again at 3 s.
+Other errors (`onerror`/`onclose` before open) leave `next` unchanged. Only a timeout
+means the link was too slow for the timeout, and a refused connection says nothing about
+speed. The value lives only in memory, so a reload starts again at 3 s.
 
-The existing reconnect backoff (`min(1000 * 2^(n-1), 30_000)` between
-attempts) and the stall cooldown stay as they are. They space attempts out;
-this value bounds how long one attempt may take.
+The existing reconnect backoff (`min(1000 * 2^(n-1), 30_000)` between attempts) and the
+stall cooldown stay as they are. They space attempts out; this value bounds how long one
+attempt may take.
 
-*Alternatives.* A fixed longer timeout (for example 10 s) would slow down
-catching a zombie socket after an iOS resume, which is the reason the 3 s
-value exists. Measuring the round trip with a preflight HTTP request would
-cost a round trip on every connect.
+*Alternatives.* A fixed longer timeout (for example 10 s) would slow down catching a
+zombie socket after an iOS resume, which is the reason the 3 s value exists. Measuring the
+round trip with a preflight HTTP request would cost a round trip on every connect.
 
 ### D2. Resume verification uses a smoothed round trip
 
-Each heartbeat ping records when it was sent. When its matching `pong`
-arrives, the client updates `srtt` (an exponentially weighted average with
-weight 1/8, seeded by the first sample, as in TCP).
+Each heartbeat ping records when it was sent. When its matching `pong` arrives, the client
+updates `srtt` (an exponentially weighted average with weight 1/8, seeded by the first
+sample, as in TCP).
 `verifyDeadline = clamp(3 * srtt, 1_500, 8_000)`, or 1,500 before any
-sample exists. A verification ping is not used as a sample, because it is
-sent right after a resume and its delay measures the resume, not the link.
+sample exists. A verification ping is not used as a sample, because it is sent right after
+a resume and its delay measures the resume, not the link.
 
-A pong delayed behind queued downstream data makes the sample larger than
-the true round trip. That errs toward waiting longer, and the 8 s cap
-bounds it. The estimate is kept across reconnects of one page.
+A pong delayed behind queued downstream data makes the sample larger than the true round
+trip. That errs toward waiting longer, and the 8 s cap bounds it. The estimate is kept
+across reconnects of one page.
 
 `fast-chat-switching` changes what counts as an answer during verification
-(any inbound message). This design changes only how long the client waits.
-The two compose without conflict.
+(any inbound message). This design changes only how long the client waits. The two compose
+without conflict.
 
 ### D3. Archived chats leave the session list; one message per lifecycle change
 
@@ -113,13 +111,15 @@ Server:
   sessions) and `archivedChatCount()`. The `sessions` event, the connect
   message, and the broadcast use `getLive()`. `getAll()` keeps its meaning
   for `GET /api/sessions` and server-side callers.
-- `setChatSession(session)` no longer emits the list. Instead it emits:
-  - `session-update` when the session is not archived (created, changed,
-    or restored);
-  - `chat-session-archived { session, archivedCount }` when it is archived
-    and was not before;
-  - nothing when an archived session changes while staying archived.
-    Archived rows are not live state.
+- Both `setChatSession(session)` and the chat branch of `updateSession`
+  compare the previous and next `archivedAt` and use the same transition rule:
+  - next unarchived: emit `session-update` (create, change, restore);
+  - previous live, next archived: emit `chat-session-archived
+    { session, archivedCount }`;
+  - previous absent, next archived (boot registration), or previous and next
+    archived: emit no live row and no lifecycle list.
+  A restore also emits `archive-summary`. Archived boot rows are counted by
+  the next connect summary. Tmux updates keep their existing behavior.
 - `removeChatSession` emits `session-removed`, plus `archive-summary
   { archivedCount }` when the removed session was archived.
 - Each connect sends `archive-summary { archivedCount }` right after
@@ -129,12 +129,17 @@ Server:
 Client:
 
 - `session-update` adds a session the client does not hold yet; today it
-  ignores one. Sound and attention notifications still skip a session the
+  ignores one. Additions exclude `pendingKills` and archived rows; restore
+  removes any archived duplicate, and removal clears both row collections. Sound and attention notifications still skip a session the
   client did not hold before, as they do now.
 - The store keeps `sessions` (live) and `archivedChats: Map<id, Session>`,
   plus `archivedCount` and the Archive paging state. A new selector,
   `selectSessionById(state, id)`, reads `sessions` first, then
-  `archivedChats`. Every lookup by id among the 46 reads switches to it.
+  `archivedChats`. Every registry-row lookup by id switches to it, using a fresh inventory
+  of current hooks, stores and components, not a fixed file/read count.
+  Transcript maps in `chatStore` remain transcript maps. Include
+  `PlanWorkspaceConversation`, `ToolDrill`, `teamTaskLabels` and
+  `strategyLabels` as well as the original chat/Team call sites.
   Reads that iterate the live list stay on `sessions`.
 - `chat-session-archived` moves the row from `sessions` to the top of
   `archivedChats`, and sets `archivedCount`. It does not touch the
@@ -149,8 +154,8 @@ for an archive would drop the open transcript.
 
 ### D4. Archived rows come over HTTP: one page route, one by-id route
 
-Both routes are read-only and live in `src/server/routes/archivedChats.ts`,
-behind the same access rules as `/api/chat/search`:
+Both routes are read-only and live in `src/server/routes/archivedChats.ts`, behind the
+same access rules as `/api/chat/search`:
 
 - `GET /api/chat/sessions/archived?before=<cursor>&limit=50`: archived chat
   rows ordered by `(archivedAt desc, id desc)`. The cursor is the
@@ -161,55 +166,74 @@ behind the same access rules as `/api/chat/search`:
   `{ rows, unknown: string[] }`. Unarchived ids are answered too, so a
   caller never has to know whether a session is archived.
 
-They go over HTTP rather than the socket because of the hazard in Context:
-a page reply must never sit in front of a pong. Keyset paging stays stable
-while chats are archived or restored during paging. A row archived after a
-page was computed has a newer `archivedAt` than any later cursor, and it
-reaches the client through `chat-session-archived`.
+They go over HTTP rather than the socket because of the hazard in Context: a page reply
+must never sit in front of a pong. Keyset paging stays stable while chats are archived or
+restored during paging. A row archived after a page was computed has a newer `archivedAt`
+than any later cursor, and it reaches the client through `chat-session-archived`.
 
 Client fetching (`src/client/stores/archivedChatRows.ts`):
 
 - Expanding `Archive` with no loaded page requests the first page.
   Reaching the end of the list requests `nextCursor`. At most one page
   request is in flight, and a cursor that has already been requested is
-  never requested again.
+  never requested again within that paging lifecycle. A new connection
+  starts a new lifecycle and permits intentional refetching.
 - `useSessionRow(id)` is the by-id path for components that may show an
   archived chat (worker and task rows, the Team page, the restored
   selection). Ids missing from both maps are collected for one animation
   frame and fetched in one request, at most 100 per request. An id the
-  server reports unknown is remembered as unknown until the next connect.
+  server reports unknown is remembered as unknown until the next connect or a lifecycle message for that id.
 - The kept selection: when the persisted `selectedSessionId` is not in
   `sessions` after the first `sessions` message, App resolves it through
   the by-id path before the existing "select the first visible target"
   fallback runs. An unknown id clears the selection and shows the
-  not-found notice.
+  not-found notice. A valid archived row or pending resolution remains selected
+  even with Archive collapsed. Existing filtered-out LIVE selection fallback,
+  Team-page deferral, and hibernating selection rules are preserved.
+- Once per new connection, its first `sessions` frame invalidates archived
+  rows, pages, cursors, unknown marks and pending requests; live duplicates
+  are excluded. Refresh the first page if Archive is expanded and resolve
+  selected/rendered references before fallback. Periodic list broadcasts do
+  not reset this cache. Old HTTP replies cannot cross this boundary.
 
-Merging a fetched row (page or by-id) follows table M below. The rule is
-that live state always wins over a fetched row.
+Merging a fetched row (page or by-id) follows table M below. The rule is that live state
+always wins over a fetched row. A WS lifecycle mutation for the id after request issuance,
+or a reconnect, wins over both HTTP rows and unknown replies. Every lifecycle message
+clears obsolete unknown state. M1–M8 apply only to current requests without a later
+mutation; M9–M11 specify overtaken replies. Freshness tracking is connection-local client
+state, with no new wire version, lease or fencing token. HTTP returns registry-shaped
+`Session` rows, including group/task/parked fields.
 
 ### D5. The workspace digest rides in the connect URL
 
-The server computes `digest = sha256(JSON.stringify(repositories))`,
-truncated to 16 hex characters, once for each snapshot the coordinator
-produces. `generatedAt` is left out. The digest travels as a field of
-`workspace-snapshot`. The client keeps the digest of the snapshot it holds
-and opens the socket as `/ws?workspace=<digest>`. `createServerFetch`
-copies the parameter into `WSData`, and `open` skips `workspace-snapshot`
-when it equals the current digest.
+The server computes `digest = sha256(JSON.stringify(repositories))`, truncated to 16 hex
+characters, once for each snapshot the coordinator produces. `generatedAt` is left out.
+The digest travels as a field of
+`workspace-snapshot` as a top-level message field (outside the parsed
+snapshot). Snapshot and digest are replaced atomically on server and client. The client
+keeps the digest of the snapshot it holds and opens the socket as
+`/ws?workspace=<digest>`. `createServerFetch` copies the parameter into `WSData`, and
+`open` skips `workspace-snapshot` when it equals the current digest.
 
-The parameter goes in the URL because the server sends its connect messages
-in `open`, before any client message can arrive. A client hello would cost
-a round trip on every connect.
+The parameter goes in the URL because the server sends its connect messages in `open`,
+before any client message can arrive. A client hello would cost a round trip on every
+connect.
 
-The digest is a pure function of the content, so a restart that rebuilds
-the same snapshot keeps the same digest. Skipping is still correct then,
-because the client holds exactly that content. A parameter that is not 16
-hex characters is ignored. A truncated digest collision would leave a
-stale workspace view until the next change; at 64 bits that is negligible.
+The digest is a pure function of the content, so a restart that rebuilds the same snapshot
+keeps the same digest. Skipping is still correct then, because the client holds exactly
+that content. A parameter that is not 16 hex characters is ignored. A truncated digest
+collision would leave a stale workspace view until the next change; at 64 bits that is
+negligible.
 
 `JSON.stringify` is deterministic for the same coordinator output, because
-the snapshot is built in a fixed order. W5 tests that the digest equals for
-snapshots built twice from the same repositories.
+the snapshot is built in a fixed order. W8 tests that the digest equals for snapshots
+built twice from the same repositories.
+
+When no snapshot exists at open, defer only this initial comparison until first
+publication. Retain the valid client digest, suppress that first snapshot if equal,
+otherwise send it (also for missing/malformed digests). Consume the deferred comparison
+once; later structural broadcasts remain normal. This preserves equal-digest suppression
+even when reconnecting before the first discovery pass after restart (W5a–W5c).
 
 ### D6. Precompressed assets and cache headers
 
@@ -223,7 +247,8 @@ snapshots built twice from the same repositories.
   `staticAssetsMiddleware(root)`, which `bootstrap.ts` mounts where
   `serveStatic` is mounted today. It wraps
   `serveStatic({ root, precompressed: true, onFound })`, and `onFound` sets
-  `Cache-Control`:
+  `Cache-Control`, classifying the found filesystem path relative to root
+  and preserving `staticDir` / `AGENTBOARD_STATIC_DIR` configuration:
   - paths under `/assets/` (Vite's content-hashed output):
     `public, max-age=31536000, immutable`;
   - `index.html`, `sw.js`, `manifest.webmanifest`: `no-cache`;
@@ -234,25 +259,24 @@ snapshots built twice from the same repositories.
 - The release workflow copies `dist/client` whole, so the copies ship
   without changes to it. The tarball grows by about 30%.
 
-*Alternative.* Compressing on the fly in a Hono middleware would spend CPU
-on every request, and brotli quality 11 is too slow for that.
+*Alternative.* Compressing on the fly in a Hono middleware would spend CPU on every
+request, and brotli quality 11 is too slow for that.
 
 ### D7. No recovery matrix row
 
-The connect-timeout escalation, the verification deadline and the digest
-skip are transport retries and a cache. They are not durable recovery
-mechanisms and hold no exclusive slot, so `docs/recovery-matrix.md` gets no
-row.
+The connect-timeout escalation, the verification deadline and the digest skip are
+transport retries and a cache. They are not durable recovery mechanisms and hold no
+exclusive slot, so `docs/recovery-matrix.md` gets no row.
 
 ## Acceptance oracles
 
-Each table is committed verbatim as a table-driven test with the code it
-covers. Times are milliseconds and use injected clocks, never wall time.
+Each table is committed verbatim as a table-driven test with the code it covers. Times are
+milliseconds and use injected clocks, never wall time.
 
 ### T: connect timeout (D1)
 
-Input: the previous `next`, the event, and whether this is the first attempt
-after a resume. Output: the timeout of the next attempt.
+Input: the previous `next`, the event, and whether this is the first attempt after a
+resume. Output: the timeout of the next attempt.
 
 | id | previous next | event | resume first | next attempt waits |
 | --- | --- | --- | --- | --- |
@@ -272,9 +296,9 @@ Unreachable: a negative or `NaN` handshake. The handshake is measured with
 `performance.now()` on both ends (today `lastConnectTs` is `Date.now()`,
 which a wall-clock step can move backwards), and tests inject that clock.
 
-Sequence oracle T12: a fake socket that opens 4,000 after construction.
-The client's attempts time out at 3,000, then open at 4,000 within a 6,000
-timeout. There are exactly two attempts, and status is `connected`.
+Sequence oracle T12: a fake socket that opens 4,000 after construction. The client's
+attempts time out at 3,000, then open at 4,000 within a 6,000 timeout. There are exactly
+two attempts, and status is `connected`.
 
 ### V: verification deadline (D2)
 
@@ -294,8 +318,8 @@ a forced reconnect happens at exactly 1,500.
 
 ### M: merging a fetched archived row (D4)
 
-The row comes from a page or a by-id reply. "Held" is the client's state for
-that id when the reply is applied.
+The row comes from a page or a by-id reply. "Held" is the client's state for that id when
+the reply is applied.
 
 | id | held | fetched row | result |
 | --- | --- | --- | --- |
@@ -307,9 +331,15 @@ that id when the reply is applied.
 | M6 | absent | unarchived | added to `sessions` |
 | M7 | in `sessions` | unarchived | dropped; the live row stays |
 | M8 | absent | unknown id | marked unknown; a kept selection naming it is cleared |
+| M9 | archived by WS after request | unarchived row computed before archive | dropped; archived row stays |
+| M10 | removed by WS after request | row computed before removal | dropped; no ghost row |
+| M11 | created/restored by WS after request | unknown computed before creation/restore | dropped; row and selection stay |
 
-Unreachable: a page reply containing an unarchived row. The page query
-filters on `archivedAt IS NOT NULL` (P2 checks it).
+A reconnect after issuance drops any row/unknown reply regardless of held state. New
+requests after invalidation follow M1–M8 again.
+
+Unreachable: a page reply containing an unarchived row. The page query filters on
+`archivedAt IS NOT NULL` (P2 checks it).
 
 ### W: workspace snapshot on connect (D5)
 
@@ -319,12 +349,23 @@ filters on `archivedAt IS NOT NULL` (P2 checks it).
 | W2 | equal | present | nothing |
 | W3 | different | present | snapshot with digest |
 | W4 | malformed (`zz`, 17 chars) | present | snapshot with digest |
-| W5 | * | none yet | nothing (the first broadcast delivers it) |
+| W5 | * | none yet | nothing; defer initial comparison to first snapshot |
+
+Deferred first-publication oracle (only when W5 applied):
+
+| id | held URL digest | first available snapshot | result |
+| --- | --- | --- | --- |
+| W5a | valid, equal | present | suppress first snapshot |
+| W5b | valid, different | present | send snapshot with digest |
+| W5c | absent or malformed | present | send snapshot with digest |
+
+After each W5a–W5c, later structural changes broadcast normally. Closing before first
+publication discards that connection's deferred comparison.
 
 Digest oracles: W6, two snapshots with equal `repositories` and different
 `generatedAt` give equal digests. W7, adding one worktree changes the
-digest. W8, a fresh `WorkspaceCoordinator` built over the same repositories
-(a restart) gives the same digest.
+digest. W8, a fresh `WorkspaceCoordinator` built over the same repositories (a restart)
+gives the same digest.
 
 ### E: encoding and cache headers (D6)
 
@@ -342,15 +383,18 @@ Requests go through `staticAssetsMiddleware` mounted on a Hono app at
 | E6 | `/icon.png` | `br` | (none) | (none) |
 | E7 | `/assets/index-abc123.js` | `br;q=1` | (none) | immutable as E1 |
 
-Each row also checks that the decoded body equals the original file, and
-that `Vary: Accept-Encoding` is present exactly when `Content-Encoding` is.
+Each row also checks that the decoded body equals the original file, and that `Vary:
+Accept-Encoding` is present exactly when `Content-Encoding` is.
 
 ### Properties
 
 - **P1 (archive count).** Generator: seeded sequences of 200 operations
   over 30 chat ids (create, archive, restore, remove, plus connect at random
   points). Seams: the real `SessionRegistry` and `ConnectionHub` with fake
-  sockets. Property: after each broadcast, the client's `archivedCount`
+  sockets and the actual client protocol/store. Create/boot use
+  `setChatSession`; archive/restore and archived-staying patches use the real
+  `updateSession` path called by `ChatSessionManager.applyPatch`. Include
+  boot archived registration, archived removal and unrelated tmux refresh. Property: after each broadcast, the client's `archivedCount`
   equals the registry's archived count, the client's live ids equal
   `getLive()` ids, and no archived id is in the live list. Seed 0x51ED,
   cases `propertyCases(200)`.
@@ -371,8 +415,8 @@ that `Vary: Accept-Encoding` is present exactly when `Content-Encoding` is.
 ## Risks / Trade-offs
 
 - [A lookup by id still reads `sessions` directly and misses an archived
-  chat, so a released member's row goes blank on the Team page] → All 46
-  reads are listed in task 2.4, each one moved or marked as a deliberate
+  chat, so a released member's row goes blank on the Team page] → A fresh
+  current-source inventory in task 2.4 moves every lookup or marks a deliberate
   iteration over the live list. A guard test fails on a lookup by
   id through `sessions.find(` outside the store module.
 - [The kept selection clears before the by-id fetch returns] → D4 orders
@@ -393,11 +437,11 @@ that `Vary: Accept-Encoding` is present exactly when `Content-Encoding` is.
 
 ## Migration Plan
 
-Client and server ship in one build, and the service worker activates the
-matching client, so no compatibility shim is needed. An old client still
-loaded against a new server until its next reload sees no archived chats in
-`Archive`, and works otherwise. Rollback is reverting the build. No stored
-data changes.
+The supported deployment is a matched client and server from one build. An already-loaded
+old client may miss created/restored chats and retain archived cards until refresh.
+Service-worker updates and polling help replace it, but do not guarantee instantaneous or
+strictly bounded replacement. No compatibility shim or extra protocol version is added.
+Rollback reverts the build; no stored data changes.
 
 ## Implementation contract
 
@@ -433,9 +477,8 @@ data changes.
 
 ### Scope
 
-- `src/client/hooks/useWebSocket.ts`
-- `src/client/stores/sessionStore.ts`
-- `src/client/stores/archivedChatRows.ts`
+- `src/client/hooks/**`
+- `src/client/stores/**`
 - `src/client/protocol/**`
 - `src/client/utils/workspaceView.ts`
 - `src/client/App.tsx`
@@ -463,16 +506,19 @@ data changes.
   removed, a learned timeout without the floor, verification sampled as
   srtt).
 - V2: `src/server/__tests__/archivedSessionList.test.ts` covers A3, A4 and
-  property P1 (kills: `getAll()` left in the connect path, `setChatSession`
-  still emitting the list).
+  property P1 (kills: `getAll()` left in the connect path, `setChatSession` or `updateSession`
+  still emitting a list/live archived row); covers boot registration and
+  patch archive/restore through actual protocol/store composition.
 - V3: `src/server/__tests__/archivedChatsRoute.test.ts` covers the routes,
   the id limit, the cursor, and property P2 (kills: ordering by `archivedAt`
   alone, so ties duplicate or vanish).
 - V4: `src/client/__tests__/archivedChatRows.test.ts` runs table M, page
   dedupe, and the one-request-per-frame batching (kills: a fetched row
-  overwriting a live one).
+  overwriting a live one, stale HTTP resurrecting a removed/archived
+  row); includes M9–M11, connection invalidation and selection preservation.
 - V5: `src/server/__tests__/workspaceDigest.test.ts` runs table W and W6–W8
-  (kills: `generatedAt` included in the digest, the URL parameter ignored).
+  (kills: `generatedAt` included in the digest, the URL parameter ignored, unconditional first-publication broadcast
+  after restart); includes W5a–W5c and later broadcast preservation.
 - V6: `src/server/__tests__/staticAssets.test.ts` runs table E over the
   middleware (kills: `precompressed` off, `onFound` not wired).
   `scripts/__tests__/compressAssets.test.ts` runs P3.
