@@ -130,3 +130,43 @@ One PR holds the lister, its tests, and the `ci.yml` step. Rollback is a revert 
 ## Open Questions
 
 None.
+
+## Implementation contract
+
+### Acceptance
+- A1: `scripts/e2e-fixture-specs.ts` decides from Playwright itself: it runs `bunx playwright test --list --reporter=json` from the repository root with the repository's own configuration twice, once with `AGENTBOARD_CHAT_FIXTURE` removed from the environment and once with it set to `1`, the two listings may run in parallel, and it prints each listed file's repository-relative path, the suite's `file` joined to the listing's `config.rootDir` and made relative to the repository root, sorted by code unit, one per line.
+- A2: A file is listed exactly when one of its tests has an `expectedStatus` other than `skipped` with the fixture on and is `skipped` or absent without it; tests are matched by project name and title path; `status` is never read.
+- A3: The lister exits 1, with a message on stderr, when either listing exits non-zero, reports an entry in `errors`, is not the JSON shape it reads (`config.rootDir`, `suites`, and each test carrying a project name and an `expectedStatus`), or lists nothing.
+- A4: The guard test `scripts/__tests__/e2eFixtureSpecs.test.ts` fails, naming its subject, when the fixture step's Playwright arguments hold anything beyond one unquoted `$<name>`, naming the variable the first command assigns, plus `--<option>=<value>` options from the test's allowlist, `workers` alone today: a `tests/e2e/` path, a bare spec name, `tests/e2e`, `./tests/e2e`, a glob, `--grep=chat`, or an option whose value is a separate word such as `--workers 1`.
+- A5: The guard test also fails, naming its subject, when the fixture `run` lacks the assignment, holds a third command, passes Playwright a variable other than the one it assigns, or passes no `$<name>` at all; when an assignment outside the allowlist precedes `bunx playwright test` (the allowlist is `AGENTBOARD_CHAT_FIXTURE`, which must be `1`, plus `NODE_ENV` and `E2E_PORT`) or `AGENTBOARD_CHAT_FIXTURE=1` is missing; when the step holds keys beyond `name` and `run`, such as `if`, `continue-on-error`, `shell`, `working-directory`, or `env`, or its job gains `continue-on-error`; and when the variable appears in another step's `run` or `env`, in a job's `env`, or in the workflow's `env`.
+- A6: The readers check fails, naming the file, for every file under `tests/` at any depth and of any name that the lister does not list and that refers to `AGENTBOARD_CHAT_FIXTURE` other than to set it to `'0'`: a top-level spec gating in `beforeEach`, a spec in a subdirectory gating in a test body, a helper under `tests/e2e/support/`, a file under `tests/fixtures/`, a mention in a comment, and a spec the configuration no longer collects. It passes for `'0'` settings in both forms and either quote, and for listed files whatever they read.
+- A7: Over the real tree the guard passes: the lister exits 0 printing a non-empty list, the readers check passes over `tests/`, and the step check passes over `ci.yml` parsed with `Bun.YAML.parse`.
+- A8: In `.github/workflows/ci.yml` the fixture step's `run` is exactly two commands after continued lines are joined: `specs=$(bun scripts/e2e-fixture-specs.ts)`, then the environment assignments `NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1 E2E_PORT=4174` and `bunx playwright test $specs --workers=1`; the step holds only `name` and `run`, and the main e2e step stays `bunx playwright test --workers=1`.
+- A9: The listed files, re-measured on the branch's base, include `chat-activity`, `chat-auto-approve`, and `chat-workers`; those three pass locally under CI's fixture setup, after `bun run build`, with a fresh HOME, a spare `E2E_PORT`, and `--workers=1`, and the pull request's e2e job log names them.
+
+### Invariants
+- I1: A test's listed-ness is decided only by its `expectedStatus`: a `test.fail()` test counts as runnable, a test skipped both ways is never listed, and a file whose tests run both ways is not listed.
+- I2: No count is frozen: the workflow names no spec path itself and no clause or test pins a literal spec count; the list is re-measured on the branch's base, which listed 30 files on master at a491f364.
+- I3: The specs, their fixture gates, the main e2e step, and everything that decides whether the e2e job runs at all, the job's `if` and `needs`, the docs-only classification, and the workflow's triggers stay unchanged, and the fixture step gains no narrowing filter such as `--grep`.
+- I4: The step fails closed: a failing lister, a load error, an unexpected shape, or an empty list exits non-zero at the assignment, so under `bash -e` the step fails before Playwright runs and can neither run every spec nor none by accident.
+- I5: Each of the two listings gets its own new directory as `E2E_TMUX_TMPDIR`, and the script removes both before it exits, leaving the system temporary directory as it found it.
+
+### Scope
+- `scripts/e2e-fixture-specs.ts`
+- `scripts/__tests__/e2eFixtureSpecs.test.ts`
+- `.github/workflows/ci.yml`
+
+### Verification
+- V1: The guard test drives the pure function over fixture listings and proves every listing rule of task 1.1: top-level, `describe`-gated, and helper-held gates list their files; ungated, `'0'`, and both-ways-skipped specs do not; a `test.fail()` test counts as runnable; project and title-path matching tells two same-titled tests in different `describe`s apart and lists a file once when one project of two flips; every test reading `status: skipped` changes nothing; and each refusal names its cause.
+- V2: The guard test drives the CLI over a temporary repository whose configuration sets `testDir: 'tests/e2e'` with a `node_modules` link to the repository's: it prints the gated specs, omits the ungated, `'0'`, and both-ways-skipped specs, exits 1 with the load error on stderr for a spec that fails to load, and exits 1 with a stderr message on a tree with no gated spec; over the real repository, with the system temporary directory pointed at a new empty directory, the run leaves it empty.
+- V3: The guard checks are pure functions proved over fixture inputs, every case of task 1.2 as a failing counterexample naming its subject, and then run once over the real tree: the lister exits 0 with a non-empty list, the readers check passes over `tests/`, and the step check passes over `ci.yml` read with `Bun.YAML.parse`.
+- V4: A9's evidence is a private local run, never `bun run test:e2e` and never a test server pointed at live data: `bun run build`, a fresh HOME, a spare `E2E_PORT` in 41000-60999, the private browser cache on `PLAYWRIGHT_BROWSERS_PATH`, and `--workers=1`; the count re-measured on the branch's base is recorded in the result with its literal citations, each resolved to a current test title before the campaign.
+- V5: `bun run check` passes on the clean committed head.
+
+### Excluded
+- X1: No change to the specs, their fixture gate, or the main e2e step.
+- X2: No splitting or sharding of the fixture step, and no second fixture step.
+- X3: No spec renames, no `*.fixture.spec.ts` naming convention, and no Playwright project or tag filter for either step.
+- X4: No guarding of the e2e job's `if` and `needs`, the docs-only classification, or the workflow's triggers.
+- X5: Out of the guard's reach by design: a variable name assembled at run time, such as `'AGENTBOARD_' + 'CHAT_FIXTURE'`, and a run-time gate in code outside `tests/`, such as the server's fixture switch under `src/`.
+- X6: No push, pull request, plan approval, or execution start by the implementation: Kawai pushes and opens the pull request, and only the owner approves the plan and starts executions.
