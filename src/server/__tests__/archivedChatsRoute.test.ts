@@ -22,7 +22,12 @@ test('archive routes clamp limits, reject malformed cursors and 101 ids, and pre
   const api = app(registry)
   expect((await (await api.request('/api/chat/sessions/archived?limit=0')).json()).rows).toHaveLength(1)
   expect((await (await api.request('/api/chat/sessions/archived?limit=500')).json()).rows).toHaveLength(100)
-  expect((await api.request('/api/chat/sessions/archived?before=broken')).status).toBe(400)
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  for (const cursor of ['broken', '', encode({ archivedAt: 'invalid', id: 'id-001' }),
+    encode({ archivedAt: '2026-01-01', id: 12 }), encode(['2026-01-01', 'id-001']),
+    encode({ archivedAt: '2026-01-01', id: 'id-001' }) + '%']) {
+    expect((await api.request('/api/chat/sessions/archived?before=' + encodeURIComponent(cursor))).status).toBe(400)
+  }
   expect((await api.request('/api/chat/sessions/rows?ids=' + Array.from({ length: 101 }, (_, i) => i).join(','))).status).toBe(400)
   const reply = await (await api.request('/api/chat/sessions/rows?ids=live,id-000,unknown')).json()
   expect(reply.rows).toEqual([registry.get('live'), registry.get('id-000')])

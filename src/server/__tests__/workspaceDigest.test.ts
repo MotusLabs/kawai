@@ -93,6 +93,9 @@ test('W6-W8: coordinator content digest ignores generation time, changes with co
   expect(published).toHaveLength(1)
   const restarted = make(); await restarted.requestRefresh()
   expect(restarted.getDigest()).toBe(digest)
+  const frames: ServerMessage[] = []
+  open(new ConnectionHub(), socket({ workspaceDigest: digest }, frames), restarted.getSnapshot(), restarted.getDigest()!)
+  expect(frames.filter(frame => frame.type === 'workspace-snapshot')).toEqual([])
   name = 'changed'; await first.reconcile()
   expect(first.getDigest()).not.toBe(digest)
   expect(published.at(-1)?.digest).toBe(first.getDigest()!)

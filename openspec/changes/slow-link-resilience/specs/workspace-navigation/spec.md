@@ -61,8 +61,8 @@ Every workspace snapshot SHALL carry a content digest excluding generation time.
 - **THEN** on reconnect the digest differs, and the server sends the current snapshot with its digest
 
 #### Scenario: A server restart with the same workspace
-- **WHEN** the server restarts, the client reconnects before the first snapshot is available, and that first snapshot has the same content as the client's
-- **THEN** the digests are equal, and the snapshot is not resent
+- **WHEN** the server restarts and its first snapshot has the same content as the client's
+- **THEN** the digests are equal, and the snapshot is not resent whether the client reconnects before or after that first snapshot becomes available
 
 #### Scenario: A first connect names no digest
 - **WHEN** a client connects without naming a digest

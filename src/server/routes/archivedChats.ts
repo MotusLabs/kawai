@@ -5,7 +5,10 @@ import type { SessionRegistry } from '../SessionRegistry'
 interface Cursor { archivedAt: string; id: string }
 function decodeCursor(value: string): Cursor | null {
   try {
-    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
+    if (!/^[A-Za-z0-9_-]+$/.test(value)) return null
+    const decoded = Buffer.from(value, 'base64url')
+    if (decoded.toString('base64url') !== value) return null
+    const parsed = JSON.parse(decoded.toString('utf8'))
     if (typeof parsed?.archivedAt !== 'string' || !Number.isFinite(Date.parse(parsed.archivedAt)) ||
       typeof parsed?.id !== 'string' || !parsed.id) return null
     return parsed
