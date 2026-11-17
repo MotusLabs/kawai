@@ -96,7 +96,7 @@ The system SHALL capture each plan usage report the agent emits in a chat sessio
 - **THEN** the report is not kept for `openrouter`, and its usage bar shows only the OpenRouter key and credits pulls
 
 ### Requirement: Usage is refreshed when no report has arrived
-When a provider holds no report and its chat agent has started or it qualifies for background quota observation, the system SHALL fetch plan usage on demand, once per provider: a quota-serving provider's own plan usage; for a provider whose own usage endpoint is selected, only that endpoint's data, never the host login's, even after a refusal; otherwise the agent process's logged-in account. Without obtainable data nothing SHALL be recorded or shown. Older data SHALL NOT replace fresher data.
+When a provider holds no report and its chat agent has started or it qualifies for background quota observation, the system SHALL fetch plan usage on demand, once per provider: a quota-serving provider's own plan usage; with its own usage endpoint selected, only that endpoint's data, never the host login's, even after a refusal; otherwise the agent process's logged-in account. Without plan limits or obtainable data, nothing SHALL be recorded or shown. Older data SHALL NOT replace fresher data.
 
 #### Scenario: Windows appear before the first message
 - **WHEN** a client attaches to a chat session, starting its agent without sending a prompt, and the provider holds no report while plan usage data is obtainable
@@ -135,7 +135,7 @@ When a provider holds no report and its chat agent has started or it qualifies f
 - **THEN** the usage bar never shows that account's plan windows for the session
 
 ### Requirement: Provider plan usage is pulled from the provider quota endpoint
-When a session's provider has a base URL, the server SHALL fetch plan usage from `/api/monitor/usage/quota/limit` at its origin once per provider, with the qualifying session's or worker's effective credentials, without waiting for a turn, but never for a provider whose own usage endpoint is selected. Model API paths, queries, and fragments SHALL NOT enter the quota URL. Only a matching response SHALL yield provider windows, with their own source; failures SHALL leave the session undisturbed.
+When a session's provider has a base URL, the server SHALL fetch coding-plan usage from `/api/monitor/usage/quota/limit` at its origin once per provider, with the qualifying session's or team configuration's effective credentials, but never for a provider whose own usage endpoint is selected. Model API paths, queries, and fragments SHALL NOT enter the quota URL. Only a matching response SHALL yield provider windows, with their own source; failures SHALL leave the session undisturbed.
 
 #### Scenario: API-key gateway profile shows provider usage
 - **WHEN** a session's provider routes through a base URL that serves the quota endpoint and authenticates with an API key with no host login

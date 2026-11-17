@@ -207,7 +207,7 @@ Each requirement and active delta that shares a capability with this change, che
 - **[Trade-off] Account balance needs a management key**, which can create and delete keys. → It is optional, read only by the server, never placed in an agent environment, and never logged.
 - **[Trade-off] A key with no cap shows no key meter.** → The docs advise setting a cap or budget on the inference key; with a balance key, the credits meter still shows.
 - **[Risk] OpenRouter's response shapes are partly undocumented** (the `budgets` scopes, `is_management_key`). → A strict shape check; an unknown scope is labelled by its raw value, and anything malformed records no data rather than guessing.
-- **[Risk] Ordering with `providers-and-workers` and `process-observability`.** → Implementation starts once `providers-and-workers` section 5 (per-provider usage) is on master; section 4 (provider cooldown, `limit_window`, `cooldownFor`) landed in #219. Adding requirements alone does not avoid overlap: an ADDED rule cannot override an unconditional SHALL elsewhere in the same capability. So the two `chat-usage-limits` requirements this change contradicts are MODIFIED (D6).
+- **[Risk, superseded 2026-11-18 — see proposal "Closeout status"] Ordering with `providers-and-workers` and `process-observability`.** → Implementation starts once `providers-and-workers` section 5 (per-provider usage) is on master; section 4 (provider cooldown, `limit_window`, `cooldownFor`) landed in #219. Adding requirements alone does not avoid overlap: an ADDED rule cannot override an unconditional SHALL elsewhere in the same capability. So the two `chat-usage-limits` requirements this change contradicts are MODIFIED (D6).
   - Both `providers-and-workers` and `process-observability` also MODIFY those requirements. `process-observability` is implemented but not archived. `providers-and-workers` is still in flight (section 5 rewrites per-provider usage), and its blocks do not yet compose `process-observability`'s edits; its PR C docs commit will, so it archives after `process-observability`.
   - Today each MODIFIED block here restates `process-observability`'s text, which is written over `providers-and-workers`' wording, with the carve-out added. "Plan usage reports are kept per provider" restates `providers-and-workers`' text, since `process-observability` leaves it alone. The two changes do not contradict each other.
   - **Hard constraint:** this change archives last, after both. Before archiving, every MODIFIED block is re-derived from the then-current main spec, with the carve-out kept. Until `providers-and-workers` archives, `openspec validate` reports that archive would refuse "Plan usage reports are kept per provider" because the name is not found. That is expected, since the rename is that change's.
@@ -243,3 +243,56 @@ Each requirement and active delta that shares a capability with this change, che
 
 - Does MiMo pay-as-you-go also answer 402 when its balance is negative, and through which error class? D7 catches it either way. The answer only adds a scenario to the docs.
 - Should the transcript also show a session's running total of provider-reported cost? This is deferred, and is display only.
+
+## Closeout map (2026-11-18, PROPOSED)
+
+Static evidence on master `f52963d0`: each requirement's code path and the
+existing test files its task's Verify names. Scenario-level `@covers`
+annotations with literal titles are task 6.2; this table is not a claim that
+every scenario is already annotated or re-run.
+
+| Requirement (scenarios) | Code | Existing test files |
+|---|---|---|
+| Profiles preserve chat permissions and credential privacy (7) | `catalogParse.ts`, `ClaudeProfiles.ts` | `profileCatalogCredentials.test.ts`, `claudeProfiles.test.ts` |
+| Trusted providers may name their credential variables (3) | `catalogParse.ts` | `profileCatalogCredentials.test.ts`, `profileCatalogProviders.test.ts` |
+| A credentialed provider's route comes only from trusted catalogs (5) | `catalogMerge.ts` | `profileCatalogCredentials.test.ts` |
+| A credentialed provider's base URL is pinned on every launch (4) | `ClaudeProfiles.ts` | `claudeProfilesCredentials.test.ts`; `scripts/verify-claude-profile-settings.ts` |
+| Named credential variables are withheld from every agent (4) | `chatProviderEnv.ts`, `secretNameRegistry.ts` | `claudeProfilesCredentials.test.ts`, `registeredNamesRetention.test.ts` |
+| A credentialed provider authenticates only with its own variable (2) | `chatAuth.ts`, `ChatSessionManager.ts` | `chatSessionManager.provider-usage-openrouter.test.ts` |
+| Catalogs may cap the output reservation (2) | `catalogParse.ts` (`PROFILE_CONTROLLED_ENV`) | `profileCatalogCredentials.test.ts` |
+| The shipped catalog includes OpenRouter (2) | `config/providers.default.json` | `shippedCatalog.test.ts` |
+| OpenRouter key endpoint, meters, credits, limited status (3+4+2+1) | `openRouterUsage.ts`, `ChatSessionManager.ts` | `openRouterUsage.test.ts`, `chatSessionManager.provider-usage-openrouter.test.ts` |
+| OpenRouter usage refreshes while sessions are live and after a costed turn (3) | `ChatSessionManager.ts` | `chatSessionManager.provider-usage-cadence.test.ts`, `chatSessionManager.provider-usage-openrouter.test.ts` |
+| MODIFIED Plan usage reports are kept per provider (6) | `usageLimits.ts`, `ChatSessionManager.ts` | `chatSessionManager.provider-usage-openrouter.test.ts` |
+| MODIFIED Usage is refreshed when no report has arrived (9) | `ChatSessionManager.ts` | as above; "Eligible alternative without a live chat" is **not implemented** on master (no background collector) and is owned by `process-quota-history-and-incident-advice` |
+| MODIFIED Provider plan usage is pulled from the provider quota endpoint (9) | `ChatSessionManager.ts` | as above; "Background provider configuration" is **not implemented** and is owned by the same change |
+| payment-required, credit cooldown, never park (3+4+2) | `limitSignals.ts`, limit cooldown, `limitOutcomes.ts`, `waitingLabels.ts` | `limitSignals.test.ts`, `limitEvents.test.ts`, `limitOutcomes.*.test.ts` |
+| A turn's cost is the provider-reported charge when streamed (3) | package `claude/usageFacts.ts` → `providerCostUsd`, `ChatMessages.tsx` | `chatSessionDriver.test.ts`, `packages/agent-runtime/__tests__/claudeUsageFacts.test.ts`, `src/client/__tests__/chatTranscriptRows.test.tsx` |
+
+The two background scenarios restate current main text unchanged; archiving
+this change neither adds nor removes them, and does not claim them
+implemented. Task 4.1's "`ChatSessionDriver`" names the pre-extraction driver;
+the cost sum now lives in the runtime package.
+
+## Implementation contract
+
+### Acceptance
+- A1: Every scenario listed in "Closeout map" carries a `@covers` annotation directly above an existing or added test whose literal title resolves, except the two background scenarios owned by `process-quota-history-and-incident-advice`.
+- A2: Each MODIFIED `chat-usage-limits` and `claude-session-profiles` block keeps every scenario of the then-current main requirement and every main clause, with the own-endpoint carve-out added.
+- A3: Task 5.2 is either recorded by the owner with observations and no key material, or recorded as unverified at archive.
+### Invariants
+- I1: No production code changes; only test annotations, test-only additions, and this change's artifacts.
+- I2: No key material appears in any artifact, test, or log.
+### Scope
+- `openspec/changes/openrouter-provider/**`
+- `src/server/__tests__/**`
+- `src/client/__tests__/**`
+- `packages/agent-runtime/__tests__/**`
+### Verification
+- V1: Citation preflight resolves every annotated literal title; `scripts/__tests__/specCoverageGuard.test.ts` passes.
+- V2: `openspec validate openrouter-provider --strict` passes and a block-by-block scenario-name diff against main shows no dropped scenario.
+- V3: `bun run check --full-properties` passes on the clean committed head under pinned Bun 1.4.3, and `scripts/verify-result.ts` reports its exit code.
+### Excluded
+- X1: No live OpenRouter call by an agent; 5.2 belongs to the owner.
+- X2: No implementation of background quota observation; it belongs to `process-quota-history-and-incident-advice`.
+- X3: No archive before the owner's 5.2 decision.

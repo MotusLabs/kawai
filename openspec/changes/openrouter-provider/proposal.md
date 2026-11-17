@@ -1,5 +1,28 @@
 # Proposal
 
+## Closeout status (2026-11-18, PROPOSED)
+
+Planning update for plan `plan-2eb5f292` (draft); owner approval pending. Code
+for tasks 1.1–5.1 is on master (19/20 ticked; `config/providers.default.json`
+`openrouter`, `src/server/chat/openRouterUsage.ts`, the own-endpoint pull in
+`ChatSessionManager.ts`, credit limits). Task 5.2, the live capped-key check,
+is **Unknown and owner-gated**: no receipt exists, none is invented, and it is
+not waived here. Proposed refinements, each needing owner approval:
+
+- The archive order "process-observability, then providers-and-workers, then
+  this change" is obsolete. `providers-and-workers` archived on 2026-10-19 and
+  the main `chat-usage-limits` text already carries the background-observation
+  wording this order protected; this change's three MODIFIED blocks keep every
+  current main scenario (design "Closeout map"). New order: this change
+  archives first, before `process-observability-foundation` (same capability)
+  and before any relay change that REMOVES "The shipped catalog includes
+  OpenRouter".
+- The MODIFIED blocks were re-derived on main `f52963d0` to keep main's
+  clauses ("plan limits", "coding-plan usage", "team configuration") with the
+  carve-out added.
+- Archive needs the owner's 5.2 decision first (run it, or record it as
+  unverified at archive); no bypass.
+
 ## Why
 
 OpenRouter serves Claude models, and others, through an Anthropic-compatible endpoint on prepaid credits. Kawai cannot run it safely today. A spike on 2026-10-18, with a temporary capped key that has since been deleted, showed four gaps:
@@ -52,7 +75,7 @@ OpenRouter serves Claude models, and others, through an Anthropic-compatible end
 ## Impact
 
 - **Depends on `providers-and-workers`.** This change needs its provider-level cooldown (section 4) and its per-provider usage store (section 5). Section 4 landed in #219. Section 5 is still pending, and implementation waits for it.
-- **Archive order:** `process-observability`, then `providers-and-workers`, then this change. Both of those changes MODIFY the `chat-usage-limits` requirements that this change also MODIFIES: "Usage is refreshed when no report has arrived" and "Provider plan usage is pulled from the provider quota endpoint". This change's blocks restate the text the two produce together, with a carve-out for providers whose own usage endpoint is selected. Archiving it earlier would lose their wording.
+- **Archive order (historical, superseded 2026-11-18 by "Closeout status"):** `process-observability`, then `providers-and-workers`, then this change. Both of those changes MODIFY the `chat-usage-limits` requirements that this change also MODIFIES: "Usage is refreshed when no report has arrived" and "Provider plan usage is pulled from the provider quota endpoint". This change's blocks restate the text the two produce together, with a carve-out for providers whose own usage endpoint is selected. Archiving it earlier would lose their wording.
 - **Code:**
   - `src/server/chat/catalogParse.ts` and `profileCatalog.ts`: new provider fields, trust rules, the controlled variable.
   - `ClaudeProfiles.ts` and `chatProviderEnv.ts`: credential injection and withholding.

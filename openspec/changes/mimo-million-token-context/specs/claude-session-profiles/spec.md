@@ -40,7 +40,7 @@ Each named profile SHALL apply its predefined environment configuration to its a
 ## ADDED Requirements
 
 ### Requirement: Claude catalog entries can specify an auto-compaction window
-Claude profiles, providers, and provider models SHALL accept an optional integer `autoCompactWindow` (100000–1000000 tokens). A configured value SHALL set the auto-compact window and clear its disable switches, independently of capacity. A model value SHALL override its provider value and a nearer value a farther one; a project overlay omitting it SHALL inherit the base value, and a user-level catalog, which replaces the shipped defaults, SHALL receive none. Role overrides SHALL take precedence at agent start.
+Claude profiles, providers, and provider models SHALL accept an optional integer `autoCompactWindow` (100000–1000000 tokens) that sets the auto-compact window and clears its disable switches, independently of capacity. A model value SHALL override its provider value and a nearer value a farther one; a project overlay omitting it SHALL inherit the base value, while a user-level catalog, which replaces the shipped defaults, receives none. Role overrides take precedence at start.
 
 #### Scenario: MiMo global default
 - **WHEN** a MiMo chat starts on the shipped MiMo definition with no role override
