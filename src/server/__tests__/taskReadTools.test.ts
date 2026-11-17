@@ -19,7 +19,7 @@ const child = (parentId: string, seconds: number) =>
 for (const { runtime, call } of h.runtimes) {
   describe(`task_get sections through the ${runtime} adapter`, () => {
     // @covers: team-tasks › task_get subtasks are compact rows › Foreign subtask anchor
-    test(`G1, G2 (${runtime}): subtasks are task_list rows with a next anchor, and a foreign or unknown subtask anchor is refused naming it`, async () => {
+    test('G1, G2 (each runtime): subtasks are task_list rows with a next anchor, and a foreign or unknown subtask anchor is refused naming it', async () => {
       const task = await newTask()
       const other = await newTask()
       const children = Array.from({ length: 103 }, (_, i) => child(task.id, i).id)
@@ -39,7 +39,7 @@ for (const { runtime, call } of h.runtimes) {
     })
 
     // @covers: team-tasks › task_get returns full message bodies on request › Non-boolean value
-    test(`G3, G5, G5a, G5c (${runtime}): previews by default, whole bodies with full_messages, a foreign message anchor and a non-boolean full_messages refused`, async () => {
+    test('G3, G5, G5a, G5c (each runtime): previews by default, whole bodies with full_messages, a foreign message anchor and a non-boolean full_messages refused', async () => {
       const task = await newTask()
       const other = await newTask()
       const long = message(task.id, 1, 'a'.repeat(6000))
@@ -59,7 +59,7 @@ for (const { runtime, call } of h.runtimes) {
 
     // @covers: team-tasks › task_get lists results as rows › Result anchor not of this task
     // @covers: team-tasks › task_get reads one result whole › Result of another task
-    test(`G9c, G10, G11, G12 (${runtime}): result rows page, result_id reads whole under the real seal, and foreign, outstanding, or unknown result ids are refused naming them`, async () => {
+    test('G9c, G10, G11, G12 (each runtime): result rows page, result_id reads whole under the real seal, and foreign, outstanding, or unknown result ids are refused naming them', async () => {
       const task = await newTask()
       const other = await newTask()
       const old = await submit(task.id, 'old')
@@ -79,7 +79,7 @@ for (const { runtime, call } of h.runtimes) {
     })
 
     // @covers: team-tasks › Remaining task histories have continuation anchors › Invalid history anchors
-    test(`H2 (${runtime}): a bad anchor among valid arguments, wrong anchor types, and forged extra arguments refuse or are stripped, and no stored row changes`, async () => {
+    test('H2 (each runtime): a bad anchor among valid arguments, wrong anchor types, and forged extra arguments refuse or are stripped, and no stored row changes', async () => {
       const task = await newTask()
       rawRevisions(h.db, task.id, 2, 4)
       const mine = rawAssignment(h.db, h.team.teamId, task.id, 1)
@@ -113,7 +113,7 @@ for (const { runtime, call } of h.runtimes) {
   })
 
   describe(`task_result_diff_read through the ${runtime} adapter`, () => {
-    test(`G13a, G13c, G13c2, G13d, G13f (${runtime}): a diff reads losslessly from the whole result's resume offset; bad offsets, a foreign result, and another team are refused`, async () => {
+    test('G13a, G13c, G13c2, G13d, G13f (each runtime): a diff reads losslessly from the whole result\'s resume offset; bad offsets, a foreign result, and another team are refused', async () => {
       const task = await newTask()
       const other = await newTask()
       const stored = bytesOf('a'.repeat(9000), '€', [0xff], 'tail')

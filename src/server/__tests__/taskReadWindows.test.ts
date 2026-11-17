@@ -10,7 +10,7 @@ import type { AgentTaskDetail } from '../../shared/teamTasks'
 import type { TaskReadRequest } from '../team/taskReadWindows'
 import { agent, useTaskToolHarness } from './taskToolHarness'
 import { at } from './taskJournalFixture'
-import { bytesOf, rawAssignment, rawHolder, rawMessage, rawRevisions, storedHash } from './taskReadFixture'
+import { bytesOf, rawAssignment, rawHolder, rawMessage, rawResult, rawRevisions, storedHash } from './taskReadFixture'
 
 const h = useTaskToolHarness('kawai-read-windows-')
 const newTask = (direction = 'CSV') => h.tasks.store.create({ teamId: h.team.teamId, title: 'Export', direction, creator: { kind: 'agent', sessionId: 'lead' } }, at(0))
@@ -42,7 +42,13 @@ describe('subtasks (D5)', () => {
     // Clustered creation times: runs of four subtasks share a timestamp.
     const children = Array.from({ length: 163 }, (_, i) => child(task.id, 10 + Math.floor(i / 4), `${i} `.padEnd(2062, 'x')))
     expect(h.tasks.store.detail(task.id)!.subtasks.reduce((sum, row) => sum + Buffer.byteLength(row.direction), 0)).toBe(163 * 2062)
+    // Some subtasks carry an outstanding result and an assignment, so the derived assignee and result matter.
+    for (const id of children.slice(150, 153)) {
+      rawResult(h.tasks.store, h.team.teamId, id, 5000)
+      rawHolder(h.db, h.mail, h.team.teamId, id, 5000)
+    }
     const detail = read(task.id)
+    expect(detail.subtasks.filter(row => row.result !== null && row.assignee !== null)).toHaveLength(3)
     expect(ids(detail.subtasks)).toEqual(children.slice(-100))
     expect(JSON.stringify(detail.subtasks)).not.toContain('xxxxxxxx')
     expect(detail.subtasks.every(row => !('direction' in row) && !('acceptance' in row) && !('participants' in row) && !('assignment' in row))).toBe(true)

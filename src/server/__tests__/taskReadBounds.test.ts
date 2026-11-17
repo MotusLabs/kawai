@@ -10,7 +10,7 @@ import type { AgentTaskDetail } from '../../shared/teamTasks'
 import { taskHandlers } from '../team/taskTools'
 import type { TaskReadRequest } from '../team/taskReadWindows'
 import { agent, useTaskToolHarness } from './taskToolHarness'
-import { at, mulberry32, rawNote } from './taskJournalFixture'
+import { at, mulberry32, observeQueries, rawNote } from './taskJournalFixture'
 import { normalizedJson, rawAssignment, rawHolder, rawMessage, rawResult, rawRevisions, storedHash, umbrellaFixture } from './taskReadFixture'
 import { propertyCases } from './helpers/propertyCases'
 
@@ -52,6 +52,50 @@ describe('the umbrella fixture (G16, G17)', () => {
     expect(human.results!.every(result => Buffer.byteLength(result.diff!) === 307200)).toBe(true)
     expect(human.assignments.every(row => Buffer.byteLength(row.instruction) === 128)).toBe(true)
   })
+})
+
+// Projection versus derivation (design D5): the window statements themselves take their
+// limits and byte projections in SQL; the summary and derived internals (outstanding
+// assignment and result) may still read whole rows, and are not asserted here.
+test('G16 statements: each window statement returns at most one row past its window and never selects an instruction, a whole body, summary, rationale, or diff', () => {
+  const task = umbrellaFixture(h.db, h.tasks.store, h.mail, 'team-umbrella')
+  h.db.transaction(() => {
+    for (let i = 0; i < 70; i++) rawResult(h.tasks.store, 'team-umbrella', task, 2000 + i, { summary: 's'.repeat(3000), diff: 'd'.repeat(9000) })
+    for (let i = 0; i < 70; i++) rawAssignment(h.db, 'team-umbrella', task, 3000 + i, { supersededBy: 'x', instruction: 'i'.repeat(3000) })
+    for (let i = 0; i < 70; i++) rawMessage(h.db, h.mail, 'team-umbrella', task, 4000 + i, 'b'.repeat(3000))
+  })()
+  const observer = observeQueries(h.db)
+  observer.during(() => read(task, { resultId: h.tasks.store.results.listByTask(task).at(-1)!.id }))
+  const windows: Array<[RegExp, number, string[]]> = [
+    [/FROM team_tasks WHERE parent_id = \$task/, 101, ['direction']],
+    [/FROM team_messages WHERE task_id = \$taskId/, 51, ['body']],
+    [/FROM team_task_results r WHERE task_id = \$task/, 51, ['diff_ref', 'summary', 'coverage']],
+    [/FROM team_task_assignments WHERE task_id = \$task/, 51, ['instruction']],
+    [/FROM team_task_revisions WHERE task_id = \$task AND revision >= 2/, 51, ['rationale', 'direction']],
+    [/FROM team_task_acknowledgements\s+WHERE task_id = \$task/, 51, []],
+  ]
+  for (const [pattern, most, forbidden] of windows) {
+    const found = observer.queries.filter(query => pattern.test(query.sql))
+    expect(found.length, String(pattern)).toBeGreaterThanOrEqual(1)
+    for (const query of found) {
+      expect(query.sql, String(pattern)).toMatch(/LIMIT \$(take|limit)/)
+      expect(query.rows, String(pattern)).toBeLessThanOrEqual(most)
+      for (const column of forbidden) expect(Object.keys(query.columnBytes), `${String(pattern)} ${column}`).not.toContain(column)
+    }
+  }
+  // Whole bodies on request keep the same 50-row window in SQL.
+  const fullRead = observeQueries(h.db)
+  fullRead.during(() => read(task, { fullMessages: true }))
+  const fullMessages = fullRead.queries.filter(query => /FROM team_messages WHERE task_id = \$taskId/.test(query.sql))
+  expect(fullMessages.length).toBeGreaterThanOrEqual(1)
+  for (const query of fullMessages) expect(query.rows).toBeLessThanOrEqual(51)
+  // The byte projections: previews in SQL, the diff of a whole result at most 8,192 bytes.
+  const projected = (column: string) => Math.max(0, ...observer.queries.map(query => query.columnBytes[column] ?? 0))
+  expect(projected('kawai_body')).toBe(2000)
+  expect(projected('summary_preview')).toBe(2000)
+  expect(projected('rationale_preview')).toBe(32)
+  expect(projected('kawai_diff')).toBe(8192)
+  expect(observer.queries.some(query => /FROM team_task_results WHERE id = \? AND task_id = \?/.test(query.sql) && 'diff_ref' in query.columnBytes)).toBe(false)
 })
 
 // P3/I1: seed 0x5AB7, 200 histories of 0–400 rows with tied times; every section pages once, in order.
