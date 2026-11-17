@@ -30,7 +30,7 @@ The durable `profile-limit-handling` requirements currently include overload in 
 
 ### D1: Separate capacity from quota at the structured error boundary
 
-Recognize only a failed matching Codex attempt whose `error.codexErrorInfo` is exactly `serverOverloaded`. Remove that kind from `codexLimitScope`, so neither upstream retry notifications nor terminal capacity attempts emit quota signals. Exhaustion ends as an ordinary capacity error, never a fabricated quota event. Cached exhausted quota windows do not supply a capacity deadline. A later real quota failure follows the existing quota path unchanged.
+Recognize only a failed matching Codex attempt whose `error.codexErrorInfo` is exactly `serverOverloaded`. In a session with `capacityRecovery: 'bounded'` (D2), the session's limit facts skip that kind, so neither upstream retry notifications nor terminal capacity attempts emit quota signals there. The exported `codexLimitScope` is unchanged (it still maps `serverOverloaded` to `login`, and `codexLimits.test.ts:119` stays), and a session with the option omitted or `'off'` keeps today's overload limit events, upstream and terminal (table O). Exhaustion ends as an ordinary capacity error, never a fabricated quota event. Cached exhausted quota windows do not supply a capacity deadline. A later real quota failure follows the existing quota path unchanged.
 
 Alternative: keep recording final overload limit events and override cooldown duration. Rejected because the same events also drive parking and forwarding and imply account exhaustion. Retain existing historical events without rewriting the append-only record; already-recorded cooldowns expire normally.
 
@@ -41,7 +41,7 @@ Alternative: keep recording final overload limit events and override cooldown du
 Concretely:
 - `capacityRetry.ts` is the pure policy (D3) with clock, random, and timer seams.
 - `capacityRecovery.ts` owns the effects for one session: the deadline, the one pending timer or active attempt, the generation guard (D5), the retired attempt ids, and the continuation request. `turnCompleted` hands a matching failed attempt to it before deciding the turn; it answers "settle as before" or "recovering".
-- The session option `capacityRecovery: 'bounded' | 'off'` (additive, default `'off'`, so the package's existing behavior is unchanged for other consumers); Kawai passes `'bounded'` for Codex chats.
+- The session option `capacityRecovery: 'bounded' | 'off'` (additive). Omitted or `'off'` is today's behavior exactly: overload still produces its login-scoped limit events (upstream non-final, terminal final) and the turn ends on a terminal failure. Only `'bounded'` both suppresses overload limit events and owns the retry, so suppression never exists without recovery. Any other runtime value reads as `'off'`. Kawai passes `'bounded'` for Codex chats. Table O fixes these semantics.
 - Public additions, all optional fields or new union members: the activity's `retry` gains `owner` (`'provider' | 'capacity'`), `ordinal`, `nextRetryAt`, and `deadline`; one new informational event `{ type: 'capacity_retry', turnId, ordinal, nextRetryAt, deadline, expiring }`; the exported continuation wrapper constant. No existing type, event, or option changes meaning.
 
 Recovery mechanics, as planned before the move:
@@ -80,13 +80,28 @@ Extend the package's activity state (`common/activity.ts`, `codex/activity.ts`),
 
 ### D7: One change, not a classification-only slice
 
-Removing `serverOverloaded` from the quota scope (task 1.1) without recovery would stop the one-hour shared-home cooldown while giving the turn no retry, so a capacity failure would end the turn and the next mail would hit the same overloaded model at once. The change therefore lands as one plan change: tasks 1.x–4.x in one result. A checkpoint may review 1.x early, but nothing lands without 2.x.
+Suppressing overload limit events (task 1.1, `'bounded'` only) without recovery would stop the one-hour shared-home cooldown while giving the turn no retry, so a capacity failure would end the turn and the next mail would hit the same overloaded model at once. The change therefore lands as one plan change: tasks 1.x–4.x in one result. A checkpoint may review 1.x early, but nothing lands without 2.x.
 
 ### Acceptance oracles
 
 The following are observable decision tables; implementation must commit them verbatim as table-driven tests. They are unchanged by the 2026-11-18 retarget except where a seam is named: "driver" now means the package's Codex session with a scripted app-server transport, and "production manager" means Kawai's `ChatSessionManager` with the in-tree package. L1's single scoped cleanup interrupt (the planning review's B3 rule) stays the only effect a stale callback may have. `*` is a don't-care. Mutants are mandatory checks against missing production wiring, as well as reducer logic. Reviewed hazards: B1 (stale actor), M1 (test-only composition), and readers disagreeing on derived state in `docs/oracle-hazards.md`.
 
-Classification table: axes are structured kind, source, and quota snapshot. Source is upstream retry or terminal failed attempt; snapshot is exhausted or absent/non-exhausted.
+Option table (added 2026-11-18 for review finding F2): axes are the session's `capacityRecovery` value and the overload source; seam is the package session over a scripted app-server with `onLimitEvent` and `onActivity` subscribed. Every other row of this section (C, L, T, P1–P3) is stated for `'bounded'`; W and P4–P5 hold through Kawai, which passes `'bounded'`.
+
+| Oracle | Option | Source | Observable result |
+| --- | --- | --- | --- |
+| O1 | omitted | `serverOverloaded` upstream retry (`willRetry`) | Today's non-final login-scoped limit event and provider retry activity; no capacity state |
+| O2 | omitted | `serverOverloaded` terminal failed attempt | Today's final login-scoped limit event; the turn ends with its error; no continuation, no `capacity_retry` event, no new activity fields |
+| O3 | `'off'` | upstream retry | As O1 |
+| O4 | `'off'` | terminal failed attempt | As O2 |
+| O5 | `'bounded'` | upstream retry | No limit event; provider-owned retry activity only if `willRetry` (L7); no capacity attempt (C1) |
+| O6 | `'bounded'` | terminal failed attempt | No limit event; capacity recovery per L2–L4 (C2) |
+| O7 | any | usage, rate, or session-budget kind | Identical events, scopes, and resets in all modes (C3–C4) |
+| O8 | an unrecognized string | either source | As O3–O4 |
+
+Mutants: unconditional suppression (the review's reproduction: an omitted consumer stops receiving the terminal overload event) fails O2/O4; recovery enabled when omitted fails O2; `codexLimitScope` changed fails the exported-scope row kept in `codexLimits.test.ts`; `'bounded'` suppression leaking into quota kinds fails O7; suppression in `'bounded'` without recovery fails O6.
+
+Classification table (`'bounded'`): axes are structured kind, source, and quota snapshot. Source is upstream retry or terminal failed attempt; snapshot is exhausted or absent/non-exhausted.
 
 | Oracle | Kind | Source | Snapshot | Observable result |
 | --- | --- | --- | --- | --- |
@@ -181,7 +196,7 @@ No schema migration or feature flag. Ship the driver policy, classification chan
 
 ## Production composition and verification boundaries
 
-- Package level (tasks 1.x–2.x): C, T, L, and P1–P3 run against the real package session over a scripted app-server transport (`packages/agent-runtime/__tests__/`), the same seam `codexDriver.test.ts` uses.
+- Package level (tasks 1.x–2.x): O, C, T, L, and P1–P3 run against the real package session over a scripted app-server transport (`packages/agent-runtime/__tests__/`), the same seam `codexDriver.test.ts` uses.
 - Kawai level (tasks 3.x–4.x): W1–W3, W6, W8, and P4 run through `ChatSessionManager`, the limit store, `LimitOutcomes`, and the dispatcher with the in-tree package and a scripted Codex app-server; W7 through the production activity push and snapshot into `ChatActivityRow`; W5 and P5 through `codexRollout.ts` over rollout fixtures. Each guarded seam has one row through this composition and a mutant that removes the wiring (the `'bounded'` option not passed, the activity fields not projected, the wrapper not recognized).
 - Affected existing workflows to keep green: real quota handling (C3, C4, W3), other providers' overload events, the Codex interrupt and urgent-delivery tests, rollout replay of ordinary turns, and the package's own Codex suites.
 - Deferred installed-protocol facts (above) stay explicit: they are captured at implementation time, not assumed, and no credentialed or live model probe is part of this planning.
@@ -196,7 +211,7 @@ No schema migration or feature flag. Ship the driver policy, classification chan
 
 ### Acceptance
 
-- A1: A Codex `serverOverloaded`, retrying or terminal, records no quota limit event and creates or extends no cooldown, while usage, rate, and session-budget limits keep their existing events, scopes, and resets (C1–C5, W6).
+- A1: With `capacityRecovery: 'bounded'` (as Kawai passes), a Codex `serverOverloaded`, retrying or terminal, records no quota limit event and creates or extends no cooldown, while usage, rate, and session-budget limits keep their existing events, scopes, and resets (C1–C5, W6).
 - A2: A terminal `serverOverloaded` keeps the logical turn working and retries on the same thread and model with D3's delays, inside a ten-minute window from the first such failure, never starting an attempt at or after the deadline (T1–T6, L2–L4, L8–L10, P2).
 - A3: At most one continuation is pending or active per session, stale callbacks only ever send the one scoped cleanup interrupt, and Stop, interrupt, lifecycle end, new human input, and urgent delivery cancel recovery (L1, L11–L16, L18–L20, P1, P3).
 - A4: The original input or peer envelope is sent once, completed tools are not replayed by Kawai, logical usage spans attempts, and exactly one terminal event is published per logical turn (L5–L7, L17, W4, P5).
@@ -207,7 +222,7 @@ No schema migration or feature flag. Ship the driver policy, classification chan
 ### Invariants
 
 - I1: Only the package's Codex session decides a Codex logical turn's attempts; Kawai never starts a capacity attempt.
-- I2: The package's public API changes only additively, its version stays 0.1.1, and nothing is published.
+- I2: The package's public API changes only additively, its version stays 0.1.1, and nothing is published; with the option omitted or `'off'`, package behavior, including `codexLimitScope` and the upstream and terminal overload limit callbacks, is unchanged (O1–O4, O8).
 - I3: `codex/session.ts`, `codexRuntime.ts`, and `ChatSessionManager.ts` do not grow in net lines.
 - I4: Retry state is never persisted and never resumed after a backend restart.
 - I5: Claude retry behavior and other providers' overload handling are unchanged.
@@ -238,7 +253,7 @@ No schema migration or feature flag. Ship the driver policy, classification chan
 
 ### Verification
 
-- V1: C1–C5, T1–T6, L1–L20, and W1–W8 are committed verbatim as table-driven tests at the seams named above, each with its named mutant failing, including the wiring mutants of W1 and W7.
+- V1: O1–O8, C1–C5, T1–T6, L1–L20, and W1–W8 are committed verbatim as table-driven tests at the seams named above, each with its named mutant failing, including the wiring mutants of W1 and W7.
 - V2: P1–P5 run at their seeds (`0xCA9AC17`–`0xCA9AC21`) with 1,000 declared cases each through `propertyCases`, the full counts under `--full-properties`, with the lifecycle table as the independent reference model and crashes before and after continuation dispatch and final emission.
 - V3: The package's tests run through the root runner (`bun run test <files>`), and `bun run typecheck` covers the package project.
 - V4: A citation preflight over the result's evidence map reports zero unresolved; `openspec validate codex-capacity-retry --strict` and `bun run check --full-properties` pass on the clean committed head under the pinned Bun; `scripts/verify-result.ts` reports the head.
