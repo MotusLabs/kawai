@@ -246,6 +246,35 @@ the choice before code):
 | PW4 | bootstrap migration on a disposable DB copy with a seeded map | after start: store holds the entries, map row gone, stamp set; second start writes nothing | migration deletes the map before the durable acknowledgement |
 | PW5 | `claimProviderUsagePull` | a provider pull reads a store-only balance key | pull reads the raw seed |
 
+### Scenario coverage plan
+
+"Current" cites landed core tests (seam evidence for the dormant core, task
+2.1). "Planned" names this change's task, where production-path evidence is
+added. Every scenario has both where the core already covers it.
+
+| Scenario | Current evidence (`file` › `title`) | Planned |
+| --- | --- | --- |
+| Import writes only the store | — | 4.1 (PW1), 4.4 (P1s) |
+| Corrupt store degrades visibly | `src/server/__tests__/credentialStore.test.ts` › `a 0000 file is unreadable and mutations refuse` | 2.6 (C10 at the gate and launch, listing) |
+| Invalid store is never salvaged | `src/server/__tests__/credentialStore.test.ts` › `NUL value, NUL secret value, invalid kind, invalid value type` | 2.6 (C10) |
+| Legacy launch-env names are preserved | `src/server/__tests__/credentialStore.test.ts` › `set, blank, unset, value-free listing, mixed-case name preserved on disk`; `src/server/__tests__/credentialStoreAdmissionEquivalence.test.ts` › `a 33-entry document round-trips with disjoint preservation` | 3.1 (migration of a mixed-case map entry) |
+| Secret sources require catalog-compatible names | `src/server/__tests__/credentialStoreAdmissionEquivalence.test.ts` › `secret-source admission matches the catalog binding boundary` | 4.1 (U3) |
+| NUL never enters or persists in the store | `src/server/__tests__/credentialStore.test.ts` › `NUL value, NUL secret value, invalid kind, invalid value type` | 4.1 (U3) |
+| Unsafe permissions refuse every access | `src/server/__tests__/credentialStore.test.ts` › `0644 refuses read and mutation, never chmodded, bytes stand`; `src/server/__tests__/credentialStore.test.ts` › `0400 reads, and an explicit set replaces it atomically with a fresh 0600` | 2.6 (C10) |
+| Gates precede any cached value | `src/server/__tests__/credentialStore.test.ts` › `a warmed cache never serves past a symlink or unsafe mode; edits reload`; `src/server/__tests__/credentialStoreTrustGates.test.ts` › `a warmed cache never serves past a foreign owner` | — |
+| Applied and durable report separately | `src/server/__tests__/credentialStoreDurability.test.ts` › `an exact store-directory fsync fault reports applied but not durable` | 4.1 (U6), 3.1 (M8) |
+| Secret-source changes retain the name first | `src/server/__tests__/credentialStore.test.ts` › `retain runs before the credential file changes`; `src/server/__tests__/credentialStore.test.ts` › `missing collaborator refuses before any file change` | 2.1 (real SQLite collaborator), 2.5 |
+| A change that changes nothing writes nothing | `src/server/__tests__/credentialStoreMutations.test.ts` › `clearing an absent entry is a no-op that leaves the file untouched`; `src/server/__tests__/credentialStoreReclassify.test.ts` › `valid no-ops return false/false and never touch bytes or the registry` | 4.1 (U4) |
+| Blank is a stored state for both kinds | `src/server/__tests__/credentialStore.test.ts` › `set, blank, unset, value-free listing, mixed-case name preserved on disk` | 2.2 (C4) |
+| The credential UI is write-only (3 scenarios) | — | 4.1, 4.2, 4.3 |
+| Credential resolution composes per variable (5 scenarios) | — | 2.2, 2.3 |
+| Legacy Settings credentials migrate to the store at upgrade (4 scenarios) | — | 3.1, 3.2, 3.3, 5.1 |
+| Import then create; Running session keeps its environment | — | 4.5 |
+| Registered secret names stay withheld: the four scenarios carried from `provider-relay-secret-registry` | that change's scenario map (unchanged tests) | 2.5 re-runs them with the store source wired |
+| Reclassification does not end withholding | `src/server/__tests__/registeredNamesRetention.test.ts` › `every remove/disable/clear/reclassify sequence keeps registered names withheld` (seam only) | 2.5 (real collaborator) |
+| Named profiles: the eight scenarios unchanged from main | existing named-profile launch tests (task 1.2 records their literal titles) | 2.4 (re-run unchanged) |
+| Named profiles: A seed-only sibling key survives | — | 2.2, 2.4 |
+
 ## Implementation contract
 
 ### Acceptance
