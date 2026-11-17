@@ -232,7 +232,7 @@ describe('service rules (T5, R6, R10, T14) and the seal', () => {
     expect((await reads.agentGet({ kind: 'human', team }, task.id)).journal.map(entry => entry.text)).toEqual(['hello'])
   })
 
-  test('T14: more than 50 results and revisions stay whole, and the seal projects the bounded detail as it projects task_get', async () => {
+  test('T14: more than 50 results and revisions — the outstanding result whole and sealed in the read, the others as rows whose anchors reach every one', async () => {
     const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
     for (let i = 2; i <= 55; i++) await tasks.amend(agent('lead'), task.id, { direction: `v${i}` })
     const coverage = [{ clause: 'A clean export downloads', tests: ['`src/export.test.ts` › `downloads a csv`'] }]
@@ -241,23 +241,29 @@ describe('service rules (T5, R6, R10, T14) and the seal', () => {
       last = (await results.submit(agent('dev'), task.id, { summary: `r${i}`, commit: `c${i}`, coverage, tests: [{ description: 'bun run test', outcome: 'pass' }] })).id
     }
     await results.handoff(agent('lead'), task.id, { kind: 'review', resultId: last, target: { kind: 'session', id: 'reviewer' }, instructions: 'Review', expectedResponse: null })
-    const bounded = await reads.agentGet(agent('reviewer'), task.id)
+    const seal = results.wholeResultSeal(agent('reviewer'), task.id)
+    const bounded = await reads.agentGet(agent('reviewer'), task.id, {}, seal)
     const whole = await tasks.get(agent('reviewer'), task.id)
     // bounded-metrics-and-task-get D7: the newest 50 revisions as rows, each with the identity the whole read reports.
     expect(bounded.revisions.map(row => row.revision)).toEqual(whole.revisions.slice(-50).map(revision => revision.revision))
     expect(bounded.revisions.map(row => row.identity)).toEqual(whole.revisions.slice(-50).map(revision => revision.identity!))
     expect(bounded.bounds.revisions).toEqual({ total: 55, returned: 50, truncated: true, nextBefore: 6 })
     expect(whole.revisions).toHaveLength(55)
-    expect(bounded.results).toEqual(whole.results)
-    expect(bounded.results).toHaveLength(52)
-    for (const key of ['assignments', 'publications', 'acknowledgements'] as const) expect(bounded[key]).toEqual(whole[key])
-    expect(bounded.task).toEqual(whole.task)
-    const sealedBounded = results.applySeal(agent('reviewer'), task.id, bounded)
+    // bounded-task-reads D8: the outstanding result whole, sealed as task_get's whole read seals it, then 50 rows.
     const sealedWhole = results.applySeal(agent('reviewer'), task.id, whole)
-    expect(sealedBounded.results).toEqual(sealedWhole.results!)
-    expect(sealedBounded.results![0]!.coverage).toEqual({ withheld: true, clauses: 1 })
-    expect(sealedBounded.bounds).toBe(bounded.bounds)
-    // The human reads it unsealed.
-    expect(results.applySeal({ kind: 'human', team }, task.id, bounded).results![0]!.coverage).toEqual(coverage)
+    const { diff: _diff, diffBytes, diffCut, diffResumeOffsetBytes, ...outstanding } = bounded.results[0] as unknown as Record<string, unknown>
+    const { diff: _wholeDiff, ...expected } = sealedWhole.results![0]!
+    expect(outstanding).toEqual(expected)
+    expect([diffBytes, diffCut, diffResumeOffsetBytes]).toEqual([0, false, 0])
+    expect((bounded.results[0] as { coverage: unknown }).coverage).toEqual({ withheld: true, clauses: 1 })
+    expect(bounded.results.slice(1).map(row => row.id)).toEqual(whole.results!.slice(1, 51).map(result => result.id))
+    expect(bounded.bounds.results).toEqual({ total: 51, returned: 50, truncated: true, nextBefore: whole.results![50]!.id })
+    const older = await reads.agentGet(agent('reviewer'), task.id, { resultsBefore: bounded.bounds.results.nextBefore! }, seal)
+    expect(older.results.map(row => row.id)).toEqual([last, whole.results![51]!.id])
+    expect(older.bounds.results).toEqual({ total: 51, returned: 1, truncated: false, nextBefore: null })
+    expect(bounded.task).toEqual(whole.task)
+    // The human reads it unsealed, whole.
+    expect(tasks.store.humanDetail(task.id)!.results![0]!.coverage).toEqual(coverage)
+    expect((await reads.agentGet({ kind: 'human', team }, task.id, {}, results.wholeResultSeal({ kind: 'human', team }, task.id))).results[0]).toMatchObject({ coverage })
   })
 })
