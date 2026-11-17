@@ -274,6 +274,176 @@ Below a 768 px viewport width Team mode SHALL replace the rail with a bottom bar
 - **WHEN** the human sends a decision on a phone and presses **Undo** within 10 seconds
 - **THEN** no answer is sent and the answer view is shown again with the choice kept
 
+### Requirement: Members is a read-only inspection of group settings
+The Agents area (formerly the Members tab) SHALL list each of the team's groups with its role description, live membership, task-creation right, effective workers grouped by provider with caps and live counts, effective approval policy with its source (group file, team default, or built-in), member cap, routing strategy and limit policy, effort with any per-model effort, and routing warnings. No control SHALL edit a group. A prompt change SHALL affect future agent starts only and SHALL NOT elevate runtime permissions.
+
+#### Scenario: Caps show live counts
+- **WHEN** a group allows two members on a model and one is live
+- **THEN** the row shows 1 of 2 for that model with the live member named
+
+#### Scenario: Workers are grouped by provider
+- **WHEN** the `juniors` group sets `workers: { glm-flash: 3, haiku: 2 }`, with `glm-flash` a model of provider Z.AI and `haiku` a model of provider Claude
+- **THEN** the group's row shows `glm-flash` under Z.AI and `haiku` under Claude, each with its cap and live count
+
+#### Scenario: Members cannot be edited
+- **WHEN** the human opens Agents
+- **THEN** it presents no control that writes a group file or changes a running agent's permissions
+
+#### Scenario: A warning names what fell back
+- **WHEN** a group file lists a model the catalog does not define
+- **THEN** the group's row shows that warning alongside the settings that took effect
+
+#### Scenario: Per-profile effort is shown beside the group effort
+- **WHEN** a group sets `effort: low` and `modelEffort: { haiku: xhigh }`
+- **THEN** the group's row shows effort `low` together with `xhigh` for the `haiku` model
+
+#### Scenario: Approval source is shown
+- **WHEN** the team has no default and a group has no `approval:` key
+- **THEN** the group's row shows manual as the built-in policy
+
+#### Scenario: An ignored auto key is a warning
+- **WHEN** the team has no default and a group sets `approval: auto`
+- **THEN** the group's row shows manual as the built-in policy and a warning that `approval: auto` has no effect and auto comes only from the team default
+
+#### Scenario: A manual key is shown as the group's own policy
+- **WHEN** the team default is auto and a group sets `approval: manual`
+- **THEN** the group's row shows manual from the group file
+
+### Requirement: Team views are mounted only on the Team page
+Tasks, Conversations (Threads and Delivery), and Strategy SHALL be shown only as areas of Team mode, never in a chat's side slot. A chat SHALL reach them through its header's Team button or task chip, which open Team mode for the chat's team.
+
+#### Scenario: A task chip opens the Team page
+- **WHEN** the human clicks a chat's task chip
+- **THEN** Team mode for the chat's team opens on Tasks with that task selected
+
+#### Scenario: Same record from any entry point
+- **WHEN** the human opens a task from the navigator's Team entry and later from a chat's task chip
+- **THEN** both show the same Team mode view of that task, with the same revisions, journal, and messages
+
+### Requirement: Product Strategy is a tab with full-width sub-views
+The **Strategy** area SHALL hold the strategy as four sub-views at Team mode's full content width: an overview of the direction, a review of one revision in review, the draft editor, and the revision history. Each sub-view SHALL keep the existing strategy actions and their human-only approval rules. A team with no strategy record SHALL show the capture affordance in the overview.
+
+#### Scenario: Overview leads with direction
+- **WHEN** the human opens Strategy for a team with an approved revision
+- **THEN** purpose, primary users, needs and outcomes, use cases, principles, and boundaries are shown first, with every other section collapsed and expandable
+
+#### Scenario: Review shows the diff beside the findings
+- **WHEN** the human opens the review of revision 3 on a wide viewport
+- **THEN** the changes from the approved revision and the Known / Assumed / Not decided findings are side by side, with **Approve revision 3** and **Withdraw** below them
+
+#### Scenario: The draft editor keeps its text across sub-views
+- **WHEN** the human edits a draft, switches to History, and returns to the draft
+- **THEN** the unsaved text is unchanged
+
+#### Scenario: No record offers capture
+- **WHEN** the team has no strategy record
+- **THEN** the overview offers capture, and the Tasks, Conversations, and Agents areas work as usual
+
+### Requirement: Mailbox rows collapse to one line and can be searched
+Each row of Conversations › Delivery SHALL show by default one line: sender, recipient, age, priority, its waiting reason's immediate blocker, and the first line of its body. Expanding a row SHALL show the full body, every constraint, and any handoff detail. A search box SHALL narrow every section to rows whose sender, recipient, body, or reason contains the text. Empty sections SHALL be hideable.
+
+#### Scenario: Expand a row
+- **WHEN** the human expands a queued row whose body is twenty lines
+- **THEN** the full body and the row's other waiting constraints are shown, and collapsing it returns to one line
+
+#### Scenario: Search narrows the sections
+- **WHEN** the human searches `strategy-ui`
+- **THEN** only rows whose sender, recipient, body, or reason contains `strategy-ui` remain, and each section's count reflects the match
+
+#### Scenario: Hide empty sections
+- **WHEN** the human turns on hiding empty sections and Receiving has no rows
+- **THEN** Receiving is not shown
+
+### Requirement: Messages rows group by thread and collapse
+Conversations › **Threads** SHALL group its list by thread: one collapsible row per thread, showing its latest message and message count. Message bodies SHALL be clamped to a few lines until expanded. **Expand all** and **Collapse all** SHALL act on every loaded thread. Opening a thread SHALL keep showing its detail and composer.
+
+#### Scenario: A thread collapses to one row
+- **WHEN** a thread holds six messages
+- **THEN** the list shows one row for it with its latest message and a count of 6, and expanding it lists the six messages
+
+#### Scenario: Long bodies are clamped
+- **WHEN** a message body is longer than the clamp
+- **THEN** the row shows its first lines with a control to show the full body
+
+#### Scenario: Expand all
+- **WHEN** the human chooses Expand all
+- **THEN** every loaded thread row is expanded, and Collapse all collapses them again
+
+### Requirement: Messages search covers the whole history
+Conversations › Threads SHALL offer a text search that the server applies to the team's whole message history alongside the other filters, matching message bodies and participant names. It SHALL NOT be limited to loaded pages. Paging SHALL continue within the search's results.
+
+#### Scenario: Search finds an old message
+- **WHEN** the human searches a phrase that appears only in a message older than every loaded page
+- **THEN** the list shows that message's thread
+
+#### Scenario: Search combines with filters
+- **WHEN** the human filters to urgent mail and searches `review`
+- **THEN** only urgent messages containing `review` are listed, and **Load more** continues within those results
+
+#### Scenario: A live message outside the search
+- **WHEN** a new message that does not contain the search text arrives while a search is active
+- **THEN** it is not added to the list
+
+### Requirement: Tasks search and collapse
+The **Tasks** area SHALL offer a search box over each task's title and current direction in its List and Board views. It SHALL show subtasks nested under their parent, with each parent collapsible. Each section of a task's detail — direction, acceptance, revision history, journal, subtasks, and messages — SHALL collapse and expand on its own.
+
+#### Scenario: Search highlights matches
+- **WHEN** the human searches `usage bar`
+- **THEN** only tasks whose title or current direction contains it are listed, with the match marked, and a matching subtask is shown under its parent
+
+#### Scenario: Collapse a parent
+- **WHEN** the human collapses a parent task with two subtasks
+- **THEN** its subtasks are hidden and the parent row shows that it has 2
+
+#### Scenario: Detail sections collapse independently
+- **WHEN** the human collapses Revision history and then opens another task
+- **THEN** Revision history is collapsed in that task's detail too, while the other sections keep their own state
+
+### Requirement: Each tab keeps its view state while the page is open
+Each area's search, filters, expanded items, and selection SHALL survive switching areas, opening a chat and returning, and reconnecting, for as long as the browser tab is open. They SHALL be kept per team, so two teams SHALL NOT share them. They SHALL NOT be sent to the server.
+
+#### Scenario: State survives a chat visit
+- **WHEN** the human searches Conversations › Delivery, expands two rows, opens a chat from one of them, and returns to Team mode
+- **THEN** Delivery shows the same search and the same two rows expanded
+
+#### Scenario: Teams keep separate state
+- **WHEN** the human searches Tasks on team A and then opens team B in Team mode
+- **THEN** team B's Tasks has no search applied
+
+### Requirement: The attention queue lists exhausted sessions
+The attention queue SHALL list each context-exhaustion item with its cause (the session and terminal reason), its owner, its impact (the dropped message and task, if any), and a next action that opens its source. A dropped message's item opens its Conversations › Delivery row, and otherwise the item opens the chat.
+
+#### Scenario: Item with a dropped message
+- **WHEN** an exhaustion dead-lettered the lead's go mail
+- **THEN** the item names the session and reason, is owned by the lead, and its action opens that Delivery row expanded
+
+#### Scenario: Item without mail
+- **WHEN** a human-created session is flagged during a human-typed turn
+- **THEN** the item is under needs you and its action opens the chat
+
+### Requirement: The Members tab sets the team's default approval policy
+The Agents area SHALL show the team's default approval policy (not set, manual, or auto) and let the human set it to manual or auto. It SHALL say the default covers spawned members of groups without `approval: manual` and seeds chats the human creates, changing only later chats, and SHALL name groups whose `approval: auto` has no effect. A refused save SHALL show inline; the control SHALL be disabled while disconnected. Every open view of the team SHALL follow a save.
+
+#### Scenario: Setting the default updates the group rows
+- **WHEN** the human sets the team default to auto on Agents
+- **THEN** every group without `approval: manual` shows auto from the team default, and groups with `approval: manual` keep manual from the group file
+
+#### Scenario: Another open view follows the change
+- **WHEN** two browser tabs show the same team's Agents area and one sets the default to auto
+- **THEN** the other tab shows auto without reloading
+
+#### Scenario: The control is disabled while disconnected
+- **WHEN** Team mode loses its server connection
+- **THEN** the default approval control is disabled and the last known value stays shown
+
+#### Scenario: Groups asking for auto are named next to the control
+- **WHEN** the team default is not auto and the `devs` and `reviewers` groups set `approval: auto`
+- **THEN** the control names `devs` and `reviewers` as asking for auto, and says setting the team default to auto grants it
+
+#### Scenario: The notice clears once the default is auto
+- **WHEN** the human sets the team default to auto while groups set `approval: auto`
+- **THEN** the control no longer names any group as asking for auto
+
 ## REMOVED Requirements
 
 ### Requirement: The Team page header shows the strategy status

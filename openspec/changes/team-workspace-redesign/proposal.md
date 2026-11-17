@@ -27,6 +27,28 @@ problems follow:
 The redesign was explored as a design canvas (Team View Redesign, eleven
 desktop and phone screens). This change turns it into an implementable plan.
 
+**Current state (f52963d0).** Nothing is implemented: the eight-tab
+`WorkspaceTab` grammar (default Tasks) and `TeamWorkspaceBands` are current,
+and no shell, Today, flow strip, or rework code exists (`design.md`, "Current
+inventory"). The change stays one executable change with one serialized
+writer and five ordered implementation groups, because the groups share
+`App.tsx`, `teamLocation.ts`, the team stores, and `TeamWorkspaceView`:
+
+1. **Shell and routes** — Team shell, mode switch, rail, palette, location
+   grammar with legacy redirects, Back to Team, entry points.
+2. **Today inline controls** — Needs you / Waiting on agents with the owning
+   controls, replacing the bands.
+3. **Flow strip and stuck rework** — row projections, `flowStrip`, one
+   migration, two human-only commands, the `rework-stuck` item.
+4. **Area screens** — Conversations, Tasks, Plans (landed plan-workspace UI
+   only), Strategy, Agents, Insights, Outbound audit.
+5. **Narrow layouts** — bottom bar, phone Today, decision view with Undo;
+   then the final validation and archive.
+
+Each group ends with a production-path checkpoint; browser checks are
+fixture-gated Playwright specs selected by the landed CI fixture lister
+(`scripts/e2e-fixture-specs.ts`), never `bun run test:e2e`.
+
 ## What Changes
 
 - **Team becomes a mode with its own shell.** A **Sessions | Team** switch in
@@ -90,8 +112,9 @@ desktop and phone screens). This change turns it into an implementable plan.
 - `team-workspace` — the Team page becomes Team mode: areas instead of tabs,
   Today instead of the bands, Conversations instead of Messages + Mailbox,
   the strategy status moves from a header line to the rail and the Strategy
-  banner, the location grammar gains areas with legacy redirects, and the
-  narrow-viewport behaviour becomes the phone layout.
+  banner, the location grammar gains areas with legacy redirects, the
+  narrow-viewport behaviour becomes the phone layout, and requirements that
+  named former tabs name their areas.
 - `workspace-navigation` — the navigator's **Team** entry opens Team mode;
   the mode switch is the primary way across.
 - `chat-header` — the header's Team button opens Team mode; a Sessions view
@@ -123,7 +146,29 @@ desktop and phone screens). This change turns it into an implementable plan.
   acknowledgements retain replay responses. One schema migration.
 - No change to chat sessions, mail delivery, plan execution, or the outbound
   observer. Existing Today actions reuse their commands; only the rework threshold and acknowledgement add human-only commands.
-- Tests: unit tests for the location grammar, flow strip, and stuck rule
-  (oracle tables in `design.md`); component tests for Today's inline
-  actions; Playwright e2e for the mode switch, legacy redirects, and the
-  phone layout.
+- Tests: table-driven tests for every oracle family in `design.md` (location
+  grammar, redirects, shell mount, markers, Today controls, stage clock, flow
+  strip, stuck rule, migration, rework commands, area hosts, phone flows),
+  each guarded seam exercised once through the real `App`/store/connection
+  composition with a named mutant; a fixture-gated Playwright spec
+  (`tests/e2e/team-mode.spec.ts`) run by CI's fixture step or a disposable
+  checkout, database, and spare port — never `bun run test:e2e` or live data.
+- Specs: the MODIFIED blocks are re-derived on the current main text (after
+  slow-link-resilience and unify-approval-defaults), and every main
+  requirement that named a former tab (Members, Mailbox, Messages, Strategy,
+  approval default, view state, task chip, exhausted-session links) is
+  re-stated now instead of at archive time.
+
+## Holds and dependencies
+
+- **Held, unchanged:** plan-workspace's unlanded 7.x, its human pilot
+  task-efdf3b9c, and the cancelled G refs. The Plans area recomposes only the
+  landed plan-workspace UI; nothing here revives the held work.
+- **Not built here:** revision-control's hold/pause/Continue UI and
+  plan-revision-apply's Apply UI; they rebase onto whichever shell is current.
+- **Serialize, no hard edge:** `teamLocation.ts`, `TeamPlansView`, and
+  `teamPlanStore` with revision-control's UI remainder and plan-workspace 7.1;
+  the `team-workspace` main spec with held delivery-outcome-metrics (second to
+  archive re-derives); the group-3 migration number with every other
+  migration; `App.tsx`/client stores with rename-agentboard-to-kawai's client
+  storage group.
