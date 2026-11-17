@@ -37,7 +37,7 @@ Barriers keep stale work from passing integration. Its tests R01, R10, R11, R17,
     - **Cancel**: the existing execution Stop.
 
     Adapt and Restart under a standing hold are recorded at once and wait on `hold`; their dialog can release the change from a changes-scoped hold in the same command. Continue resumes under the hold. While a target is undecided, a task revision published outside Adapt dispatches nothing, and the resolution names the newest revision.
-- **Apply an approved plan revision to a running execution.** An owner command under a command id, compare-and-swapped on the execution's current revision:
+- **Apply an approved plan revision to a running execution.** *Moved to the change `plan-revision-apply` (split proposed 2026-11-18); kept here as the original statement.* An owner command under a command id, compare-and-swapped on the execution's current revision:
   - Kawai classifies every change as unchanged, changed, added, or removed against the execution's revision (C1).
   - For each changed change the owner picks continue, adapt, or restart. Adapt publishes a task revision with notify.
   - Added changes are scheduled by their dependencies. Removed changes that have not landed are cancelled as Kawai's own tasks.
@@ -79,15 +79,11 @@ Non-goals:
   - Pausing with its causes, Paused, and their recovery after restart;
   - the four choices;
   - the `pausing` and `paused` causes and their attention items.
-- `plan-revision-apply`:
-  - the Apply command and its preconditions;
-  - the revision delta and per-change choices;
-  - added and removed changes, and the landed-change refusals;
-  - the execution revision history and the publication record.
+`plan-revision-apply` and the `plan-execution` modification moved to the change `plan-revision-apply` with their delta specs (split proposed 2026-11-18).
 
 ### Modified Capabilities
 
-- `plan-execution`, in the unarchived `plan-execution` change. Its requirement "A running execution keeps its revision" now allows the owner's Apply. Approval alone still changes nothing.
+None. (The `plan-execution` modification moved to `plan-revision-apply`.)
 
 ## Impact
 
@@ -110,5 +106,15 @@ Non-goals:
 - **Client.** `PlanHoldsSection.tsx`, `PlanHoldDialog.tsx`, `PlanPauseSection.tsx`, `PlanCheckpointDecisionDialog.tsx`, and `PlanApplyRevisionDialog.tsx`, plus `teamPlanStore` wiring.
 - **Data.** An additive migration with seven tables: holds, hold changes, pauses, pause targets, checkpoints, execution revisions, and publication changes. A backfill writes revision 1 of each existing execution's history.
 - **Docs.** AGENTS.md bullets for holds, pause and checkpoints, and Apply, and the plan note's `task_checkpoint` rule.
-- **Tests.** Unit and integration coverage of every command, gate, and state. That includes R01, R10, R11, R17, and R18 as server integration tests, plus one browser walkthrough with the fixture adapter, named in `.github/workflows/ci.yml`.
-- **Sequencing.** Implement after `plan-execution`, `integration-candidates`, and `plan-supervision`, whose contracts X1–X8, I2, and S1–S4 it binds.
+- **Tests.** Unit and integration coverage of every command, gate, and state. That includes R01, R10, R11, and R18 as server integration tests (R17, the Apply crash test, moved to `plan-revision-apply`), plus one browser walkthrough with the fixture adapter, fixture-gated so `scripts/e2e-fixture-specs.ts` lists it for CI (CI no longer names spec files in `.github/workflows/ci.yml`).
+- **Sequencing.** Originally: implement after `plan-execution`, `integration-candidates`, and `plan-supervision`, whose contracts X1–X8, I2, and S1–S4 it binds. All three are archived, and groups 1–4 of this change landed on that base, so no prerequisite is pending.
+
+## Split and remainder (proposed 2026-11-18, needs the owner's plan approval)
+
+**Landed (groups 1–4, PR #298 stack, `a2ac8ecb` and earlier):** holds, the hold gate in execution, landing and promotion, `no-hold`, pauses, `task_checkpoint` and `push-checkpoint`, Pausing/Paused, and Continue/Adapt/Restart, composed in `src/server/plans/planComposition.ts`. The D2 migration and stores also carry Apply's tables, and the pure `revisionDelta.ts` exists with no production caller.
+
+**Not reachable yet:** no human message reaches the hold and pause services (`src/shared/planMessages.ts` has none), `team-plan-detail` and `plan_get` show no hold or pause, and supervision and attention know none of the three causes. So the landed levers have no owner-facing entry point.
+
+**This change keeps** plan-holds and plan-pause, and its remaining slice (tasks group 9): the hold and pause messages, the detail and `plan_get` fields, the three causes and attention items, the dialogs, one fixture browser walkthrough, the scenario-to-test map, and its checks.
+
+**`plan-revision-apply` (new) takes** Apply: tasks 5.x, the executions' revisions of 6.1, the Apply parts of 7.1–7.3, the `plan-revision-apply` delta spec, and the `plan-execution` modification. Its preconditions, preview service, and blind reading do not depend on this remainder. The two share protocol, detail, store, and view files, so the proposed graph orders them: Apply's first production path (its 2.2: message, whitelist, detail rows) and its protocol task (3.1) run after this remainder's 9.1–9.2, and Apply's client work (3.2–3.3) after 9.4–9.5.

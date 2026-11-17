@@ -44,8 +44,8 @@ Read against the merged designs and code. No rename touches another change's spe
 
 `src/server/plans/revisionControl/` holds:
 - `holdStore.ts`, `pauseStore.ts`, `checkpointStore.ts`, and `executionRevisionStore.ts`: the only SQL writers of the D2 tables;
-- `holdService.ts`, `pauseService.ts`, and `applyService.ts`: the human commands, all refusing non-human callers first;
-- the pure `holdGate.ts` (D5), `pauseState.ts` (D8), `revisionDelta.ts` (D10), and `applyPreconditions.ts` (D11);
+- `holdService.ts`, `pauseService.ts`, and `applyService.ts` (moved to `plan-revision-apply`): the human commands, all refusing non-human callers first;
+- the pure `holdGate.ts` (D5), `pauseState.ts` (D8), `revisionDelta.ts` (D10), and `applyPreconditions.ts` (D11, moved to `plan-revision-apply`);
 - `checkpointTool.ts` (D7);
 - `revisionControlConnections.ts` (D14).
 
@@ -508,81 +508,9 @@ Every resolution therefore works from the newest revision, and nothing is dispat
 
 *Executable oracles (from §10 (3) on, per the digest):* each step commits its table rows verbatim as `test.each` rows; from (3) on a completeness test expands the axes over the table and the unreachable list (no gap, no overlap); from (3) on growing model-based tests run the table as an executable reference model — a seeded generator produces command sequences (resolutions with fresh or replayed ids, a hold placed or released, a killed holder, the old holder's checkpoint or result, a crash with recovery at each transaction boundary) against the real service on an in-memory database, comparing observable state with the model after every step, seeds and case counts fixed within the runner's 20 s timeout; a failing seed found on the way becomes a named table row.
 
-### D10. The revision delta
+### D10–D12. Moved to `plan-revision-apply`
 
-`revisionDelta(from: PlanContent, to: PlanContent, landed: Set<string>, provisioned: Set<string>)` is pure. It returns per-change classes and execution-wide findings.
-
-**Per change, by name:**
-- `added`: only in `to`.
-- `removed`: only in `from`.
-- `changed`: present in both, with the differing fields listed. The compared fields are `dependsOn`, `fixes` (plan-supervision D2), the implementing and review groups, acceptance, extra checks, and guidance, and the effective review group when the plan's review group changes.
-- `metadata`: a landed change whose only differences are `dependsOn` or `fixes`. Apply updates them and offers no choice, so a forward fix can name a task on a change that already landed.
-- `unchanged`: otherwise.
-
-**Execution-wide findings (refusals, D11):**
-- `landing-changed`: the landing mode or integration branch differs;
-- `plan-rules-changed`: the plan-wide acceptance rules or extra checks differ and any change has landed;
-- `landed-changed`: a landed change differs in a field other than `dependsOn` and `fixes`, or is `removed`;
-- `lead-changed`: `PlanContent.leadGroup` (plan-supervision D2) differs. It is informational, never a refusal: Apply takes it, and cards raised afterwards go to the new lead group.
-
-A change of plan-wide rules with nothing landed, or of roles at any time, marks every unlanded change `changed` through the effective fields. A role entry counts through its `profiles`, in preference order — the change's implementing group's and its effective review group's, looked up by group name — and only unlanded changes compare roles, so a role change never produces `landed-changed`.
-
-**Choices.** A `changed` change that has a task needs a choice. One still `waiting`, with no task, is recorded with choice `none` and picks up the new definition when provisioned.
-
-### D11. Apply
-
-**`team-plan-execution-apply-preview { executionId, revision }`** returns the delta, the choices it needs, the generated Adapt texts, and the precondition standing.
-
-**`team-plan-execution-apply { executionId, expectedRevision, revision, contentHash, choices, adaptations?, rationale, commandId }`** follows D3.
-
-**Reads:**
-- `ValidationService.prepareStanding(planId, revision)` (V1);
-- the group files;
-- the landing probe's base head;
-- the blob reads of `changes-on-base` for the added changes and for the changed changes chosen `adapt` or `restart`.
-
-**`APPLY_PRECONDITIONS`** run in order and are append-only like X5:
-
-| Entry | Checks |
-| --- | --- |
-| `plan-open` | the plan is open |
-| `execution-running` | the execution is running |
-| `execution-revision-unchanged` | `expectedRevision` is the execution's current revision (the CAS) |
-| `revision-current` | `revision` and `contentHash` are the plan's current approved revision |
-| `revision-newer` | `revision` is greater than the execution's |
-| `validation-current` | V5's entry, unchanged |
-| `start-conditions-resolved` | the target report's `start` conditions (V2) |
-| `strategy-impact` | `ImpactService.gate(planId, revision)` (C-I1) |
-| `landing-unchanged` | no `landing-changed` |
-| `landed-unchanged` | no `landed-changed`, and no `plan-rules-changed`. The message names each change and points to a forward fix: "add a change that corrects it (plan-supervision S4)" |
-| `merge-quiet` | no changed or removed change has a merge or fast-forward effect running |
-| `choices-complete` | exactly the changed changes with a task have a choice; Adapt texts are not empty |
-| `changes-unclaimed` | Start's entry, for the added changes |
-| `changes-on-base` | Start's entry, for the added changes and the adapted or restarted ones |
-| `roles-routable` | Start's entry, for the unlanded changes under the target's roles |
-
-**The transaction** inserts the next `plan_execution_revisions` row and updates the execution's revision columns. Then, per change:
-- **unchanged:** a publication row only;
-- **metadata:** the row, with the landed change's `dependsOn` and `fixes` read from the new revision;
-- **changed, `continue`:** the row; the running attempt keeps its manifest, and later attempts and handoffs read the execution's new revision;
-- **changed, `adapt`:** the human publishes the task's next revision with notify through the `within` publication (request key `apply:<commandId>:<change>`), recording the task revision. The shipped notice goes to the outstanding claimant, and plan-execution D9 follows after commit;
-- **changed, `restart`:** the row. The executor supersedes the assignment and dispatches a new attempt of the stage's kind under the new revision, as in D9 here;
-- **added:** a change row in `waiting` at its content position (or `landed` with `owns = 0` when a landing fact exists), scheduled by the executor;
-- **removed, unlanded:** state `cancelled`, `owns = 0`. Pending effects are cancelled, the slot is given up, and Kawai cancels its task through `TaskService.setStatus(system, …, 'cancelled')` with `alsoWithin`, exactly as Stop does for one change.
-
-Positions follow the target's content order. The `revision-applied` event closes the transaction.
-
-**Atomicity and crashes (R17).** The revision row, the publication rows, the task revisions with their notices, the cancellations, and the event commit together. The command id replays the whole command, and each task publication's request key replays inside it, so a retry after a crash publishes nothing twice. The notices are mailbox rows, under shipped delivery and receipt recovery.
-
-**Forward fixes (S4, plan-supervision at 645d02d).** `PlanChange.fixes` names the fix or correction task (`task-<uuid>`, a `plan_fix_tasks` row). A revision that adds changes naming such a task joins the running execution through Apply, and `fixStatus` then reads running for that execution. S4 closes a fix task once a change naming it has landed and no change in the current approved revision naming it is unlanded. Each landing is judged by the revision it landed under (`plan_change_landings.execution_id`). Apply never removes a landed change (`landed-unchanged`), so it never strands a fix. A removed, unlanded fix change is cancelled like any other, and the fix task stays open until a change naming it lands.
-
-### D12. What a running execution's revision now means
-
-- **Approval still changes nothing.** Only Apply moves an execution to a newer revision, and only forward.
-- **Manifests are immutable.** An attempt's manifest names the revision current at its dispatch. Attempts dispatched after an Apply name the new one.
-- **Readers of the revision** (`planSteps`, the task-link check for added tasks, completion in plan-execution D19) read the execution's current revision.
-- **Completion.** The execution completes when every change of its current revision has landed. Removed changes are cancelled and not counted. The plan completes by the system when that revision is still the plan's current approved one, as before.
-- **History.** `plan_execution_revisions` keeps every revision the run held, with its publication rows. `team-plan-detail` and `plan_get` list them.
+The revision delta (D10), Apply (D11), and what a running execution's revision means (D12) moved to the change `plan-revision-apply` (split proposed 2026-11-18), as its D2, D3, and D4. Its D3 corrects one obsolete step of the old D11: a removed change's task is cancelled through `TaskService.prepareStatus` before the transaction and its synchronous `commit` inside it, as Stop does, never through the async `setStatus(…, alsoWithin)`.
 
 ### D13. Supervision causes and attention
 
@@ -603,7 +531,7 @@ Each is derived only while its plan is open. None changes state. A target past i
 **Messages,** each answered by `team-plan-result`:
 - `team-plan-hold-place`, `team-plan-hold-release`, and `team-plan-hold-extend`;
 - `team-plan-pause` and `team-plan-pause-resolve`;
-- `team-plan-execution-apply-preview` and `team-plan-execution-apply`.
+- `team-plan-execution-apply-preview` and `team-plan-execution-apply` (moved to `plan-revision-apply`).
 
 They are addressed by `teamPath` through the shared resolver and listed in `CHAT_CONNECTION_TYPES`. `team-plan-detail` gains `holds`, `pauses` (targets with state, causes, checkpoints, and decisions), and per execution `revisions` with their publication rows. It is pushed after every write here and after every Paused recording.
 
@@ -612,7 +540,7 @@ They are addressed by `teamPath` through the shared resolver and listed in `CHAT
 - `PlanHoldDialog.tsx`: scope, changes, rationale, deadline, and cite;
 - `PlanPauseSection.tsx`: targets with Pausing causes, checkpoints, and "no active work" changes;
 - `PlanCheckpointDecisionDialog.tsx`: the checkpoint package, the four choices, Adapt's texts, and a link to Stop;
-- `PlanApplyRevisionDialog.tsx`: the delta by class, a choice per changed change, the generated Adapt texts, the standing, and the required rationale.
+- `PlanApplyRevisionDialog.tsx`: the delta by class, a choice per changed change, the generated Adapt texts, the standing, and the required rationale. (Moved to `plan-revision-apply`.)
 
 Hold, Pause, and Apply open from the plan detail and the execution section.
 
@@ -620,7 +548,7 @@ Hold, Pause, and Apply open from the plan detail and the execution section.
 
 ### D15. Agent surface
 
-- `plan_get` gains `holds`, `pauses`, and each execution's `revisions`.
+- `plan_get` gains `holds` and `pauses`; each execution's `revisions` moved to `plan-revision-apply`.
 - `task_checkpoint` (D7) is the only new tool.
 - The plan note (`teamPrompt.ts`) adds:
   - a `plan-pause` mail asks you to stop at a safe point: commit everything on the change branch, leaving the worktree clean, then call `task_checkpoint`;
@@ -664,7 +592,7 @@ Published:
 | --- | --- | --- |
 | R1 Holds | D2 hold tables; D4 scope, narrowing, and deadline rules; D5 `holdGate` and the gated step list | `execution-safety-recovery` (the recovery matrix covers hold writes; no fencing, per its D11) |
 | R2 Pauses and checkpoints | D2 pause, target, and checkpoint tables; D8 `pauseTargetState` and the Paused rule; D7 `push-checkpoint` and its inspector; D9 choices | `execution-safety-recovery` (matrix rows for Paused across restart and the `push-checkpoint` inspector; `task_checkpoint` stays pause-only, per its D12) |
-| R3 Execution revisions and publications | D2 `plan_execution_revisions` and publication rows; D10 `revisionDelta`; D11 `APPLY_PRECONDITIONS`, append-only | `execution-safety-recovery` (audit and the crash matrix of Apply), later plan changes |
+| R3 Execution revisions and publications (published by `plan-revision-apply` after the split; the tables landed here) | D2 `plan_execution_revisions` and publication rows; D10 `revisionDelta`; D11 `APPLY_PRECONDITIONS`, append-only | `execution-safety-recovery` (audit and the crash matrix of Apply), later plan changes |
 | R4 Command events | D3 kinds and compared payloads | `execution-safety-recovery` (audit) |
 | R5 Causes and attention | D13 causes and their order, and attention kinds | `execution-safety-recovery` (recovery states beside them) |
 
@@ -675,7 +603,7 @@ Published:
 - **[A checkpoint push triggers CI on the branch]** → CI evidence is bound to a round's commit (X4), so a checkpoint commit's CI is never a round's evidence.
 - **[Strict landed refusals block plan-wide rule edits after the first landing]** → The owner adds a forward fix or starts a new execution after Stop. Silent reinterpretation of landed evidence would break P10.
 - **[Continue keeps the old task direction for a changed change]** → That is the owner's recorded choice. The publication row shows it, and Adapt is one click away.
-- **[`plan-execution`, `integration-candidates`, and `plan-supervision` must land first]** → The `plan-execution` delta modifies a requirement that exists only in that unarchived change, so validation shows an informational note until it is archived. Names are reconciled in tasks 1.1.
+- **[`plan-execution`, `integration-candidates`, and `plan-supervision` must land first]** → Obsolete (2026-11-18): all three are archived, and the `plan-execution` delta moved to `plan-revision-apply`, where it modifies the main spec's requirement directly. Names were reconciled in task 1.1.
 
 ## Migration Plan
 
@@ -687,3 +615,164 @@ Published:
 
 - Whether the 30-day deadline bound should be a per-team setting in `~/.kawai/teams.json`. Recommendation: keep the constant until a team asks.
 - Whether Apply should also accept a revision that drops a landed change by keeping its landing fact as history. Recommendation: refuse now (`landed-unchanged`) and revisit with typed relations.
+
+## Remainder (proposed 2026-11-18)
+
+### Current inventory (source pin `f52963d0`)
+
+- **Landed and composed.** `src/server/plans/revisionControl/` holds the stores, `holdService.ts`, `holdGate.ts`, `pauseService.ts`, `pauseState.ts`, `pauseTick.ts`, `pauseResolve*.ts`, `pauseRestart.ts`, `pauseReleaseHold.ts`, `checkpointTool.ts`, `checkpointStore.ts`, `executionRevisionStore.ts`, `events.ts`, `revisionDelta.ts`, and migration 17 (`revisionControlSchema.ts`, seven tables). `src/server/plans/planComposition.ts:30-63` composes them; `executionPlanner.ts` reads `holdGate`.
+- **Missing.** No hold or pause message exists in `src/shared/planMessages.ts` or `CHAT_CONNECTION_TYPES` (`src/server/chat/chatConnectionTypes.ts:30`), and there is no `revisionControlConnections.ts`. `team-plan-detail` (`planConnections.ts:88`) and `plan_get` (through `supervision/planSupervisionDetail.ts`) carry no holds or pauses. `SupervisionWait` (`src/shared/planSupervision.ts:25-26`) has no `paused`, `pausing`, or `hold`, and `ATTENTION_SOURCES` (`src/server/team/workspaceRead.ts:295`) has none of the three kinds. No client component of D14 exists, and `tests/e2e/` has no revision-control spec.
+- **Size limits.** `src/shared/planSupervision.ts` is 385 lines and `workspaceRead.ts` 420; D13 allows a new `planAttention.ts` when the 500-line bound needs it.
+
+### Scenario partition
+
+Every scenario of this change's two delta specs, with where it is satisfied. "Landed" means the behavior is in the groups 1–4 code; task 9.6 maps each to a literal test and annotates it, and a scenario it cannot map becomes a gap.
+
+| Requirement › scenario | Owner | Evidence or task |
+| --- | --- | --- |
+| plan-holds › Only the owner places a hold › A hold on two changes; Unknown change names are refused; Agents cannot hold | landed (3.1) | `revisionControlHoldService.test.ts`, mapped in 9.6 |
+| plan-holds › A held change gets no new work › A failed round under a hold; A running turn continues | landed (3.2) | `executionHolds.test.ts`, mapped in 9.6 |
+| plan-holds › A held change never lands or is promoted › The slot is given up; Promotion with a held change; A merge in flight settles | landed (3.3) | mapped in 9.6 |
+| plan-holds › Results under a hold are kept › A result arrives under a hold; Release resumes the round (R10) | landed (3.4) | `src/server/__tests__/executionHolds.test.ts` › `a result arriving under a hold is kept; its CI runs; no review or landing; the release resumes the same round` |
+| plan-holds › A whole-plan hold refuses Start › Start under a plan hold; Start under a changes hold | landed (3.3) | mapped in 9.6 |
+| plan-holds › Holds are released only by the owner › Narrowing a plan hold | landed (3.1) | mapped in 9.6 |
+| plan-holds › Holds are released only by the owner › The deadline passes | remainder | 9.3 (AT1); the hold staying active is landed (3.1) |
+| plan-holds › Holds are visible to the owner and agents › A held change's cause; Extending clears the item | remainder | 9.1–9.2 (detail, `plan_get`), 9.3 (CA3, AT3) |
+| plan-pause › The owner pauses the work a hold covers › Two developers are asked to pause; Kawai-held steps are not targets | landed (4.1) | mapped in 9.6 |
+| plan-pause › An unclaimed instruction is withdrawn › A queued instruction; A spawning instruction | landed (4.1) | mapped in 9.6 |
+| plan-pause › Holders record checkpoints through task_checkpoint › all four | landed (4.2) | `checkpointTool.test.ts`, `checkpointToolPauses.test.ts`, mapped in 9.6 |
+| plan-pause › Paused is recorded only when work is safe and the holder has stopped › all three | landed (4.3) | `pauseTick.test.ts`, `pauseTickComposition.test.ts`, mapped in 9.6 |
+| plan-pause › Parked, cooling, and landing holders are named, not forced › both | landed (4.3) | mapped in 9.6 |
+| plan-pause › Pausing never resolves a pending request › Pause beside a pending approval (R11) | landed (4.3) | `src/server/__tests__/pauseTick.test.ts` › `a pending approval stays pending and reads Pausing as request (R11)` |
+| plan-pause › Pausing never resolves a pending request › The pause deadline passes; A failed checkpoint push past the deadline | remainder | 9.3 (AT5, AT7) |
+| plan-pause › Pause state survives restart › Restart with a paused execution (R01) | landed (4.5) | `src/server/__tests__/pauseResolveRestartInvariants.test.ts` › `restart with a Paused target keeps execution, attempt, and checkpoint; continue creates no attempt` |
+| plan-pause › Pause state survives restart › Restart mid-pause (R18) | landed (4.5) | `src/server/__tests__/pauseTick.test.ts` › `a restart re-derivation sends no resume twice and records no second Paused` |
+| plan-pause › The owner chooses how paused work goes on › all four | landed (4.4) | `pauseResolve*.test.ts` K/C/A/R/S rows, mapped in 9.6 |
+| plan-pause › Restart starts fresh from the newest safe commit › both | landed (4.4) | `pauseResolveRestart.test.ts`, mapped in 9.6 |
+| plan-pause › Resolutions under a hold wait or release it › both | landed (4.4) | `pauseResolveReleaseHold.test.ts`, mapped in 9.6 |
+| plan-pause › A paused change gets no new work until decided › both | landed (4.4) | mapped in 9.6 |
+| plan-pause › Pauses are visible to the owner and agents › A paused change's cause; Stop clears decisions | remainder | 9.2, 9.3 (CA1, AT6, AT9); Stop's cancellation of targets is landed (S1) |
+
+Moved, not dropped: every scenario of `plan-revision-apply` and the `plan-execution` modification, now in that change. Task partition: 1.1–4.5 landed; 5.1–5.3 moved; 6.1 split (9.2 here, revisions moved); 6.2 → 9.3; 7.1 split (9.1 here); 7.2 split (9.4 here); 7.3 split (9.5 here); 8.1 → 9.7 here, and plan-revision-apply's own checks.
+
+### Acceptance oracles (remainder)
+
+Hazards consulted: M1 (oracle behind a hand-built harness), "readers disagreeing on derived state", and "a key input no fixture varies" (`docs/oracle-hazards.md`).
+
+**Protocol (PT).** Through the real connection router and `planComposition`.
+
+| id | Input | Observable result |
+| --- | --- | --- |
+| PT1 | each of the five new message types | listed in `CHAT_CONNECTION_TYPES`; the router forwards it |
+| PT2 | a message naming an unknown `teamPath` | refused `unknown-team`; nothing written |
+| PT3 | `team-plan-hold-place` naming an unknown change | `team-plan-result` carries the service's refusal naming it; nothing written |
+| PT4 | a command resent with the same command id and payload | `team-plan-result` carries the first outcome; no second row or event |
+| PT5 | the same command id with a different payload | refused, naming the first differing field |
+| PT6 | `team-plan-hold-place` for a running execution's change | `team-plan-result` carries the hold, and the next `team-plan-detail` push lists it |
+| PT7 | the agent tool list | no tool places, releases, or extends a hold, pauses, or resolves a pause; `task_checkpoint` stays the only revision-control tool |
+
+**Detail (DV).** DV1: holds with scope, changes, rationale, deadline, cite, and release. DV2: pauses with deadline and targets (state, causes, holder, checkpoints, decision). DV3: a push follows every hold, pause, and resolve write and every Paused recording. DV4: another team's plan reads as not found in `plan_get` and the detail.
+
+**Causes (CA).** Running-stage waits for one change; outcome is the cause and the "also applying" list.
+
+| id | Waits present | Cause | Also applying |
+| --- | --- | --- | --- |
+| CA1 | paused | `paused`, naming the pause and the awaited decision | none |
+| CA2 | pausing | `pausing`, naming the pause and its D8 causes | none |
+| CA3 | hold (CI passed, review waiting for the release) | `hold`, naming the holds and deadlines; no `no-progress` stall alert | none |
+| CA4 | effect, hold | `effect` | hold |
+| CA5 | hold, uncertain-delivery | `hold` | uncertain-delivery |
+| CA6 | repeating-failure outcome, hold | `repeating-failure` | hold |
+
+Order rule: effect, paused, pausing, hold, uncertain-delivery, then the shipped waits; `repeating-failure` stays ahead of every named wait (D13).
+
+**Attention (AT).** Axes: plan open, hold or target state, deadline passed, decided.
+
+| id | Situation | Items |
+| --- | --- | --- |
+| AT1 | open plan, active hold, deadline passed | `plan-hold-overdue:<holdId>:<deadline>`, owner human, "Release or extend the hold" |
+| AT2 | the hold released | none |
+| AT3 | the hold extended to a later deadline | the old item clears; a new key appears only once the new deadline passes |
+| AT4 | the plan closed | none of the three kinds |
+| AT5 | target Pausing for a cause other than `holder-killed` or `checkpoint-push-failed`, pause deadline passed | `plan-pause-overdue:<pauseId>:<change>` only |
+| AT6 | target Paused, undecided | `plan-checkpoint:<pauseId>:<change>` (kind `plan-checkpoint-decision`) only, before or after the deadline |
+| AT7 | target Pausing as `holder-killed` or `checkpoint-push-failed`, undecided | `plan-checkpoint-decision` only, before or after the deadline |
+| AT8 | target decided | none |
+| AT9 | execution stopped or finished | none; the targets read cancelled |
+| AT10 | target Pausing for another cause, deadline not passed | none |
+
+Completeness: every combination of plan open × {hold active, released, extended} × deadline passed, and of target state {Pausing·other, Pausing·holder-killed, Pausing·checkpoint-push-failed, Paused, decided} × deadline passed × execution running, matches exactly one row; a closed plan is AT4 whatever the rest.
+
+**Property AP-1.** One target never raises two items, and items exist only for open plans. Generator: every axis combination above, then seeded sequences of place, extend, release, pause, Paused recording, decide, and Stop over two changes; seam: the real stores on a fresh test database and the real `ATTENTION_SOURCES` read; seed `0x4C0D`, 300 cases looped through `propertyCases`; no new dependency.
+
+**View (UI).** UI1: each dialog mints one command id at open, reuses it while the compared payload is unchanged, re-mints on a change, and retires it on success. UI2: a refusal renders every failing check. UI3: every control disables while disconnected. UI4: Pausing shows its causes and never reads Paused before `paused_at`. UI5: the checkpoint dialog offers Continue, Adapt, Restart, and a link to Stop for a Paused target, and only Restart and Stop for `holder-killed` or `checkpoint-push-failed`.
+
+Production composition: PT6 runs through the composed server; CA3 through the real `SupervisionMonitor`; AT1 through the real workspace read. Each has a mutant that removes the wiring (the handler not composed, the cause not reached by the monitor, the source not in `ATTENTION_SOURCES`).
+
+### Execution checkpoints
+
+1. After 9.1: PT6's production path (place over the socket through the router and the composed handler, the hold stored, the next `team-plan-detail` push listing it) and PT3's refusal, at a pinned commit, reviewed before 9.2 (design-challenge budget per `docs/agent-collaboration.md`). 9.1 carries every piece of that path: the message, its whitelist entry, the handler, and the `holds` detail field with its push.
+2. After 9.3: CA/AT tables and AP-1 green, with the named mutants killed.
+3. After 9.5: the fixture walkthrough passes in CI's fixture step; then 9.6–9.7.
+
+Preserved: R01, R10, R11, and R18 keep passing unchanged; holds and pauses gain no lease, epoch, or fencing token (execution-safety-recovery D11).
+
+## Implementation contract
+
+### Acceptance
+
+- A1: Every hold and pause command reaches its service over the socket: PT1–PT7 hold through the real connection router and `planComposition`.
+- A2: `team-plan-detail` and `plan_get` list holds and pauses with the DV1–DV2 fields, pushed after every write and Paused recording (DV3), and refuse another team's plan (DV4); the holds detail and its push land with the hold messages (9.1), so PT6's checkpoint needs no later work.
+- A3: Supervision names `paused`, `pausing`, and `hold` in D13's order, never as a `no-progress` stall (CA1–CA6).
+- A4: The three attention kinds follow AT1–AT10, and AP-1 holds over its declared cases.
+- A5: The dialogs and store behave as UI1–UI5, and every store apply method has a dispatch caller.
+- A6: A fixture-gated browser walkthrough holds, pauses, checkpoints, sees Pausing become Paused, and continues, and `scripts/e2e-fixture-specs.ts` lists it.
+- A7: Every plan-holds and plan-pause scenario maps to a literal test title with an `@covers` annotation, or to a named gap.
+
+### Invariants
+
+- I1: No agent tool or agent-callable path places, releases, or extends a hold, pauses, or resolves a pause.
+- I2: Paused is shown only from a recorded `paused_at`; a view never derives it.
+- I3: The R01, R10, R11, and R18 tests pass unchanged.
+- I4: No lease, epoch, or fencing token is added.
+- I5: Apply is not implemented here; no Apply message, dialog, or service is added.
+
+### Scope
+
+- `openspec/changes/revision-control/**`
+- `src/server/plans/revisionControl/**`
+- `src/server/plans/planComposition.ts`
+- `src/server/plans/planConnections.ts`
+- `src/server/plans/planTools.ts`
+- `src/server/plans/planAttention.ts`
+- `src/server/plans/supervision/**`
+- `src/server/team/workspaceRead.ts`
+- `src/server/chat/chatConnectionTypes.ts`
+- `src/shared/planMessages.ts`
+- `src/shared/planRevisionControl.ts`
+- `src/shared/planSupervision.ts`
+- `src/client/stores/teamPlanStore.ts`
+- `src/client/components/team/PlanHold*.tsx`
+- `src/client/components/team/PlanPause*.tsx`
+- `src/client/components/team/PlanCheckpointDecisionDialog.tsx`
+- `src/client/components/team/PlanExecutionSection.tsx`
+- `src/client/components/team/TeamPlansView.tsx`
+- `src/server/__tests__/**`
+- `src/client/__tests__/**`
+- `tests/e2e/chat-plan-revision-control.spec.ts`
+- `docs/architecture/plans.md`
+- `docs/architecture/plan-supervision.md`
+
+### Verification
+
+- V1: PT, DV, CA, and AT rows are committed verbatim as table-driven tests, with the production-composition rows and the named mutants of tasks 9.1–9.3 each failing.
+- V2: AP-1 runs at seed `0x4C0D` with 300 declared cases, the full count under `--full-properties`.
+- V3: Component tests cover UI1–UI5; the fixture spec passes in CI's fixture step, run only through the private fixture path, never `bun run test:e2e`.
+- V4: A citation preflight over the result's map reports zero unresolved, and `scripts/__tests__/specCoverageGuard.test.ts` passes.
+- V5: `openspec validate revision-control --strict` and `bun run check --full-properties` pass on the clean committed head under the pinned Bun; `scripts/verify-result.ts` reports the head.
+
+### Excluded
+
+- X1: Apply, the revision delta's production use, execution revision history, and the Apply dialog and browser step, which belong to `plan-revision-apply`.
+- X2: Holds or pauses outside plans, agent-side controls, forced termination of a holder, and voluntary checkpoints.
+- X3: Archiving this change; it archives after the remainder lands.

@@ -30,3 +30,13 @@ None.
 - Tests: `src/server/__tests__/openspecDiscovery.test.ts`, `workspaceCoordinator.test.ts`, and new fingerprint and pool tests.
 - Operations: with no OpenSpec edits, a steady state of 148 worktrees runs at most 148 CLI processes per 10 minutes, at most 3 at a time, instead of 148 at once every 30 s.
 - Related: `check-time-optimization` attributes check flakiness to CPU contention. This change removes the largest known source of that contention inside the workspace.
+
+## Closeout status (proposed 2026-11-18, not approved)
+
+Both requirements landed on master: PR #384 (merge `977db6a9`) and the retention fix PR #411 (`09535dfc`). What is left is a closeout, not new behavior:
+
+- **Literal oracle map.** Several oracle rows are template-generated test titles (`FP1`–`FP11`, `FP13`–`FP15`, `RD1`–`RD4`, `PL1`), which Kawai's title resolver cannot cite. The closeout unrolls them into literal calls with the same rendered titles and maps every oracle id to a test (design, "Oracle evidence map").
+- **Proposed retirement of the live before/after measurement.** Task 1.1 (the pre-change baseline), task 6.3, and V5 cannot be satisfied honestly any more: the code is on master, so a "before" sample can no longer be taken, and no spec scenario depends on them. This proposal asks the owner to retire them through plan approval. Until the owner approves, they stay open and unticked. The change claims no speedup; the 2026-11-10 figures in Why are the motivation, not a measured result.
+- **Then** sync `openspec-visibility` and archive, as the closeout slice's last step.
+
+Nothing here is ticked, waived, or archived by this proposal.
