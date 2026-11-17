@@ -46,6 +46,12 @@ Source pin: `f52963d0ab20d5ff9693fcd941e3c3f17970aa26`.
 - **Client.** `src/client/components/ChatProviderSettings.tsx` (the Settings
   env editor) inside `SettingsModal.tsx:13,142`; tests
   `src/client/__tests__/chatProviderSettings.test.tsx`, `settingsModal.test.tsx`.
+- **Wire contract.** `src/shared/chatProviderSettings.ts` (`ChatProviderEnvSource`
+  :5, `ChatProviderEnvResponse` :7, `ChatProviderEnvUpdate` :16) is the typed
+  contract shared by `routes/chatProviderEnv.ts` and `ChatProviderSettings.tsx`.
+  Replacing that API (S5, table U) replaces this contract: the credential
+  listing, set, clear, and reclassify bodies and outcomes go in a shared
+  `src/shared/credentials.ts` (proposed), and the retired types are removed.
 - **Recovery.** `docs/recovery-matrix.md` has no credential row.
 - **Path mismatch (found now).** The catalogs resolve HOME first
   (`profileCatalog.ts:231`: `ctx.homeDir ?? process.env.HOME ?? os.homedir()`);
@@ -305,6 +311,8 @@ added. Every scenario has both where the core already covers it.
 - `src/server/chat/ChatSessionManager.ts`
 - `src/server/routes/chatProviderEnv.ts`
 - `src/server/routes/credentials.ts`
+- `src/shared/chatProviderSettings.ts`
+- `src/shared/credentials.ts`
 - `src/server/bootstrap.ts`
 - `src/client/components/ChatProviderSettings.tsx`
 - `src/client/components/settings/**`

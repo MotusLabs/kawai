@@ -33,6 +33,11 @@ Source pin: `f52963d0ab20d5ff9693fcd941e3c3f17970aa26`.
 - Catalog files: `profileCatalog.ts:228-253` (levels; whole-file replace
   when a user file exists); stamps through `profileCatalogStamp`; the parsers
   are in `catalogParse.ts`.
+- Profile payload: `ClaudeProfiles.ts:56` `claudeProfileCatalog` and `:76`
+  `claudeProfileMetadata` build the `ClaudeProfileMetadata` the route returns
+  (type in `src/shared/chat.ts`); the source listing (D7) and the absent-model
+  mark (10.x) extend this projection, so `ClaudeProfiles.ts` is in scope for
+  the payload only — launch resolution stays shared with creation.
 - Launch composition: `ClaudeProfiles.ts` (`resolveClaudeProfile`),
   `provider/claudeRuntimeLaunch.ts:73-97` (`claudeSpawnLaunch`, env) and
   `:162-169` (`launchFields`: `settingSources: ['user','project','local']`).
@@ -247,6 +252,7 @@ list evidence from a superseded credential generation (never consulted).
 - `src/server/chat/connectionDiagnostics.ts`
 - `src/server/chat/connectionRedactor.ts`
 - `src/server/chat/modelsList.ts`
+- `src/server/chat/ClaudeProfiles.ts`
 - `src/server/chat/profileCatalog.ts`
 - `src/server/chat/catalogParse.ts`
 - `src/server/chat/ChatSessionManager.ts`
