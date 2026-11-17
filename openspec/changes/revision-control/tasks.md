@@ -1,6 +1,8 @@
 # Tasks
 
-Implement after these have landed on master: `plan-execution`, `integration-candidates`, and `plan-supervision`, together with what they build on (`durable-plans`, `strategy-revision-impact`, and `plan-validation`). Then rebase this branch onto master. Every file stays under 500 LOC. Tests that spawn git use `cleanGitEnv`. Tests never reach GitHub: they put a stub `gh` executable on a private `PATH` and use a local bare repository as `origin`.
+**Split (proposed 2026-11-18, needs the owner's plan approval).** Groups 1–4 landed (PR #298 and its stack, `a2ac8ecb`). Group 5, the executions' revisions of 6.1, and the Apply parts of 7.1–7.3 move to the new change `plan-revision-apply`; its tasks.md carries them, so they are listed here only as moved. Group 9 below is this change's remaining executable slice; its contract is at the end of design.md. No box here is ticked or unticked by the split.
+
+Original note: implement after these have landed on master: `plan-execution`, `integration-candidates`, and `plan-supervision`, together with what they build on (`durable-plans`, `strategy-revision-impact`, and `plan-validation`). Then rebase this branch onto master. Every file stays under 500 LOC. Tests that spawn git use `cleanGitEnv`. Tests never reach GitHub: they put a stub `gh` executable on a private `PATH` and use a local bare repository as `origin`.
 
 ## 1. Shared model and contracts
 
@@ -91,14 +93,14 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 
   Add the AGENTS.md pause bullet and the plan note's `task_checkpoint` rule (D15); that is the docs for group 4. Verify by the tests, and by reading the bullet and note against D6–D9.
 
-## 5. Apply
+## 5. Apply (moved to `plan-revision-apply`, tasks 1.x–3.x there)
 
-- [ ] 5.1 Implement `ApplyService.preview` and `apply` with `APPLY_PRECONDITIONS` (D11): reads first, then one transaction. Verify with tests:
+- [ ] 5.1 **Moved to plan-revision-apply.** Implement `ApplyService.preview` and `apply` with `APPLY_PRECONDITIONS` (D11): reads first, then one transaction. Verify with tests:
   - each entry refuses by name and writes nothing, and every failing entry is listed;
   - two concurrent Applies on one base leave one revision row;
   - an agent caller is refused;
   - the preview lists the delta, the needed choices, and the generated Adapt texts.
-- [ ] 5.2 Implement the per-change writes (D11). Verify with tests:
+- [ ] 5.2 **Moved to plan-revision-apply.** Implement the per-change writes (D11). Verify with tests:
   - continue keeps the attempt, and later handoffs read the new revision;
   - adapt publishes one task revision with notify;
   - restart dispatches under the new revision;
@@ -106,12 +108,12 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - removed unlanded changes and their tasks are cancelled, with the slot given up;
   - the publication rows and `revision-applied` commit together;
   - completion reads the current revision (D12).
-- [ ] 5.3 Write the R17 integration test: a crash before commit leaves nothing; a retry after commit replays, with one task revision and one notice per adapted change. Add the S4 forward-fix test: a change whose `fixes` names a fix task is applied to a running execution and lands, `fixStatus` reads running, and the fix task closes once no change of the current approved revision naming it is unlanded. Add the negative case (D11): a fix change removed before it lands is cancelled, and its fix task stays open. Add a `fixes`-only difference on a landed change, which applies as `metadata` with no choice. Add the AGENTS.md Apply bullet; that is the docs for group 5. Verify by the tests, and by reading the bullet against D10–D12.
+- [ ] 5.3 **Moved to plan-revision-apply.** Write the R17 integration test: a crash before commit leaves nothing; a retry after commit replays, with one task revision and one notice per adapted change. Add the S4 forward-fix test: a change whose `fixes` names a fix task is applied to a running execution and lands, `fixStatus` reads running, and the fix task closes once no change of the current approved revision naming it is unlanded. Add the negative case (D11): a fix change removed before it lands is cancelled, and its fix task stays open. Add a `fixes`-only difference on a landed change, which applies as `metadata` with no choice. Add the AGENTS.md Apply bullet; that is the docs for group 5. Verify by the tests, and by reading the bullet against D10–D12.
 
 ## 6. Reading, supervision, and attention
 
-- [ ] 6.1 Add `holds`, `pauses`, and executions' `revisions` to `team-plan-detail` and `plan_get` (D14, D15). Verify with connection and tool tests: another team's ids read as not found, and pushes follow every write and every Paused recording.
-- [ ] 6.2 Add the `paused`, `pausing`, and `hold` causes in their D13 position, and the three attention sources. Verify with tests:
+- [ ] 6.1 **Split: `holds` and `pauses` are 9.2 here; executions' `revisions` moved to plan-revision-apply.** Add `holds`, `pauses`, and executions' `revisions` to `team-plan-detail` and `plan_get` (D14, D15). Verify with connection and tool tests: another team's ids read as not found, and pushes follow every write and every Paused recording.
+- [ ] 6.2 **Carried out by 9.3.** Add the `paused`, `pausing`, and `hold` causes in their D13 position, and the three attention sources. Verify with tests:
   - each cause wins in its position (after `effect`, in the order `paused`, `pausing`, `hold`, before `uncertain-delivery`), and the others are listed as also applying;
   - none raises a `no-progress` stall, and `repeating-failure` keeps its S2 position ahead of them;
   - each item's id, owner, next action, and clearing rule, including after an extension;
@@ -122,8 +124,8 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 
 ## 7. Human protocol and the view
 
-- [ ] 7.1 Add the D14 messages to `src/shared/planMessages.ts` and `CHAT_CONNECTION_TYPES`, and their handlers in `revisionControlConnections.ts`. Verify with router tests: every type is whitelisted, `unknown-team` is refused, and each result carries its record or error.
-- [ ] 7.2 Add the `teamPlanStore` command slots and the components of D14. Verify with component tests:
+- [ ] 7.1 **Split: the hold and pause messages are 9.1 here; the two Apply messages moved to plan-revision-apply.** Add the D14 messages to `src/shared/planMessages.ts` and `CHAT_CONNECTION_TYPES`, and their handlers in `revisionControlConnections.ts`. Verify with router tests: every type is whitelisted, `unknown-team` is refused, and each result carries its record or error.
+- [ ] 7.2 **Split: the hold, pause, and checkpoint dialogs are 9.4 here; the Apply dialog moved to plan-revision-apply.** Add the `teamPlanStore` command slots and the components of D14. Verify with component tests:
   - each dialog arms one command id and reuses it while the payload is unchanged;
   - refusals render every failing check;
   - every control disables while disconnected;
@@ -131,8 +133,20 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - Apply asks a choice only for changed changes with tasks.
 
   Every store apply method has a dispatch caller.
-- [ ] 7.3 Write one browser walkthrough with the fixture adapter, `tests/e2e/chat-plan-revision-control.spec.ts`, named in `.github/workflows/ci.yml`: hold a change, pause it, record a checkpoint, see Pausing turn into Paused, Continue, and Apply a revision with one adapted change. Run it alone on a spare `E2E_PORT` after `bun run build`. Needs no docs beyond the AGENTS.md bullets.
+- [ ] 7.3 **Split, and obsolete in part (2026-11-18): CI no longer names spec files in `.github/workflows/ci.yml`; `scripts/e2e-fixture-specs.ts` lists every fixture-gated spec. The hold-to-Continue walkthrough is 9.5 here; the Apply step moved to plan-revision-apply.** Write one browser walkthrough with the fixture adapter, `tests/e2e/chat-plan-revision-control.spec.ts`, named in `.github/workflows/ci.yml`: hold a change, pause it, record a checkpoint, see Pausing turn into Paused, Continue, and Apply a revision with one adapted change. Run it alone on a spare `E2E_PORT` after `bun run build`. Needs no docs beyond the AGENTS.md bullets.
 
 ## 8. Checks
 
-- [ ] 8.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate revision-control --strict`. Verify that all pass, apart from the informational note for the unarchived `plan-execution` requirement.
+- [ ] 8.1 **Carried out by 9.7 for this change; plan-revision-apply runs its own.** Run `bun run lint && bun run typecheck && bun run test` and `openspec validate revision-control --strict`. Verify that all pass, apart from the informational note for the unarchived `plan-execution` requirement.
+
+## 9. Remainder: visibility, attention, human protocol, and view (proposed slice)
+
+Contract at the end of design.md; oracles in design "Remainder". Server first (9.1–9.3, one production-path checkpoint after 9.1), then the client (9.4–9.5). Every file stays under 500 lines.
+
+- [ ] 9.1 Add `team-plan-hold-place`, `team-plan-hold-release`, `team-plan-hold-extend`, `team-plan-pause`, and `team-plan-pause-resolve` to `src/shared/planMessages.ts` and `CHAT_CONNECTION_TYPES` (`src/server/chat/chatConnectionTypes.ts`), with handlers in a new `src/server/plans/revisionControl/revisionControlConnections.ts` composed in `planComposition.ts`, each answered by `team-plan-result`. Verify PT1–PT6 through the real connection router and `planComposition`; mutants: a type left out of the whitelist (PT1), the handler not composed (PT6). Checkpoint: the production path of PT6 (place over the socket, the push carries the hold) plus PT3's refusal, reviewed before 9.2.
+- [ ] 9.2 Add `holds` and `pauses` (targets with state, causes, holder, checkpoints, and decisions) to `team-plan-detail` and `plan_get`, pushed after every hold, pause, and resolve write and every Paused recording. Verify DV1–DV4 with connection and tool tests; mutants: the push after a Paused recording removed (DV3), the team check removed (DV4).
+- [ ] 9.3 Add the `paused`, `pausing`, and `hold` causes after `effect` in the running-stage waits (`src/shared/planSupervision.ts`), and the three attention sources in `ATTENTION_SOURCES`. Verify CA1–CA6 and AT1–AT10 as table-driven tests, property AP-1, and one row each through the real `SupervisionMonitor` (no stall for a held change, CA3) and the real workspace read (AT1); mutants: `hold` placed after `uncertain-delivery` (CA4), the overdue key without the deadline (AT3), `plan-pause-overdue` raised beside `plan-checkpoint-decision` (AT7).
+- [ ] 9.4 Add the `teamPlanStore` command slots and `PlanHoldsSection.tsx`, `PlanHoldDialog.tsx`, `PlanPauseSection.tsx`, and `PlanCheckpointDecisionDialog.tsx`, opened from the plan detail and the execution section. Verify UI1–UI5 with component tests; every store apply method has a dispatch caller.
+- [ ] 9.5 Write `tests/e2e/chat-plan-revision-control.spec.ts`, skipped unless `AGENTBOARD_CHAT_FIXTURE=1` like the other plan specs, so `scripts/e2e-fixture-specs.ts` lists it for CI's fixture step: hold a change, pause it, record a checkpoint, see Pausing turn into Paused, Continue. Verify: `bun scripts/e2e-fixture-specs.ts` lists the file, and CI's fixture job passes it. Local runs only in a disposable checkout with its own build, database, and spare `E2E_PORT`; never `bun run test:e2e`.
+- [ ] 9.6 Map every plan-holds and plan-pause scenario to a literal test title (design "Scenario partition") and add `@covers: plan-holds › …` and `@covers: plan-pause › …` annotations above them. A landed scenario whose test cannot be found becomes a failing gap row, not a silent pass. Verify: the citation preflight reports zero unresolved, and `scripts/__tests__/specCoverageGuard.test.ts` passes.
+- [ ] 9.7 Run `openspec validate revision-control --strict`, the affected tests, and `bun run check --full-properties` on the clean committed head under the pinned Bun, then `scripts/verify-result.ts`. Verify: all pass; the result maps every oracle id of the remainder to a test title and a killed mutant.
