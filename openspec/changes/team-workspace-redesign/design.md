@@ -48,7 +48,8 @@ Static, grep-verified; nothing of this change is implemented.
 | Team views | `components/team/`: `TeamTasksView`, `TaskTree`, `TeamTaskDetail`, `TeamMessagesView`, `TeamMailboxView`, `TeamMembersPanel`, `TeamApprovalDefaultControl`, `TeamPlansView` + `Plan*Section`/`PlanWorkspace*`, `ProductStrategyView`, `StrategyImpactReview`, `TeamAuditView`, `metrics/MetricsView`, `TeamAttentionQueue`, `TeamMorningSummary` | recomposed per area (group 4) |
 | Absent | no `TeamShell`, `TodayView`, `flowStrip`, `reworkStuck`, `team_settings`, `rework_acks`, `reworkAlertRounds` anywhere in `src/` or `packages/` (grep empty) | added by groups 1–3 |
 | Read model | `src/shared/teamWorkspace.ts:75` `AttentionItem`, `:131` `TeamTaskRow`; `src/server/team/workspaceRead.ts` 420 lines | group 2 adds `detail`; group 3 adds row fields and `rework-stuck` |
-| Commands | `src/server/chat/chatConnectionTypes.ts:88-90` `team-workspace-open`/`-close`/`-approval-default-set`; every D3 command (`chat-approval`, `chat-answer`, `team-plan-decide`, `team-task-accept-result`, `team-task-handoff`, `team-task-open`, `team-mailbox-retry`/`-discard`/`-hand-off`, `team-plan-execution-retry`/`-stop`, `team-plan-promote`, `team-message-send`) is registered there today | group 3 registers the two rework commands |
+| Commands | `src/server/chat/chatConnectionTypes.ts:88-90` `team-workspace-open`/`-close`/`-approval-default-set`; every D3 command (`chat-approval`, `chat-answer`, `team-plan-decide`, `team-task-accept-result`, `team-task-handoff`, `team-task-open`, `team-mailbox-retry`/`-discard`/`-hand-off`, `team-plan-execution-retry`/`-stop`, `team-plan-promote`, `team-message-send`) is registered there today; the registration list is typed `satisfies readonly ChatConnectionMessage['type'][]` (`:136`), derived from `ClientMessage` | group 3 registers the two rework commands |
+| Wire contract | `src/shared/types.ts` `ServerMessage` `:574-579` (`team-workspace-snapshot`/`team-workspace` carry `TeamWorkspaceSnapshot`; `team-workspace-approval-default-result` ok/refusal variants) and `ClientMessage` `:919-925` (`team-workspace-open`/`-close`, `team-workspace-approval-default-set`); `TeamWorkspaceSnapshot` at `src/shared/teamWorkspace.ts:317` | group 3 adds the `team-workspace-rework-threshold-set` and `team-workspace-rework-ack` `ClientMessage` variants and their `-result` `ServerMessage` variants (shaped like the approval-default pair), and `reworkAlertRounds` on the snapshot; without the `ClientMessage` variants the guarded registration does not typecheck |
 | Approval default | `src/server/team/teamApprovalDefaults.ts:12` `team_approval_defaults`; `workspaceConnections.ts:128,158` setter | unchanged; shown in Agents |
 | Migrations | `src/server/dbSafety/migrations.ts`, highest version 22 (`team-approval-defaults`, `:118`) | group 3 adds one migration, number taken at implementation |
 | View state | `src/client/stores/teamWorkspaceStore.ts` 155 lines, memory only (`:3`) | gains `lastLocation`, `returnTo` (memory only) |
@@ -486,6 +487,7 @@ These give every task an observable oracle. Rows are planned tests.
 | RC5 | ack | task of another team | refused |
 | RC6 | ack | rounds ≠ projected count | refused; view refreshed |
 | RC7 | either | from an agent connection | refused, nothing changed |
+| RC8 | either | sent by the real client store over the real connection | the server handler receives the typed message (registered in `CHAT_CONNECTION_TYPES`, a `ClientMessage` variant) and the store applies the matching `-result` `ServerMessage`; the snapshot's `reworkAlertRounds` follows |
 
 **CV — Conversations** — CV1: each thread message shows its delivery state as text; CV2: Retry/Discard on a held message in a thread sends the Mailbox's existing command; CV3: **Delivery issues** keeps only threads with a held, dead-lettered, or uncertain message.
 
@@ -580,7 +582,7 @@ refs stay exactly as they are (X1). The Plans area recomposes only the landed
 ### Acceptance
 - A1: Group 1 — a team hash renders `TeamShell` without `SessionList` or `Header`; the mode switch, ⌘., team switcher, palette, rail, markers, and Back to Team behave as rows L1–L14, H1–H3, SH1–SH3, RL1–RL3, K1–K2, MK1–MK4, M1–M8, CP1–CP3, and E1–E3 state, and every legacy tab link opens its area with one `replaceState`.
 - A2: Group 2 — Today lists Needs you and folded Waiting on agents from the snapshot; each D3 kind's inline control sends exactly the existing command of rows TD1–TD10, disables while disconnected, renders refusals inline, and a second answer is refused (C1); rows AD1–AD3 and TY1–TY3 hold.
-- A3: Group 3 — task rows project `stageSince`, `reworkRounds`, `planId`, and `reworkStuck` (R1–R7, ST1–ST3); `flowStrip` satisfies F1–F14 and P2; one migration creates `team_settings` and `rework_acks` (MG1–MG3); the two human-only commands behave as RC1–RC7; `rework-stuck` items follow S1–S10.
+- A3: Group 3 — task rows project `stageSince`, `reworkRounds`, `planId`, and `reworkStuck` (R1–R7, ST1–ST3); `flowStrip` satisfies F1–F14 and P2; one migration creates `team_settings` and `rework_acks` (MG1–MG3); the two human-only commands behave as RC1–RC8; `rework-stuck` items follow S1–S10.
 - A4: Group 4 — Conversations, Tasks, Plans, Strategy, Agents, Insights, and Outbound audit render through their area hosts with rows CV1–CV3, AH1–AH5, and DC1, and every existing view test listed in "Current inventory" passes through the new hosts.
 - A5: Group 5 — below 768 px the bottom bar, phone Today, and full-screen decision view satisfy N1–N6; keyboard and accessible-name checks AX1–AX2 pass.
 - A6: Every scenario in the delta (100: 65 orig, 35 carried) has an `@covers` test, and the coverage map names a literal test title and killed mutant for every oracle id.
@@ -607,6 +609,7 @@ refs stay exactly as they are (X1). The Plans area recomposes only the landed
 - `tailwind.config.js`
 - `src/shared/teamWorkspace.ts`
 - `src/shared/flowStrip.ts`
+- `src/shared/types.ts`
 - `src/server/team/**`
 - `src/server/chat/chatConnectionTypes.ts`
 - `src/server/dbSafety/migrations.ts`
