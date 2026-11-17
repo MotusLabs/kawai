@@ -2,7 +2,7 @@
 
 ## 1. Lister and guards
 
-- [ ] 1.1 Add `scripts/e2e-fixture-specs.ts` (D1): the pure function over two listings, the runner, and the CLI. The CLI prints the sorted repository-relative paths, one per line, or exits 1 with a stderr message.
+- [x] 1.1 Add `scripts/e2e-fixture-specs.ts` (D1): the pure function over two listings, the runner, and the CLI. The CLI prints the sorted repository-relative paths, one per line, or exits 1 with a stderr message.
 
   Verify the pure function over fixture listings:
   - A test skipped without the fixture and runnable with it lists its file. So does a test absent without the fixture and runnable with it.
@@ -26,7 +26,7 @@
   - A tree with no gated spec makes it exit 1, with a stderr message.
 
   Verify over the real repository, with the system temporary directory pointed at a new empty directory: the run leaves that directory empty.
-- [ ] 1.2 Add the guard checks as pure functions, and the guard test over the real tree (D2). Verify with fixture inputs that each check fails, naming its subject, in each of these cases:
+- [x] 1.2 Add the guard checks as pure functions, and the guard test over the real tree (D2). Verify with fixture inputs that each check fails, naming its subject, in each of these cases:
   - Beside `$specs` and `--workers=1`, the fixture step's Playwright arguments add any of: a `tests/e2e/` path, a bare `chat.spec.ts`, `tests/e2e`, `./tests/e2e`, a glob, `--grep=chat`, or `--workers 1`.
   - The fixture `run`:
     - lacks the assignment;
@@ -51,8 +51,8 @@
 
 ## 2. CI step
 
-- [ ] 2.1 Switch the fixture step to the two-line `run` (D3). Verify:
+- [x] 2.1 Switch the fixture step to the two-line `run` (D3). Verify:
   - `Bun.YAML.parse` reads `ci.yml`, and the guard test passes over the real tree;
-  - the lister prints the 30 gated specs, and the three newly listed ones are among them;
+  - the lister prints the re-measured gated specs (30 on master at a491f364, 41 at the merge head 78ae8706), and the three newly listed ones are among them;
   - those three pass locally under CI's fixture setup: after `bun run build`, with a fresh HOME, a spare `E2E_PORT`, and `--workers=1`, and never through `bun run test:e2e`;
   - the pull request's e2e job passes, and its fixture step's log names the three specs.
