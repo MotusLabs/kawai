@@ -210,9 +210,36 @@ export class AssignmentStore {
     return rows.map(row => this.row(String(row.id))!)
   }
 
+  /** An assignment's `(created_at, rowid)` when it belongs to the task; null otherwise (bounded-task-reads D9). */
+  taskAnchor(taskId: string, id: string): { at: string; rowid: number } | null {
+    return this.db.prepare('SELECT created_at AS at, rowid FROM team_task_assignments WHERE id = ? AND task_id = ?')
+      .get(id, taskId) as { at: string; rowid: number } | null
+  }
+
+  /**
+   * The newest `take` assignments of a task strictly older than `before` by
+   * `(created_at, rowid)`, newest first, with derived state and without the
+   * instruction, which this statement never selects (bounded-task-reads D9).
+   */
+  windowByTask(taskId: string, before: { at: string; rowid: number } | null, take: number): Array<Omit<TeamTaskAssignment, 'instruction'>> {
+    const columns = (this.db.prepare('PRAGMA table_info(team_task_assignments)').all() as Array<{ name: string }>)
+      .map(column => column.name).filter(name => name !== 'instruction').map(name => `"${name}"`).join(', ')
+    const older = before ? 'AND (created_at < $at OR (created_at = $at AND rowid < $rowid))' : ''
+    const rows = this.db.prepare(`SELECT ${columns} FROM team_task_assignments WHERE task_id = $task ${older}
+      ORDER BY created_at DESC, rowid DESC LIMIT $take`)
+      .all({ $task: taskId, $take: take, ...(before ? { $at: before.at, $rowid: before.rowid } : {}) }) as Record<string, unknown>[]
+    return rows.map(raw => {
+      const { instruction: _omitted, ...row } = this.mapRaw({ ...raw, instruction: '' })
+      return row
+    })
+  }
+
   private row(id: string): TeamTaskAssignment | null {
     const raw = this.db.prepare('SELECT * FROM team_task_assignments WHERE id = ?').get(id) as Record<string, unknown> | null
-    if (!raw) return null
+    return raw ? this.mapRaw(raw) : null
+  }
+
+  private mapRaw(raw: Record<string, unknown>): TeamTaskAssignment {
     const message = raw.message_id === null ? null : this.mail?.get(String(raw.message_id)) ?? null
     const actor = partyFromRow(raw.created_by_kind, raw.created_by_session)
     const { state, reason } = assignmentState({ supersededBy: raw.superseded_by === null ? null : String(raw.superseded_by) }, message)

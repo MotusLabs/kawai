@@ -51,9 +51,13 @@ describe('windows (T1–T4, T11–T13, T15)', () => {
     expect(detail.messages.map(row => row.body)).toEqual(['m10'])
     expect(detail.bounds).toEqual({
       journal: { total: 3, returned: 3, olderRemaining: false, nextBefore: null },
-      subtasks: { total: 0, returned: 0, truncated: false },
-      messages: { total: 1, returned: 1, truncated: false },
+      subtasks: { total: 0, returned: 0, truncated: false, nextBefore: null },
+      messages: { total: 1, returned: 1, truncated: false, nextBefore: null },
       revisions: { total: 1, returned: 1, truncated: false, nextBefore: null },
+      results: { total: 0, returned: 0, truncated: false, nextBefore: null },
+      assignments: { total: 0, returned: 0, truncated: false, nextBefore: null },
+      publications: { total: 0, returned: 0, truncated: false, nextBefore: null },
+      acknowledgements: { total: 0, returned: 0, truncated: false, nextBefore: null },
     })
   })
 
@@ -69,13 +73,13 @@ describe('windows (T1–T4, T11–T13, T15)', () => {
     expect(ids(detail.journal)).toEqual(written.slice(-50))
     expect(detail.bounds.journal).toEqual({ total: 1198, returned: 50, olderRemaining: true, nextBefore: written[1148] })
     expect(ids(detail.subtasks)).toEqual(children.slice(-100))
-    expect(detail.bounds.subtasks).toEqual({ total: 149, returned: 100, truncated: true })
+    expect(detail.bounds.subtasks).toEqual({ total: 149, returned: 100, truncated: true, nextBefore: children[49] })
     expect(ids(detail.messages)).toEqual(ids(sent.slice(-50)))
     expect(ids(detail.messages)).toEqual(ids(mail.forTask(task.id).slice(-50)))
     expect(detail.messages.at(-1)!.state).toBe('claimed')
-    expect(detail.bounds.messages).toEqual({ total: 60, returned: 50, truncated: true })
-    // Subtask summaries are the store's own.
-    expect(detail.subtasks[0]).toEqual(store.list('team').find(row => row.id === children[49])!)
+    expect(detail.bounds.messages).toEqual({ total: 60, returned: 50, truncated: true, nextBefore: sent[10]!.id })
+    // bounded-task-reads D5: subtask rows are task_list's own.
+    expect(detail.subtasks[0]).toEqual(store.listWindow.agentList('team', { status: 'all', limit: 200 }).tasks.find(row => row.id === children[49])!)
     // T15: the human detail is untouched.
     const human = store.humanDetail(task.id)!
     expect(ids(human.journal)).toEqual(written)
@@ -256,15 +260,18 @@ describe('query observer scopes (C2: M4 and M5)', () => {
     observer.queries.length = 0
     observer.during(() => store.journalWindow.agentDetail(task.id, { journalLimit: 120 }))
     const lists = observer.queries.filter(isListRead)
-    // Exactly the journal, subtask, and message windows read lists.
+    // Exactly the subtask, message, and journal windows read lists, each one row past its window (bounded-task-reads D5/D6).
     expect(lists).toHaveLength(3)
-    const [journal, subtasks, messages] = lists
+    const [subtasks, messages, journal] = lists
     expect(journal!.sql).toContain('LIMIT $take')
     expect(journal!.rows).toBe(121)
-    expect(subtasks!.sql).toContain('LIMIT 100')
-    expect(subtasks!.rows).toBe(100)
+    expect(subtasks!.sql).toContain('LIMIT $take')
+    expect(subtasks!.rows).toBe(101)
     expect(messages!.sql).toContain('LIMIT $limit')
-    expect(messages!.rows).toBe(50)
+    expect(messages!.rows).toBe(51)
+    // D6: a body reaches JavaScript only as its 2,000-byte projection.
+    expect(Object.keys(messages!.columnBytes)).not.toContain('body')
+    expect(messages!.columnBytes.kawai_body).toBeLessThanOrEqual(2000)
     // M5's scope: the preview column, before any JavaScript trim; no text column at all.
     expect(journal!.columnBytes.preview).toBe(2000)
     expect(Object.keys(journal!.columnBytes)).not.toContain('text')

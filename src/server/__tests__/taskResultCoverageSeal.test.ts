@@ -95,9 +95,15 @@ const submitWithMap = (taskId: string, coverage: unknown = submitterMap, summary
 const reviewOf = (taskId: string, resultId: string, target: { kind: 'group' | 'session'; id: string }) =>
   results.handoff(agent('lead'), taskId, { kind: 'review', resultId, target, instructions: 'Review the export', expectedResponse: null })
 /** The detail the named session reads through the task_get handler (the seal applies there). */
-const readAs = async (sessionId: string, taskId: string) =>
-  (await taskHandlers(tasks, sessionId, results).task_get({ task_id: taskId })).results as
-    Array<Record<string, any>>
+/** Every result whole as the session reads it: the outstanding one by default, each other one by result_id (bounded-task-reads D8). */
+const readAs = async (sessionId: string, taskId: string) => {
+  const read = taskHandlers(tasks, sessionId, results).task_get
+  const whole: Array<Record<string, any>> = []
+  for (const row of (await read({ task_id: taskId })).results) {
+    whole.push('findings' in row ? row : (await read({ task_id: taskId, result_id: row.id })).resultDetail!)
+  }
+  return whole
+}
 const readHuman = async (taskId: string) => results.applySeal(human(), taskId, await tasks.get(human(), taskId))
 const settledFactsWith = (coverage: unknown) => JSON.stringify({ version: 1, coverage })
 

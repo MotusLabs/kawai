@@ -54,8 +54,10 @@ test('task_get lists F2 accepted on R1, disputed, upheld, and resolved on R2, in
   expect(f2.transitions[3]).toMatchObject({ source: 'submission', resultId: r2.id })
   expect(detail.findingsLedger.map((row: { id: string }) => row.id)).toEqual(['F2', 'F1'])
   expect(detail.ledgerOlderRemaining).toBe(false)
-  // Each result's findings rows carry their items, class, and counted flag.
-  const rows = detail.results.flatMap((result: { findings: unknown[] }) => result.findings)
+  // Each whole result's findings rows carry their items, class, and counted flag; R1 is a row now, read whole by result_id (bounded-task-reads D8).
+  expect(detail.results[1]).toMatchObject({ id: r1.id })
+  expect('findings' in detail.results[1]).toBe(false)
+  const rows = (await tools('lead').task_get({ task_id: task.id, result_id: r1.id })).resultDetail.findings
   expect(rows.find((row: { resultId: string }) => row.resultId === r1.id)).toMatchObject({ structured: true, counted: true, items: [{ findingId: 'F1', class: 'accepted' }, { findingId: 'F2', class: 'accepted' }] })
 })
 
