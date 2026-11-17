@@ -33,7 +33,7 @@ When a setting's value comes from a legacy `AGENTBOARD_<NAME>`, the server SHALL
 - **THEN** the deprecation warning does not contain the token
 
 ### Requirement: Default data lives in the Kawai home directory
-With no database-path or log-file override, the server SHALL keep its database at `~/.kawai/kawai.db`, its log at `~/.kawai/kawai.log`, and its sibling data (chat wire logs, chat worker and background-task state, database backups, the tmux server PID file) in `~/.kawai/`. That directory also holds the existing `groups/`, `routing/`, `teams.json`, `outbound.json`, and `profiles.json` files. An explicit path override SHALL be used as given.
+With no database-path or log-file override, the server SHALL keep its database at `~/.kawai/kawai.db`, its log at `~/.kawai/kawai.log`, and its sibling data (chat wire logs, chat worker and background-task state, database backups, the tmux server PID file) in `~/.kawai/`. That directory also holds the existing `groups/`, `routing/`, `teams.json`, `outbound.json`, and `profiles.json` files. An explicit database path SHALL be used as given, with no data migration or migration-record change.
 
 #### Scenario: Fresh install uses the Kawai home
 - **WHEN** the server starts for the first time with neither `~/.kawai/kawai.db` nor `~/.agentboard/` present
@@ -45,7 +45,11 @@ With no database-path or log-file override, the server SHALL keep its database a
 
 #### Scenario: A new explicit database path is created
 - **WHEN** the server starts with `KAWAI_DB_PATH` naming a file that does not exist, even while a damaged migration record exists under `~/.kawai/`
-- **THEN** it creates and opens that file, moves nothing, and leaves the record and both default directories unchanged
+- **THEN** it creates and opens that file, moves no data-home entry, and leaves the migration record unchanged
+
+#### Scenario: An explicit path inside the Kawai home is honored
+- **WHEN** the server starts with `KAWAI_DB_PATH=~/.kawai/kawai.db`, that file absent, a damaged migration record under `~/.kawai/`, and `~/.agentboard/agentboard.db` present
+- **THEN** it creates and opens `~/.kawai/kawai.db`, reports the record and the overlap, leaves the record unchanged, and moves no legacy entry
 
 ### Requirement: Legacy data directory is migrated on first start
 When default paths apply, `~/.kawai/kawai.db` is missing, and `~/.agentboard/agentboard.db` exists, the server SHALL, before opening the database, move the legacy database with its journal, log, chat wire logs, chat worker and background-task state, backups, tmux PID file, and dev TLS files into `~/.kawai/`, renaming `agentboard.db` and `agentboard.log` to their Kawai names. It SHALL NOT move `~/.agentboard/app`, `~/.agentboard/bin`, or files it does not recognize.
