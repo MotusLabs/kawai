@@ -68,7 +68,7 @@ test('synthetic 778/771 connect payload omits archived rows and unchanged worksp
       workspace: 'plain temporary directory; no repository/worktree payload', archivedProjects: 'private deleted directory; no Git subprocess per archived row' },
       completeSessionsFrameBytes: Buffer.byteLength(JSON.stringify({ type: 'sessions', sessions: all })),
       first: describe(0), firstBytes: total(0), equalDigestReconnect: describe(1), reconnectBytes: total(1) }
-    const destination = process.env.SLOW_LINK_MEASUREMENT_PATH ?? info.outputPath('measurement.json')
+    const destination = process.env.SLOW_LINK_MEASUREMENT_PATH ?? join(root, 'measurement.json')
     if (!destination.startsWith('/tmp/')) throw new Error('Measurement must stay in private /tmp artifacts')
     writeFileSync(destination, JSON.stringify(report, null, 2) + '\n')
     await info.attach('synthetic-connect-payload', { path: destination, contentType: 'application/json' })
