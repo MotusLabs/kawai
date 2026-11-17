@@ -42,6 +42,12 @@
 - [x] 5.1 Run `bun run lint && bun run typecheck && bun run test` on the final head, and `openspec validate openrouter-provider --strict`. Verify all pass.
 - [ ] 5.2 Do a live check with a capped inference key in `OPENROUTER_API_KEY` and a management key in `OPENROUTER_MANAGEMENT_KEY`. An `openrouter-haiku` chat completes a turn; the usage bar shows the key cap and credits meters; the completion summary shows the provider-reported cost; a Bash tool `env` in an `openrouter` and in a GLM session shows neither key variable. Spending the cap records a `credit` event and cools `openrouter`. Delete the test key afterwards. Verify by recording the observations in the PR description, with no key material.
 
+## 6. Closeout (proposed 2026-11-18)
+
+- [ ] 6.1 **Owner gate.** The owner runs task 5.2 with their own keys, or records at archive that 5.2 is unverified. No agent runs it, waives it, or invents its observations.
+- [ ] 6.2 Add `@covers: <capability> › <requirement> › <scenario>` annotations above existing tests for the scenarios design "Closeout map" lists, after a citation preflight that resolves every literal title; add a test only where a mapped scenario has none (test-only edits). Verify: `scripts/__tests__/specCoverageGuard.test.ts` and the touched files pass; `bun run check --full-properties` on the clean committed head under pinned Bun 1.4.3.
+- [ ] 6.3 Before archiving, diff each MODIFIED block against the then-current main spec (`openspec validate openrouter-provider --strict` plus a block-by-block scenario-name diff); re-derive it if main changed. Then sync and archive, before any relay change that REMOVES "The shipped catalog includes OpenRouter". No `process-observability` partition change waits for this archive (disjoint capabilities).
+
 ## Workflow follow-up
 
-- Archive order: `process-observability`, then `providers-and-workers`, then this change (design Risks). This change's MODIFIED `chat-usage-limits` blocks restate the text those two produce together, so archiving it earlier would drop their wording. Before archiving, diff each MODIFIED block against the then-current main spec. If either change rewrote the requirement again, re-derive the block.
+- Archive order (historical, superseded by task 6.3 and proposal "Closeout status"): `process-observability`, then `providers-and-workers`, then this change (design Risks). This change's MODIFIED `chat-usage-limits` blocks restate the text those two produce together, so archiving it earlier would drop their wording. Before archiving, diff each MODIFIED block against the then-current main spec. If either change rewrote the requirement again, re-derive the block.

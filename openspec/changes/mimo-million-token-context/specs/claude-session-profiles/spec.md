@@ -19,7 +19,7 @@ Each named profile SHALL apply its predefined environment configuration to its a
 
 #### Scenario: MiniMax and MiMo configuration
 - **WHEN** MiniMax or MiMo sessions start
-- **THEN** MiniMax uses https://api.minimax.io/anthropic starting on MiniMax-M3 with every Claude tier mapped to MiniMax-M3, and MiMo uses https://api.xiaomimimo.com/anthropic starting on mimo-v2.6-pro[1m] while mapping Sonnet to mimo-v2.6-flash[1m] and Opus, Haiku, and Fable to mimo-v2.6-pro[1m], declaring 1M capacity and enabling auto-compaction with a 300000-token window unless a role overrides that preference
+- **THEN** MiniMax uses https://api.minimax.io/anthropic starting on MiniMax-M3 with every Claude tier mapped to MiniMax-M3, and MiMo uses https://api.xiaomimimo.com/anthropic starting on mimo-v2.6-pro[1m] while mapping Sonnet to mimo-v2.6-flash[1m] and Opus, Haiku, and Fable to mimo-v2.6-pro[1m], declaring 1M capacity and requesting a 300000-token auto-compact window unless a role overrides that preference
 
 #### Scenario: Kimi configuration
 - **WHEN** a Kimi chat session starts
@@ -40,11 +40,11 @@ Each named profile SHALL apply its predefined environment configuration to its a
 ## ADDED Requirements
 
 ### Requirement: Claude catalog entries can specify an auto-compaction window
-Claude profiles, providers, and provider models SHALL accept optional integer `autoCompactWindow` values from 100000 through 1000000 tokens. A configured value SHALL enable automatic compaction and set its window independently of model capacity. A model value SHALL override its provider value, and nearer catalog values SHALL override farther values at the same scope. Catalog assembly follows the durable install mode. Existing role overrides SHALL take precedence at agent start.
+Claude profiles, providers, and provider models SHALL accept an optional integer `autoCompactWindow` (100000–1000000 tokens) that sets the auto-compact window and clears its disable switches, independently of capacity. A model value SHALL override its provider value and a nearer value a farther one; a project overlay omitting it SHALL inherit the base value, while a user-level catalog, which replaces the shipped defaults, receives none. Role overrides take precedence at start.
 
 #### Scenario: MiMo global default
-- **WHEN** a MiMo chat starts against an effective MiMo definition that declares 1M capacity and the 300000-token window — the shipped pre-trim entry or the relay-adopted template — with no role override
-- **THEN** automatic compaction is enabled with a 300000-token window while the model capacity is declared as 1M
+- **WHEN** a MiMo chat starts on the shipped MiMo definition with no role override
+- **THEN** its launch requests a 300000-token auto-compact window with the disable switches cleared, while the model capacity is declared as 1M
 
 #### Scenario: A model overrides the provider default
 - **WHEN** a provider specifies 400000 and one of its models specifies 300000
@@ -62,13 +62,13 @@ Claude profiles, providers, and provider models SHALL accept optional integer `a
 - **WHEN** a Codex catalog entry or an executable-backed Claude entry specifies autoCompactWindow
 - **THEN** its file is rejected with an actionable incompatibility error
 
-#### Scenario: Replacement catalog (replace mode)
-- **WHEN** a replace-mode operator catalog defines MiMo without autoCompactWindow
-- **THEN** the shipped 300000-token preference is not injected into that operator definition
+#### Scenario: User-level catalog replaces the shipped preference
+- **WHEN** a user-level catalog defines MiMo without autoCompactWindow
+- **THEN** no shipped 300000-token preference is injected, because the user-level files replace the shipped defaults
 
-#### Scenario: Merge-mode inheritance
-- **WHEN** a merge-mode catalog omits autoCompactWindow and a shipped or retained MiMo definition is available below it
-- **THEN** the effective MiMo definition inherits that lower definition's window, and where no lower definition exists no preference is synthesized and a retired id is never resurrected
+#### Scenario: Project overlay omits the window
+- **WHEN** a project-level catalog redefines MiMo's models without autoCompactWindow over a base that declares 300000
+- **THEN** the effective MiMo definition inherits the 300000-token window
 
 ### Requirement: Selected window preferences compose within the launch's protections
 A Claude launch composing a selected window SHALL check the newly composed keys — the window and each cleared disable flag — against its fresh per-spawn registered-name set before writing either env layer, never adding them to that set; a nonempty intersection SHALL refuse the launch before spawn. An explicit `[1m]` model declaration adds the 1M opt-out flag to the composed keys, cleared in both env layers; otherwise that flag keeps its existing behavior.

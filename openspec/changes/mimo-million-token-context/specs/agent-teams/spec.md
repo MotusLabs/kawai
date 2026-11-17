@@ -3,18 +3,18 @@
 ## ADDED Requirements
 
 ### Requirement: Roles can choose an auto-compaction window
-Group frontmatter SHALL accept optional integer `autoCompactWindow` from 100000 through 1000000 tokens and a single-line `modelAutoCompactWindow` flow map with the same values. For supported Claude launches, a matching model entry SHALL override the role default, which SHALL override the catalog default. A selected value SHALL enable automatic compaction; its composition stays subject to the registered-name refusal. With no selected value, existing runtime behavior SHALL apply.
+Group frontmatter SHALL accept optional integer `autoCompactWindow` (100000–1000000 tokens) and a single-line `profileAutoCompactWindow` flow map keyed by profile id. For supported Claude launches a matching profile entry SHALL override the role default, which SHALL override the catalog default. A selected value SHALL set the window and clear the disable switches, subject to the registered-name refusal; with none, existing behavior SHALL apply.
 
 #### Scenario: Global MiMo preference is inherited
 - **WHEN** a developer on MiMo starts with a catalog window of 300000 and no role compaction setting
-- **THEN** its agent enables auto-compaction with a 300000-token window
+- **THEN** its agent requests a 300000-token auto-compact window with the disable switches cleared
 
 #### Scenario: Role default overrides the catalog
 - **WHEN** a developer role specifies autoCompactWindow of 250000 and MiMo's catalog specifies 300000
 - **THEN** that developer's agent requests 250000 while a MiMo chat without that role requests 300000
 
-#### Scenario: Model-specific role preference wins
-- **WHEN** a developer role specifies autoCompactWindow of 250000 and modelAutoCompactWindow of `{ mimo: 300000 }`
+#### Scenario: Profile-specific role preference wins
+- **WHEN** a developer role specifies autoCompactWindow of 250000 and profileAutoCompactWindow of `{ mimo: 300000 }`
 - **THEN** its MiMo members request 300000 and its other supported Claude members request 250000
 
 #### Scenario: Qualified model key
@@ -41,7 +41,7 @@ Invalid compaction settings SHALL produce group warnings without rejecting the r
 - **THEN** a warning names the invalid MiMo value, MiMo uses 250000, and Sonnet uses 400000
 
 #### Scenario: Malformed override map
-- **WHEN** modelAutoCompactWindow is a list rather than a flow map
+- **WHEN** profileAutoCompactWindow is a list rather than a flow map
 - **THEN** a warning is reported and the role's valid default still applies
 
 #### Scenario: Duplicate keys

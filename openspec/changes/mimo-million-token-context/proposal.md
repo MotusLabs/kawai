@@ -1,17 +1,63 @@
 # Proposal
 
+## Update status (2026-11-18, PROPOSED)
+
+Planning update for plan `plan-2eb5f292` (draft); owner approval pending.
+Nothing is implemented (0/10 on master `f52963d0`). Changes from the
+2026-10-26 text, each a proposed refinement:
+
+- **Retargeted to the actual launch path.** Claude launches compose in
+  `src/server/chat/provider/claudeRuntimeLaunch.ts` (`claudeSpawnLaunch`,
+  `launchFields`) over `resolveClaudeProfile`, and run through the in-tree
+  `@motuslabs/agent-runtime` 0.1.1 (`package.json:47`); the old
+  `ChatSessionDriver` is gone. No runtime package API change or publication
+  is needed or allowed.
+- **Env-only composition.** The package's `settings` option carries only
+  `env` (`packages/agent-runtime/src/options.ts:250`), so the window and the
+  cleared disable switches go into both env layers; no inline
+  `autoCompactEnabled` setting is composed (design D3).
+- **Relay install-mode coupling dropped.** Install modes, retained layers and
+  the relay §5 trim do not exist on master (held lineage
+  `feat/relay-install-modes`, task `c6bfbd04`, untouched). Catalog assembly is
+  today's tiers (user-level files replace the shipped defaults; project
+  overlays merge over the base), so the former D4 landing-order rule and
+  oracle C5c are removed and C5a/C5b are re-derived over those tiers; whichever of this change and a future relay change
+  lands second re-derives the shared requirement.
+- **Role field renamed** `modelAutoCompactWindow` → `profileAutoCompactWindow`,
+  matching the landed per-profile convention `profileEffort`
+  (`src/server/team/groupFile.ts:11-22`, `groupCatalog.ts:125-158`).
+- **Implementation contract added** (design.md).
+- The credentialed runtime smoke R1 stays an explicit owner gate (task 4.1);
+  it is not waived and no result is invented.
+
 ## Why
 
-Xiaomi documents a 1M-token context window for MiMo-V2.6-Pro, but Kawai's shipped MiMo profile supplies neither a context hint nor an auto-compact window. The reported 167K meter is consistent with Claude Code's 200K fallback minus its reserve; the affected session's raw report has not been inspected, so that diagnosis remains a hypothesis.
+Xiaomi documents a 1M-token context window for MiMo-V2.6-Pro, but Kawai's
+shipped MiMo profile (`config/profiles.default.json:14-24`) supplies neither a
+context hint nor an auto-compact window. The reported 167K meter is consistent
+with Claude Code's 200K fallback minus its reserve; the affected session's raw
+report has not been inspected, so that diagnosis remains a hypothesis.
 
 ## What Changes
 
-- Declare MiMo's 1M capacity to Claude Code using `[1m]` on its startup model and all tier mappings, independently of its compaction preference.
-- Add an optional `autoCompactWindow` token count to Claude catalog profiles/providers/models and role group frontmatter. A configured size enables auto-compaction. Ship MiMo with a global default of `300000`. The normalization checks the newly composed key set — the window and each cleared disable flag — against the launch's freshly derived per-spawn registered-name set without ever adding to it; a nonempty intersection refuses the launch before either layer is written rather than blanking or dropping the key.
-- Add `modelAutoCompactWindow` role overrides, following the existing per-model effort convention. Resolve role/model override, then role default, then catalog default, then existing runtime behavior.
-- Preserve Pro for startup/Opus/Haiku/Fable and Flash for Sonnet; Xiaomi documents 1M for both models. When a selected numeric preference applies to a launch whose model declaration explicitly carries `[1m]`, the launch also clears `CLAUDE_CODE_DISABLE_1M_CONTEXT` in both env layers, subject to the same registered-name refusal; without an explicit preference or an explicit `[1m]` declaration that flag keeps its legacy behavior, and capacity is never inferred from a numeric window alone.
-- Document how the shipped fix reaches newly started agents per install mode: merge-mode installs inherit the shipped or retained MiMo definition, replace-mode operator catalogs stand alone until the operator adds the preference, and the relay-adopted template carries it.
-- Pin the effective launch configuration and validate the actual driver's context report. Keep Kawai's existing reserve-aware meter behavior.
+- Declare MiMo's 1M capacity to Claude Code using `[1m]` on its startup model
+  and all tier mappings, independently of its compaction preference.
+- Add an optional typed `autoCompactWindow` token count to Claude catalog
+  profiles/providers/models and role group frontmatter. A selected size sets
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and clears `DISABLE_AUTO_COMPACT` and
+  `DISABLE_COMPACT` in both env layers. Ship MiMo with `300000`. The composed
+  key set is checked against the launch's fresh per-spawn registered-name set
+  without adding to it; a nonempty intersection refuses the launch before
+  either layer is written.
+- Add `profileAutoCompactWindow` role overrides keyed like `profileEffort`.
+  Resolve role/profile override, then role default, then catalog scalar, then
+  existing runtime behavior.
+- Preserve Pro for startup/Opus/Haiku/Fable and Flash for Sonnet. When a
+  selected preference applies to a launch whose model declaration explicitly
+  carries `[1m]`, also clear `CLAUDE_CODE_DISABLE_1M_CONTEXT` in both layers,
+  under the same refusal; capacity is never inferred from a window alone.
+- Feed the normalized launch env to the context tracker and the start
+  observation, keeping Kawai's reserve-aware meter.
 
 ## Capabilities
 
@@ -21,12 +67,24 @@ None.
 
 ### Modified Capabilities
 
-- `claude-session-profiles`: MiMo's shipped launch configuration declares its supported context window alongside its existing routing and tier mappings.
-- `agent-teams`: roles can choose a default compaction window and override it for an individual model profile.
+- `claude-session-profiles`: MiMo's shipped launch configuration declares its
+  context window; catalog entries can carry a typed window.
+- `agent-teams`: roles choose a default compaction window and override it per
+  profile.
 
 ## Impact
 
-- Catalog parsing/merging, team group parsing/resolution, Claude launch composition, `config/profiles.default.json`, related tests, and configuration documentation. Read-only group metadata carries the new optional settings.
-- No new dependencies, database migration, or meter algorithm. Catalog assembly follows the durable install mode (relay §3): a replace-mode operator definition without the field receives no shipped preference, a merge-mode omission inherits the shipped or retained MiMo definition, and a retired retained layer never synthesizes MiMo; running agents need a new process to receive new settings. This change's MiMo inventory update lands before relay §5's fresh-defaults trim, and §5 snapshots the updated MiMo facts verbatim into its adoption templates and eligible-retained inventory (design D4).
-- Xiaomi's 128K maximum output is supporting model information, not a request to raise Claude Code's output budget in this change.
+- Code (planned): `catalogParse.ts`, `catalogMerge.ts`, `profileCatalog.ts`,
+  `ClaudeProfiles.ts` (or a focused adjacent `claudeCompaction.ts`),
+  `provider/claudeRuntimeLaunch.ts`, `provider/claudeRuntime.ts`,
+  `ChatSessionManager.ts` (callback wiring beside `getEffort`),
+  `src/server/team/groupFile.ts`, `groupCatalog.ts`, `sessionTeams.ts`,
+  `workspaceRead.ts`, `src/shared/teamWorkspace.ts`,
+  `config/profiles.default.json`, docs.
+- No new dependency, migration, meter algorithm, or runtime package change.
+  Running agents need a new process to receive new settings.
+- Shared requirement: "Named profiles configure independent provider
+  sessions" is also MODIFIED by `provider-relay-setup` and
+  `rename-agentboard-to-kawai` (not in this package); the later archive
+  re-derives it.
 - Sources checked 2026-10-26: [Xiaomi model limits](https://mimo.mi.com/docs/en-US/quick-start/model), [MiMo Pro specifications](https://mimo.mi.com/models/en-US/mimo-v2-6-pro), and [Claude Code custom-model context configuration](https://code.claude.com/docs/en/model-config#correct-the-window-for-a-gateway-or-custom-model-id).
