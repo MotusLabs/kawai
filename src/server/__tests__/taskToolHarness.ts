@@ -49,7 +49,7 @@ export interface TaskToolHarness {
 
 export const agent = (sessionId: string): TaskCaller => ({ kind: 'agent', sessionId })
 
-/** Sessions lead (leads), dev (devs), reviewer (reviewers), and stranger (another team). */
+/** Sessions lead (leads), dev (devs), reviewer and second (reviewers), and stranger (another team). */
 export function useTaskToolHarness(prefix: string): TaskToolHarness {
   const state = {} as TaskToolHarness
   const servers: Array<{ instance: { close: () => Promise<void> } }> = []
@@ -95,7 +95,7 @@ export function useTaskToolHarness(prefix: string): TaskToolHarness {
   afterAll(() => fs.rmSync(state.root, { recursive: true, force: true }))
   beforeEach(() => {
     state.records = new Map([['lead', row('lead', 'leads')], ['dev', row('dev', 'devs')], ['reviewer', row('reviewer', 'reviewers')],
-      ['stranger', row('stranger', 'leads', path.join(state.root, 'other'))]])
+      ['second', row('second', 'reviewers')], ['stranger', row('stranger', 'leads', path.join(state.root, 'other'))]])
     state.db?.close()
     state.db = schemaCopy()
     state.mail = new MailboxStore(state.db)
