@@ -9,12 +9,21 @@
 // codexRollout.test.ts — but unreachable in one server life: the history
 // memo never re-reads a rollout once live events exist, so this spec drives
 // the live delivery path instead.)
+//
+// The spec owns a private server: the usage store grants one
+// account/rateLimits/read per provider per server life, and a Codex
+// profile's provider is its resolved home, which a project file cannot
+// set — so in the shared server an earlier Codex chat would take the
+// scripted read and the strict fake would exit 2 at turn/start. Its own
+// server, CODEX_HOME and transcript make the read due in any order, and
+// stopping that server with its root removes every chat this spec made.
 import { expect, test } from '@playwright/test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Script, THREAD_ID } from '../../tests/fixtures/codexTranscript'
+import { ServerProcess } from './fixtures/serverProcess'
 import { killChat } from './support/chatHeader'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires the development chat fixture')
@@ -23,9 +32,25 @@ const COMMAND = { type: 'commandExecution', id: 'cmd-1', command: 'git push orig
 
 test('a Codex chat drives the app-server: approval card, question card, and a live peer turn', async ({ page }, info) => {
   const project = realpathSync(await mkdtemp(path.join(os.tmpdir(), 'agentboard-e2e-codex-')))
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'kawai-codex-e2e-')))
+  const server = new ServerProcess()
+  const port = Number(process.env.E2E_PORT || 4173) + 200
+  const url = `http://127.0.0.1:${port}`
+  const transcript = path.join(root, 'codex-transcript.jsonl')
+  const env = { ...process.env, HOME: root, TMUX_TMPDIR: root, TMUX: '', TMUX_SESSION: 'codex-e2e',
+    NODE_ENV: 'development', AGENTBOARD_CHAT_FIXTURE: '1', AGENTBOARD_DB_PATH: path.join(root, 'agentboard.db'),
+    LOG_FILE: path.join(root, 'agentboard.log'), AGENTBOARD_TMUX_PID_FILE: path.join(root, 'tmux.pid'),
+    CLAUDE_CONFIG_DIR: path.join(root, 'claude'), CODEX_HOME: path.join(root, 'codex'), PI_HOME: path.join(root, 'pi'),
+    CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_API_KEY: '', AGENTBOARD_REMOTE_HOSTS: '',
+    KAWAI_CODEX_PATH: process.env.KAWAI_CODEX_PATH, FAKE_TRANSCRIPT: transcript,
+    AGENTBOARD_STATIC_DIR: path.join(process.cwd(), 'dist/client'), PORT: String(port), HOSTNAME: '127.0.0.1' }
+  for (const name of ['claude', 'codex', 'pi']) mkdirSync(path.join(root, name))
+  // The login gate's fake auth.json, as playwright.config writes it.
+  writeFileSync(path.join(root, 'codex', 'auth.json'), JSON.stringify({ OPENAI_API_KEY: null, tokens: { access_token: 'fake' } }))
   // The rollout the boot reports — the bare append after the peer turn
   // writes the envelope row there, so the delivery receipt can confirm.
-  const rollout = path.join(process.env.E2E_TMUX_TMPDIR ?? os.tmpdir(), 'codex-e2e-rollout.jsonl')
+  const rollout = path.join(root, 'codex-e2e-rollout.jsonl')
+  const cleanupErrors: unknown[] = []
   try {
     await mkdir(path.join(project, '.kawai'), { recursive: true })
     // Codex entries are legal at project level; only codexHome/network are
@@ -58,9 +83,11 @@ test('a Codex chat drives the app-server: approval card, question card, and a li
       .append(rollout)
       .completed('ct-3')
     // Script.write picks a random name; the fake reads FAKE_TRANSCRIPT.
-    await writeFile(process.env.FAKE_TRANSCRIPT!, script.lines.map(line => JSON.stringify(line)).join('\n') + '\n')
+    await writeFile(transcript, script.lines.map(line => JSON.stringify(line)).join('\n') + '\n')
 
-    await page.goto('/')
+    server.spawn('bun', ['src/server/index.ts'], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] })
+    await expect.poll(async () => { try { return (await page.request.get(url, { timeout: 1000 })).ok() } catch { return false } }, { timeout: 30_000 }).toBe(true)
+    await page.goto(url)
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
     const dialog = page.getByRole('dialog', { name: 'New Session' })
     await dialog.getByLabel('Session kind').selectOption('chat')
@@ -110,12 +137,15 @@ test('a Codex chat drives the app-server: approval card, question card, and a li
     await page.screenshot({ path: info.outputPath('codex-peer-live.png') })
     await killChat(page)
   } finally {
-    // Leave no fake state behind: CI runs every fixture spec in ONE server,
-    // and a leftover transcript would make any later Codex child replay
-    // this spec's script. With both files gone the fake cannot read a
-    // transcript, so a child a later spec starts exits at once.
-    rmSync(process.env.FAKE_TRANSCRIPT!, { force: true })
-    rmSync(rollout, { force: true })
+    // Stopping the private server and removing its root takes every chat
+    // this spec created, passed or failed. A cleanup error is annotated and
+    // fails a passing test below, but never replaces the original failure.
+    await server.stop({ tmuxRoot: root }).catch(error => {
+      cleanupErrors.push(error)
+      info.annotations.push({ type: 'cleanup-error', description: String(error) })
+    })
+    rmSync(root, { recursive: true, force: true })
     await rm(project, { recursive: true, force: true })
   }
+  if (cleanupErrors.length > 0) throw cleanupErrors[0]
 })
