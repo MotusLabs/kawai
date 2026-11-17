@@ -9,8 +9,12 @@
 // The synchronous guard left in getSnapshot logs when it reads the file.
 // P2 checks startup alone first: turn completion is held until the startup
 // counts are read, then released so the real receipt settlement runs and is
-// joined (task 6.1 R7, decision 34ebc6e1).
-// S5–S6 (the Codex retry rule) live in codexStartHistoryLoad.integration.test.ts.
+// joined (task 6.1 R7, decision 34ebc6e1). S1/S2 hold the same gate while a
+// sequence's startup counts are read: a prepare's delivered-mail turn can
+// complete inside the pushed-poll window, and its receipt settlement reads
+// the transcript synchronously at the turn end — a receipt-phase read, never
+// a startup one.
+// S5–S6 (the Codex retry rule) live in codexRolloutReplay.integration.test.ts.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -221,10 +225,15 @@ describe('agent starts await the async history load', () => {
   for (const name of ['send', 'start', 'prepare']) {
     // @covers: chat-sessions › Agent starts load history without blocking the server › Mail delivery to a chat with a very large history
     test(`S1 ${name} reads the history once, asynchronously, before the driver starts`, owned(async invocation => {
-      const { seeded, boot, watch, eventually, internals, starters } = invocation
+      const { seeded, boot, watch, eventually, internals, starters, holdCompletion } = invocation
       const run = starters[name]
       const { sessionId, file } = seeded()
       await boot()
+      // The completion gate holds the driver's result frame, so the counts
+      // below are read while no turn can have completed and no receipt can
+      // have run (a prepare's delivered-mail turn completes inside the
+      // pushed-poll window, and its settlement reads the transcript).
+      const completion = holdCompletion()
       const reads = watch(file, { held: true })
       const running = run(sessionId)
       await eventually(() => reads.counts.opens === 1)
@@ -234,19 +243,24 @@ describe('agent starts await the async history load', () => {
       reads.release()
       await running
       expect(internals().drivers.has(sessionId)).toBe(true)
+      // Startup counts, read while the completion gate still holds the turn.
       expect(reads.counts).toEqual({ opens: 1, syncReads: 0 })
+      completion.release()
     }))
 
     test(`S2 ${name} with the memo present reads nothing`, owned(async invocation => {
-      const { seeded, boot, watch, internals, starters, track } = invocation
+      const { seeded, boot, watch, internals, starters, track, holdCompletion } = invocation
       const run = starters[name]
       const { sessionId, file } = seeded()
       const manager = await boot()
       await track(manager.loadHistory(sessionId))
+      // S1's gate: no turn can complete while the counts are read.
+      const completion = holdCompletion()
       const reads = watch(file)
       await run(sessionId)
       expect(internals().drivers.has(sessionId)).toBe(true)
       expect(reads.counts).toEqual({ opens: 0, syncReads: 0 })
+      completion.release()
     }))
   }
 
