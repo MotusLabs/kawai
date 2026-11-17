@@ -302,6 +302,36 @@ A read-only `task_journal_read` tool SHALL take a task id, an entry id, and a by
 - **WHEN** the entry belongs to another task, or the task to another team
 - **THEN** the call is refused as `task_get` would refuse it
 
+### Requirement: task_get revisions are rows
+`task_get` SHALL return the newest 50 revisions as rows, oldest first: number, identity `r<N>#<hash12>`, contract hash, author, time, notify flag, direction and acceptance byte lengths without their text, and a rationale preview of at most 2,000 UTF-8 bytes with its length and cut flag. An optional `revisions_before`, a revision number of the task, SHALL return the 50 rows older than it. The list SHALL carry its total and next anchor.
+
+#### Scenario: Eight revisions
+- **WHEN** an agent calls `task_get` on a task with 8 revisions of up to 27 KB each
+- **THEN** it receives 8 revision rows without text, each with the identity a whole read of that revision reports, and the current direction once, in `task`
+
+#### Scenario: Long revision history
+- **WHEN** a task has 70 revisions and the agent pages with each result's revisions anchor until none remains
+- **THEN** the first read holds the newest 50 with total 70, and every revision row is returned exactly once
+
+#### Scenario: Long rationale
+- **WHEN** a revision's rationale is 5,000 ASCII bytes
+- **THEN** its row carries the first 2,000 bytes, marked cut, with total 5,000
+
+#### Scenario: Unknown revision anchor
+- **WHEN** `revisions_before` is 0, 71 on a task with 70 revisions, or not an integer
+- **THEN** the call is refused naming the value, through either tool runtime
+
+### Requirement: task_get reads one revision whole
+`task_get` SHALL accept an optional `revision`, an existing revision number of the task, and then also return that revision's full direction, acceptance, and rationale. A revision that does not exist SHALL be refused naming it.
+
+#### Scenario: Reading an earlier revision
+- **WHEN** the agent calls `task_get` with `revision` 3
+- **THEN** the result also carries revision 3's direction, acceptance, and rationale whole
+
+#### Scenario: Unknown revision
+- **WHEN** `revision` is 9 on a task with 8 revisions, or 0
+- **THEN** the call is refused naming the revision, through either tool runtime
+
 ### Requirement: Agents are told task_get is bounded
 The `task_get` and `task_journal_read` descriptions, the system prompt's task note, and the delivered task-mail header SHALL state that `task_get` returns bounded windows with totals and byte-bounded previews, and name `journal_before`, `journal_limit`, and `task_journal_read`; none SHALL promise the full journal.
 
