@@ -178,28 +178,31 @@ Rollback: each step reverts alone. Records without the new fields stay readable 
 
 - Which test files beyond the first batch to move to `freshTestDatabase`. The task's measured list decides; it does not change the approach.
 
-## Implementation contract
+## Landed implementation contract (PRs #381, #389, #393, historical)
+
+The contract the implementation was judged against, kept for history with its clause bullets rewritten from `- A1.` to the parseable `- A1:` form (2026-11-18); the clause texts are unchanged. Below it is called the landed contract, and its ids are written L-A1, L-I1, and so on. The parsed contract of this change is the closeout contract at the end of this file.
+
 
 ### Acceptance
 
-- A1. A full check where one real-tmux file fails once and passes when rerun alone records a pass that names the file and its first-attempt failures (RT3).
-- A2. Every row RT1–RT6 and RU1–RU5 holds as a table-driven test, at least one row of each table through the production composition.
-- A3. With `CI` and `KAWAI_FULL_PROPERTIES` unset, a declared-300 test executes 75 cases with seeds `SEED+0 … SEED+74`, and with `CI=true` it executes 300 (PC1).
-- A4. `throttled-reconnect` has no assertion on a duration or a ratio of durations, and `output-coalescing` waits allow at least half the test timeout.
-- A5. After a full runner run, no `pre-migration-*` backup exists in a non-migration file's root (TD1), and helper copies open at the latest schema version (TD2).
-- A6. `bun run check --full-properties` on a tree with a `reduced` record runs and records `full` (RU4).
-- A7. AGENTS.md's Commands paragraph states the selection, `--all-real-tmux`, the nightly run, the retry, `--no-retry`, the case profile, and `--full-properties`.
-- A8. Every row SE1–SE5 and G1–G2 holds as a table-driven test, with SE4 and SE5 through the production runner.
-- A9. A dispatched run of the nightly workflow on master runs all 7 real-tmux files. A forced failure comments on, or opens, the `nightly-real-tmux` issue.
+- A1: A full check where one real-tmux file fails once and passes when rerun alone records a pass that names the file and its first-attempt failures (RT3).
+- A2: Every row RT1–RT6 and RU1–RU5 holds as a table-driven test, at least one row of each table through the production composition.
+- A3: With `CI` and `KAWAI_FULL_PROPERTIES` unset, a declared-300 test executes 75 cases with seeds `SEED+0 … SEED+74`, and with `CI=true` it executes 300 (PC1).
+- A4: `throttled-reconnect` has no assertion on a duration or a ratio of durations, and `output-coalescing` waits allow at least half the test timeout.
+- A5: After a full runner run, no `pre-migration-*` backup exists in a non-migration file's root (TD1), and helper copies open at the latest schema version (TD2).
+- A6: `bun run check --full-properties` on a tree with a `reduced` record runs and records `full` (RU4).
+- A7: AGENTS.md's Commands paragraph states the selection, `--all-real-tmux`, the nightly run, the retry, `--no-retry`, the case profile, and `--full-properties`.
+- A8: Every row SE1–SE5 and G1–G2 holds as a table-driven test, with SE4 and SE5 through the production runner.
+- A9: A dispatched run of the nightly workflow on master runs all 7 real-tmux files. A forced failure comments on, or opens, the `nightly-real-tmux` issue.
 
 ### Invariants
 
-- I1. A main-batch failure is never retried, and CI behavior is unchanged.
-- I2. A reduced run's seeds are a prefix of the full run's.
-- I3. Production `initDatabase` and the `database-safety` backup rule are unchanged.
-- I4. Test titles of the counted tests are unchanged.
-- I5. The content key is unchanged; records without the new fields read as no retries and an unknown profile.
-- I6. Selection never skips a real-tmux file when there is no merge-base, when forced, or when a shared trigger changed.
+- I1: A main-batch failure is never retried, and CI behavior is unchanged.
+- I2: A reduced run's seeds are a prefix of the full run's.
+- I3: Production `initDatabase` and the `database-safety` backup rule are unchanged.
+- I4: Test titles of the counted tests are unchanged.
+- I5: The content key is unchanged; records without the new fields read as no retries and an unknown profile.
+- I6: Selection never skips a real-tmux file when there is no merge-base, when forced, or when a shared trigger changed.
 
 ### Scope
 
@@ -220,17 +223,111 @@ Rollback: each step reverts alone. Records without the new fields stay readable 
 
 ### Verification
 
-- V1. Table-driven tests of RT1–RT6 and RU1–RU5, with the production-composition rows, and with mutants: the rerun removed (kills RT3), the F ≤ 2 bound removed (kills RT5), the main-batch guard removed (kills RT1), and the profile check in reuse removed (kills RU4).
-- V2. The PC1 exhaustive test, plus the runner probe file. Mutants: the `CI` check removed, `ceil` replaced by `floor`, and the seed offset shifted by one.
-- V3. TD1 and TD2 tests. Mutants: the helper's copy skipped (kills TD1), and the template not checkpointed (equivalent under the rollback journal: committed transactions are already in the main file, so the leftover-file check guards this instead).
-- V4. Both timing tests run 5 times serially next to a CPU-saturating load inside the workspace, with `cpu.pressure` some avg10 of 50% or more recorded during each run, and pass. Output and pressure readings are kept as evidence.
-- V5. A full `bun run check` before and after, on an otherwise idle machine, reporting total test work from the timings record. Evidence only, not a pass bound.
-- V6. SE1–SE5, G1–G2 tests. Mutants: the shared-trigger check removed (kills SE3), the no-merge-base fallback removed (kills SE2), and the own-file match dropped (kills SE4).
-- V7. The nightly workflow's dispatched trial runs and one forced-failure run, with their run URLs and the issue link kept as evidence.
+- V1: Table-driven tests of RT1–RT6 and RU1–RU5, with the production-composition rows, and with mutants: the rerun removed (kills RT3), the F ≤ 2 bound removed (kills RT5), the main-batch guard removed (kills RT1), and the profile check in reuse removed (kills RU4).
+- V2: The PC1 exhaustive test, plus the runner probe file. Mutants: the `CI` check removed, `ceil` replaced by `floor`, and the seed offset shifted by one.
+- V3: TD1 and TD2 tests. Mutants: the helper's copy skipped (kills TD1), and the template not checkpointed (equivalent under the rollback journal: committed transactions are already in the main file, so the leftover-file check guards this instead).
+- V4: Both timing tests run 5 times serially next to a CPU-saturating load inside the workspace, with `cpu.pressure` some avg10 of 50% or more recorded during each run, and pass. Output and pressure readings are kept as evidence.
+- V5: A full `bun run check` before and after, on an otherwise idle machine, reporting total test work from the timings record. Evidence only, not a pass bound.
+- V6: SE1–SE5, G1–G2 tests. Mutants: the shared-trigger check removed (kills SE3), the no-merge-base fallback removed (kills SE2), and the own-file match dropped (kills SE4).
+- V7: The nightly workflow's dispatched trial runs and one forced-failure run, with their run URLs and the issue link kept as evidence.
 
 ### Excluded
 
-- X1. Changes to the per-PR CI workflow and `test:ci` behavior.
-- X2. Changes to `database-safety` and production database code.
-- X3. Changing the worker count or the slow-tier definition.
-- X4. Retries for any file outside `REAL_TMUX_FILES`.
+- X1: Changes to the per-PR CI workflow and `test:ci` behavior.
+- X2: Changes to `database-safety` and production database code.
+- X3: Changing the worker count or the slow-tier definition.
+- X4: Retries for any file outside `REAL_TMUX_FILES`.
+
+## Closeout (proposed 2026-11-18)
+
+### Current state (source pin `f52963d0`)
+
+- Landed: every requirement of the dev-checks delta, through PR #381 (`80973e49`, D1), PR #389 (`1421e437`, selection and the nightly run), and PR #393 (`4488b150`, retry, records and profile, reduced cases, the template database). After `4488b150`, one commit touched this change's scripts: `8692da13` (extract-agent-runtime task 6.4) added the agent-runtime package's tests to the root runner's batches. The closeout's preserved-behavior tests run on the current runner, not on `4488b150`.
+- Every scenario of the delta (22) carries a `@covers: dev-checks › …` annotation.
+- The nightly workflow has a `concurrency` group (`.github/workflows/nightly-real-tmux.yml:22-24`, `group: nightly-real-tmux`, `cancel-in-progress: false`). The tasks.md note that it has none is obsolete; it was true of the trial workflow only.
+
+### Receipts for tasks 2.1 and 2.2 (read 2026-11-18 from GitHub, read-only)
+
+| Receipt | Run or issue | What it shows |
+| --- | --- | --- |
+| Dispatched run on master (V7, L-A9 first half) | Actions run 43102992960, `workflow_dispatch`, master `4488b150`, success | the log line `nightly-real-tmux: 7 passed, 0 failed` |
+| Forced failure (V7, L-A9 second half) | Actions run 43102975960, `workflow_dispatch` with `force_failure`, master `4488b150`, failure | `7 passed, 1 failed`; the report step logged `nightly-real-tmux: create https://github.com/MotusLabs/kawai/issues/394` |
+| The issue | #394 "Nightly real-tmux run failed", label `nightly-real-tmux`, open | names the forced-failure file and its test |
+| Daily schedule | runs 43208433239 (11-12) through 44078591177 (11-17), master, all success | the latest logs `7 passed, 0 failed` |
+
+Three earlier dispatches the same evening ended in `startup_failure` (runs 43095125222, 43095129212, 43095779275); the D7 stop rule counts trial runs that ran, and the next run passed.
+
+The "comment on the open issue" path has run only in its unit test (`scripts/__tests__/nightlyRealTmux.test.ts` › `with an open nightly issue, the failure comments on the oldest one instead of opening another`). Issue #394 is still open, so the next real failure comments on it. Closing #394 is the owner's housekeeping, not part of this change.
+
+### Proposed retirements (need the owner's approval)
+
+| Item | Why | Proposed disposition |
+| --- | --- | --- |
+| Task 6.2, V5 (a full check before and after) | The "before" tree's check cannot be rerun on the machine and load of 2026-11-10, so the comparison would not measure this change. It was evidence only, never a pass bound, and no scenario depends on it. | Retire. Claim no check-time figure. |
+| Task 1.3, V4 (both timing tests 5 times under CPU saturation, plus the negative control) | It is a load and timing probe, not a behavior check; the behavior it guards (L-A4: no duration assertion, half-timeout deadlines) is checked structurally by grep and by the two `Real-tmux tests do not fail on machine speed` scenarios' tests. Since then, six scheduled nightly runs passed all 7 files. A loaded run remains possible, so this retirement is a judgment call, not an impossibility. | Retire, or keep as an owner-gated probe the closeout runs once with its raw log. The owner chooses at plan approval. |
+
+### What the closeout preserves
+
+The real-tmux selection with its shared-trigger and no-merge-base floor (L-I6), the main-batch-never-retried rule and the two-file retry bound (L-I1, RT1, RT5), the recorded `retries` and `caseProfile` with the `--full-properties` reuse rule (RU4), and the reduced profile's seed prefix (L-I2). The closeout changes only test call shapes.
+
+### Oracle evidence map
+
+A row marked *template* has no literal title at `f52963d0`: its test comes from a loop (`scripts/__tests__/realTmuxSelection.test.ts:51`, `scripts/__tests__/runPlanRetry.test.ts:121-130`, `src/server/__tests__/checkRunReuse.test.ts:162`, `scripts/__tests__/pushReducedPass.test.ts:57`). Closeout task 7.1 replaces each loop with literal calls whose titles equal the rendered text.
+
+| Oracle | Test | State |
+| --- | --- | --- |
+| SE1–SE5 (pure selector rows) | `scripts/__tests__/realTmuxSelection.test.ts`, rows rendered `${id}: merge-base …, forced …, changed […] → run/skip (reason)` | template (7.1) |
+| SE4 (production) | `src/server/__tests__/realTmuxSelection.integration.test.ts` › `SE4 through the real runner: a change in one file's declared area runs only that real-tmux file` | literal |
+| SE5 (production) | `src/server/__tests__/realTmuxSelection.integration.test.ts` › `SE5 through the real runner: a change outside every declared area and trigger skips every real-tmux file` | literal |
+| G1 | `scripts/__tests__/realTmuxSelection.test.ts` › `G1: a real-tmux file without an @exercises header fails the guard, naming the file` | literal |
+| G2 | `scripts/__tests__/realTmuxSelection.test.ts` › `G2: a glob matching no tracked file fails the guard, naming the file and the glob` | literal |
+| RT1–RT6 (unit rows) | `scripts/__tests__/runPlanRetry.test.ts`, rows rendered `${id}: main …, F=…, retries on/off, … → pass/fail` | template (7.1) |
+| RT3 (production) | `src/server/__tests__/realTmuxRetry.integration.test.ts` › `RT3 through the real runner: one real-tmux file fails once, passes alone, and the record names it` | literal |
+| RT3 (record, L-A1) | `src/server/__tests__/checkRunReuse.test.ts` › `RT3's record names the retried file and its first-attempt failures` | literal |
+| RU1–RU5 (unit rows) | `src/server/__tests__/checkRunReuse.test.ts`, rows rendered `${id}: … request, … record → run/reuse` | template (7.1) |
+| RU4 (production, L-A6) | `src/server/__tests__/realTmuxRetry.integration.test.ts` › `RU4 through the real runner: --full-properties on a reduced pass runs again and records full` | literal |
+| PC1 | `src/server/__tests__/propertyCases.test.ts` › `PC1: propertyCases(n) is n below 50 or under CI or the full flag, else ceil(n/4), for n 1–2,000 in 4 environments` | literal |
+| PC1 wiring (L-A3) | `src/server/__tests__/caseProfileProbe.integration.test.ts` › `default: a declared-300 probe executes the first 75 seeds and the record says reduced`; `src/server/__tests__/caseProfileProbe.integration.test.ts` › `CI=true: the probe executes all 300 seeds and the record says full`; `src/server/__tests__/caseProfileProbe.integration.test.ts` › `--full-properties: the probe executes all 300 seeds and the record says full` | literal |
+| TD1 | `scripts/__tests__/testDbTemplate.test.ts` › `TD1 through the real runner: pre-migration backups exist only in the migration test's root; every child sees the template` | literal |
+| TD2 | `src/server/__tests__/testDatabase.test.ts` › `TD2: a copy of the template opens at the latest version, records exactly the registry, and takes no pre-migration backup` | literal |
+| L-A9 (nightly report) | `scripts/__tests__/nightlyRealTmux.test.ts` › `with no open nightly issue, the failure opens one with the label and the report`; `scripts/__tests__/nightlyRealTmux.test.ts` › `the workflow runs daily and on dispatch, may write issues, and runs then reports through the script`; plus the receipts above | literal + receipts |
+| 3.7 (pre-push accepts reduced) | `scripts/__tests__/pushReducedPass.test.ts`, rendered `the pre-push hook accepts a …-profile pass…` | template (7.1) |
+
+## Implementation contract
+
+### Acceptance
+
+- A1: Every oracle id SE1–SE5, G1–G2, RT1–RT6, RU1–RU5, PC1, TD1, and TD2 maps to at least one literal test title that the repository's title resolver finds at the closeout head (zero unresolved), and every landed clause L-A1–L-A9 maps to a test or a cited receipt.
+- A2: The unrolled tests keep each row's inputs and assertions; each new title equals the text its template rendered, and no file's test count drops.
+- A3: On the closeout head, the landed contract's named mutants (L-V1, L-V2, L-V3, L-V6) each fail their named row, with each mutant's script and log kept.
+- A4: Tasks 2.1 and 2.2 cite the run ids and the issue of this design's receipt table; tasks 1.3, 6.2, and V4/V5 read as the owner decided through plan approval; nothing claims a check-time figure.
+- A5: Only after A4 records the decisions: the dev-checks delta is synced into `openspec/specs/dev-checks/spec.md` byte-equal to this change's blocks, before per-result-suite's archive touches that file, and the change is archived; `specCoverageGuard.test.ts` passes.
+
+### Invariants
+
+- I1: No file under `scripts/` other than `scripts/__tests__/` changes, and no workflow file changes.
+- I2: The selection floor (forced, no merge-base, shared trigger), the main-batch and two-file retry rules, the recorded retries and profile, and the seed prefix stay as the landed contract states (L-I1, L-I2, L-I6).
+- I3: No load probe, timing run, forced nightly failure, or issue write is performed by the closeout unless the owner keeps 1.3 as a probe.
+
+### Scope
+
+- `openspec/changes/check-time-optimization/**`
+- `scripts/__tests__/realTmuxSelection.test.ts`
+- `scripts/__tests__/runPlanRetry.test.ts`
+- `scripts/__tests__/pushReducedPass.test.ts`
+- `src/server/__tests__/checkRunReuse.test.ts`
+- `openspec/specs/dev-checks/spec.md`
+- `openspec/changes/archive/**`
+
+### Verification
+
+- V1: A citation preflight (`parseCitation` plus `testTitles`) over the map reports zero malformed or unresolved citations at the closeout head.
+- V2: The four unrolled files pass under `bun run test`, and each named mutant of A3 fails its row; logs kept.
+- V3: `openspec validate check-time-optimization --strict` passes before the archive, and `scripts/__tests__/specCoverageGuard.test.ts` after it.
+- V4: `bun run check --full-properties` passes on the clean committed closeout head under the pinned Bun, and `scripts/verify-result.ts` reports the head.
+
+### Excluded
+
+- X1: Retired or owner-gated measurements (1.3/V4, 6.2/V5), unless the owner keeps 1.3 as a probe.
+- X2: Closing issue #394 or dispatching the nightly workflow.
+- X3: Any change to the runner, the check machinery, CI, or the per-result-suite change, whose archive follows this one on the same main spec.
