@@ -161,9 +161,13 @@ Refusals:
   total; otherwise it is refused, naming it.
 - At exactly the total, the tool returns zero bytes and a null next offset.
   A result with no diff has total 0.
-- Caller and team rules are `TaskJournalReads.readable`'s: a system caller
-  is refused, and a foreign team's task, or a result of another task, is
-  refused as not found.
+- Caller and team rules are `TaskJournalReads.readable`'s, unchanged and
+  origin-specific (decision 5e36a5a8): a system caller whose origin lacks the
+  `read` right (`override` or `promotion`) is refused as a system read, while
+  an `execution` origin, which holds `read`, reads as it does through
+  `task_get`. A foreign team's task, or a result of another task, is refused
+  as not found. Team and task ownership rules and `task_get`'s blind-first
+  seal are unchanged; no right is added or removed.
 
 A whole result's `diffResumeOffsetBytes` is where the reader continues, as
 a journal preview's `resumeOffsetBytes` is for `task_journal_read`.
@@ -232,7 +236,7 @@ All rows and properties here are PLANNED. Commit the tables verbatim as data-dri
 | G13c2 | `offset_bytes` = total | 0 bytes, null next |
 | G13d | a result with a commit and no diff | total 0, empty data, null next |
 | G13e | a stored diff whose bytes are not exact UTF-8 at a chunk edge | `text` null, `dataBase64` untrimmed |
-| G13f | result of another task; task of another team; a system caller | refused as not found (first two), refused as a system read (third) |
+| G13f | result of another task; task of another team; an `override` or `promotion` system caller; an `execution` system caller | refused as not found (first two), refused as a system read (third), read as through `task_get` (fourth; decision 5e36a5a8) |
 | G14 | default | no assignment row has `instruction`; `task.assignment.instruction` whole |
 | G15 | default | acknowledgements: 50 newest, total 70, truncated |
 | G16 | default, serialized | < 256 KB (deterministic fixture above; not a live measurement) |
