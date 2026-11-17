@@ -549,7 +549,7 @@ export default function NewSessionModal({
             <select ref={kindSelectRef} aria-label="Session kind" className="input mt-1.5" value={kind}
               onChange={event => setKind(event.target.value as 'terminal' | 'chat')}>
               <option value="terminal">Terminal</option>
-              <option value="chat">Chat</option>
+              <option value="chat">AI agent</option>
             </select>
           </label>
           {kind === 'chat' && <div>
