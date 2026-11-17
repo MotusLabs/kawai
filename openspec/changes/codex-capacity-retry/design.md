@@ -2,11 +2,23 @@
 
 ## Context
 
-See proposal.md for motivation. `CodexSessionDriver.completeTurn` currently clears the active turn, emits a final limit signal, emits completion/error drafts, and refreshes status for every failed Codex attempt. `onNotification` shows an upstream retry as a hard-coded 1/1 activity but does not schedule retries. `codexLimits.ts` maps `serverOverloaded` to login scope, and tests explicitly pin that behavior. `LimitOutcomes` consumes final signals and logical turn completion to resolve mailbox work; a human-only turn has no mailbox resume.
+See proposal.md for motivation. Retargeted 2026-11-18 (proposed) onto the extracted runtime package; the 2026-10-26 context named `CodexSessionDriver.ts`, which no longer exists.
 
-The durable `profile-limit-handling` requirements currently include overload in quota events. The two modified requirement blocks explicitly carve out Codex capacity errors. Other providers' overload handling and actual Codex quota handling remain as specified.
+### Current inventory (source pin `f52963d0`)
 
-The shared activity model already has `retrying`, but lacks a next-attempt time, deadline, and retry owner. `codexRollout.ts` reconstructs history from protocol turn markers and user response items, so a continuation prompt would otherwise look like human input during replay.
+Nothing of this change is implemented (all ten tasks open).
+
+- **Classification.** `packages/agent-runtime/src/usage/limits.ts:107-111`: `codexLimitScope` maps `serverOverloaded` to `login`, so `codexLimitFailure` reports it as a limit failure; `src/server/__tests__/codexLimits.test.ts:119` pins that. `packages/agent-runtime/src/codex/auth.ts:68` maps it to the error category `rate-limit`, which no Kawai code reads. Kawai's `src/server/chat/codex/codexLimits.ts` only attributes a recorded kind to the Codex home's provider through `codexLimitScope`.
+- **Turn completion.** `packages/agent-runtime/src/codex/session.ts:365-381` (`turnCompleted`): a failed turn decides its result, runs `facts.finalLimit` (`codex/facts.ts:164`), publishes, and emits `error`. Every failed attempt therefore ends the logical turn, and a capacity failure becomes a final login-scoped limit event.
+- **Upstream retries.** `codex/facts.ts:125` treats a `willRetry` error notification of a limit kind as a non-final failure and starts a limit wait; `codex/activity.ts:54` shows it as a fixed `{ attempt: 1, maxRetries: 1 }` retry.
+- **Turn identity.** `codex/turns.ts` binds the native turn id from the `turn/start` reply or `turn/started`; an interrupt waits for the binding (`interruptOwed`, `session.ts:566-574`). `session.ts:485` sends `turn/start`.
+- **Kawai adapter.** `src/server/chat/provider/codexRuntimeSupport.ts:114-122` forwards `onActivity` and maps `onLimitEvent` through `chatLimitSignal` (`runtimeEvents.ts:82`); `ChatSessionManager.ts:2932-2943` records the event with `codexLimitProviderId`, which feeds `LimitOutcomes` (`src/server/team/routing/limitOutcomes.ts`). Urgent direct mail interrupts a busy recipient through the dispatcher (`src/server/team/dispatcher.ts`, `push(…, interrupt)` at :468-482).
+- **Activity.** `src/shared/chat.ts:335-347` `ChatActivity` has `attempt`, `maxRetries`, and `errorStatus` for `retrying`; the package's `ChatActivityState.retry` (`common/activity.ts:31`) the same.
+- **Replay.** `src/server/chat/codex/codexRollout.ts` parses rollout `response_item` user messages into `user_message` or `peer_message` (:124-130), so a continuation input would read as human input.
+- **Sizes.** `codex/session.ts` is 628 lines and `src/server/chat/provider/codexRuntime.ts` 571, both over the 500-line bound already; `ChatSessionManager.ts` is 3,923. This change must not grow them: new logic goes in new modules, and the hooks in these files replace lines rather than add net lines.
+- **Package boundary.** Kawai depends on `workspace:0.1.1`, and the root runner includes `packages/*/__tests__/*.test.ts` (`8692da13`), so package edits reach Kawai and its checks with no publication. Nothing in revision-control or any other open change is a prerequisite.
+
+The durable `profile-limit-handling` requirements currently include overload in quota events. The two modified requirement blocks carve out Codex capacity errors; they match the current main text otherwise (checked 2026-11-18). Other providers' overload handling and actual Codex quota handling remain as specified.
 
 ## Goals / Non-Goals
 
@@ -22,13 +34,23 @@ Recognize only a failed matching Codex attempt whose `error.codexErrorInfo` is e
 
 Alternative: keep recording final overload limit events and override cooldown duration. Rejected because the same events also drive parking and forwarding and imply account exhaustion. Retain existing historical events without rewriting the append-only record; already-recorded cooldowns expire normally.
 
-### D2: Own recovery within one logical Kawai turn
+### D2: Own recovery within one logical turn, in the package session
 
-Extract a small pure retry policy/reducer (suggested `codexCapacityRetry.ts`), with clock, random, and timer seams. The driver owns the effects. Keep `activeTurnId`, original trigger, mailbox claim, approval policy, and logical usage baseline across Codex attempt ids. Do not emit `turn_completed` or a terminal error for a recoverable attempt. Retire that attempt id before scheduling the next one. Track processed and retired attempt ids so late completions, item events, and `turn/started` cannot attach to the next attempt. Preserve existing independently scoped account-usage updates.
+**Owner (decided 2026-11-18, proposed).** The package's Codex session (`packages/agent-runtime/src/codex/`) owns the logical turn and its attempts: it already owns the turn id, the native id binding, the lifecycle, the result, and the limit facts, and only it sees `turn/completed` before publication. Kawai's adapter only projects what the package publishes. A Kawai-side retry would need the package to publish a failed attempt as a completed turn, which reopens the idle gap and mailbox release this design rejects.
+
+Concretely:
+- `capacityRetry.ts` is the pure policy (D3) with clock, random, and timer seams.
+- `capacityRecovery.ts` owns the effects for one session: the deadline, the one pending timer or active attempt, the generation guard (D5), the retired attempt ids, and the continuation request. `turnCompleted` hands a matching failed attempt to it before deciding the turn; it answers "settle as before" or "recovering".
+- The session option `capacityRecovery: 'bounded' | 'off'` (additive, default `'off'`, so the package's existing behavior is unchanged for other consumers); Kawai passes `'bounded'` for Codex chats.
+- Public additions, all optional fields or new union members: the activity's `retry` gains `owner` (`'provider' | 'capacity'`), `ordinal`, `nextRetryAt`, and `deadline`; one new informational event `{ type: 'capacity_retry', turnId, ordinal, nextRetryAt, deadline, expiring }`; the exported continuation wrapper constant. No existing type, event, or option changes meaning.
+
+Recovery mechanics, as planned before the move:
+
+The policy is `capacityRetry.ts`; `capacityRecovery.ts` owns the effects. Keep `activeTurnId`, original trigger, mailbox claim, approval policy, and logical usage baseline across Codex attempt ids. Do not emit `turn_completed` or a terminal error for a recoverable attempt. Retire that attempt id before scheduling the next one. Track processed and retired attempt ids so late completions, item events, and `turn/started` cannot attach to the next attempt. Preserve existing independently scoped account-usage updates.
 
 There is at most one active attempt or one pending backoff timer. Codex's `willRetry: true` reports activity for the current attempt only; it neither opens a Kawai retry window nor schedules a local retry. `willRetry: false` alone also does not schedule one: wait for authoritative matching `turn/completed` so two layers cannot act concurrently.
 
-Do not reset `turnStartTotal` on each continuation's `turn/started`; aggregate usage across the logical turn, with the existing cumulative-total delta logic. Emit one final completion/interruption per logical turn.
+Do not reset the logical turn's token baseline on a continuation's `turn/started` (the turn's token facts in `codex/facts.ts`, over the generation's consecutive thread totals); aggregate usage across the logical turn. Emit one final completion/interruption per logical turn.
 
 Alternative: complete each failed attempt and send a fresh synthetic user turn. Rejected because it exposes idle gaps, allows mailbox reassignment, duplicates triggers, and splits logical usage.
 
@@ -50,15 +72,19 @@ The local generated `TurnStartParams` permits an input array but does not establ
 
 Pending effects capture driver/client identity, logical turn generation, and retired attempt identity. Stop, interrupt, archive/kill/shutdown, process exit, and superseding input during backoff invalidate the generation and clear the timer before emitting a terminal event. Guard asynchronous `ready`/`turn/start` resolution as well as timer callbacks, including before sending after an await. A late start response must still be interrupted if an attempt was actually dispatched before Stop, following the existing `turnStarting` handshake; it must never reopen the cancelled logical turn. Stale callbacks therefore cannot dispatch, complete, replace activity, or extend the budget; their one permitted effect is a single cleanup interrupt of the already-dispatched cancelled attempt, scoped to its original client, thread, and attempt id (a retry dispatched and then stopped still awaits its `turn/start` response, and the driver interrupts the id that response supplies through the existing `turnStarting` handshake). A stale callback never touches a newer attempt.
 
-When a human sends during backoff, interrupt the old logical turn locally and start the new human turn on the same thread. During an actually running attempt retain current steering behavior. Ordinary group and normal direct deliveries cannot arrive mid-turn because the recipient stays working. Urgent direct mail is the preserved exception: the dispatcher deliberately selects the busy recipient, interrupts it, and delivers the envelope (`dispatcher.ts:219-233` selects the busy recipient, `:440` interrupts, `:457` delivers; the main codex-chat-sessions spec's "Interrupting a Codex turn" requirement mandates it). That interruption invalidates the recovery generation and clears the timer before the urgent turn starts, and the interrupted logical turn is not resumed into recovery afterward. An unexpected process exit uses existing process-error settlement and cancels recovery; reconnect alone has no scheduling effect.
+When a human sends during backoff, interrupt the old logical turn locally and start the new human turn on the same thread. During an actually running attempt retain current steering behavior. Ordinary group and normal direct deliveries cannot arrive mid-turn because the recipient stays working. Urgent direct mail is the preserved exception: the dispatcher deliberately selects the busy recipient, interrupts it, and delivers the envelope (`src/server/team/dispatcher.ts`, `push(…, interrupt)` at :468-482 as of `f52963d0`; the main codex-chat-sessions spec's "Interrupting a Codex turn" requirement mandates it). In the package this arrives as the session's `interrupt()`. That interruption invalidates the recovery generation and clears the timer before the urgent turn starts, and the interrupted logical turn is not resumed into recovery afterward. An unexpected process exit uses existing process-error settlement and cancels recovery; reconnect alone has no scheduling effect.
 
 ### D6: Additive activity data and existing Stop control
 
-Extend shared `ChatActivity` and the pure activity projection with optional capacity retry owner/reason, ordinal, epoch `nextRetryAt` when an attempt is scheduled, and `retryDeadline`. Keep upstream retry presentation compatible; do not display a fabricated maximum attempt count for a time-bounded policy. Publish capacity activity while waiting, including a final countdown when no further attempt fits; restore requesting/thinking/tool phases once the attempt runs. `ChatActivityRow` uses its existing client clock to show countdown and deadline, with accessible text. Existing snapshots carry the full activity on reconnect. Keep session status working during backoff so the existing Stop action and mailbox eligibility rules continue to work. Pending cards still follow existing priority rules.
+Extend the package's activity state (`common/activity.ts`, `codex/activity.ts`), Kawai's shared `ChatActivity`, and the adapter's projection with optional capacity retry owner/reason, ordinal, epoch `nextRetryAt` when an attempt is scheduled, and `retryDeadline`. Keep upstream retry presentation compatible; do not display a fabricated maximum attempt count for a time-bounded policy. Publish capacity activity while waiting, including a final countdown when no further attempt fits; restore requesting/thinking/tool phases once the attempt runs. `ChatActivityRow` uses its existing client clock to show countdown and deadline, with accessible text. Existing snapshots carry the full activity on reconnect. Keep session status working during backoff so the existing Stop action and mailbox eligibility rules continue to work. Pending cards still follow existing priority rules.
+
+### D7: One change, not a classification-only slice
+
+Removing `serverOverloaded` from the quota scope (task 1.1) without recovery would stop the one-hour shared-home cooldown while giving the turn no retry, so a capacity failure would end the turn and the next mail would hit the same overloaded model at once. The change therefore lands as one plan change: tasks 1.x–4.x in one result. A checkpoint may review 1.x early, but nothing lands without 2.x.
 
 ### Acceptance oracles
 
-The following are observable decision tables; implementation must commit them verbatim as table-driven tests. `*` is a don't-care. Mutants are mandatory checks against missing production wiring, as well as reducer logic. Reviewed hazards: B1 (stale actor), M1 (test-only composition), and readers disagreeing on derived state in `docs/oracle-hazards.md`.
+The following are observable decision tables; implementation must commit them verbatim as table-driven tests. They are unchanged by the 2026-11-18 retarget except where a seam is named: "driver" now means the package's Codex session with a scripted app-server transport, and "production manager" means Kawai's `ChatSessionManager` with the in-tree package. L1's single scoped cleanup interrupt (the planning review's B3 rule) stays the only effect a stale callback may have. `*` is a don't-care. Mutants are mandatory checks against missing production wiring, as well as reducer logic. Reviewed hazards: B1 (stale actor), M1 (test-only composition), and readers disagreeing on derived state in `docs/oracle-hazards.md`.
 
 Classification table: axes are structured kind, source, and quota snapshot. Source is upstream retry or terminal failed attempt; snapshot is exhausted or absent/non-exhausted.
 
@@ -123,9 +149,9 @@ Composition/replay table:
 
 Properties, each with one invariant and no new dependency:
 
-- P1: At most one capacity continuation is pending or active. Generate 1,000 seeded command sequences of 100 events from lifecycle rows, duplicate completions, early/late timers, and upstream retries; seams are pure policy plus scripted production driver with fake client/clock/timers/random; seed `0xCA9AC17`.
-- P2: No continuation starts at or after the original monotonic deadline. Generate 1,000 timing sequences including equality, oversleep, wall-clock jumps, and repeated failures; seam is dispatched requests from the real driver; seed `0xCA9AC18`.
-- P3: Invalidation prevents every old generation from dispatching later work. Generate 1,000 cancellation/supersession sequences with deferred ready/start responses, stale notifications, urgent-delivery invalidations, and stale cleanup interrupts; seam is driver dispatch/event log; seed `0xCA9AC19`.
+- P1: At most one capacity continuation is pending or active. Generate 1,000 seeded command sequences of 100 events from lifecycle rows, duplicate completions, early/late timers, and upstream retries; seams are pure policy plus the package's Codex session over a scripted app-server transport with fake clock/timers/random; seed `0xCA9AC17`.
+- P2: No continuation starts at or after the original monotonic deadline. Generate 1,000 timing sequences including equality, oversleep, wall-clock jumps, and repeated failures; seam is the `turn/start` requests the real package session sends; seed `0xCA9AC18`.
+- P3: Invalidation prevents every old generation from dispatching later work. Generate 1,000 cancellation/supersession sequences with deferred ready/start responses, stale notifications, urgent-delivery invalidations, and stale cleanup interrupts; seam is the package session's request and event log; seed `0xCA9AC19`.
 - P4: Capacity alone produces zero quota limit events. Generate 1,000 capacity chains with exhausted snapshots and sibling profiles through production manager/limit-store wiring; seed `0xCA9AC20`.
 - P5: Automatic continuation never duplicates the original input. Generate 1,000 chains with human or peer input and completed tools; seam is request payloads plus replayed events; seed `0xCA9AC21`.
 
@@ -135,8 +161,8 @@ Run model-based tests using the lifecycle table as the independent reference mod
 
 The following are planning dispositions, not executed evidence; each becomes a captured obligation in the implementation's evidence map (task 4.2):
 
-- Current/stale normalization for `turn/started` and a remotely interrupted `turn/completed` follows the driver's existing rules: frames naming an interrupted or retired turn id are dropped or normalize to stale (`codexEvents.ts` turn mapping, `CodexSessionDriver.ts` apply/interrupted checks, `protocol/v2/TurnStatus.ts`). The independent reference model applies the same normalization instead of new rows.
-- Approvals, questions, and dynamic tool calls are server requests, not notifications (`CodexSessionDriver.ts` `onServerRequest`; an answered async question sends its own `turn/start` through `codexThread.ts`; `requests.cancelAll()` settles them on process exit). A retired attempt's outstanding request is cancelled with the attempt. Whether the installed server re-raises such frames after a terminal failed turn is unknown until runtime evidence; if they arrive they are retired-attempt input (L1 class).
+- Current/stale normalization for `turn/started` and a remotely interrupted `turn/completed` follows the driver's existing rules: frames naming an interrupted or retired turn id are dropped or normalize to stale (`packages/agent-runtime/src/codex/events.ts` turn mapping, `codex/turns.ts` `completionOutcome`, `codex/session.ts` `turnFor`/`turnStarted`, `codex/protocol/`). The independent reference model applies the same normalization instead of new rows.
+- Approvals, questions, and dynamic tool calls are server requests, not notifications (`codex/session.ts` `serverRequest` at :412; `codex/requests.ts`; `requests.cancelAll()` settles them on process exit and stop, `session.ts:404`, `:557`). A retired attempt's outstanding request is cancelled with the attempt. Whether the installed server re-raises such frames after a terminal failed turn is unknown until runtime evidence; if they arrive they are retired-attempt input (L1 class).
 - The internal continuation wrapper's exact bytes, grammar, malformed/lookalike fallback, and replay fixtures are pinned during implementation (task 3.2); planning names no wrapper bytes or new shared message names.
 - `TurnStartParams` accepting text input is a type shape, not proof of installed behavior: whether the installed app-server retains failed-turn context, its frame ordering, and its id timing remain future prerequisite evidence to capture at implementation time. The ten-minute window, sixty-second cap, classification, and cancellation contracts are the confirmed planning behavior.
 
@@ -152,3 +178,74 @@ The following are planning dispositions, not executed evidence; each becomes a c
 ## Migration Plan
 
 No schema migration or feature flag. Ship the driver policy, classification change, activity additions, replay recognition, and tests together. Update AGENTS.md's Codex behavior description during implementation. Existing clients ignore optional activity fields; updated clients retain ordinary retry rendering. Rollback restores prior stopping/cooldown behavior and loses any ephemeral pending recovery; no stored jobs need cleanup.
+
+## Production composition and verification boundaries
+
+- Package level (tasks 1.x–2.x): C, T, L, and P1–P3 run against the real package session over a scripted app-server transport (`packages/agent-runtime/__tests__/`), the same seam `codexDriver.test.ts` uses.
+- Kawai level (tasks 3.x–4.x): W1–W3, W6, W8, and P4 run through `ChatSessionManager`, the limit store, `LimitOutcomes`, and the dispatcher with the in-tree package and a scripted Codex app-server; W7 through the production activity push and snapshot into `ChatActivityRow`; W5 and P5 through `codexRollout.ts` over rollout fixtures. Each guarded seam has one row through this composition and a mutant that removes the wiring (the `'bounded'` option not passed, the activity fields not projected, the wrapper not recognized).
+- Affected existing workflows to keep green: real quota handling (C3, C4, W3), other providers' overload events, the Codex interrupt and urgent-delivery tests, rollout replay of ordinary turns, and the package's own Codex suites.
+- Deferred installed-protocol facts (above) stay explicit: they are captured at implementation time, not assumed, and no credentialed or live model probe is part of this planning.
+
+## Execution checkpoints
+
+1. After 1.1–1.2 and the first L rows of 2.1: one production path at a pinned commit — the package session receives a terminal `serverOverloaded`, sends one continuation `turn/start` on the same thread, binds the new attempt, and completes the logical turn once; plus L4 (exhaustion) as the failure case. Reviewed before 2.2.
+2. After 2.3: L1–L20, T1–T6, and P1–P3 green with their mutants killed.
+3. After 4.1: W1–W8 and P4–P5 through the Kawai composition; then 4.2–4.3.
+
+## Implementation contract
+
+### Acceptance
+
+- A1: A Codex `serverOverloaded`, retrying or terminal, records no quota limit event and creates or extends no cooldown, while usage, rate, and session-budget limits keep their existing events, scopes, and resets (C1–C5, W6).
+- A2: A terminal `serverOverloaded` keeps the logical turn working and retries on the same thread and model with D3's delays, inside a ten-minute window from the first such failure, never starting an attempt at or after the deadline (T1–T6, L2–L4, L8–L10, P2).
+- A3: At most one continuation is pending or active per session, stale callbacks only ever send the one scoped cleanup interrupt, and Stop, interrupt, lifecycle end, new human input, and urgent delivery cancel recovery (L1, L11–L16, L18–L20, P1, P3).
+- A4: The original input or peer envelope is sent once, completed tools are not replayed by Kawai, logical usage spans attempts, and exactly one terminal event is published per logical turn (L5–L7, L17, W4, P5).
+- A5: Delivered mail stays claimed through recovery and gets no park, forward, or release from capacity alone; a real quota failure after capacity follows the existing quota path (W1–W3, W8, P4).
+- A6: The chat shows the capacity attempt, countdown, and deadline through the production snapshot and push, without a fabricated maximum, and ordinary upstream retry rendering is unchanged (W7).
+- A7: Replay shows original input once and recovery input as an internal notice, creating no receipt (W5).
+
+### Invariants
+
+- I1: Only the package's Codex session decides a Codex logical turn's attempts; Kawai never starts a capacity attempt.
+- I2: The package's public API changes only additively, its version stays 0.1.1, and nothing is published.
+- I3: `codex/session.ts`, `codexRuntime.ts`, and `ChatSessionManager.ts` do not grow in net lines.
+- I4: Retry state is never persisted and never resumed after a backend restart.
+- I5: Claude retry behavior and other providers' overload handling are unchanged.
+
+### Scope
+
+- `openspec/changes/codex-capacity-retry/**`
+- `packages/agent-runtime/src/codex/**`
+- `packages/agent-runtime/src/usage/limits.ts`
+- `packages/agent-runtime/src/common/activity.ts`
+- `packages/agent-runtime/src/events.ts`
+- `packages/agent-runtime/src/options.ts`
+- `packages/agent-runtime/src/index.ts`
+- `packages/agent-runtime/__tests__/**`
+- `src/server/chat/provider/codexRuntime.ts`
+- `src/server/chat/provider/codexRuntimeSupport.ts`
+- `src/server/chat/provider/runtimeEvents.ts`
+- `src/server/chat/provider/codexDriverTypes.ts`
+- `src/server/chat/codex/codexLimits.ts`
+- `src/server/chat/codex/codexRollout.ts`
+- `src/server/chat/ChatSessionManager.ts`
+- `src/shared/chat.ts`
+- `src/client/components/chat/ChatActivityRow.tsx`
+- `src/server/__tests__/**`
+- `src/client/__tests__/**`
+- `AGENTS.md`
+- `docs/architecture/chat.md`
+
+### Verification
+
+- V1: C1–C5, T1–T6, L1–L20, and W1–W8 are committed verbatim as table-driven tests at the seams named above, each with its named mutant failing, including the wiring mutants of W1 and W7.
+- V2: P1–P5 run at their seeds (`0xCA9AC17`–`0xCA9AC21`) with 1,000 declared cases each through `propertyCases`, the full counts under `--full-properties`, with the lifecycle table as the independent reference model and crashes before and after continuation dispatch and final emission.
+- V3: The package's tests run through the root runner (`bun run test <files>`), and `bun run typecheck` covers the package project.
+- V4: A citation preflight over the result's evidence map reports zero unresolved; `openspec validate codex-capacity-retry --strict` and `bun run check --full-properties` pass on the clean committed head under the pinned Bun; `scripts/verify-result.ts` reports the head.
+
+### Excluded
+
+- X1: Publishing or versioning `@motuslabs/agent-runtime`, and extract-agent-runtime's consumer-access closeout (its task 8.4).
+- X2: Model or provider switching, generic retries of other errors, persisted retry jobs, a settings UI, and Claude retry policy.
+- X3: Changing the Codex error category (`auth.ts:68`), which no Kawai code reads.
+- X4: Live or credentialed Codex probes; installed-protocol facts are captured at implementation time.
