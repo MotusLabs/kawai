@@ -39,7 +39,9 @@ then retired by an owner decision, never archived itself:
 
 This change's own `chat-usage-limits` delta is obsolete: main already carries
 its text (archived 2026-10-19 with `providers-and-workers`), so neither F, Q,
-nor W restates it. Archive order (proposed): `openrouter-provider`, F, Q, W.
+nor W restates it. Archive order (proposed): F, then Q and W.
+`openrouter-provider` is independent of all three: F and W touch none of its
+capabilities, and Q only ADDs a distinct `chat-usage-limits` requirement.
 
 ## Why
 

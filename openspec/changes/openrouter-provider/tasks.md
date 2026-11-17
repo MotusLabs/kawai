@@ -46,7 +46,7 @@
 
 - [ ] 6.1 **Owner gate.** The owner runs task 5.2 with their own keys, or records at archive that 5.2 is unverified. No agent runs it, waives it, or invents its observations.
 - [ ] 6.2 Add `@covers: <capability> › <requirement> › <scenario>` annotations above existing tests for the scenarios design "Closeout map" lists, after a citation preflight that resolves every literal title; add a test only where a mapped scenario has none (test-only edits). Verify: `scripts/__tests__/specCoverageGuard.test.ts` and the touched files pass; `bun run check --full-properties` on the clean committed head under pinned Bun 1.4.3.
-- [ ] 6.3 Before archiving, diff each MODIFIED block against the then-current main spec (`openspec validate openrouter-provider --strict` plus a block-by-block scenario-name diff); re-derive it if main changed. Then sync and archive, before `process-observability-foundation`.
+- [ ] 6.3 Before archiving, diff each MODIFIED block against the then-current main spec (`openspec validate openrouter-provider --strict` plus a block-by-block scenario-name diff); re-derive it if main changed. Then sync and archive, before any relay change that REMOVES "The shipped catalog includes OpenRouter". No `process-observability` partition change waits for this archive (disjoint capabilities).
 
 ## Workflow follow-up
 

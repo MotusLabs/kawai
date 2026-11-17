@@ -12,4 +12,4 @@ change.
 ## 2. Closeout
 
 - [ ] 2.1 Citation preflight (zero unresolved), `bun run check --full-properties` on the clean committed head under pinned Bun 1.4.3, `scripts/verify-result.ts`, and `openspec validate process-observability-foundation --strict`. Map every scenario to its literal title in the result.
-- [ ] 2.2 After `openrouter-provider` has archived, sync and archive this change. `process-observability` stays unticked and unarchived; its retirement is an owner decision after all three partition changes archive.
+- [ ] 2.2 Sync and archive this change; it does not wait for `openrouter-provider` or its owner-gated task 5.2 (disjoint capabilities, design D3). `process-observability` stays unticked and unarchived; its retirement is an owner decision after all three partition changes archive.

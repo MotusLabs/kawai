@@ -14,9 +14,14 @@ not waived here. Proposed refinements, each needing owner approval:
   the main `chat-usage-limits` text already carries the background-observation
   wording this order protected; this change's three MODIFIED blocks keep every
   current main scenario (design "Closeout map"). New order: this change
-  archives first, before `process-observability-foundation` (same capability)
-  and before any relay change that REMOVES "The shipped catalog includes
-  OpenRouter".
+  archives before any relay change that REMOVES "The shipped catalog includes
+  OpenRouter". It has no ordering edge with the `process-observability`
+  partition: `process-observability-foundation` and
+  `process-workflow-observability` touch none of this change's capabilities
+  (`chat-sessions`, `chat-usage-limits`, `claude-session-profiles`,
+  `profile-limit-handling`), and `process-quota-history-and-incident-advice`
+  only ADDs a distinct `chat-usage-limits` requirement that none of this
+  change's blocks names.
 - The MODIFIED blocks were re-derived on main `f52963d0` to keep main's
   clauses ("plan limits", "coding-plan usage", "team configuration") with the
   carve-out added.

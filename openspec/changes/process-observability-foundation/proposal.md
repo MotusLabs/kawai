@@ -57,10 +57,11 @@ baseline to modify.
 ## Impact
 
 - Code: none expected. Closeout tests may be added under `src/server/__tests__/`.
-- Archive order (proposed): `openrouter-provider` first (both touch
-  `chat-usage-limits` history; this change carries no `chat-usage-limits`
-  delta), then this change, then `process-quota-history-and-incident-advice`
-  and `process-workflow-observability`, which MODIFY requirements this change
-  adds.
+- Archive order (proposed): this change, then
+  `process-quota-history-and-incident-advice` and
+  `process-workflow-observability`, which MODIFY requirements this change
+  adds. It is independent of `openrouter-provider` and its owner-gated task
+  5.2: their delta capabilities are disjoint (this change: `chat-turn-usage`,
+  `process-observations`, `prometheus-export`, `team-process-metrics`).
 - `openspec/coverage.json` does not exempt this change, so every ADDED and
   MODIFIED scenario needs a `@covers` annotation at archive.

@@ -46,9 +46,14 @@ being fixed here.
 
 ### D3 — Archive order
 
-`openrouter-provider` archives first, then this change, then the two
-remainders (they MODIFY `prometheus-export` and `process-recommendations`
-requirements that only exist after this archive and the quota change's).
+This change archives first, then the two remainders (they MODIFY
+`prometheus-export` and `process-recommendations` requirements that only
+exist after this archive and the quota change's). It does not wait for
+`openrouter-provider` or its owner-gated task 5.2: that change's capabilities
+(`chat-sessions`, `chat-usage-limits`, `claude-session-profiles`,
+`profile-limit-handling`) and this change's (`chat-turn-usage`,
+`process-observations`, `prometheus-export`, `team-process-metrics`) are
+disjoint.
 
 ## Closeout map
 
@@ -108,7 +113,7 @@ and fails that assertion. Each `C` row's test is named for its scenario.
 ### Acceptance
 - A1: Every scenario in "Closeout map" has a `@covers` annotation directly above a test whose literal title resolves; the 15 candidate rows gain tests asserting their named outcomes that pass against unchanged production code.
 - A2: Each `M` row records one negative control that removes its named asserted outcome and fails that assertion, named in the result.
-- A3: After `openrouter-provider` archives, this change syncs and archives with no main-spec scenario removed or weakened.
+- A3: This change syncs and archives, independently of `openrouter-provider`, with no main-spec scenario removed or weakened.
 ### Invariants
 - I1: No production source changes; only tests, `@covers` annotations, docs under `docs/operations/`, and this change's artifacts.
 - I2: No requirement or scenario that depends on background quota observation, recommendations, stage metrics, digests, or experiments is archived by this change.
