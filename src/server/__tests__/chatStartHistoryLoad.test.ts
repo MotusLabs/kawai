@@ -9,8 +9,12 @@
 // The synchronous guard left in getSnapshot logs when it reads the file.
 // P2 checks startup alone first: turn completion is held until the startup
 // counts are read, then released so the real receipt settlement runs and is
-// joined (task 6.1 R7, decision 34ebc6e1).
-// S5–S6 (the Codex retry rule) live in codexStartHistoryLoad.integration.test.ts.
+// joined (task 6.1 R7, decision 34ebc6e1). S1/S2 hold the same gate while a
+// sequence's startup counts are read: a prepare's delivered-mail turn can
+// complete inside the pushed-poll window, and its receipt settlement reads
+// the transcript synchronously at the turn end — a receipt-phase read, never
+// a startup one.
+// S5–S6 (the Codex retry rule) live in codexRolloutReplay.integration.test.ts.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -218,15 +222,21 @@ describe('agent starts await the async history load', () => {
     return invocation.track(body(invocation))
   }
 
-  for (const name of ['send', 'start', 'prepare']) {
-    // @covers: chat-sessions › Agent starts load history without blocking the server › Mail delivery to a chat with a very large history
-    test(`S1 ${name} reads the history once, asynchronously, before the driver starts`, owned(async invocation => {
-      const { seeded, boot, watch, eventually, internals, starters } = invocation
-      const run = starters[name]
+  /** The S1 body: a held load, one async open, no sync read; the driver
+   *  starts only after the load, and the counts are read behind the
+   *  completion gate. Literal titles so coverage citations resolve. */
+  const s1Case = (starter: (invocation: typeof owner, sessionId: string) => Promise<unknown>) =>
+    owned(async invocation => {
+      const { seeded, boot, watch, eventually, internals, holdCompletion } = invocation
       const { sessionId, file } = seeded()
       await boot()
+      // The completion gate holds the driver's result frame, so the counts
+      // below are read while no turn can have completed and no receipt can
+      // have run (a prepare's delivered-mail turn completes inside the
+      // pushed-poll window, and its settlement reads the transcript).
+      const completion = holdCompletion()
       const reads = watch(file, { held: true })
-      const running = run(sessionId)
+      const running = starter(invocation, sessionId)
       await eventually(() => reads.counts.opens === 1)
       // The load is held: nothing has started a driver yet.
       await Bun.sleep(30)
@@ -234,21 +244,44 @@ describe('agent starts await the async history load', () => {
       reads.release()
       await running
       expect(internals().drivers.has(sessionId)).toBe(true)
+      // Startup counts, read while the completion gate still holds the turn.
       expect(reads.counts).toEqual({ opens: 1, syncReads: 0 })
-    }))
+      completion.release()
+    })
 
-    test(`S2 ${name} with the memo present reads nothing`, owned(async invocation => {
-      const { seeded, boot, watch, internals, starters, track } = invocation
-      const run = starters[name]
+  // @covers: chat-sessions › Agent starts load history without blocking the server › Mail delivery to a chat with a very large history
+  test('S1 send reads the history once, asynchronously, before the driver starts', s1Case((invocation, sessionId) => invocation.starters.send(sessionId)))
+
+  // @covers: chat-sessions › Agent starts load history without blocking the server › Mail delivery to a chat with a very large history
+  test('S1 start reads the history once, asynchronously, before the driver starts', s1Case((invocation, sessionId) => invocation.starters.start(sessionId)))
+
+  // @covers: chat-sessions › Agent starts load history without blocking the server › Mail delivery to a chat with a very large history
+  test('S1 prepare reads the history once, asynchronously, before the driver starts', s1Case((invocation, sessionId) => invocation.starters.prepare(sessionId)))
+
+  /** The S2 body: a populated memo, so the same starts read nothing. */
+  const s2Case = (starter: (invocation: typeof owner, sessionId: string) => Promise<unknown>) =>
+    owned(async invocation => {
+      const { seeded, boot, watch, internals, track, holdCompletion } = invocation
       const { sessionId, file } = seeded()
       const manager = await boot()
       await track(manager.loadHistory(sessionId))
+      // S1's gate: no turn can complete while the counts are read.
+      const completion = holdCompletion()
       const reads = watch(file)
-      await run(sessionId)
+      await starter(invocation, sessionId)
       expect(internals().drivers.has(sessionId)).toBe(true)
       expect(reads.counts).toEqual({ opens: 0, syncReads: 0 })
-    }))
-  }
+      completion.release()
+    })
+
+  // @covers: chat-sessions › Agent starts load history without blocking the server › Mail delivery to a chat with a very large history
+  test('S2 send with the memo present reads nothing', s2Case((invocation, sessionId) => invocation.starters.send(sessionId)))
+
+  // @covers: chat-sessions › Agent starts load history without blocking the server › Mail delivery to a chat with a very large history
+  test('S2 start with the memo present reads nothing', s2Case((invocation, sessionId) => invocation.starters.start(sessionId)))
+
+  // @covers: chat-sessions › Agent starts load history without blocking the server › Mail delivery to a chat with a very large history
+  test('S2 prepare with the memo present reads nothing', s2Case((invocation, sessionId) => invocation.starters.prepare(sessionId)))
 
   // @covers: chat-sessions › Agent starts load history without blocking the server › A message sent while the history is loading
   test('S3 a send while prepare’s load is in flight shares it: one read, one driver, the history once', owned(async invocation => {
