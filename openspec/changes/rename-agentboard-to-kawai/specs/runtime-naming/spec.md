@@ -43,6 +43,10 @@ With no database-path or log-file override, the server SHALL keep its database a
 - **WHEN** the server starts with `KAWAI_DB_PATH=/tmp/x/k.db`
 - **THEN** it opens `/tmp/x/k.db` and migrates no data
 
+#### Scenario: A new explicit database path is created
+- **WHEN** the server starts with `KAWAI_DB_PATH` naming a file that does not exist, even while a damaged migration record exists under `~/.kawai/`
+- **THEN** it creates and opens that file, moves nothing, and leaves the record and both default directories unchanged
+
 ### Requirement: Legacy data directory is migrated on first start
 When default paths apply, `~/.kawai/kawai.db` is missing, and `~/.agentboard/agentboard.db` exists, the server SHALL, before opening the database, move the legacy database with its journal, log, chat wire logs, chat worker and background-task state, backups, tmux PID file, and dev TLS files into `~/.kawai/`, renaming `agentboard.db` and `agentboard.log` to their Kawai names. It SHALL NOT move `~/.agentboard/app`, `~/.agentboard/bin`, or files it does not recognize.
 
@@ -111,7 +115,7 @@ If any legacy entry cannot be moved, the server SHALL put back every moved entry
 - **THEN** the next start either completes the move when the database already reached `~/.kawai/kawai.db` or puts the moved entries back and migrates again, and afterwards every entry exists at exactly one of its two paths
 
 ### Requirement: A damaged migration record stops startup
-With default paths, if the record of an interrupted data migration cannot be read, or it exists while neither `~/.kawai/kawai.db` nor `~/.agentboard/agentboard.db` exists, the server SHALL exit with an error before opening a database. The error SHALL name the record, both database paths with whether each exists, and the newest pre-rename backup found. The server SHALL NOT move any entry, and SHALL NOT open or create a database.
+With no database-path override, if the record of an interrupted data migration cannot be read, or it exists while neither `~/.kawai/kawai.db` nor `~/.agentboard/agentboard.db` exists, the server SHALL exit with an error before opening a database. The error SHALL name the record, both database paths with whether each exists, and the newest pre-rename backup found. The server SHALL NOT move any entry, and SHALL NOT open or create a database.
 
 #### Scenario: Unreadable record with the migrated database present
 - **WHEN** `~/.kawai/kawai.db` exists, `~/.agentboard/agentboard.db` does not, and the migration record cannot be parsed
