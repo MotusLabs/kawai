@@ -1,6 +1,6 @@
 # Claude chat profiles
 
-In New Session, choose **Claude chat**, then select **Profile**. Default is
+In New Session, choose **AI agent**, then select **Profile**. Default is
 selected initially. The offered catalog follows the entered project path (see
 below). The chat header shows the selected profile. Catalog load failures
 block creation and offer **Retry profiles**; terminal command presets are

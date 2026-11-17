@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
+import { Profiler } from 'react'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
 import type { ChatActivity, ChatBackgroundTask, ChatCommandState, ChatContextUsage, ChatEvent, ChatNotification, ChatPendingRequest, ChatRuntime, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
 import type { ClientMessage, ServerMessage, Session } from '@shared/types'
@@ -1323,6 +1324,87 @@ describe('chat activity row', () => {
       await act(async () => { jest.advanceTimersByTime(59_000) })
       expect(elapsed()).toBe('1m 01s')
       renderer.unmount()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  const elapsedOf = (renderer: TestRenderer.ReactTestRenderer) =>
+    textOf(renderer.root.findByProps({ 'data-testid': 'chat-activity-elapsed' }))
+
+  // The diagnosed failure (task-5f8479dc): requesting -> thinking re-anchors
+  // the same mounted row 1.3 s in; its seconds must follow the new anchor,
+  // not the mount's 1 s cadence (which showed 0s at +1000 and 1s at +2000).
+  // @covers: chat-sessions › Chat transcript shows the in-flight turn's activity › Model is thinking
+  test('an in-place phase re-anchor ticks on the new phase seconds, not the mount cadence', async () => {
+    jest.useFakeTimers()
+    try {
+      const { renderer } = renderRow({ phase: 'requesting', elapsedMs: 0 }, Date.now())
+      await act(async () => { jest.advanceTimersByTime(1_300) })
+      expect(elapsedOf(renderer)).toBe('1s')
+      const anchor = Date.now()
+      await act(async () => {
+        renderer.update(<ChatActivityRow activity={{ phase: 'thinking', elapsedMs: 0 }} phaseStartedAt={anchor} />)
+      })
+      expect(elapsedOf(renderer)).toBe('0s')
+      await act(async () => { jest.advanceTimersByTime(999) })
+      expect(elapsedOf(renderer)).toBe('0s')
+      await act(async () => { jest.advanceTimersByTime(1) })
+      expect(elapsedOf(renderer)).toBe('1s')
+      await act(async () => { jest.advanceTimersByTime(1_000) })
+      expect(elapsedOf(renderer)).toBe('2s')
+      renderer.unmount()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  // A restored phase keeps its age and ticks on its own whole seconds.
+  // @covers: chat-sessions › Activity is live-only and restored on reconnect › Reconnect while thinking
+  test('an already-aged phase keeps its age and ticks on its next whole second', async () => {
+    jest.useFakeTimers()
+    try {
+      const { renderer } = renderRow({ phase: 'thinking', elapsedMs: 2_300 }, Date.now() - 2_300)
+      expect(elapsedOf(renderer)).toBe('2s')
+      await act(async () => { jest.advanceTimersByTime(699) })
+      expect(elapsedOf(renderer)).toBe('2s')
+      await act(async () => { jest.advanceTimersByTime(1) })
+      expect(elapsedOf(renderer)).toBe('3s')
+      await act(async () => { jest.advanceTimersByTime(1_000) })
+      expect(elapsedOf(renderer)).toBe('4s')
+      renderer.unmount()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  test('a re-anchor and unmount leave no obsolete tick scheduled', async () => {
+    jest.useFakeTimers()
+    try {
+      const baseline = jest.getTimerCount()
+      let commits = 0
+      const tree = (anchor: number) => (
+        <Profiler id="activity-row" onRender={() => { commits += 1 }}>
+          <ChatActivityRow activity={{ phase: 'thinking', elapsedMs: 0 }} phaseStartedAt={anchor} />
+        </Profiler>
+      )
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => { renderer = TestRenderer.create(tree(Date.now())) })
+      expect(jest.getTimerCount()).toBe(baseline + 1)
+      await act(async () => { jest.advanceTimersByTime(1_300) })
+      await act(async () => { renderer.update(tree(Date.now())) })
+      // The old anchor's pending step is gone: one schedule, one commit a second.
+      expect(jest.getTimerCount()).toBe(baseline + 1)
+      // 100 ms acts commit every tick on its own; a surviving old-anchor
+      // chain (300 ms off this grid) would add commits.
+      commits = 0
+      for (let step = 0; step < 50; step += 1) {
+        await act(async () => { jest.advanceTimersByTime(100) })
+      }
+      expect(commits).toBe(5)
+      expect(elapsedOf(renderer)).toBe('5s')
+      act(() => { renderer.unmount() })
+      expect(jest.getTimerCount()).toBe(baseline)
     } finally {
       jest.useRealTimers()
     }

@@ -1,7 +1,7 @@
 // The activity row (design D6): one muted, pulsing line at the end of the
 // transcript naming what the in-flight turn is doing and for how long. The
-// elapsed time ticks once per second on the client clock — no server traffic —
-// and the interval lives only while the row is mounted. Hiding the row
+// elapsed time ticks once per second of the phase's age on the client clock —
+// no server traffic — and its timer lives only while the row is mounted. Hiding the row
 // (responding phase, pending requests, archived chats) is ChatView's decision
 // (design D4); this component only renders what it is given.
 import { useEffect, useState } from 'react'
@@ -38,10 +38,21 @@ export default function ChatActivityRow({ activity, phaseStartedAt }: {
   phaseStartedAt: number
 }) {
   const [now, setNow] = useState(() => Date.now())
+  // One timeout chain per anchor, each step landing on the next whole second
+  // of the phase's age: a phase that re-anchors on the mounted row (requesting
+  // -> thinking) or arrives already aged ticks on its own seconds, not on the
+  // mount's. A new anchor or unmount clears the pending step.
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [])
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const step = () => {
+      const current = Date.now()
+      setNow(current)
+      const intoSecond = (((current - phaseStartedAt) % 1000) + 1000) % 1000
+      timer = setTimeout(step, 1000 - intoSecond)
+    }
+    step()
+    return () => clearTimeout(timer)
+  }, [phaseStartedAt])
   return (
     <p className="flex items-center gap-2 text-chat-meta text-secondary" data-testid="chat-activity" data-phase={activity.phase}>
       <span className="chat-activity-dot" aria-hidden="true" />
