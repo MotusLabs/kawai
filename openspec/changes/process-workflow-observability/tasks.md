@@ -20,8 +20,8 @@ archives after it and after `process-observability-foundation`.
 
 ## 7. Daily reassessment and durable digests
 
-- [ ] 7.1 Persist validated per-team schedule/time zone and collection/retention settings with documented defaults. Verify D7 and that completed usage cannot go below 90 days; schedule edits keep dated digests (D6).
-- [ ] 7.2 Implement the minute scheduler, daily reassessment, and digest/checkpoint transaction (D5). **Checkpoint 2.** Commit Table D and property PP2 (seed `0xD16E`, year sweep in three zones). Verify "Restart after scheduled time", "No new evidence", generation without a lead or Prometheus; mutant "catch up every missed date" fails D4.
+- [ ] 7.1 Persist validated per-team schedule/time zone and collection/retention settings with documented defaults. Verify Table D row DG-7 and that completed usage cannot go below 90 days; schedule edits keep dated digests (DG-6).
+- [ ] 7.2 Implement the minute scheduler, daily reassessment, and digest/checkpoint transaction (D5). **Checkpoint 2.** Commit Table D (DG-1–DG-10, including the reviewer's Jan 1–3 downtime example as DG-8) and property PP2 (seed `0xD16E`, year sweep in three zones over generated running and downtime spans, design "Properties"). Verify "Restart after scheduled time", "No new evidence", generation without a lead or Prometheus; mutant "catch up every missed date" fails DG-4, DG-8 and PP2; mutant "skip a date due while running" fails DG-9 and PP2; mutant "no missed-interval record" fails DG-8.
 - [ ] 7.3 Display typed system digests beside agent reports with period/freshness and changed/resolved advice. Verify "Lead unavailable", no agent impersonation, no duplicate scheduled lead message; add daily-operation docs.
 
 ## 8. Human-scoped model and compaction experiments

@@ -59,8 +59,13 @@ holds and its test stays the oracle.
 
 Per team: time zone (IANA) and local time (default 09:00 UTC), validated. A
 minute tick writes at most one digest per team per local date in one
-transaction with its checkpoint; restart catches up only the latest due
-date; an unchanged assessment set yields a "no change" digest without new
+transaction with its checkpoint. A date whose scheduled instant passes while
+the scheduler runs gets its digest at the first tick at or after that
+instant. Dates whose scheduled instants fell during downtime are not
+backfilled: at startup the scheduler writes one catch-up digest for the
+latest such date and, in the same transaction, a missed-interval record
+naming the downtime span and the skipped earlier dates (possibly none). An
+unchanged assessment set yields a "no change" digest without new
 recommendation copies; generation needs no lead session or Prometheus.
 
 ### D6 — Experiments (8.x)
@@ -126,13 +131,16 @@ WebSocket handler) with fake clocks.
 
 | id | situation | → digests |
 |----|-----------|-----------|
-| D1 | scheduled time passes | one for that local date |
-| D2 | DST fall-back repeats 02:00–03:00 with schedule 02:30 | one for that date |
-| D3 | DST spring-forward skips 02:30 | one, at the next valid minute |
-| D4 | server down for three due dates | one, for the latest due date |
-| D5 | no evidence change | one "no change" digest, no new recommendation copies |
-| D6 | schedule edited after a digest | earlier digests unchanged |
-| D7 | invalid zone, time, or cadence | refused, nothing stored |
+| DG-1 | scheduled time passes | one for that local date |
+| DG-2 | DST fall-back repeats 02:00–03:00 with schedule 02:30 | one for that date |
+| DG-3 | DST spring-forward skips 02:30 | one, at the next valid minute |
+| DG-4 | server down for three due dates | one, for the latest due date; missed interval names the two earlier dates |
+| DG-5 | no evidence change | one "no change" digest, no new recommendation copies |
+| DG-6 | schedule edited after a digest | earlier digests unchanged |
+| DG-7 | invalid zone, time, or cadence | refused, nothing stored |
+| DG-8 | `UTC` 09:00; no digest yet; down Jan 1 08:00 → Jan 3 10:00 | one digest, for Jan 3; missed interval Jan 1 08:00–Jan 3 10:00 naming Jan 1 and Jan 2; none for Jan 1 or Jan 2 |
+| DG-9 | running through Jan 1–3 09:00 | one digest each for Jan 1, Jan 2, Jan 3; no missed interval |
+| DG-10 | digest for Jan 1 written at 09:00, down Jan 1 09:30 → Jan 1 12:00 | no new digest at startup; missed interval names no skipped date |
 
 **Table X — experiments.**
 
@@ -148,10 +156,19 @@ WebSocket handler) with fake clocks.
   (overlaps, ties, gaps). Property: the primary-cause durations sum to the
   elapsed time with no overlap, and match Table P per instant. Seed `0x9A27`,
   200 cases.
-- **PP2, one digest per local date.** Generator: every day of one year in
-  three zones with random restarts. Property: exactly one digest per team and
-  local date that has passed its schedule. Seed `0xD16E`, 365 cases × zones
-  (`propertyCases`).
+- **PP2, digests match the running/downtime model.** Generator: one year
+  of days in three zones, split into random alternating running and downtime
+  spans (some spanning several due dates, some shorter than a day, some
+  starting or ending on a DST transition). Reference model, per team: each
+  local date's scheduled instant (Table D rows DG-2/DG-3 for DST) falls either
+  in a running span, which yields exactly one digest for that date, or in a
+  downtime span; at each startup, the dates whose instants fell in the
+  downtime span just ended yield one digest for the latest of them and one
+  missed-interval record naming the others; those others never get a
+  digest. Property: the stored digests and missed-interval records equal the
+  model, no date has two digests, and no digest is dated before its
+  schedule. Seed `0xD16E`, 365 cases × zones (`propertyCases`). Table D rows
+  DG-4, DG-8, DG-9 and DG-10 are fixed cases of the same model.
 - **PP3, decisions are idempotent.** Generator: seeded command sequences with
   replays, reorderings and a crash at each transaction boundary. Property:
   stored decisions equal the model of Table H. Seed `0xDEC1`, 200 cases.
@@ -161,7 +178,7 @@ WebSocket handler) with fake clocks.
 1. 5.1/5.2 on the real metrics reader: one task through assignment, review,
    hold and acceptance shows the Table P partition in `team_metrics` and the
    tab.
-2. 7.2 with the real scheduler and a fake clock: D1 and D4.
+2. 7.2 with the real scheduler and a fake clock: DG-1, DG-4 and DG-8.
 Each names a wiring mutant that must fail.
 
 ## Affected existing workflows
@@ -189,7 +206,7 @@ mailbox delivery, background-task status, foundation export snapshot.
 - A1: First-acceptance cohorts, the Table P partition, unfinished work, and bottleneck rules appear in `team_metrics` and the Metrics tab, with existing metric ids unchanged and checkpoint 1 passing.
 - A2: Human decisions and intervention links follow Table H and property PP3; accepting advice dispatches and edits nothing.
 - A3: Report proposals follow Table W only after this change is approved and task 6.2 lands; until then the existing window-role test passes unchanged.
-- A4: Digests follow Table D and property PP2 and are shown beside agent reports as typed system digests.
+- A4: Digests follow Table D and property PP2's running/downtime model: one digest per date due while running, latest-only catch-up with a missed-interval record after downtime, no backfill. They are shown beside agent reports as typed system digests.
 - A5: Experiments follow Table X; the 9.6 families and gauges are exported within registry budgets; adapters 10.1 and 10.2 record actual landed facts and report absent capabilities.
 ### Invariants
 - I1: No experiment, decision, or digest starts, switches, compacts, or interrupts a chat.
@@ -216,7 +233,7 @@ mailbox delivery, background-task status, foundation export snapshot.
 - `openspec/changes/process-workflow-observability/**`
 ### Verification
 - V1: Tables P, W, H, D, X are committed verbatim as table-driven tests, at least one per seam through production composition with its wiring mutant failing.
-- V2: Properties PP1–PP3 run through `propertyCases` at their seeds; PP2 sweeps a year of days in `Europe/Berlin`, `America/New_York`, and `UTC`.
+- V2: Properties PP1–PP3 run through `propertyCases` at their seeds; PP2 sweeps a year of days in `Europe/Berlin`, `America/New_York`, and `UTC` with generated running and downtime spans and asserts both the per-running-date and the latest-only catch-up rules.
 - V3: Citation preflight, `bun run check --full-properties` on the clean committed head under pinned Bun 1.4.3, `scripts/verify-result.ts`, `openspec validate process-workflow-observability --strict`, and the walkthrough (10.3) as a fixture-gated private CI browser spec (never `bun run test:e2e`, never live data).
 ### Excluded
 - X1: No implementation of `plan-revision-apply`, `codex-capacity-retry`, or `delivery-outcome-metrics`; their facts are consumed only when landed.
