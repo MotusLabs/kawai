@@ -1,10 +1,11 @@
 // e2e-fixture-specs.ts - The fixture step's spec lister (ci-fixture-specs D1):
 // lists the suite twice (`--list --reporter=json`, fixture off and on) and
 // prints the files whose tests flip from skipped to runnable, sorted, one per
-// line. The fixture step's `run` assigns this output and passes it to
-// Playwright (ci.yml D3). A listing that fails, reports an error, is not the
-// shape read here, or flips nothing refuses with exit 1 (I4). The guard
-// checks run over the real tree too (D2); `status` is never read (I1).
+// line, echoing them on stderr for the job log (A9): the step captures stdout
+// into $specs and CI's dot reporter names no files. The step's `run` assigns
+// this output to Playwright (ci.yml D3). A listing that fails, reports an
+// error, is not the shape read here, or flips nothing refuses with exit 1
+// (I4). The guard checks run over the real tree too (D2); `status` is never read (I1).
 import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -213,15 +214,13 @@ function outcomeRefusal(outcome: ListingOutcome, parsed: unknown): string | null
   return null
 }
 
-/** List the fixture-gated files from repository root; exit 1 on a refusal (A3). */
+/** List the fixture-gated files; exit 1 on a refusal (A3); echo the list on
+ * stderr so the job log names the files (A9). */
 export async function runCli(
   repoRoot: string,
   out: { log: (line: string) => void; error: (line: string) => void },
 ): Promise<number> {
-  const [off, on] = await Promise.all([
-    runListing(repoRoot, 'fixture-off', false),
-    runListing(repoRoot, 'fixture-on', true),
-  ])
+  const [off, on] = await Promise.all([runListing(repoRoot, 'fixture-off', false), runListing(repoRoot, 'fixture-on', true)])
   const parsed = [off, on].map((outcome) => {
     try {
       return JSON.parse(outcome.stdout) as unknown
@@ -242,6 +241,7 @@ export async function runCli(
     return 1
   }
   for (const file of picked.files) out.log(file)
+  out.error(`scripts/e2e-fixture-specs: ${picked.files.length} fixture specs: ${picked.files.join(' ')}`)
   return 0
 }
 

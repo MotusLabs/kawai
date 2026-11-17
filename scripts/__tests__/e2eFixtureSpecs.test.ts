@@ -147,13 +147,14 @@ describe('pickFixtureSpecs', () => {
   })
 
   test('project and title-path matching tell same-titled tests apart; one flipping project lists once', () => {
+    // The flipping identity comes first: a key-collapse mutant lets the last entry win, losing the flip, and fails below.
     const twin = (describes: string[], expected: string) => ({ title: 'same title', describes, expected })
-    const twinOff = listing([suiteFor('twin.spec.ts', [twin(['A'], 'passed'), twin(['B'], 'skipped')])])
-    const twinOn = listing([suiteFor('twin.spec.ts', [twin(['A'], 'passed'), twin(['B'], 'passed')])])
+    const twinOff = listing([suiteFor('twin.spec.ts', [twin(['B'], 'skipped'), twin(['A'], 'passed')])])
+    const twinOn = listing([suiteFor('twin.spec.ts', [twin(['B'], 'passed'), twin(['A'], 'passed')])])
     expect(expectFiles(pickFixtureSpecs(REPO_ROOT, twinOff, twinOn))).toEqual(['tests/e2e/twin.spec.ts'])
     const byProject = (project: string, expected: string) => ({ title: 't', project, expected })
     const projOff = listing([suiteFor('two.spec.ts', [byProject('chromium', 'skipped'), byProject('firefox', 'skipped')])])
-    const projOn = listing([suiteFor('two.spec.ts', [byProject('chromium', 'skipped'), byProject('firefox', 'passed')])])
+    const projOn = listing([suiteFor('two.spec.ts', [byProject('chromium', 'passed'), byProject('firefox', 'skipped')])])
     expect(expectFiles(pickFixtureSpecs(REPO_ROOT, projOff, projOn))).toEqual(['tests/e2e/two.spec.ts'])
   })
 
@@ -209,11 +210,10 @@ describe('the lister CLI', () => {
     try {
       const result = runLister(repo, { AGENTBOARD_CHAT_FIXTURE: 'irrelevant-in-parent' })
       expect(result.status, result.stderr).toBe(0)
-      expect((result.stdout ?? '').trim().split('\n').sort()).toEqual([
-        'tests/e2e/gated-top.spec.ts',
-        'tests/e2e/helper-gated.spec.ts',
-        'tests/e2e/nested/deep/gated-nested.spec.ts',
-      ])
+      const expected = ['tests/e2e/gated-top.spec.ts', 'tests/e2e/helper-gated.spec.ts', 'tests/e2e/nested/deep/gated-nested.spec.ts']
+      expect((result.stdout ?? '').trim().split('\n').sort()).toEqual(expected)
+      // stdout lands in the workflow's $specs; the job log names the files only through the stderr echo (A9).
+      for (const file of expected) expect(result.stderr, file).toContain(file)
     } finally {
       rmSync(repo, { recursive: true, force: true })
     }
@@ -485,14 +485,14 @@ describe('over the real tree', () => {
   })
 
   test('the readers check passes over tests/ with the real list', async () => {
-    const lines: string[] = []
-    const code = await runCli(REPO_ROOT, {
-      log: (line) => lines.push(line),
-      error: (line) => lines.push(`STDERR:${line}`),
-    })
+    const printed: string[] = []
+    const errors: string[] = []
+    const code = await runCli(REPO_ROOT, { log: (line) => printed.push(line), error: (line) => errors.push(line) })
     expect(code).toBe(0)
-    expect(lines.length).toBeGreaterThan(0)
-    expect(lines.some((line) => line.startsWith('STDERR:'))).toBe(false)
-    expect(checkUnlistedReaders(readTestsTree(REPO_ROOT), lines)).toEqual([])
+    expect(printed.length).toBeGreaterThan(0)
+    // The workflow captures stdout into $specs; the e2e job log names the files only through the stderr echo (A9).
+    const logged = errors.join('\n')
+    for (const file of printed) expect(logged, file).toContain(file)
+    expect(checkUnlistedReaders(readTestsTree(REPO_ROOT), printed)).toEqual([])
   }, 120000)
 })
