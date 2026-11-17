@@ -5,11 +5,11 @@ Implementation notes (feat/bounded-openspec-discovery, 2026-11-11):
 - 1.1 used the 2026-11-10 measurements instead of a fresh 10-minute log: 676 runs in 2 minutes, 235 at peak, a mean of 49 running over 20 one-second samples, and `cpu.pressure` some avg60 of 30-33%. The server was then stopped. Thirty seconds after the stop, avg10 fell from 12.8% to 0.4%, and avg60 fell from 21.6% to 7.4% within a minute.
 - 2.1, 3.1, 4.1: the tables were written with their code, not committed failing first, because the pre-commit hook runs the affected tests and refuses a failing commit. The named mutants stand in as the evidence that each table detects its fault.
 - 4.2: besides the two named mutants, two pool variants survive, a waiter that rechecks for a free slot and a waiter that takes the slot without the handoff. The window between a release and the waiter waking is one microtask, which no test reaches without a hook in the pool. The first variant keeps the size bound and loses only FIFO order.
-- A5: `indexHandlers.test.ts` › `workspace snapshots reach clients on connect, discovery, and removal` waited a single `setTimeout(0)` tick for discovery to publish. The fingerprint's `stat` calls and the pool's queue add async hops, so its two waits after a seed change now use the file's bounded `waitForSent` (2 s). Its assertions are unchanged.
+- A5: `src/server/__tests__/indexHandlers.test.ts` › `workspace snapshots reach clients on connect, discovery, and removal` waited a single `setTimeout(0)` tick for discovery to publish. The fingerprint's `stat` calls and the pool's queue add async hops, so its two waits after a seed change now use the file's bounded `waitForSent` (2 s). Its assertions are unchanged.
 
 ## 1. Baseline evidence
 
-- [ ] 1.1 Before any code change, on the live instance with no OpenSpec edits for 10 minutes, record one-second samples of `pgrep -fc 'openspec list --json'` and `/sys/fs/cgroup/cpu.pressure` for 10 minutes, and the worktree count. Keep the raw log. Verify: the log holds 600 samples, and the result reports the peak, the mean, and the pressure range (the V5 "before" half).
+- [ ] 1.1 **Proposed for retirement (2026-11-18, needs the owner's plan approval; see design "Closeout").** Before any code change, on the live instance with no OpenSpec edits for 10 minutes, record one-second samples of `pgrep -fc 'openspec list --json'` and `/sys/fs/cgroup/cpu.pressure` for 10 minutes, and the worktree count. Keep the raw log. Verify: the log holds 600 samples, and the result reports the peak, the mean, and the pressure range (the V5 "before" half).
 
 ## 2. Fingerprint (D1)
 
@@ -35,5 +35,15 @@ Implementation notes (feat/bounded-openspec-discovery, 2026-11-11):
 
 - [x] 6.1 Add the `@covers: openspec-visibility › …` annotations for every scenario of the two new requirements above their tests. Verify: `scripts/__tests__/specCoverageGuard.test.ts` passes.
 - [x] 6.2 Add or update the workspace-discovery bullet in `docs/architecture/` (fingerprint reuse, the 10-minute limit, the pool of 3, the debug line). Add a `docs/recovery-matrix.md` row: the fault is an input missed by the fingerprint, the mechanism is the 10-minute reuse limit, and the test is RD5's title. Verify: `recoveryMatrix.test.ts` passes.
-- [ ] 6.3 After the change ships in a release and the live instance runs it, repeat 1.1 for 10 minutes and collect the `workspace_openspec_pass` lines. Verify V5: the peak is 3 or less, and the result reports runs per 10 minutes and the median pass duration beside 1.1's figures, with both raw logs attached.
-- [ ] 6.4 Run `bun run check` on the clean committed tree (V6). Map every oracle id (FP1–FP15, RD1–RD5, DO1–DO7, PL1, QT1, PC1) to its test title and killed mutant, and A1–A6, I1–I4, and V1–V6 to evidence. Verify: no id is unmapped.
+- [ ] 6.3 **Proposed for retirement (2026-11-18, needs the owner's plan approval; see design "Closeout").** After the change ships in a release and the live instance runs it, repeat 1.1 for 10 minutes and collect the `workspace_openspec_pass` lines. Verify V5: the peak is 3 or less, and the result reports runs per 10 minutes and the median pass duration beside 1.1's figures, with both raw logs attached.
+- [ ] 6.4 Carried out by group 7 below. Run `bun run check` on the clean committed tree (V6). Map every oracle id (FP1–FP15, RD1–RD5, DO1–DO7, PL1, QT1, PC1) to its test title and killed mutant, and A1–A6, I1–I4, and V1–V6 to evidence. Verify: no id is unmapped.
+
+## 7. Closeout (proposed slice; contract at the end of design.md)
+
+Groups 2–6.2 landed in PR #384 (`977db6a9`), with the retention fix PR #411 (`09535dfc`). Their boxes stay as they are; this group does not tick earlier boxes.
+
+- [ ] 7.1 Unroll the template-generated rows into literal `test` calls over the same row bodies: FP1–FP11 and FP13–FP15 in `src/server/__tests__/openspecFingerprint.test.ts`, the RD rows in `src/server/__tests__/openspecDiscoveryReuse.test.ts`, and PL1 in `src/server/__tests__/openspecPool.test.ts`. Each new title equals the text its template rendered. Verify A2: the per-file test count is unchanged, a diff shows no assertion change, and the files pass under `bun run test`.
+- [ ] 7.2 Complete the oracle evidence map in design.md with the literal titles from 7.1, and run the citation preflight on the committed head. Verify A1/V1: zero malformed or unresolved citations.
+- [ ] 7.3 Rerun the landed contract's named mutants (V1: size, mtime, root path, `archive/` walked, root entries skipped; V2: age ignored, failed result kept, post-run fingerprint stored; V3: pool size 4, slot leaked on throw; V4: pool bypassed, cache bypassed, timer at submission). Verify A3: each fails its named row, with each mutant's script and log kept.
+- [ ] 7.4 Record the owner's decision on 1.1, 6.3, and V5 from plan approval in this file and in design.md, without inventing a measurement. Verify A4: neither file claims a speedup.
+- [ ] 7.5 Only when 7.4 records a retirement: sync the two ADDED requirements into `openspec/specs/openspec-visibility/spec.md` and archive the change. Verify A5/V3: strict validation before the archive, then `scripts/__tests__/specCoverageGuard.test.ts` and `bun run check --full-properties` on the clean committed head (V4). If the owner keeps 1.1/6.3 open, stop after 7.3 and report the change as owner-gated.
