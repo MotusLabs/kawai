@@ -1,5 +1,26 @@
 # Design
 
+## Reconciliation status (2026-11-17)
+
+The `task_get` decisions D5–D9, Table G, and the task parts of properties
+P3–P5 have been delivered outside this change: D7 and G6–G8 by PR #396, and
+the rest by the `bounded-task-reads` slice (PR #419). They are kept below
+unchanged, because tasks.md group 3 cites them, but the main `team-tasks`
+spec is now their baseline and this change carries no `team-tasks` delta.
+Where they differ, the main spec and `bounded-task-reads`'s design govern:
+- D9: assignments, publications, and acknowledgements gained continuation
+  anchors, and publication rationales became 2,000-byte previews (main spec
+  "Remaining task histories have continuation anchors" and "task_get
+  assignment history is compact").
+- D8a and G13f: the diff reader keeps `TaskJournalReads.readable`'s
+  origin-specific rights (decision 5e36a5a8). An `execution` origin reads;
+  an `override` or `promotion` origin is refused as a system read.
+- G16: the 256 KB figure holds for a deterministic fixture only. No response
+  has a universal byte bound (main spec "task_get bounds its growing lists").
+
+The metrics, report, and drill decisions (D1–D4, D10), Table T, properties
+P1 and P2, and the Table T part of P4 remain this change's live design.
+
 ## Context
 
 Every `kawai-team` tool result is a single `JSON.stringify` of the handler's
