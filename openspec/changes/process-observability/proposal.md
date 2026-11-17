@@ -1,5 +1,46 @@
 # Proposal
 
+## Partition status (2026-11-18, PROPOSED)
+
+Planning update for plan `plan-2eb5f292` (draft); owner approval pending. No
+box in tasks.md is ticked or unticked by this update, and nothing here is
+archived. If approved, this change is carried out by three changes and is
+then retired by an owner decision, never archived itself:
+
+- `process-observability-foundation` (F): closeout of the landed foundation.
+- `process-quota-history-and-incident-advice` (Q): collector-first quota
+  history and incident advice (finding F4: main `chat-usage-limits` already
+  promises background observation; no collector exists).
+- `process-workflow-observability` (W): stages, decisions, digests,
+  experiments, remaining export families, adapters, walkthrough.
+
+**Tasks.** 1.1–1.5, 2.1–2.4, 9.1–9.5 (ticked, landed) → F closeout; 3.1–3.5,
+4.1–4.6 → Q; 5.1–5.4, 6.1–6.4, 7.1–7.3, 8.1–8.4, 9.6, 10.1–10.4 → W. (45)
+
+**Scenarios (84).** Each maps to exactly one place:
+
+| Original delta › requirement | Scenarios → slice |
+|---|---|
+| chat-turn-usage › Usage rows are retained for 90 days | all 4 → F |
+| chat-usage-limits › Usage is refreshed when no report has arrived | 7 → main baseline (archived via `providers-and-workers`, landed); "Eligible alternative without a live chat" → Q implements main |
+| chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint | 7 → main baseline (landed); "Background provider configuration" → Q implements main |
+| chat-usage-limits › Provider usage stays fresh while sessions are live | 6 → main baseline (landed; "Pulls stop without live sessions" holds today); "Unused alternative stays observable", "No standalone reader" → Q implements main |
+| process-observations › Observations cover managed work only; Observation ingestion is idempotent and non-blocking; Primary completion is recorded result acceptance; Turn timing includes non-completing outcomes; Context and compaction are structured observations; Source availability is explicit during staged delivery | all 10 → F |
+| process-observations › History has bounded retention and visible coverage | "Interval detail ages out first", "Existing history" → F; "Detail pruned" → Q |
+| process-observations › Stage and execution state are independent; Parallel execution does not inflate task elapsed time | all 4 → W |
+| process-observations › Quota observations preserve identity and freshness; Incident alternatives use facts available at the time | all 3 → Q |
+| prometheus-export › all 7 requirements | all 10 → F (two requirements narrowed; W restores the full text by MODIFIED) |
+| process-recommendations › Incident advice is available before statistical baselines; Switch comparisons respect all eligibility and quota constraints; Assessments are immutable and versioned; Incident advice reuses existing episodes; Recommendations share the existing Metrics and report surfaces | all 7 → Q (the last narrowed; W restores it by MODIFIED) |
+| process-recommendations › Recommendations optimize acceptance time with guardrails; Human decisions and interventions are separate records; Outcomes distinguish observations from causal claims; Experiments require an explicit human scope; Each team receives one daily reassessment digest | all 7 → W |
+| process-reports › RENAMED/MODIFIED Report windows do not delay proposals and 3 ADDED | all 6 → W (a proposed behavior change; today's window roles hold until approved and implemented) |
+| team-process-metrics › Acceptance time…; Stage measurements…; Unfinished work… | all 4 → W |
+| team-process-metrics › Early advice does not waive evidence sufficiency | 1 → Q |
+| team-process-metrics › Observation definitions are shared across surfaces | 1 → F (narrowed; snapshot-version clause → W) |
+
+This change's own `chat-usage-limits` delta is obsolete: main already carries
+its text (archived 2026-10-19 with `providers-and-workers`), so neither F, Q,
+nor W restates it. Archive order (proposed): `openrouter-provider`, F, Q, W.
+
 ## Why
 
 Kawai can count tokens, task lead time and limit-related friction, but cannot explain how execution, review queues, quota waits and context management affect time to an accepted result. The owner needs actionable advice during an incident and regular improvements afterward, without waiting for a week of reports or requiring Prometheus.

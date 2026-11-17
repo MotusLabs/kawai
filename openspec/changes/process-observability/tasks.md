@@ -1,5 +1,9 @@
 # Tasks
 
+## Partition (2026-11-18, PROPOSED)
+
+If the owner approves the partition in proposal.md, tasks below are carried out by `process-observability-foundation` (1.x, 2.x, 9.1–9.5 closeout), `process-quota-history-and-incident-advice` (3.x, 4.x), and `process-workflow-observability` (5.x–8.x, 9.6, 10.x) with the same numbers. These boxes are left as recorded; this change is retired by an owner decision after all three archive.
+
 ## Delivery order
 
 The approved foundation is implementable without the provider/dispatch/context prerequisites. Execute groups 1 and 2, then tasks 9.1-9.5. Next satisfy integration gate 3.1 and continue groups 3-8, task 9.6 and group 10. Numeric section order preserves the existing feature grouping; this dependency order controls execution.
