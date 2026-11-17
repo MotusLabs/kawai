@@ -2,9 +2,10 @@
 // D2). Handlers bind the calling session id and strip unknown arguments, so
 // a forged creator or team in the input is never seen by the service.
 // `task_transfer_owner` moves ownership (group-mail-task-affinity D7).
-// `task_get` and `task_journal_read` read through one TaskJournalReads
-// (bounded-log-reads-and-task-get D4–D6): bounded windows and byte-bounded
-// previews, and any entry whole, behind task_get's caller and team rules.
+// `task_get`, `task_journal_read`, and `task_result_diff_read` read through
+// one TaskJournalReads (bounded-log-reads-and-task-get D4–D6,
+// bounded-task-reads D5–D10): bounded windows and byte-bounded previews, any
+// entry or diff whole, behind task_get's caller and team rules.
 import { z } from 'zod'
 import { TASK_STATUSES, type TaskListStatus, type TaskStatus } from '../../shared/teamTasks'
 import type { TaskService } from './TaskService'
@@ -12,7 +13,7 @@ import type { TaskResultService } from './TaskResultService'
 import { JOURNAL_LIMIT_MAX, TaskJournalReads } from './taskJournalWindow'
 import { TASK_LIST_LIMIT_MAX, TASK_LIST_STATUSES } from './taskListWindow'
 
-export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_journal_read', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
+export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_journal_read', 'task_result_diff_read', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
   'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result', 'task_transfer_owner'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
@@ -26,6 +27,13 @@ const listLimit = `limit must be an integer from 1 to ${TASK_LIST_LIMIT_MAX}`
 // value, as the store refuses a number outside the task's revisions.
 const unknownRevision = { error: (issue: { input?: unknown }) => `Unknown revision of this task: ${String(issue.input)}` }
 const offsetBytes = 'offset_bytes must be a safe non-negative integer'
+const offsetSchema = z.number({ error: offsetBytes }).int({ error: offsetBytes }).min(0, { error: offsetBytes })
+  .max(Number.MAX_SAFE_INTEGER, { error: offsetBytes }).optional()
+// bounded-task-reads D5–D9: a section anchor of the wrong type is refused naming the argument;
+// a string anchor that is not the task's is refused by the store, naming the id.
+const anchorId = (name: string) => z.string({ error: `${name} must be an id string` }).optional()
+const unknownPublication = { error: (issue: { input?: unknown }) => `Unknown publication of this task: ${String(issue.input)}` }
+const acknowledgementAnchor = 'acknowledgements_before must be { session_id, revision } of an acknowledgement of this task'
 export const taskSchemas = {
   task_create: z.object({
     title: z.string().min(1), direction: z.string().min(1), acceptance: z.string().optional(), contract: z.string().optional(),
@@ -38,12 +46,19 @@ export const taskSchemas = {
       .max(JOURNAL_LIMIT_MAX, { error: journalLimit }).optional(),
     revisions_before: z.number(unknownRevision).optional(),
     revision: z.number(unknownRevision).optional(),
+    subtasks_before: anchorId('subtasks_before'),
+    messages_before: anchorId('messages_before'),
+    full_messages: z.boolean({ error: 'full_messages must be a boolean' }).optional(),
+    results_before: anchorId('results_before'),
+    result_id: anchorId('result_id'),
+    assignments_before: anchorId('assignments_before'),
+    publications_before: z.number(unknownPublication).optional(),
+    acknowledgements_before: z.object({
+      session_id: z.string({ error: acknowledgementAnchor }), revision: z.number({ error: acknowledgementAnchor }),
+    }, { error: acknowledgementAnchor }).optional(),
   }),
-  task_journal_read: z.object({
-    ...taskId, entry_id: z.string().min(1),
-    offset_bytes: z.number({ error: offsetBytes }).int({ error: offsetBytes }).min(0, { error: offsetBytes })
-      .max(Number.MAX_SAFE_INTEGER, { error: offsetBytes }).optional(),
-  }),
+  task_journal_read: z.object({ ...taskId, entry_id: z.string().min(1), offset_bytes: offsetSchema }),
+  task_result_diff_read: z.object({ ...taskId, result_id: z.string().min(1), offset_bytes: offsetSchema }),
   task_note: z.object({ ...taskId, text: z.string().min(1) }),
   task_update_status: z.object({ ...taskId, status, note: z.string().optional() }),
   task_amend: z.object({
@@ -107,8 +122,9 @@ export const taskSchemas = {
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
   task_create: 'Create a team task (only if your group may create tasks). Optional parent_id, worktree (a worktree root of this repository), and openspec_change; plan_id with plan_change links the task to a change of an open plan\'s approved revision (both or neither; fixed afterwards). Optional contract: an implementation contract in Markdown — a `## Implementation contract` heading, then `### Acceptance`, `### Invariants`, `### Scope`, `### Verification`, `### Excluded` in that order, clauses as `- A1: text` (I, V, X likewise), Scope as one glob per bullet; Acceptance, Scope, and Verification need at least one entry. A contract that does not parse refuses the creation with every problem and its line. You become its creator.',
-  task_get: 'Read a task: current direction, acceptance, and contract (in task), assignment, and result whole; the journal, subtasks, and messages as bounded windows, oldest first, each with its total — the newest 50 journal entries (journal_limit 1–200), 100 subtasks, and 50 messages. A journal entry is a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8). Page older entries with journal_before set to bounds.journal.nextBefore; read any entry whole with task_journal_read. revisions lists the newest 50 revisions oldest first as rows — revision, identity (r<revision>#<hash>), contractHash (null without a contract), author, createdAt, notify, directionBytes, acceptanceBytes, and a rationale preview of at most 2,000 stored bytes with rationaleBytes and rationaleCut — never their direction or acceptance; bounds.revisions has total, returned, truncated, and nextBefore, and revisions_before (an integer from 2 to the task\'s revision) returns the revisions below it. Read one revision whole with revision (an integer from 1 to the task\'s revision): revisionText carries its direction, acceptance, and rationale. findingsLedger lists the newest 100 findings (F<n>), newest first, each with level, clause, state, and transitions (ledgerOlderRemaining when more exist); each result\'s findings rows carry their items, class, and whether they counted.',
+  task_get: 'Read a task, bounded on every call: the current direction, acceptance, contract, and assignment (task) whole; every growing list a window with its total in bounds.<list> (total, returned, truncated when older rows remain, nextBefore to continue). The journal: the newest 50 entries (journal_limit 1–200), oldest first, each a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8); page older with journal_before set to bounds.journal.nextBefore, and read any entry whole with task_journal_read. subtasks: the newest 100, oldest first, as task_list rows (no direction or acceptance); page with subtasks_before. messages: the newest 50, oldest first, each body a preview of at most 2,000 UTF-8 bytes with bodyBytes and bodyCut; page with messages_before; full_messages: true returns whole bodies in the same window (potentially large). revisions lists the newest 50 revisions oldest first as rows — revision, identity (r<revision>#<hash>), contractHash (null without a contract), author, createdAt, notify, directionBytes, acceptanceBytes, and a rationale preview of at most 2,000 stored bytes with rationaleBytes and rationaleCut — never their direction or acceptance; bounds.revisions has total, returned, truncated, and nextBefore, and revisions_before (an integer from 2 to the task\'s revision) returns the revisions below it. Read one revision whole with revision (an integer from 1 to the task\'s revision): revisionText carries its direction, acceptance, and rationale. results: the outstanding result first, whole and sealed, then the newest 50 other results newest first as rows (id, commit, taskRevision, submittedBy, supersededBy, acceptedAt, reviewVerdict, createdAt, and a 2,000-byte summary preview with summaryBytes and summaryCut — no findings, maps, or diff); page with results_before (bounds.results.nextBefore; total excludes the outstanding result). result_id returns that result whole as resultDetail, sealed the same way. In a whole result the diff is a preview of at most 8,192 bytes with diffBytes, diffCut, and diffResumeOffsetBytes; read the whole diff with task_result_diff_read. assignments: the newest 50, oldest first, without their instruction (task.assignment keeps the current one\'s); page with assignments_before. publications: the newest 50, oldest first, each rationale a 2,000-byte preview with rationaleBytes and rationaleCut (revision reads it whole); page with publications_before (a revision number). acknowledgements: the newest 50, oldest first; page with acknowledgements_before ({ session_id, revision }). An anchor that is not this task\'s is refused naming it. Not byte-bounded: the current direction, acceptance, and instruction, whole results apart from their diff, revisionText, full_messages bodies, publication recipients, and task participants. findingsLedger lists the newest 100 findings (F<n>), newest first, each with level, clause, state, and transitions (ledgerOlderRemaining when more exist); each whole result\'s findings rows carry their items, class, and whether they counted. A Codex thread started before these arguments existed keeps its original catalogue and cannot use them.',
   task_journal_read: 'Read one journal entry of a task losslessly (entry_id from task_get): up to 8,192 stored bytes from offset_bytes (default 0; a preview\'s resumeOffsetBytes continues it) as dataBase64, which is authoritative, with their text when valid UTF-8 (else null), the entry\'s totalBytes, and nextOffsetBytes (null at the end). Read-only.',
+  task_result_diff_read: 'Read one result\'s diff losslessly (result_id from task_get): up to 8,192 stored bytes from offset_bytes (default 0; a whole result\'s diffResumeOffsetBytes continues its preview) as dataBase64, which is authoritative, with their text when valid UTF-8 (else null), the diff\'s totalBytes (0 without a diff), and nextOffsetBytes (null at the end). Read-only.',
   task_note: "Append a note to a task's journal (decisions, findings, progress). Notes are permanent.",
   task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its owner only). Optional note is journaled.',
   task_amend: "Publish a new revision of a task's direction, acceptance criteria, or contract (its owner only). Optional contract (the task_create grammar) replaces the current one; omitted or blank carries it forward unchanged, and a contract can never be removed. A contract that does not parse refuses the amendment with every problem and publishes nothing. Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice.",
@@ -130,18 +146,27 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
   return {
     task_create: async (input: unknown) => tasks.create(caller, taskSchemas.task_create.parse(input)),
     task_get: async (input: unknown) => {
-      const { task_id, journal_before, journal_limit, revisions_before, revision } = taskSchemas.task_get.parse(input)
-      const detail = await reads.agentGet(caller, task_id, {
-        journalBefore: journal_before, journalLimit: journal_limit, revisionsBefore: revisions_before, revision,
-      })
-      // The blind-first seal (independent-verification D6): project the
-      // results for the reading session when the server has a result
-      // service; the human's path (humanDetail) never seals.
-      return results ? results.applySeal(caller, task_id, detail) : detail
+      const args = taskSchemas.task_get.parse(input)
+      const anchor = args.acknowledgements_before
+      // The blind-first seal (independent-verification D6): the read
+      // transaction projects every whole result for the reading session when
+      // the server has a result service (bounded-task-reads D10); the human's
+      // path (humanDetail) never seals.
+      return reads.agentGet(caller, args.task_id, {
+        journalBefore: args.journal_before, journalLimit: args.journal_limit, revisionsBefore: args.revisions_before, revision: args.revision,
+        subtasksBefore: args.subtasks_before, messagesBefore: args.messages_before, fullMessages: args.full_messages,
+        resultsBefore: args.results_before, resultId: args.result_id, assignmentsBefore: args.assignments_before,
+        publicationsBefore: args.publications_before,
+        acknowledgementsBefore: anchor === undefined ? undefined : { sessionId: anchor.session_id, revision: anchor.revision },
+      }, results?.wholeResultSeal(caller, args.task_id))
     },
     task_journal_read: async (input: unknown) => {
       const { task_id, entry_id, offset_bytes } = taskSchemas.task_journal_read.parse(input)
       return reads.journalRead(caller, task_id, entry_id, offset_bytes ?? 0)
+    },
+    task_result_diff_read: async (input: unknown) => {
+      const { task_id, result_id, offset_bytes } = taskSchemas.task_result_diff_read.parse(input)
+      return reads.diffRead(caller, task_id, result_id, offset_bytes ?? 0)
     },
     task_note: async (input: unknown) => {
       const { task_id, text } = taskSchemas.task_note.parse(input)

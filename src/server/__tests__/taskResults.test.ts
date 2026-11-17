@@ -133,8 +133,10 @@ test('task_get carries each result its newest check and earlier count: unchecked
   const bare = tasks.store.results.insert({ teamId: team.teamId, taskId: task.id, summary: 'Old', commit: 'abc123', diff: null,
     worktree: null, tests: [], limitations: null, taskRevision: task.revision, submittedBy: { kind: 'agent', sessionId: 'dev' } })
   const result = await results.submit(agent('dev'), task.id, submission)
-  const viewsOf = async () => ((await taskHandlers(tasks, 'dev', results).task_get({ task_id: task.id })).results as
-    Array<{ id: string; checks: { newest: { id: string; status: string } | null; earlier: number } }>)
+  // The outstanding result whole by default, the older one whole by result_id (bounded-task-reads D8).
+  const read = taskHandlers(tasks, 'dev', results).task_get
+  const viewsOf = async () => [(await read({ task_id: task.id })).results[0], (await read({ task_id: task.id, result_id: bare.id })).resultDetail] as
+    Array<{ id: string; checks: { newest: { id: string; status: string } | null; earlier: number } }>
   const view = (rows: Awaited<ReturnType<typeof viewsOf>>, id: string) => rows.find(row => row.id === id)!.checks
   // The bare result: nothing recorded. The submitted one: its pending row is the newest.
   let rows = await viewsOf()

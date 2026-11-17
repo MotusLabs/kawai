@@ -152,10 +152,15 @@ for (const { runtime, call } of RUNTIMES) {
       expect(value.messages.map((entry: { body: string }) => entry.body)).toEqual(['m10'])
       expect(value.bounds).toEqual({
         journal: { total: 3, returned: 3, olderRemaining: false, nextBefore: null },
-        subtasks: { total: 0, returned: 0, truncated: false },
-        messages: { total: 1, returned: 1, truncated: false },
+        subtasks: { total: 0, returned: 0, truncated: false, nextBefore: null },
+        messages: { total: 1, returned: 1, truncated: false, nextBefore: null },
         revisions: { total: 1, returned: 1, truncated: false, nextBefore: null },
+        results: { total: 0, returned: 0, truncated: false, nextBefore: null },
+        assignments: { total: 0, returned: 0, truncated: false, nextBefore: null },
+        publications: { total: 0, returned: 0, truncated: false, nextBefore: null },
+        acknowledgements: { total: 0, returned: 0, truncated: false, nextBefore: null },
       })
+      expect(value.messages[0]).toMatchObject({ bodyBytes: 3, bodyCut: false })
     })
 
     // @covers: team-tasks › task_get bounds its growing lists › Long-running task read by an agent
@@ -165,16 +170,20 @@ for (const { runtime, call } of RUNTIMES) {
       const task = await newTask()
       const written = notes(task.id, 1198)
       for (let i = 0; i < 149; i++) tasks.store.create({ teamId: team.teamId, title: `s${i}`, direction: 'd', creator: { kind: 'agent', sessionId: 'lead' }, parentId: task.id }, at(i))
-      for (let i = 0; i < 60; i++) message(task.id, i)
+      const sent = Array.from({ length: 60 }, (_, i) => message(task.id, i))
       const first = (await call('dev', 'task_get', { task_id: task.id })).value
       expect(ids(first.journal)).toEqual(written.slice(-50))
       expect(first.subtasks).toHaveLength(100)
       expect(first.messages.map((entry: { body: string }) => entry.body)).toEqual(Array.from({ length: 50 }, (_, i) => `m${i + 10}`))
       expect(first.bounds).toEqual({
         journal: { total: 1198, returned: 50, olderRemaining: true, nextBefore: written[1148] },
-        subtasks: { total: 149, returned: 100, truncated: true },
-        messages: { total: 60, returned: 50, truncated: true },
+        subtasks: { total: 149, returned: 100, truncated: true, nextBefore: first.subtasks[0].id },
+        messages: { total: 60, returned: 50, truncated: true, nextBefore: sent[10]!.id },
         revisions: { total: 1, returned: 1, truncated: false, nextBefore: null },
+        results: { total: 0, returned: 0, truncated: false, nextBefore: null },
+        assignments: { total: 0, returned: 0, truncated: false, nextBefore: null },
+        publications: { total: 0, returned: 0, truncated: false, nextBefore: null },
+        acknowledgements: { total: 0, returned: 0, truncated: false, nextBefore: null },
       })
       const k = 700
       const t3 = (await call('dev', 'task_get', { task_id: task.id, journal_before: written[k], journal_limit: 100 })).value
@@ -337,7 +346,7 @@ for (const { runtime, call } of RUNTIMES) {
   describe(`the seal on the bounded task_get through the ${runtime} adapter (T14, T15)`, () => {
     // @covers: team-tasks › task_get bounds its growing lists › Results and revisions stay whole
     // @covers: team-tasks › task_get bounds its growing lists › Human detail stays complete
-    test('T14: a held reviewer reads coverage withheld with every result, revision, and bound; the human detail stays whole and unsealed', async () => {
+    test('T14: a held reviewer reads coverage withheld on the whole outstanding result beside 50 rows, revision rows, and bounds; the human detail stays whole and unsealed', async () => {
       const task = await newTask()
       for (let i = 2; i <= 55; i++) await tasks.amend(agent('lead'), task.id, { direction: `v${i}` })
       const coverage = [{ clause: 'A clean export downloads', tests: ['`src/export.test.ts` › `downloads a csv`'] }]
@@ -350,8 +359,11 @@ for (const { runtime, call } of RUNTIMES) {
       const sealed = (await call('reviewer', 'task_get', { task_id: task.id, session_id: 'dev' })).value
       expect(sealed.revisions).toHaveLength(50)
       expect(sealed.bounds.revisions).toEqual({ total: 55, returned: 50, truncated: true, nextBefore: 6 })
-      expect(sealed.results).toHaveLength(52)
-      expect(sealed.results.every((result: { coverage: unknown }) => JSON.stringify(result.coverage) === JSON.stringify({ withheld: true, clauses: 1 }))).toBe(true)
+      // bounded-task-reads D8: the outstanding result whole and sealed, then 50 rows that carry no map at all.
+      expect(sealed.results).toHaveLength(51)
+      expect(sealed.results[0].coverage).toEqual({ withheld: true, clauses: 1 })
+      expect(sealed.results.slice(1).every((row: Record<string, unknown>) => !('coverage' in row) && !('reviewerMaps' in row) && !('findings' in row))).toBe(true)
+      expect(sealed.bounds.results).toMatchObject({ total: 51, returned: 50, truncated: true })
       expect(sealed.bounds.journal).toMatchObject({ returned: 50, olderRemaining: true })
       expect(ids(sealed.journal)).toEqual(ids(tasks.store.detail(task.id)!.journal).slice(-50))
       const submitter = (await call('dev', 'task_get', { task_id: task.id })).value
@@ -387,8 +399,8 @@ for (const { runtime, call } of RUNTIMES) {
       expect(value.revisions[2]).toMatchObject({ directionBytes: 5, rationale: 'é'.repeat(1000), rationaleBytes: 5000, rationaleCut: true })
       expect(value.bounds.revisions).toEqual({ total: 3, returned: 3, truncated: false, nextBefore: null })
       expect(value.revisionText).toBeUndefined()
-      // The publications still carry their whole rationale, and the current direction is read once, in the task.
-      expect(value.publications.find((entry: { revision: number }) => entry.revision === 3).rationale).toBe('é'.repeat(2500))
+      // bounded-task-reads D9: publications preview the rationale too; the current direction is read once, in the task.
+      expect(value.publications.find((entry: { revision: number }) => entry.revision === 3)).toMatchObject({ rationale: 'é'.repeat(1000), rationaleBytes: 5000, rationaleCut: true })
       expect(value.task.direction).toBe('third')
       expect(value.task.identity).toBe(whole[2]!.identity)
     })
@@ -465,8 +477,10 @@ describe('system callers and the shared catalogue', () => {
     expect(taskNames(claudeNames)).toEqual([...TASK_TOOL_NAMES].sort())
     expect(taskNames(codexTools.map(tool => tool.name))).toEqual([...TASK_TOOL_NAMES].sort())
     const shape = (name: string) => Object.keys(table.find(tool => tool.name === name)!.schema.shape).sort()
-    expect(shape('task_get')).toEqual(['journal_before', 'journal_limit', 'revision', 'revisions_before', 'task_id'])
+    expect(shape('task_get')).toEqual(['acknowledgements_before', 'assignments_before', 'full_messages', 'journal_before', 'journal_limit', 'messages_before',
+      'publications_before', 'result_id', 'results_before', 'revision', 'revisions_before', 'subtasks_before', 'task_id'])
     expect(shape('task_journal_read')).toEqual(['entry_id', 'offset_bytes', 'task_id'])
+    expect(shape('task_result_diff_read')).toEqual(['offset_bytes', 'result_id', 'task_id'])
     const limit = (z.toJSONSchema(table.find(tool => tool.name === 'task_get')!.schema) as { properties: Record<string, Record<string, unknown>> }).properties.journal_limit!
     expect(limit).toMatchObject({ type: 'integer', minimum: 1, maximum: 200 })
   })

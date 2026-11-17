@@ -430,11 +430,30 @@ export class MailboxStore {
     return this.select('task_id = $taskId', { $taskId: taskId })
   }
 
-  /** The newest `limit` messages of a task in any state, oldest first (bounded-log-reads D4). */
-  forTaskNewest(taskId: string, limit: number): TeamMessage[] {
-    const rows = this.cachedStatement('SELECT * FROM team_messages WHERE task_id = $taskId ORDER BY created_at DESC, rowid DESC LIMIT $limit')
-      .all({ $taskId: taskId, $limit: limit }) as Record<string, unknown>[]
-    return rows.reverse().map(mapRow)
+  /**
+   * The newest `limit` messages of a task in any state, newest first
+   * (bounded-log-reads D4, bounded-task-reads D6), strictly older than
+   * `before` by `(created_at, rowid)` when given. The body reaches JavaScript
+   * only as a byte projection: its stored length and its first
+   * `previewBytes` bytes, or all of them with `previewBytes` null. `message`
+   * carries every other field; its `body` is empty.
+   */
+  forTaskNewest(taskId: string, limit: number, options: { before?: { at: string; rowid: number } | null; previewBytes: number | null }):
+    Array<{ message: TeamMessage; bodyBytes: number; body: unknown }> {
+    const columns = (this.db.prepare('PRAGMA table_info(team_messages)').all() as Array<{ name: string }>)
+      .map(column => column.name).filter(name => name !== 'body').map(name => `"${name}"`).join(', ')
+    const body = options.previewBytes === null ? 'CAST(body AS BLOB)' : `substr(CAST(body AS BLOB), 1, ${options.previewBytes})`
+    const older = options.before ? 'AND (created_at < $at OR (created_at = $at AND rowid < $rowid))' : ''
+    const rows = this.cachedStatement(`SELECT ${columns}, length(CAST(body AS BLOB)) AS kawai_body_bytes, ${body} AS kawai_body
+      FROM team_messages WHERE task_id = $taskId ${older} ORDER BY created_at DESC, rowid DESC LIMIT $limit`)
+      .all({ $taskId: taskId, $limit: limit, ...(options.before ? { $at: options.before.at, $rowid: options.before.rowid } : {}) }) as Record<string, unknown>[]
+    return rows.map(row => ({ message: mapRow({ ...row, body: '' }), bodyBytes: Number(row.kawai_body_bytes ?? 0), body: row.kawai_body }))
+  }
+
+  /** A message's `(created_at, rowid)` when it belongs to the task; null otherwise (bounded-task-reads D6). */
+  taskAnchor(taskId: string, messageId: string): { at: string; rowid: number } | null {
+    return this.cachedStatement('SELECT created_at AS at, rowid FROM team_messages WHERE id = $id AND task_id = $taskId')
+      .get({ $id: messageId, $taskId: taskId }) as { at: string; rowid: number } | null
   }
 
   /** Urgent direct mail held for a session's pending request. */

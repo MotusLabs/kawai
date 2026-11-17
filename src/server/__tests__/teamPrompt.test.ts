@@ -75,6 +75,15 @@ describe('buildTeamPrompt', () => {
       expect(prompt).toContain('revisions as the newest 50 text-free rows (identity, byte lengths, rationale preview)')
       expect(prompt).toContain('Page older revisions with `revisions_before` (`bounds.revisions.nextBefore`), and read one revision\'s direction, acceptance, and rationale whole with `revision`.')
       expect(prompt).not.toContain('every revision, and results whole')
+      // bounded-task-reads D11: every section anchor and whole-read route, and what stays unbounded.
+      const line = prompt.split('\n').find(entry => entry.startsWith('- `mcp__kawai-team__task_get`'))!
+      for (const term of ['`subtasks_before`', '`messages_before`', '`full_messages: true`', '`results_before`', '`result_id`', '`resultDetail`',
+        '`mcp__kawai-team__task_result_diff_read`', '`diffResumeOffsetBytes`', '`assignments_before`', '`publications_before`', '`acknowledgements_before`',
+        '`revisions_before`', '`revision`', '`journal_before`', '`journal_limit`', '2,000-byte previews', '8,192-byte preview', 'have no byte bound']) {
+        expect(line).toContain(term)
+      }
+      expect(line).not.toContain('results whole')
+      expect(prompt).toContain('`mcp__kawai-team__task_result_diff_read`: read any result\'s diff whole, in byte chunks from `offset_bytes`')
       expect(prompt).toContain('`mcp__kawai-team__task_journal_read`: read any journal entry whole, in byte chunks from `offset_bytes`')
       expect(prompt).not.toMatch(/whole journal|full journal/)
       expect(prompt).toContain(TASK_JOURNAL_GUIDANCE)
@@ -124,6 +133,9 @@ describe('buildTeamPrompt', () => {
       expect(tasks).toContain('If `mcp__kawai-team__task_journal_read` is not among your tools (a Codex thread started before it existed keeps its original tools)')
       expect(tasks).toContain('stop before any conclusion that needs omitted entries or bytes: say so, and ask for the work to continue in a fresh Codex chat.')
       expect(tasks).toContain('Never read the journal around the task tools — through the database, logs, the shell, or files.')
+      // bounded-task-reads D11: an old catalogue lacks the section anchors and the diff reader; stop, never bypass.
+      expect(tasks).toContain('A thread whose `task_get` lacks `subtasks_before`, `messages_before`, `full_messages`, `results_before`, `result_id`, `assignments_before`, `publications_before`, or `acknowledgements_before`, or that lacks `mcp__kawai-team__task_result_diff_read`, cannot reach the omitted rows or bytes')
+      expect(tasks).toContain('never a database, log, or shell read')
     }
   })
 })

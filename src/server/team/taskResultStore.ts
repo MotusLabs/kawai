@@ -113,6 +113,25 @@ export class TaskResultStore {
     return row ? this.map(row) : null
   }
 
+  /**
+   * One result of the task with its diff as a byte projection
+   * (bounded-task-reads D8): the stored length, whether it is NULL, and the
+   * first `diffCap` bytes. `result.diff` is null; the caller previews the bytes.
+   * Null when the result is not the task's.
+   */
+  getWithDiffProjection(taskId: string, id: string, diffCap: number): { result: TaskResult; diffNull: boolean; diffBytes: number; diff: unknown } | null {
+    const columns = (this.db.prepare('PRAGMA table_info(team_task_results)').all() as Array<{ name: string }>)
+      .map(column => column.name).filter(name => name !== 'diff_ref').map(name => `"${name}"`).join(', ')
+    const row = this.db.prepare(`SELECT ${columns}, diff_ref IS NULL AS kawai_diff_null, length(CAST(diff_ref AS BLOB)) AS kawai_diff_bytes,
+      substr(CAST(diff_ref AS BLOB), 1, ${diffCap}) AS kawai_diff FROM team_task_results WHERE id = ? AND task_id = ?`)
+      .get(id, taskId) as Record<string, unknown> | null
+    if (!row) return null
+    return {
+      result: this.map({ ...row, diff_ref: null }), diffNull: Number(row.kawai_diff_null) === 1,
+      diffBytes: Number(row.kawai_diff_bytes ?? 0), diff: row.kawai_diff,
+    }
+  }
+
   /** Every result of a task: the outstanding one first, then superseded ones newest first. */
   listByTask(taskId: string): TaskResult[] {
     return (this.db.prepare('SELECT * FROM team_task_results WHERE task_id = ? ORDER BY created_at DESC, rowid DESC')
@@ -171,7 +190,8 @@ export class TaskResultStore {
       .all(submissionId) as Record<string, unknown>[]).map(mapItem)
   }
 
-  private outstandingId(taskId: string): string | null {
+  /** The outstanding result's id: the newest result nothing supersedes; null when none. */
+  outstandingId(taskId: string): string | null {
     const row = this.db.prepare(`SELECT id FROM team_task_results r WHERE task_id = ?
       AND NOT EXISTS (SELECT 1 FROM team_task_results s WHERE s.supersedes_result_id = r.id)
       ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(taskId) as { id: string } | null

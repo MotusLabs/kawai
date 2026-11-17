@@ -4,33 +4,37 @@
 // - The detail reads its anchor, the journal, subtask, and message windows,
 //   and their counts in one synchronous read transaction, newest first by
 //   `(created_at, rowid)` with the limits in SQL, then returns each list
-//   oldest first, and the revision rows of taskRevisionWindow (D7). The
-//   other sections stay whole.
+//   oldest first, the revision rows of taskRevisionWindow (D7), and the
+//   child, message, result, and history windows of taskReadWindows
+//   (bounded-task-reads D5–D10). The task and whole results stay whole.
 // - Journal text reaches JavaScript only as byte projections of a BLOB cast:
 //   a ≤ 2,000-byte preview here, a ≤ 8,192-byte chunk in the reader. Stored
 //   entries are never rewritten.
 // - One exact UTF-8 decode serves both: fatal, keeping a byte-order mark,
 //   and accepted only when the text re-encodes to the same bytes.
 import type { Database } from 'bun:sqlite'
-import type { AgentTaskDetail, TaskJournalChunk, TaskJournalPreview } from '../../shared/teamTasks'
-import { rawCoverage } from '../../shared/coverageMaps'
+import type { AgentTaskDetail, TaskJournalChunk, TaskJournalPreview, TaskResultDiffChunk } from '../../shared/teamTasks'
 import { partyFromRow } from './actorRow'
 import type { MailboxStore } from './mailboxStore'
 import { refuseSystem } from './systemCaller'
 import type { TaskCaller, TaskService } from './TaskService'
-import { publicationRevisions, revisionDetail, type RevisionWindowRequest } from './taskRevisionWindow'
+import { revisionDetail, type RevisionWindowRequest } from './taskRevisionWindow'
+import {
+  acknowledgementWindow, assignmentWindow, messageWindow, publicationWindow, resultWindow, subtaskWindow,
+  type TaskReadRequest, type WholeResultSeal,
+} from './taskReadWindows'
+import { readResultDiff } from './taskResultDiffRead'
 import type { TaskStore } from './taskStore'
 
 export const JOURNAL_PREVIEW_BYTES = 2000
 export const JOURNAL_CHUNK_BYTES = 8192
 export const JOURNAL_LIMIT_DEFAULT = 50
 export const JOURNAL_LIMIT_MAX = 200
-export const SUBTASK_WINDOW = 100
+export { MESSAGE_WINDOW, SUBTASK_WINDOW } from './taskReadWindows'
 /** The agent task_get ledger window (review-findings-ledger D10): the newest rows. */
 export const LEDGER_WINDOW = 100
-export const MESSAGE_WINDOW = 50
 
-export interface JournalWindowRequest extends RevisionWindowRequest {
+export interface JournalWindowRequest extends RevisionWindowRequest, TaskReadRequest {
   /** An entry id of the task; the window holds entries strictly older than it. */
   journalBefore?: string
   /** 1–200, default 50. */
@@ -79,12 +83,21 @@ export function trimIncompleteTail(bytes: Uint8Array): Uint8Array {
   return bytes
 }
 
-/** The preview partition (D4, I-P): T-small, T-invalid, or T-large-readable, from the projected bytes. */
-export function journalPreview(totalBytes: number, projected: Uint8Array): Omit<TaskJournalPreview, 'id' | 'author' | 'createdAt'> {
-  const cut = totalBytes > JOURNAL_PREVIEW_BYTES
+/**
+ * A preview of the first `cap` stored bytes (bounded-task-reads D8): cut when the total exceeds
+ * the cap, then trimmed back to a whole character; text null (and resume 0) when the bytes are
+ * not exact UTF-8. 2,000 for journal, message, rationale, and summary previews; 8,192 for diffs.
+ */
+export function bytePreview(totalBytes: number, projected: Uint8Array, cap: number): Omit<TaskJournalPreview, 'id' | 'author' | 'createdAt'> {
+  const cut = totalBytes > cap
   const bytes = cut ? trimIncompleteTail(projected) : projected
   const text = utf8Exact(bytes)
   return { text, previewBytes: bytes.length, totalBytes, cut, resumeOffsetBytes: text === null ? 0 : bytes.length }
+}
+
+/** The preview partition (D4, I-P): T-small, T-invalid, or T-large-readable, from the projected bytes. */
+export function journalPreview(totalBytes: number, projected: Uint8Array): Omit<TaskJournalPreview, 'id' | 'author' | 'createdAt'> {
+  return bytePreview(totalBytes, projected, JOURNAL_PREVIEW_BYTES)
 }
 
 /** A projected BLOB of the length SQL promised; anything else is refused rather than guessed. */
@@ -101,10 +114,12 @@ export class TaskJournalWindow {
   constructor(private readonly db: Database, private readonly store: TaskStore, private readonly mail?: MailboxStore) {}
 
   /**
-   * The agent's bounded detail of an existing task (D4/D5). Throws for an
-   * unknown task, a foreign or unknown anchor, or a limit outside 1–200.
+   * The agent's bounded detail of an existing task (D4/D5, bounded-task-reads
+   * D5–D10). Throws for an unknown task, a foreign or unknown anchor, or a
+   * limit outside 1–200. Every anchor is resolved, every window and count
+   * read, and every whole result sealed in one synchronous read transaction.
    */
-  agentDetail(taskId: string, window: JournalWindowRequest = {}): AgentTaskDetail {
+  agentDetail(taskId: string, window: JournalWindowRequest = {}, seal: WholeResultSeal = results => results): AgentTaskDetail {
     const limit = window.journalLimit ?? JOURNAL_LIMIT_DEFAULT
     if (!Number.isInteger(limit) || limit < 1 || limit > JOURNAL_LIMIT_MAX) {
       throw new Error(`journal_limit must be an integer from 1 to ${JOURNAL_LIMIT_MAX}: ${limit}`)
@@ -113,20 +128,19 @@ export class TaskJournalWindow {
       const task = this.store.get(taskId)
       if (!task) throw new Error(`Task not found: ${taskId}`)
       const anchor = window.journalBefore === undefined ? null : this.anchor(taskId, window.journalBefore)
+      // Every section resolves its own anchor first, so any bad anchor refuses the whole read.
+      const subtasks = subtaskWindow(this.db, this.store, taskId, window.subtasksBefore)
+      const messages = messageWindow(this.db, this.mail, taskId, window.messagesBefore, window.fullMessages ?? false)
+      const results = resultWindow(this.db, this.store, taskId, window, seal)
+      const assignments = assignmentWindow(this.db, this.store, taskId, window.assignmentsBefore)
+      const publications = publicationWindow(this.db, this.store, task, window.publicationsBefore)
+      const acknowledgements = acknowledgementWindow(this.db, taskId, window.acknowledgementsBefore)
+      // D7: the newest 50 revision rows.
+      const revisions = revisionDetail(this.db, taskId, task.revision, window)
       const rows = this.journalRows(taskId, anchor, limit + 1)
-      const subtaskIds = this.db.prepare(`SELECT id FROM team_tasks WHERE parent_id = ?
-        ORDER BY created_at DESC, rowid DESC LIMIT ${SUBTASK_WINDOW}`).all(taskId) as Array<{ id: string }>
-      const messages = this.mail?.forTaskNewest(taskId, MESSAGE_WINDOW) ?? []
-      const counts = this.db.prepare(`SELECT
-        (SELECT COUNT(*) FROM team_task_journal WHERE task_id = $id) AS journal,
-        (SELECT COUNT(*) FROM team_tasks WHERE parent_id = $id) AS subtasks,
-        (SELECT COUNT(*) FROM team_messages WHERE task_id = $id) AS messages`).get({ $id: taskId }) as Record<string, number>
+      const { journal: journalTotal } = this.db.prepare('SELECT COUNT(*) AS journal FROM team_task_journal WHERE task_id = ?').get(taskId) as { journal: number }
       const journal = rows.slice(0, limit).reverse()
       const olderRemaining = rows.length > limit
-      const subtasks = subtaskIds.reverse().map(row => this.store.summary(this.store.get(row.id)!))
-      const messageTotal = this.mail ? counts.messages! : 0
-      // D7: the newest 50 revision rows; the publications read their own text-free fields.
-      const revisions = revisionDetail(this.db, taskId, task.revision, window)
       // review-findings-ledger D10: the newest 100 rows, newest raised first.
       const ledger = this.store.ledger(taskId).reverse()
       return {
@@ -134,24 +148,24 @@ export class TaskJournalWindow {
         revisions: revisions.rows,
         ...(revisions.text ? { revisionText: revisions.text } : {}),
         journal,
-        subtasks,
-        assignments: this.store.assignmentsOf(taskId),
-        messages,
-        publications: this.store.notices?.publications(task, publicationRevisions(this.db, taskId)) ?? [],
-        acknowledgements: this.store.acknowledgements.list(taskId),
-        // Mapped as `TaskStore.detail` maps them; the seal applies after (D4).
-        results: this.store.results.listByTask(taskId).map(result => ({
-          ...result,
-          checks: this.store.checks.viewForResult(result.id),
-          reviewerMaps: this.store.results.reviewerMapsOf(result.id, rawCoverage(result.coverage)),
-        })),
+        subtasks: subtasks.rows,
+        assignments: assignments.rows,
+        messages: messages.rows,
+        publications: publications.rows,
+        acknowledgements: acknowledgements.rows,
+        results: results.results,
+        ...(results.resultDetail ? { resultDetail: results.resultDetail } : {}),
         findingsLedger: ledger.slice(0, LEDGER_WINDOW),
         ledgerOlderRemaining: ledger.length > LEDGER_WINDOW,
         bounds: {
-          journal: { total: counts.journal!, returned: journal.length, olderRemaining, nextBefore: olderRemaining ? journal[0]!.id : null },
-          subtasks: { total: counts.subtasks!, returned: subtasks.length, truncated: counts.subtasks! > subtasks.length },
-          messages: { total: messageTotal, returned: messages.length, truncated: messageTotal > messages.length },
+          journal: { total: journalTotal, returned: journal.length, olderRemaining, nextBefore: olderRemaining ? journal[0]!.id : null },
+          subtasks: subtasks.bounds,
+          messages: messages.bounds,
           revisions: revisions.bounds,
+          results: results.bounds,
+          assignments: assignments.bounds,
+          publications: publications.bounds,
+          acknowledgements: acknowledgements.bounds,
         },
       }
     })()
@@ -221,9 +235,16 @@ export class TaskJournalWindow {
 export class TaskJournalReads {
   constructor(private readonly tasks: TaskService) {}
 
-  async agentGet(caller: TaskCaller, taskId: string, window: JournalWindowRequest = {}): Promise<AgentTaskDetail> {
+  /** `seal` runs inside the read transaction, over the whole results only (bounded-task-reads D10). */
+  async agentGet(caller: TaskCaller, taskId: string, window: JournalWindowRequest = {}, seal?: WholeResultSeal): Promise<AgentTaskDetail> {
     await this.readable(caller, taskId)
-    return this.tasks.store.journalWindow.agentDetail(taskId, window)
+    return this.tasks.store.journalWindow.agentDetail(taskId, window, seal)
+  }
+
+  /** One chunk of a result's diff (bounded-task-reads D8a), behind the same caller and team rules. */
+  async diffRead(caller: TaskCaller, taskId: string, resultId: string, offsetBytes = 0): Promise<TaskResultDiffChunk> {
+    await this.readable(caller, taskId)
+    return readResultDiff(this.tasks.store.db, taskId, resultId, offsetBytes)
   }
 
   async journalRead(caller: TaskCaller, taskId: string, entryId: string, offsetBytes = 0): Promise<TaskJournalChunk> {

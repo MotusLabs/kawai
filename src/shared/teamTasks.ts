@@ -501,24 +501,82 @@ export interface TeamTaskDetail {
   findingsLedger?: LedgerRow[]
 }
 
-/** The agent's bounded detail (bounded-log-reads-and-task-get D4): journal, subtask, and message windows, oldest first, with their bounds; other sections whole. */
-export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal' | 'revisions'> {
+/**
+ * The agent's bounded detail (bounded-log-reads-and-task-get D4, bounded-task-reads D5–D10):
+ * every growing list a SQL window with its bounds; the current task, its assignment, and the
+ * whole results stay whole. Never the human's detail (`HumanTaskDetail` keeps every section whole).
+ */
+export interface AgentTaskDetail extends Omit<TeamTaskDetail, 'journal' | 'revisions' | 'subtasks' | 'messages' | 'assignments' | 'publications' | 'acknowledgements' | 'results'> {
   journal: TaskJournalPreview[]
   /** bounded-metrics-and-task-get D7: the newest 50 revisions as text-free rows, oldest first. */
   revisions: AgentRevisionRow[]
   /** The whole text of the revision named by `revision`; absent otherwise. */
   revisionText?: AgentRevisionText
+  /** D5: the newest 100 subtasks as `task_list` rows, oldest first. */
+  subtasks: AgentTaskRow[]
+  /** D6: the newest 50 messages, oldest first, each body a 2,000-byte preview (whole with `full_messages`). */
+  messages: AgentTaskMessage[]
+  /** D9: the newest 50 assignments, oldest first, without their instruction (`task.assignment` keeps the current one's). */
+  assignments: AgentAssignmentRow[]
+  /** D9: the newest 50 publications, oldest first, each rationale a 2,000-byte preview. */
+  publications: AgentPublication[]
+  /** D9: the newest 50 acknowledgements, oldest first. */
+  acknowledgements: TaskAcknowledgement[]
+  /** D8: the outstanding result whole (sealed), then the newest 50 other results as rows, newest first. */
+  results: Array<AgentWholeResult | AgentResultRow>
+  /** D8: the result named by `result_id`, whole and sealed; absent otherwise. */
+  resultDetail?: AgentWholeResult
   bounds: AgentTaskBounds
   /** review-findings-ledger D10: whether ledger rows older than the newest 100 were left out. */
   ledgerOlderRemaining?: boolean
 }
 export interface AgentTaskBounds {
   journal: { total: number; returned: number; olderRemaining: boolean; nextBefore: string | null }
-  subtasks: TaskListBound
-  messages: TaskListBound
+  /** `truncated`: rows older than the window remain; `nextBefore` is then the oldest returned id. */
+  subtasks: AnchoredBound<string>
+  messages: AnchoredBound<string>
   /** `nextBefore` is the oldest returned revision number while older ones remain. */
-  revisions: { total: number; returned: number; truncated: boolean; nextBefore: number | null }
+  revisions: AnchoredBound<number>
+  /** `total` counts every result except the outstanding one; `nextBefore` is the last (oldest) row's id. */
+  results: AnchoredBound<string>
+  assignments: AnchoredBound<string>
+  /** `nextBefore` is the oldest returned publication's revision. */
+  publications: AnchoredBound<number>
+  /** `nextBefore` is the oldest returned acknowledgement's key. */
+  acknowledgements: AnchoredBound<AcknowledgementKey>
 }
+/** A window's bounds: `total` rows, `returned` of them, whether older ones remain, and the anchor that continues. */
+export interface AnchoredBound<K> { total: number; returned: number; truncated: boolean; nextBefore: K | null }
+/** An acknowledgement's stored key within its task (`acknowledgements_before`). */
+export interface AcknowledgementKey { sessionId: string; revision: number }
+/** A task message as `task_get` lists it (D6): `body` is null when the returned bytes are not exact UTF-8. */
+export interface AgentTaskMessage extends Omit<TeamMessage, 'body'> { body: string | null; bodyBytes: number; bodyCut: boolean }
+/** An assignment history row (D9): everything but the verbatim instruction. */
+export type AgentAssignmentRow = Omit<TeamTaskAssignment, 'instruction'>
+/** A publication (D9): its rationale a 2,000-byte preview; `revision` reads it whole. */
+export interface AgentPublication extends Omit<TaskPublication, 'rationale'> { rationale: string | null; rationaleBytes: number; rationaleCut: boolean }
+/**
+ * A whole result as an agent reads it (D8): every field whole except the diff, an 8,192-byte
+ * preview (null without a diff, or when the bytes are not exact UTF-8); `task_result_diff_read`
+ * continues from `diffResumeOffsetBytes`.
+ */
+export interface AgentWholeResult extends Omit<TaskResult, 'diff'> { diff: string | null; diffBytes: number; diffCut: boolean; diffResumeOffsetBytes: number }
+/** A historical result row (D8): no findings, coverage, maps, checks, or diff. */
+export interface AgentResultRow {
+  id: string
+  commit: string | null
+  taskRevision: number
+  submittedBy: TaskActor
+  supersededBy: string | null
+  acceptedAt: string | null
+  reviewVerdict: 'pass' | 'fail' | null
+  createdAt: string
+  summary: string | null
+  summaryBytes: number
+  summaryCut: boolean
+}
+/** One lossless chunk of a result's diff (D8a); as `TaskJournalChunk`, keyed by the result. */
+export interface TaskResultDiffChunk { resultId: string; offsetBytes: number; totalBytes: number; returnedBytes: number; dataBase64: string; text: string | null; nextOffsetBytes: number | null }
 /**
  * One revision as the agent's `task_get` lists it (D7): identity and byte lengths, never the
  * direction or acceptance. `rationale` is a preview of at most 2,000 stored bytes (null without

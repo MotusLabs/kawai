@@ -8,7 +8,7 @@
 // - The rationale is a ≤ 2,000-byte BLOB projection, previewed as a journal
 //   entry is. `revision: n` reads one revision whole.
 import type { Database } from 'bun:sqlite'
-import type { AgentRevisionRow, AgentRevisionText, AgentTaskBounds, TaskRevision } from '../../shared/teamTasks'
+import type { AgentRevisionRow, AgentRevisionText, AgentTaskBounds } from '../../shared/teamTasks'
 import { partyFromRow } from './actorRow'
 import { identityOf } from './contractHash'
 import { JOURNAL_PREVIEW_BYTES, blobOf, journalPreview } from './taskJournalWindow'
@@ -83,22 +83,4 @@ function wholeText(db: Database, taskId: string, revision: number): AgentRevisio
   if (!row) throw unknownRevision(revision)
   const text = (value: unknown) => value === null || value === undefined ? null : String(value)
   return { revision, direction: String(row.direction), acceptance: text(row.acceptance), rationale: text(row.rationale) }
-}
-
-/**
- * The revisions' publication fields, without direction, acceptance, or
- * contract: all `publications` reads (D5) — whole rationale included, as
- * before. The text columns are never selected, so the unwindowed publication
- * section does not carry the revision text.
- */
-export function publicationRevisions(db: Database, taskId: string): TaskRevision[] {
-  const rows = db.prepare('SELECT revision, author_kind, author_session, created_at, rationale, notify FROM team_task_revisions WHERE task_id = ? ORDER BY revision')
-    .all(taskId) as Record<string, unknown>[]
-  // `publications` reads only these fields; the text fields it does not read stay empty.
-  return rows.map(row => ({
-    revision: Number(row.revision), direction: '', acceptance: null,
-    author: partyFromRow(row.author_kind, row.author_session), createdAt: String(row.created_at),
-    rationale: row.rationale === null ? null : String(row.rationale),
-    notify: row.notify === null || row.notify === undefined ? null : Number(row.notify) === 1,
-  }))
 }

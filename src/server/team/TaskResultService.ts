@@ -16,6 +16,7 @@ import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import { targetLabel, type AssignmentService } from './AssignmentService'
 import type { MemberRelease } from './memberRelease'
 import { TaskRelease } from './taskRelease'
+import type { WholeResultSeal } from './taskReadWindows'
 import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
 import { refuseSystem } from './systemCaller'
 import type { TeamIdentity } from './teamIdentity'
@@ -336,7 +337,7 @@ export class TaskResultService {
    * evaluated at read time: a call that records the handoff result's own map
    * reads unsealed here, because its insert has already landed.
    */
-  private sealResults(sessionId: string, taskId: string, results: TaskResult[]): TaskResult[] {
+  private sealResults<R extends TaskResult>(sessionId: string, taskId: string, results: R[]): R[] {
     const outstanding = this.store.outstandingAssignment(taskId)
     const handoffResultId = outstanding?.handoffKind === 'review' ? outstanding.resultId ?? null : null
     const sealed = handoffResultId !== null &&
@@ -358,6 +359,16 @@ export class TaskResultService {
       const ownNewest = (result.reviewerMaps ?? []).find(row => row.authorSession === sessionId)
       return { ...result, comparison: ownNewest?.comparison ?? null }
     })
+  }
+
+  /**
+   * The seal over the agent `task_get`'s whole results (bounded-task-reads
+   * D8/D10): the same projection, run by the read transaction over the
+   * outstanding result and `resultDetail` so the handoff predicate sees the
+   * same state as the windows. Identity for a non-agent caller.
+   */
+  wholeResultSeal(caller: TaskCaller, taskId: string): WholeResultSeal {
+    return results => (caller.kind === 'agent' ? this.sealResults(caller.sessionId, taskId, results) : results)
   }
 
   /**

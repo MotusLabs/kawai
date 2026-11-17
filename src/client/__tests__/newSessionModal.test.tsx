@@ -44,9 +44,10 @@ function setupDom() {
 }
 
 /**
- * Claude chat is the dialog's default kind; tests that exercise the terminal
- * form (command presets, hosts, first-prompt) select Terminal first. A
- * change-section launch is the one context that opens on Terminal by itself.
+ * The agent kind (`AI agent`, value `chat`) is the dialog's default kind;
+ * tests that exercise the terminal form (command presets, hosts,
+ * first-prompt) select Terminal first. A change-section launch is the one
+ * context that opens on Terminal by itself.
  */
 function selectKind(renderer: TestRenderer.ReactTestRenderer, value: 'terminal' | 'chat') {
   act(() => {
@@ -131,7 +132,7 @@ describe('NewSessionModal default session kind', () => {
     dialog.unmount()
   })
 
-  test('change-section open → close → generic open preselects Claude chat', () => {
+  test('change-section open → close → generic open preselects the agent kind (AI agent)', () => {
     const dialog = mountDialog({ initialAutoStartChange: 'add-auth' })
     expect(dialog.kind()).toBe('terminal')
     dialog.reopen()
