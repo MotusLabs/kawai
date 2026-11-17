@@ -11,7 +11,7 @@ import { taskHandlers } from '../team/taskTools'
 import type { TaskReadRequest } from '../team/taskReadWindows'
 import { agent, useTaskToolHarness } from './taskToolHarness'
 import { at, mulberry32, observeQueries, rawNote } from './taskJournalFixture'
-import { normalizedJson, rawAssignment, rawHolder, rawMessage, rawResult, rawRevisions, storedHash, umbrellaFixture } from './taskReadFixture'
+import { clearHashedTables, normalizedJson, rawAssignment, rawHolder, rawMessage, rawResult, rawRevisions, storedHash, umbrellaFixture } from './taskReadFixture'
 import { propertyCases } from './helpers/propertyCases'
 
 const h = useTaskToolHarness('kawai-read-bounds-')
@@ -152,6 +152,8 @@ test('P4: seed 0xC0DE, 200 fixtures with valid and refused reads through the han
   const rand = mulberry32(0xc0de)
   const count = (max: number) => Math.floor(rand() * (max + 1))
   for (let c = 0; c < propertyCases(CASES); c++) {
+    // Each case starts from empty task tables; otherwise hashing every stored row grows quadratically.
+    clearHashedTables(h.db)
     const task = (await h.tasks.create(agent('lead'), { title: 'T', direction: 'd' })).id
     const other = (await h.tasks.create(agent('lead'), { title: 'O', direction: 'd' })).id
     h.db.transaction(() => {

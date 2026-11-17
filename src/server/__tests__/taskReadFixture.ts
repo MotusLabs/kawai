@@ -64,11 +64,18 @@ export function rawRevisions(db: Database, taskId: string, from: number, to: num
   })()
 }
 
+const HASHED_TABLES = ['team_tasks', 'team_task_revisions', 'team_task_journal', 'team_messages', 'team_task_results', 'team_task_assignments',
+  'team_task_acknowledgements', 'team_task_notifications', 'team_task_coverage_maps', 'team_task_findings']
+
+/** Empties every table storedHash covers, so each property case hashes only its own fixture. */
+export function clearHashedTables(db: Database) {
+  db.transaction(() => { for (const table of HASHED_TABLES) db.prepare(`DELETE FROM ${table}`).run() })()
+}
+
 /** A sha256 over every stored row of the task tables a read touches (P4: reads write nothing). */
 export function storedHash(db: Database): string {
   const hash = createHash('sha256')
-  for (const table of ['team_tasks', 'team_task_revisions', 'team_task_journal', 'team_messages', 'team_task_results', 'team_task_assignments',
-    'team_task_acknowledgements', 'team_task_notifications', 'team_task_coverage_maps', 'team_task_findings']) {
+  for (const table of HASHED_TABLES) {
     // Every column as the hex of its stored bytes, so no decode can hide a change.
     const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
       .map(column => `quote(typeof("${column.name}")) || ':' || hex(CAST("${column.name}" AS BLOB))`).join(` || ',' || `)
