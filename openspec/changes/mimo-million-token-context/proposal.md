@@ -19,8 +19,9 @@ Nothing is implemented (0/10 on master `f52963d0`). Changes from the
 - **Relay install-mode coupling dropped.** Install modes, retained layers and
   the relay §5 trim do not exist on master (held lineage
   `feat/relay-install-modes`, task `c6bfbd04`, untouched). Catalog assembly is
-  today's single layered merge, so the former D4 landing-order rule and oracles
-  C5a/C5c are removed; whichever of this change and a future relay change
+  today's tiers (user-level files replace the shipped defaults; project
+  overlays merge over the base), so the former D4 landing-order rule and
+  oracle C5c are removed and C5a/C5b are re-derived over those tiers; whichever of this change and a future relay change
   lands second re-derives the shared requirement.
 - **Role field renamed** `modelAutoCompactWindow` → `profileAutoCompactWindow`,
   matching the landed per-profile convention `profileEffort`

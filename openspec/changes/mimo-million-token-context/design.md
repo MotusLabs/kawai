@@ -51,11 +51,13 @@ resolved executable-backed entry carrying it is an incompatibility error.
 
 The scalar flows through parse, merge, flatten, embedded defaults, and
 shipped-model re-homing like other provider scalars: nearer wins, a model's
-scalar overrides its provider's, and a nearer file that omits it inherits the
-farther one (today's single merge, `catalogMerge.ts`). *Refinement (proposed):*
-the former install-mode rules (replace mode, retained layers) are dropped
-because master has neither; a later relay change that adds them re-derives
-this rule.
+scalar overrides its provider's, and a project overlay that omits it inherits
+the base value (`catalogMerge.ts`). The base is the user-level `~/.kawai`
+files when either exists, else the shipped defaults (`profileCatalog.ts:47`),
+so a user-level catalog never receives the shipped preference.
+*Refinement (proposed):* the former relay install-mode rules (durable mode,
+retained layers, trim) are dropped because master has none of them; a later
+relay change that adds them re-derives this rule.
 
 Roles accept `autoCompactWindow: 250000` and
 `profileAutoCompactWindow: { mimo: 300000 }`, a single-line flow map keyed by
@@ -121,7 +123,8 @@ Commit the tables verbatim as table-driven tests. `*` = irrelevant.
 | C2 | Provider 400000, model 300000 | that model 300000; sibling without own scalar 400000 |
 | C3 | Far model 300000, near model 400000; then a shipped key re-homed without scalar | near 400000; re-homed key keeps its inherited scalar |
 | C4 | Catalog scalar string, boolean, null, fractional, 99999, 1000001 | whole file reported and skipped; another valid file usable |
-| C5 | User-level file redefines `mimo` without the scalar | inherits the shipped 300000 (nearer omission inherits) |
+| C5a | A user-level catalog defines `mimo` without the scalar | no shipped 300000 injected (user level replaces the shipped defaults) |
+| C5b | A project overlay redefines `mimo` models without the scalar over a base declaring 300000 | inherits 300000 |
 | G1 | Role default invalid, or map malformed | group kept; field warned and ignored; valid fallback applies |
 | G2 | Invalid/unknown/wrong-qualified map entry plus valid sibling | bad entry warned alone; sibling applies |
 | G3 | Repeated written key, or two valid keys resolving to one profile | first written occurrence consumed; first valid resolved entry wins; later duplicate warned |
@@ -137,8 +140,8 @@ Commit the tables verbatim as table-driven tests. `*` = irrelevant.
 | V1 | Read-only group metadata | default, resolved per-profile map, warnings present |
 | R1 | Actual supported CLI at `CLAUDE_CODE_MIN_VERSION` with the normalized MiMo launch (owner credentials) | 1M capacity recognized, effective enablement and 300K window with the real reserve, accepted untagged outgoing model ids; missing baseline/report/credentials reads as unverified |
 
-Unreachable: a role selection for a session without that role; former rows
-C5a/C5c (install modes absent on master). Hazards consulted
+Unreachable: a role selection for a session without that role; former row
+C5c (retired retained layers do not exist on master). Hazards consulted
 (`docs/oracle-hazards.md`): L1 runs the production manager and
 `claudeSpawnLaunch` (M1); L6 covers a registered set frozen at creation and a
 branch re-composing a filtered name.
@@ -185,18 +188,18 @@ shipped tags with the code.
 | Item | Disposition |
 |---|---|
 | Spec scenarios (agent-teams, 14) | kept; `modelAutoCompactWindow` renamed to `profileAutoCompactWindow`; "Model-specific role preference wins" → "Profile-specific role preference wins" |
-| claude-session-profiles "Replacement catalog (replace mode)" | proposed removal (no install modes on master) |
-| — "Merge-mode inheritance" | → "Nearer catalog omits the window" (C5) |
+| claude-session-profiles "Replacement catalog (replace mode)" | folded into C5a (today's user-level replacement) |
+| — "Merge-mode inheritance" | → "User-level catalog replaces the shipped preference" (C5a) and "Project overlay omits the window" (C5b) |
 | Other claude-session-profiles scenarios (10) | kept |
-| Tasks 1.1–4.2 | kept, retargeted (tasks.md); 1.1 drops C5a/C5c |
+| Tasks 1.1–4.2 | kept, retargeted (tasks.md); 1.1 drops C5c |
 | D4 (relay landing order) | proposed removal |
-| Oracles C5a, C5b, C5c | C5b → C5; C5a, C5c unreachable on master |
+| Oracles C5a, C5b, C5c | C5a, C5b re-derived over today's user-level/project tiers; C5c unreachable |
 
 ## Implementation contract
 
 ### Acceptance
 - A1: The shipped MiMo profile declares `[1m]` on its startup model and every tier mapping and a 300000-token window; row C1 passes through `resolveClaudeProfile` and `claudeSpawnLaunch` with an isolated empty home.
-- A2: Catalog `autoCompactWindow` parses, merges, re-homes, and refuses invalid or incompatible entries per rows C2–C5, L5.
+- A2: Catalog `autoCompactWindow` parses, merges, re-homes, and refuses invalid or incompatible entries per rows C2–C4, C5a, C5b, L5.
 - A3: Role `autoCompactWindow` and `profileAutoCompactWindow` parse with warnings and resolve per rows W1–W5, G1–G4, and V1.
 - A4: A real manager start and respawn compose the selected window and cleared switches into both env layers and feed the tracker and start observation (L1–L4, M1), or refuse a registered collision before spawn (L6, L7).
 - A5: R1 is recorded with its actual CLI version and fields, or explicitly as unverified when owner credentials or the baseline CLI are unavailable.
