@@ -1,11 +1,16 @@
 // Codex autocomplete W1-W3/S3: real browser -> server/driver -> fake RPC.
 // The fake asserts the actual native input before returning success text.
+// Like chat-codex.spec, it owns a private server and CODEX_HOME: its script
+// takes the once-per-server account/rateLimits/read, which an earlier Codex
+// chat in a shared server would already have claimed, and stopping that
+// server with its root removes every chat this spec made.
 import { expect, test } from '@playwright/test'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
-import { realpathSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Script } from '../fixtures/codexTranscript'
+import { ServerProcess } from './fixtures/serverProcess'
 import { killChat } from './support/chatHeader'
 import type { ClientMessage, ServerMessage } from '../../src/shared/types'
 
@@ -21,6 +26,22 @@ test('Codex autocomplete selects without sending, refreshes both browsers, and i
   const text = 'please /review on this'
   const sent: ClientMessage[] = []
   const created: string[] = []
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'kawai-codex-autocomplete-')))
+  const ownedServer = new ServerProcess()
+  const port = Number(process.env.E2E_PORT || 4173) + 210
+  const url = `http://127.0.0.1:${port}`
+  const transcript = path.join(root, 'codex-transcript.jsonl')
+  const env = { ...process.env, HOME: root, TMUX_TMPDIR: root, TMUX: '', TMUX_SESSION: 'codex-autocomplete',
+    NODE_ENV: 'development', AGENTBOARD_CHAT_FIXTURE: '1', AGENTBOARD_DB_PATH: path.join(root, 'agentboard.db'),
+    LOG_FILE: path.join(root, 'agentboard.log'), AGENTBOARD_TMUX_PID_FILE: path.join(root, 'tmux.pid'),
+    CLAUDE_CONFIG_DIR: path.join(root, 'claude'), CODEX_HOME: path.join(root, 'codex'), PI_HOME: path.join(root, 'pi'),
+    CLAUDE_CODE_OAUTH_TOKEN: '', ANTHROPIC_API_KEY: '', AGENTBOARD_REMOTE_HOSTS: '',
+    KAWAI_CODEX_PATH: process.env.KAWAI_CODEX_PATH, FAKE_TRANSCRIPT: transcript,
+    AGENTBOARD_STATIC_DIR: path.join(process.cwd(), 'dist/client'), PORT: String(port), HOSTNAME: '127.0.0.1' }
+  for (const name of ['claude', 'codex', 'pi']) mkdirSync(path.join(root, name))
+  // The login gate's fake auth.json, as playwright.config writes it.
+  writeFileSync(path.join(root, 'codex', 'auth.json'), JSON.stringify({ OPENAI_API_KEY: null, tokens: { access_token: 'fake' } }))
+  const cleanupErrors: unknown[] = []
   try {
     await page.routeWebSocket(/\/ws$/, socket => {
       const server = socket.connectToServer()
@@ -45,8 +66,10 @@ test('Codex autocomplete selects without sending, refreshes both browsers, and i
       .append(rollout).item('completed', 'ct-1', { type: 'agentMessage', id: 'answer', text: 'Native skill input verified', questions: null }).completed('ct-1')
       .turn('ct-2').assertInput([{ type: 'text', text: '/missing', text_elements: [] }])
       .item('completed', 'ct-2', { type: 'agentMessage', id: 'unknown', text: 'Unknown command stayed text', questions: null }).completed('ct-2')
-    await writeFile(process.env.FAKE_TRANSCRIPT!, script.lines.map(line => JSON.stringify(line)).join('\n') + '\n')
-    await page.goto('/')
+    await writeFile(transcript, script.lines.map(line => JSON.stringify(line)).join('\n') + '\n')
+    ownedServer.spawn('bun', ['src/server/index.ts'], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] })
+    await expect.poll(async () => { try { return (await page.request.get(url, { timeout: 1000 })).ok() } catch { return false } }, { timeout: 30_000 }).toBe(true)
+    await page.goto(url)
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
     const dialog = page.getByRole('dialog', { name: 'New Session' })
     await dialog.getByLabel('Session kind').selectOption('chat')
@@ -99,7 +122,7 @@ test('Codex autocomplete selects without sending, refreshes both browsers, and i
     // Local reset commands keep the Codex profile/policy and archive only
     // after replacement creation. Later children need no home-wide usage fill.
     const replacement = new Script().boot('thread/start', 'test', rollout).request('skills/list', skills(['review']))
-    await writeFile(process.env.FAKE_TRANSCRIPT!, replacement.lines.map(line => JSON.stringify(line)).join('\n') + '\n')
+    await writeFile(transcript, replacement.lines.map(line => JSON.stringify(line)).join('\n') + '\n')
     for (const command of ['/clear', '/reset', '/new']) {
       const previous = created.at(-1)!
       const count = created.length
@@ -113,7 +136,15 @@ test('Codex autocomplete selects without sending, refreshes both browsers, and i
     }
     await killChat(page)
   } finally {
-    await rm(process.env.FAKE_TRANSCRIPT!, { force: true })
+    // Stopping the private server and removing its root takes every chat
+    // this spec created, passed or failed. A cleanup error is annotated and
+    // fails a passing test below, but never replaces the original failure.
+    await ownedServer.stop({ tmuxRoot: root }).catch(error => {
+      cleanupErrors.push(error)
+      info.annotations.push({ type: 'cleanup-error', description: String(error) })
+    })
+    rmSync(root, { recursive: true, force: true })
     await rm(project, { recursive: true, force: true })
   }
+  if (cleanupErrors.length > 0) throw cleanupErrors[0]
 })
