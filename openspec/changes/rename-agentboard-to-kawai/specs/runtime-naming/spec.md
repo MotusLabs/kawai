@@ -96,7 +96,7 @@ Before backing up or moving anything, the server SHALL check whether another pro
 - **THEN** nothing is moved, the renamed build serves from the legacy paths, and the log names the reason
 
 ### Requirement: A data migration that cannot complete leaves the legacy data usable
-If any legacy entry cannot be moved, the server SHALL put back every entry it already moved, log an error naming the entry and the cause, and run this process with the legacy `~/.agentboard/` paths. A partly migrated state SHALL NOT be left behind. If putting an entry back fails, the server SHALL log both its paths, run on the legacy paths only if the legacy database is back in place, and otherwise exit naming the pre-rename backup. It SHALL NOT delete any entry.
+If any legacy entry cannot be moved, the server SHALL put back every moved entry, log the entry and cause, and run on the legacy `~/.agentboard/` paths; a migration interrupted by a crash SHALL be completed or rolled back at the next start. No partly migrated state SHALL remain. If putting an entry back fails, the server SHALL log both its paths, run on the legacy paths only if the legacy database is back, and otherwise exit naming the pre-rename backup. It SHALL NOT delete any entry.
 
 #### Scenario: Cross-device move fails
 - **WHEN** `~/.kawai` is on a different filesystem and moving `agentboard.db` fails
@@ -106,8 +106,12 @@ If any legacy entry cannot be moved, the server SHALL put back every entry it al
 - **WHEN** moving a later entry fails and moving `kawai.db` back to `agentboard.db` also fails
 - **THEN** the server logs both paths of each entry not put back, exits with an error naming the pre-rename backup, and both the database and the backup still exist
 
+#### Scenario: A crash mid-migration recovers at the next start
+- **WHEN** the server process dies after moving some legacy entries and before the migration finished
+- **THEN** the next start either completes the move when the database already reached `~/.kawai/kawai.db` or puts the moved entries back and migrates again, and afterwards every entry exists at exactly one of its two paths
+
 ### Requirement: The managed tmux session is named kawai
-With no `TMUX_SESSION` override, the managed tmux session SHALL be `kawai`, and per-connection sessions SHALL be `kawai-ws-<connection>`. At startup, if a session named exactly `agentboard` exists and none named `kawai` does, the server SHALL rename `agentboard` to `kawai`. Before the first session refresh, it SHALL rewrite stored window targets from `agentboard:` to `kawai:`, so tracked sessions stay attached to their windows.
+With no `TMUX_SESSION` override, the managed tmux session SHALL be `kawai`, and per-connection sessions SHALL be `kawai-ws-<connection>`. At startup, if a session named exactly `agentboard` exists and none named `kawai` does, the server SHALL rename `agentboard` to `kawai`. Before the first session refresh, it SHALL rewrite stored window targets from `agentboard:` to `kawai:` whenever no `agentboard` session remains, so tracked sessions stay attached.
 
 #### Scenario: Running windows carry over
 - **WHEN** the renamed build starts while tmux has an `agentboard` session with three windows and no `kawai` session
@@ -120,6 +124,10 @@ With no `TMUX_SESSION` override, the managed tmux session SHALL be `kawai`, and 
 #### Scenario: Override is respected
 - **WHEN** the server starts with `TMUX_SESSION=work`
 - **THEN** it manages `work` and renames no session
+
+#### Scenario: Stored targets are rewritten after an interrupted rename
+- **WHEN** the server starts with a `kawai` session, no `agentboard` session, no `TMUX_SESSION` override, and stored sessions still pointing at `agentboard:` windows
+- **THEN** those stored targets are rewritten to `kawai:` before the first session refresh, so tracked sessions stay attached
 
 ### Requirement: Legacy per-connection tmux sessions are pruned
 When startup pruning of orphaned per-connection sessions is enabled, it SHALL remove orphaned `agentboard-ws-*` sessions as well as `kawai-ws-*` sessions. Per-connection sessions in either form SHALL NOT appear as discovered external sessions.
