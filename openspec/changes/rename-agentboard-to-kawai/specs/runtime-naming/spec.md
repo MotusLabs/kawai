@@ -110,6 +110,17 @@ If any legacy entry cannot be moved, the server SHALL put back every moved entry
 - **WHEN** the server process dies after moving some legacy entries and before the migration finished
 - **THEN** the next start either completes the move when the database already reached `~/.kawai/kawai.db` or puts the moved entries back and migrates again, and afterwards every entry exists at exactly one of its two paths
 
+### Requirement: A damaged migration record stops startup
+With default paths, if the record of an interrupted data migration cannot be read, or it exists while neither `~/.kawai/kawai.db` nor `~/.agentboard/agentboard.db` exists, the server SHALL exit with an error before opening a database. The error SHALL name the record, both database paths with whether each exists, and the newest pre-rename backup found. The server SHALL NOT move any entry, and SHALL NOT open or create a database.
+
+#### Scenario: Unreadable record with the migrated database present
+- **WHEN** `~/.kawai/kawai.db` exists, `~/.agentboard/agentboard.db` does not, and the migration record cannot be parsed
+- **THEN** the server exits naming the record and both paths, nothing moves, and no `agentboard.db` is created
+
+#### Scenario: Record with neither database present
+- **WHEN** a readable migration record exists and neither database file exists
+- **THEN** the server exits naming the record and its pre-rename backup, and no database is created
+
 ### Requirement: The managed tmux session is named kawai
 With no `TMUX_SESSION` override, the managed tmux session SHALL be `kawai`, and per-connection sessions SHALL be `kawai-ws-<connection>`. At startup, if a session named exactly `agentboard` exists and none named `kawai` does, the server SHALL rename `agentboard` to `kawai`. Before the first session refresh, it SHALL rewrite stored window targets from `agentboard:` to `kawai:` whenever no `agentboard` session remains, so tracked sessions stay attached.
 
@@ -144,7 +155,7 @@ When it discovers sessions on remote hosts, the server SHALL treat a remote sess
 - **THEN** its windows are listed as managed remote sessions, and the `agentboard-ws-*` sessions there are not listed
 
 ### Requirement: Browser settings carry over to the Kawai storage keys
-The client SHALL persist its settings, theme, workspace, and session selection under `kawai-settings`, `kawai-theme`, `kawai-workspace`, and `kawai-session`. Before reading a store, if the new key is missing and the legacy `agentboard-*` key exists, the client SHALL copy the value to the new key and then remove the legacy key.
+The client SHALL persist its settings, theme, workspace, and session selection under `kawai-settings`, `kawai-theme`, `kawai-workspace`, and `kawai-session`. Before reading a store, if the new key is missing and the legacy `agentboard-*` key exists, the client SHALL copy the value to the new key and remove the legacy key only after the copy reads back from persistent storage. If the copy cannot be confirmed, the client SHALL keep the legacy key and use its value.
 
 #### Scenario: Settings survive the upgrade
 - **WHEN** a browser with saved settings under `agentboard-settings` loads the renamed client
@@ -153,6 +164,10 @@ The client SHALL persist its settings, theme, workspace, and session selection u
 #### Scenario: New key is never overwritten
 - **WHEN** both `kawai-theme` and `agentboard-theme` exist
 - **THEN** `kawai-theme` is used unchanged
+
+#### Scenario: A failed copy keeps the legacy settings
+- **WHEN** `agentboard-settings` exists, `kawai-settings` does not, and writing to browser storage fails while reading and removing still work
+- **THEN** the saved settings are in effect, `agentboard-settings` is still in persistent storage after a reload, and the copy is tried again on the next load
 
 ### Requirement: Service installers use Kawai service names
 The systemd installer SHALL install and enable the user unit `kawai.service`. The launchd installer SHALL load the agents `com.kawai` and `com.kawai.logrotate`. Each SHALL install the release under `~/.kawai/app` with `bin/kawai`. When a legacy `agentboard.service` or `com.agentboard` agent exists, the installer SHALL stop it and remove its definition before starting the Kawai one.

@@ -120,9 +120,10 @@ runtime package); the three in-flight changes old task 8.3 named are archived
 ## Source partition
 
 Every requirement and scenario of this change's delta specs belongs to
-exactly one group. Two scenarios are new in this revision (marked †), added
-because the crash table H and the target-rewrite table T found unspecified
-cases.
+exactly one group. Five scenarios and one requirement are new in this
+revision (marked †), added because the crash table H, the target-rewrite
+table T, and the storage table K found unspecified cases (the last three
+from review findings F1 and F2).
 
 | Capability › requirement | Scenarios | Group |
 |---|---|---|
@@ -133,13 +134,14 @@ cases.
 | chat-sessions › Operators configure the chat provider from Settings | Settings override applies to the next spawn; Clearing the override restores the default | 1 |
 | claude-session-profiles › Users select a predefined chat profile | Select a provider profile; Models are grouped by provider; Select a Codex profile; Project-level catalog extends the picker; Older client omits the profile; Catalog loading fails | 1 |
 | claude-session-profiles › Named profiles configure independent provider sessions | Effective global provider overrides; Default and named profiles over the merged environment; GLM configuration; MiniMax and MiMo configuration; Kimi configuration; Profiles do not leak between sessions; Conflicting Claude settings; Global provider settings coexist with profiles | 1 |
-| runtime-naming › Browser settings carry over to the Kawai storage keys | Settings survive the upgrade; New key is never overwritten | 2 |
+| runtime-naming › Browser settings carry over to the Kawai storage keys | Settings survive the upgrade; New key is never overwritten; A failed copy keeps the legacy settings † | 2 |
 | runtime-naming › Default data lives in the Kawai home directory | Fresh install uses the Kawai home; Explicit database path is honored | 3 |
 | runtime-naming › Legacy data directory is migrated on first start | Existing sessions survive the move; Program files stay in place; Existing Kawai team files are kept; Background-task outcomes survive the move; Already migrated | 3 |
 | runtime-naming › The legacy database is backed up before it moves | Backup precedes the move; Failed backup stops the migration | 3 |
 | runtime-naming › Existing database backups keep their rotation and recovery role | Migration backups stay findable; Owner files are untouched | 3 |
 | runtime-naming › The migration never runs while another process holds the legacy database | Old instance still running | 3 |
 | runtime-naming › A data migration that cannot complete leaves the legacy data usable | Cross-device move fails; Undo fails with the database still moved; A crash mid-migration recovers at the next start † | 3 |
+| runtime-naming › A damaged migration record stops startup † | Unreadable record with the migrated database present †; Record with neither database present † | 3 |
 | runtime-naming › The managed tmux session is named kawai | Running windows carry over; Tracked sessions keep their windows; Override is respected; Stored targets are rewritten after an interrupted rename † | 4 |
 | runtime-naming › Legacy per-connection tmux sessions are pruned | Leftover legacy viewer sessions are removed | 4 |
 | runtime-naming › Remote hosts on either name are recognized | Remote host not yet upgraded | 4 |
@@ -155,7 +157,8 @@ cases.
 | openspec-visibility › Automatically synchronize OpenSpec metadata | Task completion changes externally; Change is created externally; Rapid artifact writes occur | 6 |
 | workspace-navigation › Automatically synchronize workspace metadata | External worktree is added; External branch or checkout changes; Discovery temporarily fails | 6 |
 
-Totals: 28 requirements; 78 original scenarios plus 2 new = 80. Every
+Totals: 29 requirements (28 original + 1 new); 78 original scenarios plus 5
+new = 83. Every
 MODIFIED block was re-derived against current main at `f52963d0`: each
 equals the main requirement with only the rename edits (verified by a
 textual diff of main vs delta after `AGENTBOARD_`→`KAWAI_` and
@@ -244,7 +247,7 @@ Add `src/server/dataHome.ts`. `resolveDataHome()` is memoized and returns `{ dir
 3. **Plan.** A pure `planDataHomeMigration(listing)` returns `(from, to)` moves from a fixed allowlist: `agentboard.log` and rotated `agentboard.log.*` → `kawai.log*`; `chat-wire/`, `chat-workers/`, `chat-tasks/`, `tmux-server.pid`, `tls-cert.pem`, `tls-key.pem` as-is; `backups/` as a directory, then each `agentboard-<stamp>-<reason>.db[.corrupt|.partial]` inside it → `kawai-…`; and **last** `agentboard.db-journal` then `agentboard.db` → `kawai.db*` (a hot journal moves with its database, immediately before it). Files that `parseBackupFile` does not recognize stay as named. `app/`, `bin/`, `launchd.*.log`, and unknown entries stay in `~/.agentboard/`. Existing `~/.kawai/` entries (including `credentials.json` and the team files) are never targets; a destination that exists aborts the plan before any move.
 4. **Intent record.** Before the first move, write `~/.kawai/.data-home-migration.json` (the plan's `(from, to)` list and the backup path, no data) through temp file, fsync, rename, and directory fsync.
 5. **Apply.** `fs.renameSync` in plan order. If any rename fails (for example `EXDEV`), the completed moves are undone in reverse order, the intent record is removed, and the process runs on the legacy directory. If an undo rename itself fails, the server logs both paths of every entry not put back; it keeps running on the legacy directory only if `agentboard.db` (with its journal) is back in place, and otherwise exits with an error naming the `pre-rename` backup. After the final move (the database), the intent record is removed and the directory fsynced. Nothing is ever deleted: every entry stays at one of its two paths. There is no copy fallback for the live database; the step-2 backup is the safety copy.
-6. **Startup reconciliation (new, H10–H13).** When the intent record exists at startup the process died mid-apply. Because the database moves last: if `~/.kawai/kawai.db` exists, every other move already happened, so the resolver removes the record and runs on `~/.kawai/` (roll forward); otherwise it undoes every recorded move whose destination exists and source is absent, leaves any entry present at both paths in place and reports it, removes the record when nothing is left at a destination, and then runs the normal migration (steps 1–5) again. A record it cannot parse refuses the migration, runs on the legacy directory, and names the record path. This is a startup reconciliation, so it gets a `docs/recovery-matrix.md` row (task 3.6).
+6. **Startup reconciliation (new, H12–H15).** When the intent record exists at startup the process died mid-apply. Because the database moves last: if `~/.kawai/kawai.db` exists, every other move already happened, so the resolver removes the record and runs on `~/.kawai/` (roll forward); otherwise it undoes every recorded move whose destination exists and source is absent, leaves any entry present at both paths in place and reports it, removes the record when nothing is left at a destination, and then runs the normal migration (steps 1–5) again. Invariant: while a record exists, the resolver never serves, opens, or creates a database path that does not already exist; the only database it may create is a fresh `~/.kawai/kawai.db` with no override, no record, and neither database present (H3). So a record it cannot parse (H14), whatever databases exist, and a valid record with neither database present (H15) both stop startup: the process exits non-zero before `initDatabase`, moves nothing, opens and creates no database, and logs the record path, both database paths with whether each exists, and the newest `pre-rename` backup it can find. The operator repairs by inspecting both directories and removing the record (rollback notes, task 6.1). *Alternative:* serve whichever database exists. Rejected: an unreadable record cannot say which siblings moved, so serving either side may split logs and sidecars; refusal is the smallest safe rule. This is a startup reconciliation, so it gets a `docs/recovery-matrix.md` row (task 3.6).
 
 The outcome is logged once the logger is ready. `initDatabase` then runs unchanged on `kawai.db`, so its own `startup` snapshot follows the move.
 *Alternative:* migrate inside `initDatabase`. Rejected, because the log path is chosen earlier in `config.ts`, and the backup must precede any move. *Alternative:* no intent record, database first (the 492eada6 design). Rejected: a crash after the database moved would leave the siblings in `~/.agentboard` with `kawai.db` present, which the "already migrated" rule then never repairs.
@@ -269,7 +272,7 @@ Old updaters fetch `agentboard-<platform>.tar.gz`, swap `bin/agentboard`, and re
 `systemd/install.sh`: when `~/.config/systemd/user/agentboard.service` exists, run `systemctl --user disable --now agentboard.service`, remove the unit and its `.d/`, and `daemon-reload`. Then install `kawai.service` running `~/.kawai/app/bin/kawai` with `KAWAI_SYSTEMD_UNIT=kawai.service`. `KAWAI_DIR` replaces `AGENTBOARD_DIR` (legacy still read). `launchd/install.sh` does the same for `com.agentboard` and `com.agentboard.logrotate`, replacing them with `com.kawai` and `com.kawai.logrotate`, wrappers `kawai-run.sh` and `kawai-log-rotate.sh` under `~/.kawai/bin`. Both print, without running it, a cleanup command for `~/.agentboard/app` and `~/.agentboard/bin`. Data is never copied or deleted; the server migrates it on first start (Decision 2). Installer tests run against fixture homes with stubbed `systemctl`/`launchctl`; no test touches a real unit.
 
 ### 7. Client storage key migration
-Add `src/client/utils/legacyStorage.ts` with `migrateStorageKey(legacy, next)`. It copies the value only when `next` is missing, then removes `legacy`, using the safe wrappers in `storage.ts`. It runs for the four keys at module load, imported first from the client entry, before the `persist` stores hydrate. Persist versions and migrations are unchanged, because the stored value moves as-is. Local choice (K3): the legacy key is removed even when the new key already exists, so a stale legacy value can never resurface; the cost is that rolling back to a legacy client starts from default browser settings, which the rollback notes state.
+Add `src/client/utils/legacyStorage.ts` with `migrateStorageKey(legacy, next)`. It works on the persistent `localStorage` directly, never through `storage.ts`'s safe wrappers, because `safeStorage.setItem` (`src/client/utils/storage.ts:29-38`) swallows a failed write into a per-tab memory copy that does not survive reload, while `removeItem` (`:40-48`) can still delete the persistent legacy key. Invariant: a legacy key is removed only after `localStorage.getItem(next)` returns a value read back from persistent storage (equal to the legacy bytes when this call wrote it). When `next` is missing it writes the legacy bytes with `localStorage.setItem`, reads them back, and removes `legacy` only if they match. If the write throws (for example `QuotaExceededError`) or the read-back differs, it leaves both keys as they are and reports `retained`; the four stores' persist storage then reads `next`, falling back to the legacy key's bytes while `next` is absent, so the settings stay in effect, and the next load tries again. When storage is unavailable or `getItem` throws, it does nothing. It runs for the four keys at module load, imported first from the client entry, before the `persist` stores hydrate. Persist versions and migrations are unchanged, because the stored value moves as-is. Local choice (K3): the legacy key is removed even when the new key already exists, so a stale legacy value can never resurface; the cost is that rolling back to a legacy client starts from default browser settings, which the rollback notes state.
 
 ### 8. Mechanical rename for everything else
 The generated and internal names, user-visible text, comments, CI, docs, `AGENTS.md`, and tests from the inventory are plain renames with no fallback. They live for one process or are internal. A restart re-creates `__kawai_root__` safely, because the bootstrap-window check already tolerates a base session with other windows.
@@ -309,11 +312,17 @@ cases (`propertyCases`); no new dependency.
 | # | `kawai-*` | `agentboard-*` | Store hydrates from | After migration |
 |---|---|---|---|---|
 | K1 | present | absent | new key | unchanged |
-| K2 | absent | present | new key holding the legacy bytes, before hydration | legacy key removed |
-| K3 | present | present | new key, unchanged | legacy key removed |
+| K2 | absent | present; persistent write and read-back succeed | new key holding the legacy bytes, before hydration | legacy key removed after the read-back matched |
+| K3 | present in persistent storage | present | new key, unchanged | legacy key removed |
 | K4 | absent | absent | defaults | nothing written |
-| K5 | storage unavailable or throws | * | defaults; no exception escapes | nothing written |
-| K6 | absent | present, malformed JSON | the bytes move as-is; the store's existing malformed-value handling applies | legacy key removed |
+| K5 | storage unavailable or `getItem` throws | * | defaults; no exception escapes | nothing written or removed |
+| K6 | absent | present, malformed JSON | the bytes move as-is; the store's existing malformed-value handling applies | legacy key removed after the read-back matched |
+| K8 | absent | present; `setItem` throws (`QuotaExceededError`) while `getItem` and `removeItem` work | the legacy bytes, read through the fallback | legacy key kept in persistent storage; no new key persisted; outcome `retained`; retried next load |
+| K9 | absent | present; `setItem` returns but the read-back is absent or differs | the legacy bytes, read through the fallback | legacy key kept; outcome `retained` |
+
+K8 is the reviewer's counterexample (both persistent keys were gone after
+the safe-wrapper copy and remove); its control is a reload after K8, which
+must still find `agentboard-settings` in persistent storage.
 
 Ordering oracle K7: the migration runs before any of the four stores
 hydrates (asserted through the real client entry import order, not a
@@ -342,12 +351,15 @@ legacy db restored / fails with db not restored).
 | H11 | move k fails, undo fails, legacy db not in place | — | as found | exit non-zero naming the `pre-rename` backup |
 | H12 | restart with valid record, `kawai.db` present | `~/.kawai` | none; record removed (roll forward) | "completed interrupted migration" |
 | H13 | restart with valid record, `kawai.db` absent | per the re-run (H4–H11) | recorded moves undone first; entries at both paths left and reported | "rolled back interrupted migration" |
-| H14 | restart with unparseable record | `~/.agentboard` | none | record path named; migration refused until repaired |
+| H14 | restart with unparseable record; any of `kawai.db` present/absent × legacy db present/absent | — (no database opened or created) | none | exit non-zero naming the record path, both database paths with presence, and the newest `pre-rename` backup |
+| H15 | restart with valid record, `kawai.db` absent, legacy db absent | — (no database opened or created) | none; record kept | exit non-zero naming the record, both database paths, and the record's `pre-rename` backup |
 
 Precedence: H1 matches first (an override with a record present still
-serves the override; the record is reported, never applied), then H14, H12,
-H13 (record rows), then H2–H11. Unreachable: probe, backup, plan, apply, and
-undo outcomes when no migration runs (H1–H3, H12) — those steps are never
+serves the override; the record is reported, never applied), then H14, H15,
+H12, H13 (record rows), then H2–H11. Reviewer counterexample kept as row
+H14a of the table-driven test: no override, `kawai.db` present, legacy db
+absent, record unparseable → exit, no `agentboard.db` created. Unreachable: probe, backup, plan, apply, and
+undo outcomes when no migration runs (H1–H3, H12, H14, H15) — those steps are never
 reached; undo outcomes when apply succeeds (H8).
 **Completeness claim:** every combination of the axes matches exactly one
 row by that precedence or one unreachable claim; the completeness test
@@ -359,10 +371,13 @@ unknown files, `app/`, `bin/`), a random pre-existing `~/.kawai` team file
 set, a random failing move index or none, and a random crash point in
 `[0, n]` followed by a restart: every allowlisted entry exists at exactly
 one of its two paths; the database exists exactly once; the served
-directory holds the database; no `~/.kawai` pre-existing file changes; no
+directory holds the database; no database file is created except in H3, and
+none while a record exists; a run that cannot satisfy this exits without
+opening one; no `~/.kawai` pre-existing file changes; no
 entry is deleted. Model-based: the table is the reference model under
 seeded command sequences with a crash at each rename and at the record
-write/remove boundaries. Seams: `planDataHomeMigration`, the injected fs
+write/remove boundaries, plus injected record corruption (truncated or
+garbled bytes) and external deletion of either database before restart. Seams: `planDataHomeMigration`, the injected fs
 rename/fsync, the injected probe, the backup seam. Seed `0x4b415733`; 200
 cases; no new dependency.
 
@@ -427,16 +442,16 @@ Seed `0x4b415735`; 100 cases.
 ### Acceptance
 - A1: With only legacy `AGENTBOARD_<NAME>` set, the server uses the value and logs exactly one deprecation warning per name naming both names without the value; with `KAWAI_<NAME>` non-empty it uses that value and logs no warning (E1–E10, PE).
 - A2: No non-test `src/` file reads `process.env.AGENTBOARD_*` except `src/server/env.ts` and the dual-name strippers/fingerprints; CI, `playwright.config.ts`, `scripts/test-preload.ts`, and `scripts/e2e-fixture-specs.ts` set only `KAWAI_*` names, and the fixture lister still lists the fixture-gated specs.
-- A3: A browser holding `agentboard-*` keys loads the renamed client with the same settings under `kawai-*`, the legacy keys removed, and an existing `kawai-*` key never overwritten (K1–K7).
-- A4: With default paths, a legacy-only home is backed up (`pre-rename`, integrity-checked) and moved to `~/.kawai/` with `kawai.db`/`kawai.log`/`kawai-*` backups, and sessions, tasks, mail, plans, and strategy read back from `kawai.db`; every row H1–H14 produces its stated serving directory, moves, and log or exit.
-- A5: After a crash at any rename or intent-record boundary, the next start serves a directory that holds the database and every allowlisted entry exists at exactly one path (PH).
+- A3: A browser holding `agentboard-*` keys loads the renamed client with the same settings under `kawai-*`, the legacy keys removed only after the new key is confirmed in persistent storage, an existing `kawai-*` key never overwritten, and a failed persistent write leaving the legacy key in place with the settings still in effect (K1–K9).
+- A4: With default paths, a legacy-only home is backed up (`pre-rename`, integrity-checked) and moved to `~/.kawai/` with `kawai.db`/`kawai.log`/`kawai-*` backups, and sessions, tasks, mail, plans, and strategy read back from `kawai.db`; every row H1–H15 produces its stated serving directory, moves, and log or exit.
+- A5: After a crash at any rename or intent-record boundary, the next start either serves a directory that holds the database or, when the record is unreadable or names no existing database, exits without opening or creating one; every allowlisted entry exists at exactly one path (PH, H14, H15).
 - A6: Without a `TMUX_SESSION` override, an `agentboard` session with windows becomes `kawai` with every window kept, tracked sessions point at `kawai:@N` and stay active, legacy ws sessions are pruned, and remote hosts on either name are listed managed (T1–T8, R1–R4).
 - A7: A legacy `bin/agentboard` root updates to both binary names from `kawai-<platform>.tar.gz`; restarts target the launching unit or label; installers replace legacy units without touching data; releases publish eight checksummed tarballs (U1–U13, PU).
 - A8: Docs and current spec Purpose text use the new names; `git grep -n -i agentboard` over `src` (non-test) and the current docs lists only the named compat sites and the upgrade/deprecation notes.
 
 ### Invariants
 - I1: No legacy-name fallback writes, prints, or logs an environment value.
-- I2: The data-home migration never deletes an entry, never targets an existing `~/.kawai` file, and never runs while another process holds the legacy database or the in-use check cannot run.
+- I2: The data-home migration never deletes an entry, never targets an existing `~/.kawai` file, never runs while another process holds the legacy database or the in-use check cannot run, and never serves, opens, or creates a missing database while a migration record exists.
 - I3: No startup path kills a tmux session that has windows.
 - I4: No test, rehearsal, or check reads or writes the owner's live data directory, live tmux server, or service units; rehearsals use a disposable HOME and private tmux socket.
 - I5: An update either replaces every live path or leaves every live path as it was.
@@ -504,8 +519,8 @@ lands separately (one PR per group is allowed; never two groups in flight).
 | Group | Checkpoint (task) | Production path to show | Failure path to show |
 |---|---|---|---|
 | 1 | 1.7 | the real `config.ts` load with only `AGENTBOARD_REMOTE_HOSTS` set reaches the remote poller | a value-bearing legacy name never appears in captured stderr |
-| 2 | 2.2 | the client entry migrates keys before the settings store hydrates | storage throwing on access |
-| 3 | 3.1 (before code), 3.10 | blind second reading recorded; real `resolveDataHome` + `initDatabase` on a disposable HOME | held db (H4) and a crash at the db move (H13) |
+| 2 | 2.2 | the client entry migrates keys before the settings store hydrates | storage throwing on access (K5); a quota-failing write keeps the legacy key persistent (K8) |
+| 3 | 3.1 (before code), 3.10 | blind second reading recorded; real `resolveDataHome` + `initDatabase` on a disposable HOME | held db (H4), a crash at the db move (H13), and an unparseable record with `kawai.db` present (H14a: exit, no db created) |
 | 4 | 4.6 | `SessionManager.ensureSession` on a private tmux socket renames and rewrites | rename raced (T5) |
 | 5 | 5.11 | the updater flow on a legacy root fixture lands both binaries | failure on the third swap path restores all |
 | 6 | 6.8 | final grep gate and docs review | a residual name outside the allowlist fails the gate |
@@ -523,7 +538,7 @@ lands separately (one PR per group is allowed; never two groups in flight).
 
 - **An old instance keeps writing to `~/.agentboard` after the migration** (a dev server on another port) → the in-use guard skips the migration while any other process holds the database. A process started later with an explicit `AGENTBOARD_DB_PATH` keeps its own path.
 - **The handle check is unavailable** (restricted `/proc`, no `lsof`) → the migration is skipped and reported, never attempted blind (Open Question 4).
-- **A crash during the moves** → the intent record and database-last order make the next start roll forward or back (H12–H14).
+- **A crash during the moves** → the intent record and database-last order make the next start roll forward or back (H12, H13); a damaged record or a record with no database stops startup without creating one (H14, H15).
 - **The tmux rename affects someone running both builds on one tmux server** → it happens only when no `kawai` session exists and `TMUX_SESSION` is unset. `TMUX_SESSION=agentboard` opts out.
 - **Moving `tmux-server.pid` breaks an existing watchdog that reads the old path** → the README snippet moves to the new path; `KAWAI_TMUX_PID_FILE` (or the legacy name) pins it.
 - **A legacy root keeps two copies of a roughly 100 MB binary** → accepted for the transition; re-running the installer moves the host to `~/.kawai/app` with one binary.
@@ -537,6 +552,7 @@ lands separately (one PR per group is allowed; never two groups in flight).
 2. Existing installs self-update through the legacy tarball. On first start the build backs up `~/.agentboard/agentboard.db`, moves the data into `~/.kawai`, renames the tmux session, rewrites stored targets, and restarts through the unit that launched it. On the owner's host this step is the owner's cutover (task 6.9).
 3. Operators rename their `AGENTBOARD_*` variables when they see the warnings, and optionally re-run the installer to move to `kawai.service` or `com.kawai`.
 4. **Rollback:** before step 2 nothing changed. After it, the legacy build looks for `~/.agentboard/agentboard.db`. Stop the service; move `~/.kawai/kawai.db*`, `kawai.log*`, `chat-wire/`, `chat-workers/`, `chat-tasks/`, `backups/` (renaming `kawai-*` backups back to `agentboard-*`), and `tmux-server.pid` back under `~/.agentboard/` with their legacy names; run `tmux rename-session -t kawai agentboard`; reverse the stored-target rewrite with the documented `UPDATE … 'agentboard:' || substr(current_window, 7) …`; start the legacy binary. Browser settings start from defaults on the legacy client (K3). The `pre-rename` backup is the fallback if any step goes wrong. Document this in the README's upgrade notes and `docs/operations/database-backups.md`.
+5. **Damaged record (H14/H15):** the server refuses to start and names the record, both database paths, and the `pre-rename` backup. Repair: stop the service, inspect both directories, keep the side that holds the database (or restore the named `pre-rename` backup to `~/.agentboard/agentboard.db` when neither does), move any strays to that side, remove `~/.kawai/.data-home-migration.json`, and start again. Document this beside the rollback.
 
 ## Open Questions
 
