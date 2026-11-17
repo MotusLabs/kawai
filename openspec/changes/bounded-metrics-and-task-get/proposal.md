@@ -1,5 +1,23 @@
 # Proposal
 
+## Reconciliation status (2026-11-17)
+
+The `task_get` half of this change has landed outside it: revision rows and
+the whole-revision read (task 3.3) in PR #396, and the other task reads
+(the work of tasks 3.1–3.2a and 3.4–3.6) in the separate `bounded-task-reads`
+slice (PR #419). Their requirements now live in the main `team-tasks` spec,
+so this change no longer carries a `team-tasks` delta. The **task_get**
+bullets below and design.md's task sections are kept as the history of the
+original plan. Where they differ from the main spec, the main spec is the
+baseline: history continuation anchors, publication rationale previews, the
+256 KB figure qualified to a deterministic fixture with no universal response
+bound, and the diff reader's origin-specific read rights.
+
+What remains here is the metrics, report, and drill work and its
+`team-process-metrics` and `process-reports` deltas. This reconciliation
+ticks no task in tasks.md, leaves every checkbox as recorded, and neither
+resumes, adopts, nor cancels any held task, branch, or evidence.
+
 ## Why
 
 `bounded-task-list` fixed the largest agent read. A measurement of every other
@@ -92,11 +110,9 @@ None.
 - `process-reports`: `process_reports_list` drops snapshots;
   `process_report_get` and `process_report_submit` return compact snapshots
   whose drill lists are paged.
-- `team-tasks`: the bounded `task_get` gains compact subtask, revision,
-  result, assignment, and message sections, more windows, and paging and
-  single-record arguments, plus a lossless diff reader. It rewrites the
-  "Results and revisions stay whole" scenario: results and revisions become
-  windows reached by anchors.
+- `team-tasks`: none remaining. The bounded `task_get` sections, arguments,
+  and diff reader this change planned are in the main spec (see
+  Reconciliation status).
 
 ## Impact
 
