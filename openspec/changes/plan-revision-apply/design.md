@@ -244,7 +244,7 @@ Model-based test: the CR table and the CH table run as the reference model over 
 
 ### Production composition (PC)
 
-PC1: through the composed server (`planComposition` with the real executor and connection router), the owner sends `team-plan-execution-apply` for a running execution with one change chosen continue and one adapted; the result carries the new revision, the adapted task has one new revision with its notice, the executor dispatches the fix attempt naming it, and the next `team-plan-detail` lists both revision rows. Mutants: `applyConnections.ts` not composed, and the executor wake after commit removed, each fail PC1. PC2: the same path with AP3's stale `expectedRevision` is refused with nothing written.
+PC1: through the composed server (`planComposition` with the real executor and connection router), the owner sends `team-plan-execution-apply` for a running execution with one change chosen continue and one adapted; the result carries the new revision, the adapted task has one new revision with its notice, the executor dispatches the fix attempt naming it, and the next `team-plan-detail` lists both revision rows. Mutants: the type left out of `CHAT_CONNECTION_TYPES`, `applyConnections.ts` not composed, the executor wake after commit removed, and the detail push removed each fail PC1. Every piece PC1 uses lands in task 2.2. PC2: the same path with AP3's stale `expectedRevision` is refused with nothing written.
 
 ### Forward fixes (FX, plan-supervision S4)
 
@@ -259,7 +259,7 @@ Start's seq-1 row (`executionComposition.test.ts`), Stop, a pause's Adapt public
 - [Strict landed refusals block plan-wide rule edits after the first landing] → The owner adds a forward fix, or stops and starts a new execution. Silent reinterpretation of landed evidence would break P10.
 - [Continue keeps the old task direction for a changed change] → It is the owner's recorded choice; the publication row shows it, and Adapt is one click away.
 - [A prepared cancel races a human closing the task] → `StaleTaskStatus` rolls the whole transaction back; Apply prepares again (AK6).
-- [Apply and revision-control's remaining slice touch the same protocol, detail, store, and view files] → The proposed graph orders revision-control's slice first; this change's client work rebases on it.
+- [Apply and revision-control's remaining slice touch the same protocol, detail, store, and view files] → The proposed graph orders them by shared path: this change's 2.2–2.4 and 3.1 after revision-control 9.1–9.2, its 3.2–3.3 after revision-control 9.4–9.5; 1.1 and 2.1 run in parallel.
 
 ## Migration Plan
 
@@ -268,9 +268,9 @@ No migration: the tables exist (migration 17). The new `team-plan-detail` field 
 ## Execution checkpoints
 
 1. Task 1.1: the blind second reading of AP, AK, DL, CH, and CR (inputs-only commit, a cross-model advisor fills the outputs, the author's outputs, a diff resolved in the tables), recorded by the Lead as binding before code.
-2. After task 2.2: PC1 and PC2 green at a pinned commit, reviewed before the remaining rows.
+2. After task 2.2: PC1 and PC2 green at a pinned commit, reviewed before the remaining rows. 2.2 carries every piece PC1 uses (the Apply message and whitelist entry, the composed handler, the continue and adapt writes, the post-commit wake, and the revision rows in the detail push), so the checkpoint runs the real router → transaction → executor → push path, never a harness.
 3. After task 2.4: the full tables, P1–P4, and the CR model green, with the named mutants killed.
-4. Tasks 3.x after revision-control's remaining slice has landed: protocol, view, and the browser step.
+4. Task 3.1 (preview message, publication rows, `plan_get`) after revision-control 9.1–9.2; tasks 3.2–3.3 (view and the browser step) after revision-control 9.4–9.5.
 
 ## Implementation contract
 
@@ -324,7 +324,7 @@ No migration: the tables exist (migration 17). The new `team-plan-detail` field 
 
 - V1: AP, AK, DL, CH, CR, and FX rows are committed verbatim as table-driven tests, after the blind second reading recorded binding by the Lead.
 - V2: P1–P4 run at their seeds with the declared counts, the full counts under `--full-properties`, and the CR/CH model-based test runs crashes at each boundary.
-- V3: PC1 and PC2 pass through the composed server; the two wiring mutants each fail PC1; mutants dropping the CAS (AK4), keeping a failed entry out of the list (AP16), writing the event outside the transaction (CR2), and publishing without the request key (P2) each fail their row.
+- V3: PC1 and PC2 pass through the composed server; the wiring mutants of task 2.2 (type not whitelisted, handler not composed, post-commit wake removed, detail push removed) each fail PC1; mutants dropping the CAS (AK4), keeping a failed entry out of the list (AP16), writing the event outside the transaction (CR2), and publishing without the request key (P2) each fail their row.
 - V4: The recovery matrix's "R4 — Apply crash" row cites this change and its CR tests, and `src/server/__tests__/recoveryMatrix.test.ts` passes.
 - V5: Component tests cover A8's dialog rules; the fixture spec passes in CI's fixture step, run only through the private fixture path, never `bun run test:e2e`.
 - V6: A citation preflight over the result's map reports zero unresolved; `openspec validate plan-revision-apply --strict` and `bun run check --full-properties` pass on the clean committed head under the pinned Bun; `scripts/verify-result.ts` reports the head.

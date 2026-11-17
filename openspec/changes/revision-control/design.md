@@ -637,7 +637,7 @@ Every scenario of this change's two delta specs, with where it is satisfied. "La
 | plan-holds › A whole-plan hold refuses Start › Start under a plan hold; Start under a changes hold | landed (3.3) | mapped in 9.6 |
 | plan-holds › Holds are released only by the owner › Narrowing a plan hold | landed (3.1) | mapped in 9.6 |
 | plan-holds › Holds are released only by the owner › The deadline passes | remainder | 9.3 (AT1); the hold staying active is landed (3.1) |
-| plan-holds › Holds are visible to the owner and agents › A held change's cause; Extending clears the item | remainder | 9.2, 9.3 (CA3, AT3) |
+| plan-holds › Holds are visible to the owner and agents › A held change's cause; Extending clears the item | remainder | 9.1–9.2 (detail, `plan_get`), 9.3 (CA3, AT3) |
 | plan-pause › The owner pauses the work a hold covers › Two developers are asked to pause; Kawai-held steps are not targets | landed (4.1) | mapped in 9.6 |
 | plan-pause › An unclaimed instruction is withdrawn › A queued instruction; A spawning instruction | landed (4.1) | mapped in 9.6 |
 | plan-pause › Holders record checkpoints through task_checkpoint › all four | landed (4.2) | `checkpointTool.test.ts`, `checkpointToolPauses.test.ts`, mapped in 9.6 |
@@ -711,7 +711,7 @@ Production composition: PT6 runs through the composed server; CA3 through the re
 
 ### Execution checkpoints
 
-1. After 9.1: PT6's production path and PT3's refusal, at a pinned commit, reviewed before 9.2 (design-challenge budget per `docs/agent-collaboration.md`).
+1. After 9.1: PT6's production path (place over the socket through the router and the composed handler, the hold stored, the next `team-plan-detail` push listing it) and PT3's refusal, at a pinned commit, reviewed before 9.2 (design-challenge budget per `docs/agent-collaboration.md`). 9.1 carries every piece of that path: the message, its whitelist entry, the handler, and the `holds` detail field with its push.
 2. After 9.3: CA/AT tables and AP-1 green, with the named mutants killed.
 3. After 9.5: the fixture walkthrough passes in CI's fixture step; then 9.6–9.7.
 
@@ -722,7 +722,7 @@ Preserved: R01, R10, R11, and R18 keep passing unchanged; holds and pauses gain 
 ### Acceptance
 
 - A1: Every hold and pause command reaches its service over the socket: PT1–PT7 hold through the real connection router and `planComposition`.
-- A2: `team-plan-detail` and `plan_get` list holds and pauses with the DV1–DV2 fields, pushed after every write and Paused recording (DV3), and refuse another team's plan (DV4).
+- A2: `team-plan-detail` and `plan_get` list holds and pauses with the DV1–DV2 fields, pushed after every write and Paused recording (DV3), and refuse another team's plan (DV4); the holds detail and its push land with the hold messages (9.1), so PT6's checkpoint needs no later work.
 - A3: Supervision names `paused`, `pausing`, and `hold` in D13's order, never as a `no-progress` stall (CA1–CA6).
 - A4: The three attention kinds follow AT1–AT10, and AP-1 holds over its declared cases.
 - A5: The dialogs and store behave as UI1–UI5, and every store apply method has a dispatch caller.
