@@ -41,7 +41,8 @@ baseline to modify.
     surfaces", narrowed to the Metrics view, tools and export (report
     snapshot versions move to `process-workflow-observability`).
 - Planned work is test-only and docs: `@covers` annotations with literal
-  titles, a few missing closeout tests (design), then sync and archive.
+  titles for 12 scenarios whose existing tests assert their outcomes, 15 new
+  closeout tests or assertions (design "Closeout map"), then sync and archive.
 
 ## Capabilities
 
