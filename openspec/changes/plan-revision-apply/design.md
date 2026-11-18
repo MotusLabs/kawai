@@ -152,73 +152,73 @@ Hazards consulted (`docs/oracle-hazards.md`): M1 (an oracle behind a hand-built 
 
 ### Preconditions (AP)
 
-Each row makes exactly one entry fail on an otherwise valid Apply. Result: refused naming that entry, nothing written (no revision row, publication row, task revision, notice, cancellation, or event).
+Each row varies one input of an otherwise valid Apply. Result per row: `?` (blind reading, task 1.1).
 
 | id | Failing entry | Input |
 | --- | --- | --- |
-| AP1 | `plan-open` | the plan is closed |
-| AP2 | `execution-running` | the execution stopped or completed |
-| AP3 | `execution-revision-unchanged` | `expectedRevision` is not the execution's current revision |
-| AP4 | `revision-current` | `revision`/`contentHash` is not the plan's current approved revision |
-| AP5 | `revision-newer` | `revision` is not greater than the execution's |
-| AP6 | `validation-current` | the target's report is out of date (V5's message) |
-| AP7 | `start-conditions-resolved` | the target report carries an unresolved `start` condition |
-| AP8 | `strategy-impact` | the impact gate refuses the target |
-| AP9 | `landing-unchanged` | the landing mode or integration branch differs |
-| AP10 | `landed-unchanged` | a landed change's acceptance differs (names it, suggests a forward fix) |
-| AP11 | `merge-quiet` | a changed or removed change has a merge or fast-forward running |
-| AP12 | `choices-complete` | a changed change with a task has no choice, or an Adapt text is empty |
-| AP13 | `changes-unclaimed` | an added change's task id is claimed elsewhere |
-| AP14 | `changes-on-base` | an added or adapted change's artifacts are not on the base |
-| AP15 | `roles-routable` | an unlanded change's group under the target's roles has no routable worker |
-| AP16 | several entries | refused naming every failing entry in list order |
-| AP17 | none | accepted |
+| AP1 | ? | the plan is closed |
+| AP2 | ? | the execution stopped or completed |
+| AP3 | ? | `expectedRevision` is not the execution's current revision |
+| AP4 | ? | `revision`/`contentHash` is not the plan's current approved revision |
+| AP5 | ? | `revision` is not greater than the execution's |
+| AP6 | ? | the target's report is out of date (V5's message) |
+| AP7 | ? | the target report carries an unresolved `start` condition |
+| AP8 | ? | the impact gate refuses the target |
+| AP9 | ? | the landing mode or integration branch differs |
+| AP10 | ? | a landed change's acceptance differs (names it, suggests a forward fix) |
+| AP11 | ? | a changed or removed change has a merge or fast-forward running |
+| AP12 | ? | a changed change with a task has no choice, or an Adapt text is empty |
+| AP13 | ? | an added change's task id is claimed elsewhere |
+| AP14 | ? | an added or adapted change's artifacts are not on the base |
+| AP15 | ? | an unlanded change's group under the target's roles has no routable worker |
+| AP16 | ? | two or more entries fail |
+| AP17 | ? | every entry passes |
 
 ### Command shape (AK)
 
 | id | Input | Result |
 | --- | --- | --- |
-| AK1 | an agent caller, or a direct service call with an agent caller | refused `forbidden` before any read; nothing written |
-| AK2 | the same command id and payload after a success | the prior result; no second row, task revision, or notice |
-| AK3 | the same command id, a different payload | refused naming the first differing field |
-| AK4 | two different command ids on the same execution revision, concurrently | one commits; the other is refused `execution-revision-unchanged` naming the new revision |
-| AK5 | the same command id sent twice concurrently | one commits; the other resolves as its replay |
-| AK6 | a prepared cancel goes stale three times | refused `state` naming the task; nothing written |
+| AK1 | an agent caller, or a direct service call with an agent caller | ? |
+| AK2 | the same command id and payload after a success | ? |
+| AK3 | the same command id, a different payload | ? |
+| AK4 | two different command ids on the same execution revision, concurrently | ? |
+| AK5 | the same command id sent twice concurrently | ? |
+| AK6 | a prepared cancel goes stale three times | ? |
 
 ### Classification (DL), through `revisionDelta`
 
 | id | Change | Class / finding |
 | --- | --- | --- |
-| DL1 | only in the target | added |
-| DL2 | only in the running revision, unlanded | removed |
-| DL3 | only in the running revision, landed | finding `landed-changed` (refusal) |
-| DL4 | in both, unlanded, a compared field differs, has a task | changed, needs a choice |
-| DL5 | as DL4 but still waiting with no task | changed, choice `none` |
-| DL6 | landed, differs only in `dependsOn` or `fixes` | metadata, no choice |
-| DL7 | landed, differs in any other compared field | finding `landed-changed` |
-| DL8 | landing mode or integration branch differs | finding `landing-changed` |
-| DL9 | plan-wide rules or extra checks differ, something landed | finding `plan-rules-changed` |
-| DL10 | plan-wide rules differ, nothing landed | every unlanded change changed |
-| DL11 | a role's profiles differ | unlanded changes of that group changed; never `landed-changed` |
-| DL12 | only `leadGroup` differs | every change unchanged; informational `lead-changed` |
-| DL13 | identical | unchanged |
+| DL1 | only in the target | ? |
+| DL2 | only in the running revision, unlanded | ? |
+| DL3 | only in the running revision, landed | ? |
+| DL4 | in both, unlanded, a compared field differs, has a task | ? |
+| DL5 | as DL4 but still waiting with no task | ? |
+| DL6 | landed, differs only in `dependsOn` or `fixes` | ? |
+| DL7 | landed, differs in any other compared field | ? |
+| DL8 | landing mode or integration branch differs | ? |
+| DL9 | plan-wide rules or extra checks differ, something landed | ? |
+| DL10 | plan-wide rules differ, nothing landed | ? |
+| DL11 | a role's profiles differ | ? |
+| DL12 | only `leadGroup` differs | ? |
+| DL13 | identical | ? |
 
 ### Choices on success (CH)
 
 | id | Class, choice | Rows written in the transaction | After commit |
 | --- | --- | --- | --- |
-| CH1 | unchanged | publication row | nothing |
-| CH2 | metadata | publication row; the change reads the target's `dependsOn` and `fixes` | nothing |
-| CH3 | changed, continue | publication row; the running attempt's manifest unchanged | later attempts and handoffs read the new revision |
-| CH4 | changed, adapt | publication row with the task revision; one task revision with notify under `apply:<commandId>:<change>`; its notice to the outstanding claimant | plan-execution D9's fix attempt names that revision (waits under a hold or an undecided pause, D8) |
-| CH5 | changed, restart | publication row | the executor supersedes the assignment and dispatches a new attempt under the new revision |
-| CH6 | changed, choice `none` (no task) | publication row | the new definition applies at provisioning |
-| CH7 | added, no landing fact | change row `waiting` at its content position | scheduled by its dependencies |
-| CH8 | added, landing fact exists | change row `landed`, `owns = 0` | nothing |
-| CH9 | removed, unlanded, task open | state `cancelled`, `owns = 0`; effects cancelled; slot given up; the prepared cancel committed | nothing |
-| CH10 | removed, unlanded, task already closed | as CH9 without a task write | nothing |
+| CH1 | unchanged | ? | ? |
+| CH2 | metadata | ? | ? |
+| CH3 | changed, continue | ? | ? |
+| CH4 | changed, adapt | ? | ? |
+| CH5 | changed, restart | ? | ? |
+| CH6 | changed, choice `none` (no task) | ? | ? |
+| CH7 | added, no landing fact | ? | ? |
+| CH8 | added, landing fact exists | ? | ? |
+| CH9 | removed, unlanded, task open | ? | ? |
+| CH10 | removed, unlanded, task already closed | ? | ? |
 
-Every success also writes the next `plan_execution_revisions` row, updates the execution's revision columns to equal it, and writes the `revision-applied` event, all in the same transaction.
+Every success also writes: `?` (blind reading, task 1.1).
 
 ### Crash and replay (CR, multi-agent R17)
 
@@ -226,12 +226,12 @@ Boundaries: B0 before the prepare phase; B1 after it, before the transaction; B2
 
 | id | Crash at | State after restart | Retry |
 | --- | --- | --- | --- |
-| CR1 | B0 or B1 | no revision row, publication row, task revision, notice, cancellation, or event from this Apply | runs as a first Apply |
-| CR2 | B2 | as CR1 (the transaction rolled back) | runs as a first Apply |
-| CR3 | B3 | the whole Apply committed; nothing dispatched yet | replays; the executor's startup tick dispatches from stored state once |
-| CR4 | B4 | committed and dispatched | replays; nothing new |
+| CR1 | B0 or B1 | ? | ? |
+| CR2 | B2 | ? | ? |
+| CR3 | B3 | ? | ? |
+| CR4 | B4 | ? | ? |
 
-Completeness: the boundaries B0–B4 cover every point of the command's path, and each maps to one row. Unreachable: a partial transaction (SQLite atomicity); a notice without its task revision (both in one `TaskStore.publish` inside the transaction).
+Completeness and unreachable combinations: `?` (blind reading, task 1.1).
 
 ### Properties
 
