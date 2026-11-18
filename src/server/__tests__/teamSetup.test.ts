@@ -404,10 +404,15 @@ describe('root-swap races — the write stays inside the verified directory', ()
   // The groups pin must resolve through the pinned .kawai fd, not the path
   // (review F3, mutant M5): a .kawai swap planted between the .kawai pin and
   // the groups pin — where the earlier swap tests never reach — cannot
-  // redirect the open through the swapped intermediate component.
+  // redirect the open through the swapped intermediate component. The swap
+  // target holds a usable empty groups directory (round-2 oracle): with it,
+  // a full-path open SUCCEEDS, so this test fails exactly when bytes land
+  // outside through the swapped path — with none, a path-opening mutant
+  // only hits ENOENT and its safe fallback hides the defect.
   test('a .kawai swap between the pins cannot redirect the groups pin', () => {
     const outside = path.join(root, 'outside')
     fs.mkdirSync(outside)
+    fs.mkdirSync(path.join(outside, 'groups'))
     fs.mkdirSync(groupsDir(), { recursive: true })
     const result = runTeamSetup(repo(), {
       afterPin: level => {
@@ -418,7 +423,8 @@ describe('root-swap races — the write stays inside the verified directory', ()
     })
     expect(result.ok).toBe(false)
     expect(result.reason).toBe('error')
-    expect(fs.readdirSync(outside)).toEqual([])
+    expect(fs.readdirSync(outside)).toEqual(['groups'])
+    expect(fs.readdirSync(path.join(outside, 'groups'))).toEqual([]) // no byte outside through the swapped path
     const displaced = path.join(repo(), '.kawai.original', 'groups')
     expect(fs.readdirSync(displaced).filter(name => name.endsWith('.md')).sort()).toEqual(STARTER)
   })
