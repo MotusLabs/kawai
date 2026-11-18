@@ -17,7 +17,7 @@ The shipped default catalog, grouped by provider:
 | glm | GLM | Z.AI | starts on Opus; Sonnet and Haiku map to `glm-5.3-flash[1m]`, Opus and Fable to `glm-5.3[1m]` — provider env below |
 | glm-flash | GLM Flash | Z.AI | starts on Sonnet; Opus and Fable map to `glm-5.3[1m]`, Haiku to `glm-5.3-flash[1m]` — provider env below |
 | minimax | MiniMax | MiniMax | `https://api.minimax.io/anthropic`; starts on `MiniMax-M3`; every Claude tier maps to `MiniMax-M3` ([reference](https://platform.minimax.io/docs/token-plan/claude-code)) |
-| mimo | MiMo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus/Haiku/Fable to `mimo-v2.6-pro` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
+| mimo | MiMo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro[1m]`; Sonnet maps to `mimo-v2.6-flash[1m]`, Opus/Haiku/Fable to `mimo-v2.6-pro[1m]` (1M capacity); `autoCompactWindow` `300000` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
 | kimi | Kimi | Kimi | `https://api.moonshot.ai/anthropic`; starts on `kimi-k3[1m]`; every Claude tier maps to `kimi-k3[1m]`; auto-compact window `1000000` ([reference](https://platform.kimi.ai/docs/guide/claude-code-kimi#configuration-reference)) |
 | openrouter-opus | OpenRouter Opus | OpenRouter | starts on Opus; Opus and Fable map to `~anthropic/claude-opus-latest[1m]` — provider env below |
 | openrouter-sonnet | OpenRouter Sonnet | OpenRouter | starts on Sonnet; Sonnet maps to `~anthropic/claude-sonnet-latest[1m]` — provider env below |
