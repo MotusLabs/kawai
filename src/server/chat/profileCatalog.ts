@@ -90,6 +90,8 @@ export interface CatalogProfile {
   executable?: string
   /** Zone of reset times the provider writes without one (IANA or ±HH:MM). */
   limitResetTimeZone?: string
+  /** The flattened auto-compaction window preference (mimo-million-token-context D2). */
+  autoCompactWindow?: number
   /**
    * The entry's runtime (ruling R1). Absent reads as `claude`, keeping every
    * existing profile's shape unchanged.
@@ -348,12 +350,20 @@ export function resolveProfileCatalog(
   for (const [providerId, provider] of merger.providers) {
     for (const [modelKey, model] of provider.models) {
       const flat = flattenModel(provider, model)
+      // A wrapper owns its configuration (mimo-million-token-context D2): a
+      // window assembled across files onto an executable-backed model is
+      // reported and dropped; within one file the parser refuses it.
+      if (flat.executable !== undefined && flat.autoCompactWindow !== undefined) {
+        errors.push(`${provider.originFile}: model "${modelKey}" is executable-backed, so its autoCompactWindow is ignored; a wrapper owns its own configuration.`)
+        flat.autoCompactWindow = undefined
+      }
       profiles.set(modelKey, {
         label: flat.label?.trim() || modelKey,
         env: flat.env,
         ...(flat.model !== undefined ? { model: flat.model } : {}),
         ...(flat.executable !== undefined ? { executable: flat.executable } : {}),
         ...(flat.limitResetTimeZone !== undefined ? { limitResetTimeZone: flat.limitResetTimeZone } : {}),
+        ...(flat.autoCompactWindow !== undefined ? { autoCompactWindow: flat.autoCompactWindow } : {}),
         providerId,
         ...(flat.authTokenEnv !== undefined ? { authTokenEnv: flat.authTokenEnv } : {}),
         ...(flat.balanceKeyEnv !== undefined ? { balanceKeyEnv: flat.balanceKeyEnv } : {}),

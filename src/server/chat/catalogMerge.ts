@@ -10,6 +10,8 @@
 // holding credential variable names from a trusted file has its route fixed
 // by the trusted tiers (openrouter-provider D2): a project file that would
 // set its base URL, or move one of its models elsewhere, is ignored whole.
+// The `autoCompactWindow` scalar merges like the others (nearer wins; a
+// model's over its provider's; a re-homed key keeps its own).
 import type { ParsedProvider, PartialProfile } from './profileCatalog'
 
 /** The settings a re-homed model carries from the shipped provider it left. */
@@ -21,6 +23,7 @@ export interface InheritedSettings {
   limitResetTimeZone?: string
   authTokenEnv?: string
   balanceKeyEnv?: string
+  autoCompactWindow?: number
 }
 
 /**
@@ -42,6 +45,8 @@ export interface MergedModel {
   label?: string
   model?: string
   env: Record<string, string>
+  /** The window preference (mimo-million-token-context D2): nearer wins, over the provider's. */
+  autoCompactWindow?: number
   inherited?: InheritedSettings
 }
 
@@ -53,6 +58,7 @@ export interface MergedProvider {
   /** Credential variable names; only trusted files set them. */
   authTokenEnv?: string
   balanceKeyEnv?: string
+  autoCompactWindow?: number
   models: Map<string, MergedModel>
   /** An operator file introduced this provider; overlays never change it (F2). */
   operatorOrigin: boolean
@@ -69,6 +75,7 @@ export function flattenModel(provider: MergedProvider, model: MergedModel): {
   limitResetTimeZone?: string
   authTokenEnv?: string
   balanceKeyEnv?: string
+  autoCompactWindow?: number
 } {
   return {
     label: model.label ?? model.inherited?.label ?? provider.label,
@@ -78,6 +85,8 @@ export function flattenModel(provider: MergedProvider, model: MergedModel): {
     limitResetTimeZone: provider.limitResetTimeZone ?? model.inherited?.limitResetTimeZone,
     authTokenEnv: provider.authTokenEnv ?? model.inherited?.authTokenEnv,
     balanceKeyEnv: provider.balanceKeyEnv ?? model.inherited?.balanceKeyEnv,
+    // A model's own window, else the one a re-homed key carried, else its provider's.
+    autoCompactWindow: model.autoCompactWindow ?? model.inherited?.autoCompactWindow ?? provider.autoCompactWindow,
   }
 }
 
@@ -113,6 +122,7 @@ function inheritedFrom(flat: ReturnType<typeof flattenModel>): InheritedSettings
     limitResetTimeZone: flat.limitResetTimeZone,
     authTokenEnv: flat.authTokenEnv,
     balanceKeyEnv: flat.balanceKeyEnv,
+    autoCompactWindow: flat.autoCompactWindow,
   }
 }
 
@@ -194,6 +204,7 @@ export class CatalogMerger {
           limitResetTimeZone: provider.limitResetTimeZone,
           authTokenEnv: provider.authTokenEnv,
           balanceKeyEnv: provider.balanceKeyEnv,
+          autoCompactWindow: provider.autoCompactWindow,
           models: new Map(),
           operatorOrigin: !shipped,
           originFile: file,
@@ -207,6 +218,7 @@ export class CatalogMerger {
       merged.limitResetTimeZone = provider.limitResetTimeZone ?? merged.limitResetTimeZone
       merged.authTokenEnv = provider.authTokenEnv ?? merged.authTokenEnv
       merged.balanceKeyEnv = provider.balanceKeyEnv ?? merged.balanceKeyEnv
+      merged.autoCompactWindow = provider.autoCompactWindow ?? merged.autoCompactWindow
     }
     for (const [id, provider] of providers) {
       const merged = this.providers.get(id)!
@@ -217,6 +229,7 @@ export class CatalogMerger {
           existing.label = model.label ?? existing.label
           existing.model = model.model ?? existing.model
           existing.env = { ...existing.env, ...model.env }
+          existing.autoCompactWindow = model.autoCompactWindow ?? existing.autoCompactWindow
           if (!shipped) {
             const holder = this.holders.get(key)!
             holder.operator = true
@@ -246,6 +259,7 @@ export class CatalogMerger {
             label: model.label ?? flat.label,
             model: model.model ?? flat.model,
             env: model.env,
+            autoCompactWindow: model.autoCompactWindow,
             inherited: inheritedFrom(flat),
           })
           continue
@@ -253,7 +267,7 @@ export class CatalogMerger {
         // P3: a new key joins X with X's merged facts plus its own — the
         // flatten applies this provider's (already overlaid) env.
         this.setHolder(key, { provider: id, operator: !shipped, originFile: file, own: false }, tier)
-        merged.models.set(key, { label: model.label, model: model.model, env: { ...model.env } })
+        merged.models.set(key, { label: model.label, model: model.model, env: { ...model.env }, autoCompactWindow: model.autoCompactWindow })
       }
     }
   }
@@ -292,6 +306,7 @@ export class CatalogMerger {
           || Object.keys(entry.env).length > 0
           || entry.executable !== undefined
           || entry.limitResetTimeZone !== undefined
+          || entry.autoCompactWindow !== undefined
         if (claudeShaped) {
           this.errors.push(`${file}: profile "${id}" is a Claude entry here but a Codex entry in ${holder.originFile}; the entry is ignored.`)
           continue
@@ -323,6 +338,7 @@ export class CatalogMerger {
             label: entry.label ?? flat.label,
             model: entry.model ?? flat.model,
             env: { ...entry.env },
+            autoCompactWindow: entry.autoCompactWindow,
             inherited: { ...inheritedFrom(flat), executable: undefined, limitResetTimeZone: undefined },
           }]]),
           operatorOrigin: !shipped,
@@ -345,7 +361,7 @@ export class CatalogMerger {
           env: {},
           executable: entry.executable,
           limitResetTimeZone: entry.limitResetTimeZone,
-          models: new Map([[id, { label: entry.label, model: entry.model, env: { ...entry.env } }]]),
+          models: new Map([[id, { label: entry.label, model: entry.model, env: { ...entry.env }, autoCompactWindow: entry.autoCompactWindow }]]),
           operatorOrigin: !shipped,
           originFile: file,
         })
@@ -360,7 +376,7 @@ export class CatalogMerger {
         env: {},
         executable: entry.executable,
         limitResetTimeZone: entry.limitResetTimeZone,
-        models: new Map([[id, { label: entry.label, model: entry.model, env: { ...entry.env } }]]),
+        models: new Map([[id, { label: entry.label, model: entry.model, env: { ...entry.env }, autoCompactWindow: entry.autoCompactWindow }]]),
         operatorOrigin: !shipped,
         originFile: file,
       })
@@ -499,6 +515,7 @@ export class CatalogMerger {
       model.label = entry.label ?? model.label
       model.model = entry.model ?? model.model
       model.env = { ...model.env, ...entry.env }
+      model.autoCompactWindow = entry.autoCompactWindow ?? model.autoCompactWindow
       // Keep a one-model provider's label equal to its model's, so the
       // picker renders the pair as the plain option it has always been.
       if (provider.models.size === 1) provider.label = entry.label ?? provider.label
@@ -507,6 +524,7 @@ export class CatalogMerger {
       // no place to land and is reported, never dropped silently (F2).
       provider.label = entry.label ?? provider.label
       provider.env = { ...provider.env, ...entry.env }
+      provider.autoCompactWindow = entry.autoCompactWindow ?? provider.autoCompactWindow
       if (entry.model !== undefined) {
         this.errors.push(`${file}: model "${entry.model}" is ignored: provider "${id}" holds other models and takes no startup model.`)
       }

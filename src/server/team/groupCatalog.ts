@@ -143,6 +143,30 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
         if (bare !== undefined) changed = true
       }
     }
+    // Role windows (mimo-million-token-context D2) resolve like modelEffort,
+    // and an unknown profile is ignored with a warning; a known profile the
+    // role does not list warns and still applies to members on it.
+    let profileAutoCompactWindow: typeof group.profileAutoCompactWindow
+    if (group.profileAutoCompactWindow) {
+      profileAutoCompactWindow = {}
+      const listed = new Set(resolvedProfiles.length > 0 ? resolvedProfiles.map(entry => entry.profileId) : ['default'])
+      const windows = group.profileAutoCompactWindow
+      for (const written of group.profileAutoCompactWindowOrder ?? Object.keys(windows)) {
+        const tokens = windows[written]!
+        const key = qualified.get(written) ?? written
+        changed = true
+        if (!known.has(key)) {
+          groupWarnings.push(`profileAutoCompactWindow: "${written}" is not defined; ignored`)
+        } else if (profileAutoCompactWindow[key] !== undefined) {
+          groupWarnings.push(`profileAutoCompactWindow: "${written}" is already listed; the later entry is ignored`)
+        } else {
+          profileAutoCompactWindow[key] = tokens
+          if (written !== key && !listed.has(key)) {
+            groupWarnings.push(`profileAutoCompactWindow: "${written}" is not one of the group's profiles; it applies only to members on that profile`)
+          }
+        }
+      }
+    }
     const unknown = resolvedProfiles.filter(entry => !known.has(entry.profileId))
     if (unknown.length > 0) changed = true
     // A cap-derived default max re-sums the resolved caps; an explicit max
@@ -150,12 +174,14 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
     const max = changed && group.maxFromCaps
       ? Math.max(1, resolvedProfiles.reduce((sum, entry) => sum + (entry.cap ?? 0), 0))
       : group.max
+    const { profileAutoCompactWindowOrder: _order, ...unordered } = group
     const checked: GroupDefinition = changed || unknown.length > 0
       ? {
-        ...group,
+        ...unordered,
         profiles: resolvedProfiles.filter(entry => known.has(entry.profileId)),
         max,
         ...(profileEffort !== undefined ? { profileEffort } : {}),
+        ...windowsField(profileAutoCompactWindow),
         warnings: [...groupWarnings, ...unknown.map(entry => `profile "${entry.profileId}" is not defined; ignored`)],
       }
       : group
@@ -166,6 +192,12 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
     })
   }
   return { groups, errors, warnings, providers: resolved.providers }
+}
+
+/** The resolved window map, or an absent key (removed when nothing valid resolved). */
+function windowsField(windows: Record<string, number> | undefined): Pick<GroupDefinition, 'profileAutoCompactWindow'> {
+  if (windows === undefined) return {}
+  return { profileAutoCompactWindow: Object.keys(windows).length > 0 ? windows : undefined }
 }
 
 const profileContext = (ctx: GroupCatalogContext) =>

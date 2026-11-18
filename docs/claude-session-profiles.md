@@ -17,7 +17,7 @@ The shipped default catalog, grouped by provider:
 | glm | GLM | Z.AI | starts on Opus; Sonnet and Haiku map to `glm-5.3-flash[1m]`, Opus and Fable to `glm-5.3[1m]` — provider env below |
 | glm-flash | GLM Flash | Z.AI | starts on Sonnet; Opus and Fable map to `glm-5.3[1m]`, Haiku to `glm-5.3-flash[1m]` — provider env below |
 | minimax | MiniMax | MiniMax | `https://api.minimax.io/anthropic`; starts on `MiniMax-M3`; every Claude tier maps to `MiniMax-M3` ([reference](https://platform.minimax.io/docs/token-plan/claude-code)) |
-| mimo | MiMo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus/Haiku/Fable to `mimo-v2.6-pro` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
+| mimo | MiMo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro[1m]`; Sonnet maps to `mimo-v2.6-flash[1m]`, Opus/Haiku/Fable to `mimo-v2.6-pro[1m]` (1M capacity); `autoCompactWindow` `300000` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
 | kimi | Kimi | Kimi | `https://api.moonshot.ai/anthropic`; starts on `kimi-k3[1m]`; every Claude tier maps to `kimi-k3[1m]`; auto-compact window `1000000` ([reference](https://platform.kimi.ai/docs/guide/claude-code-kimi#configuration-reference)) |
 | openrouter-opus | OpenRouter Opus | OpenRouter | starts on Opus; Opus and Fable map to `~anthropic/claude-opus-latest[1m]` — provider env below |
 | openrouter-sonnet | OpenRouter Sonnet | OpenRouter | starts on Sonnet; Sonnet maps to `~anthropic/claude-sonnet-latest[1m]` — provider env below |
@@ -230,6 +230,47 @@ that has one, copy the entry there to offer OpenRouter:
   }
 }
 ```
+
+## Auto-compaction window
+
+Capacity and compaction are separate. A model's `[1m]` suffix tells Claude
+Code it has a 1M-token context; `autoCompactWindow` is when to compact. It is
+an optional JSON integer from 100000 to 1000000 on a legacy `profiles.json`
+entry, a provider, or a provider model; any other value (a string, boolean,
+null, fraction, or out-of-range number) rejects the whole file, as other
+invalid fields do. A model's value overrides its provider's, a nearer file's
+a farther one's, and a re-homed shipped key keeps its own. A project overlay
+that omits it inherits the base value; a user-level catalog replaces the
+shipped defaults, so it gets none unless it says so. Codex entries and
+executable-backed entries cannot carry it (a wrapper owns its own
+configuration).
+
+```json
+{ "mimo": { "label": "MiMo", "autoCompactWindow": 250000 } }
+```
+
+Roles can choose too: a group file's `autoCompactWindow: 250000` and
+`profileAutoCompactWindow: { mimo: 300000 }` (keyed like `profileEffort`;
+`provider/model` keys allowed). Precedence at each agent start or respawn:
+the role's entry for the member's profile, then the role default, then the
+catalog value, then the legacy `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env or the
+runtime's own default. Bad role values are warnings, never a rejected group.
+Edits reach the next process start, not a running agent.
+
+A selected value sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and clears
+`DISABLE_AUTO_COMPACT` and `DISABLE_COMPACT` in both the process env and the
+flag settings layer; when the profile's own model declaration carries `[1m]`
+it also clears `CLAUDE_CODE_DISABLE_1M_CONTEXT`. If any of those names is a
+registered secret name, the launch is refused before spawn, naming only the
+variables. With no selected value the launch is unchanged. Codex and
+executable-backed members ignore role windows. Limitations: an operator's own
+global `autoCompactEnabled: false` setting is not overridden, and larger
+windows can cost more per request.
+
+The configured window is not the displayed threshold: the context meter shows
+the window minus Claude Code's reserve once a context report arrives (for
+example 300000 configured, 267000 shown with a 33000 reserve), and the window
+itself, marked approximate, before that.
 
 ## Provider reset time zone
 

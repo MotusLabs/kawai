@@ -67,7 +67,8 @@ describe('grouped shipped default on a fresh HOME', () => {
     expect(profiles.get('sonnet')).toEqual({ label: 'Claude Sonnet', model: 'claude-sonnet-5-5', env: {}, providerId: 'claude' })
     expect(profiles.get('haiku')).toEqual({ label: 'Claude Haiku', model: 'claude-haiku-5-5', env: {}, providerId: 'claude' })
     expect(profiles.get('minimax')?.env.ANTHROPIC_BASE_URL).toBe('https://api.minimax.io/anthropic')
-    expect(profiles.get('mimo')?.model).toBe('mimo-v2.6-pro')
+    expect(profiles.get('mimo')?.model).toBe('mimo-v2.6-pro[1m]')
+    expect(profiles.get('mimo')?.autoCompactWindow).toBe(300000)
     expect(profiles.get('kimi')?.model).toBe('kimi-k3[1m]')
   })
 

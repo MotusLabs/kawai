@@ -19,7 +19,8 @@ import { createClaudeDriverWith } from '../../../../packages/agent-runtime/src/c
 import type { OutboundAuditSink } from '../../outbound/observer'
 import { outboundAuditHooks } from '../../outbound/auditHooks'
 import { TEAM_MCP_SERVER } from '../../team/teamPrompt'
-import { resolveClaudeProfile } from '../ClaudeProfiles'
+import { resolveClaudeProfileDetail } from '../ClaudeProfiles'
+import { composeCompaction, selectAutoCompactWindow } from '../claudeCompaction'
 import type { ChatProviderEnv } from '../chatProviderEnv'
 import type { RetainedNamesDb } from '../secretNameRegistry'
 import type { ChatWireRecorder } from '../wireTap'
@@ -57,6 +58,8 @@ export interface ClaudeSpawnInput {
   claudeExecutablePath?: string
   /** An injected query never spawns: any executable file satisfies the launch check. */
   injected: boolean
+  /** The role's window for this spawn (mimo-million-token-context D3); read at each spawn. */
+  getCompactWindow?: () => number | undefined
 }
 
 export interface ClaudeSpawnLaunch {
@@ -71,7 +74,7 @@ export interface ClaudeSpawnLaunch {
  * registered name, so the caller's start or send refuses before anything runs.
  */
 export function claudeSpawnLaunch(input: ClaudeSpawnInput): ClaudeSpawnLaunch {
-  const resolved = resolveClaudeProfile(
+  const { launch: resolved, profile, registered } = resolveClaudeProfileDetail(
     input.claudeProfileId,
     input.getProviderEnv?.() ?? {},
     { projectPath: input.projectPath, ...(input.profileCatalogHome ? { homeDir: input.profileCatalogHome } : {}) },
@@ -79,9 +82,18 @@ export function claudeSpawnLaunch(input: ClaudeSpawnInput): ClaudeSpawnLaunch {
     input.retainedNamesDb,
   )
   if (resolved.runtime !== 'claude') throw new Error('Codex chats start through the Codex driver, not the Claude Agent SDK.')
-  const childEnv = strings(resolved.env ?? process.env)
+  const flagEnv = (resolved.settings as { env?: Record<string, string | undefined> } | undefined)?.env
+  // The selected window (mimo-million-token-context D3), read per spawn and
+  // composed after resolution, before the package sees the launch. A wrapper
+  // owns its configuration, so its launch never composes one.
+  const window = resolved.executable === undefined
+    ? selectAutoCompactWindow(input.getCompactWindow?.(), profile.autoCompactWindow)
+    : undefined
+  const { childEnv, settingsEnv } = composeCompaction(
+    { childEnv: strings(resolved.env ?? process.env), ...(flagEnv ? { settingsEnv: strings(flagEnv) } : {}) },
+    profile, window, registered,
+  )
   const executablePath = resolved.executable ?? input.claudeExecutablePath ?? (input.injected ? process.execPath : undefined)
-  const settingsEnv = (resolved.settings as { env?: Record<string, string | undefined> } | undefined)?.env
   return {
     launch: {
       cwd: input.projectPath,
@@ -92,7 +104,7 @@ export function claudeSpawnLaunch(input: ClaudeSpawnInput): ClaudeSpawnLaunch {
       tempDir: os.tmpdir(),
     },
     ...(typeof resolved.model === 'string' ? { model: resolved.model } : {}),
-    ...(settingsEnv ? { settingsEnv: strings(settingsEnv) } : {}),
+    ...(settingsEnv ? { settingsEnv } : {}),
   }
 }
 

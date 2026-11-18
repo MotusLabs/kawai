@@ -115,6 +115,12 @@ export interface ChatSessionDriverOptions extends ChatDriverCallbacks {
    * settings decide.
    */
   getEffort?: () => Options['effort']
+  /**
+   * The role's auto-compaction window for the spawn, read at every start and
+   * respawn like the effort (mimo-million-token-context D3). Undefined = the
+   * catalog scalar, else today's launch. Claude only: Codex never receives it.
+   */
+  getCompactWindow?: () => number | undefined
   teamMcpServer?: NonNullable<Options['mcpServers']>[string]
   /**
    * Recovered roster rows (workers design D6) seeding a fresh driver, so

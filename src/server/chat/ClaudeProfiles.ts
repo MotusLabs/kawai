@@ -99,6 +99,30 @@ export function resolveClaudeProfile(
   onCatalogErrors?: (errors: string[]) => void,
   retainedNamesDb?: RetainedNamesDb
 ): ChatLaunchConfiguration {
+  return resolveClaudeProfileDetail(id, globalEnv, ctx, onCatalogErrors, retainedNamesDb).launch
+}
+
+/** One resolution with the facts a spawn composes over (mimo-million-token-context D3). */
+export interface ResolvedClaudeProfile {
+  launch: ChatLaunchConfiguration
+  /** The catalog entry the launch resolved from. */
+  profile: CatalogProfile
+  /** This resolution's registered-name set; empty for a Codex entry, which withholds elsewhere. */
+  registered: ReadonlySet<string>
+}
+
+/**
+ * resolveClaudeProfile with its catalog entry and the registered-name set it
+ * derived, so the spawn checks its own composed names against the very set
+ * this launch was filtered by — read once, never re-derived or extended.
+ */
+export function resolveClaudeProfileDetail(
+  id: string = 'default',
+  globalEnv: ChatProviderEnv = {},
+  ctx: ProfileCatalogContext = {},
+  onCatalogErrors?: (errors: string[]) => void,
+  retainedNamesDb?: RetainedNamesDb
+): ResolvedClaudeProfile {
   const catalog = resolveProfileCatalog(ctx)
   // A failed file skips silently otherwise; report it (the rest resolves).
   if (catalog.errors.length > 0) onCatalogErrors?.(catalog.errors)
@@ -114,7 +138,7 @@ export function resolveClaudeProfile(
   // Codex spawn drops withheldCredentialNamesAt's set in codexSpawnEnv,
   // alongside the ANTHROPIC_*/CLAUDE_CODE_* variables.
   if (profile.runtime === 'codex') {
-    return {
+    return { profile, registered: new Set(), launch: {
       runtime: 'codex',
       codexHome: resolveCodexHome(
         { codexHome: profile.codexHome },
@@ -125,7 +149,7 @@ export function resolveClaudeProfile(
       ),
       network: profile.network ?? true,
       ...(profile.model !== undefined ? { model: profile.model } : {}),
-    }
+    } }
   }
   // The registered-name set (provider-relay-setup D2): parsed-layer catalog
   // names plus the retained names, observed and persisted per launch when a
@@ -137,7 +161,7 @@ export function resolveClaudeProfile(
   // credentials stay out of default and executable-backed launches too. The
   // filter runs before every branch's own operations (table W).
   const base = withoutCredentials(serverEnv, registered)
-  return buildClaudeLaunch(profile, base, serverEnv, registered)
+  return { profile, registered, launch: buildClaudeLaunch(profile, base, serverEnv, registered) }
 }
 
 /**

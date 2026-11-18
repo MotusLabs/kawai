@@ -4,27 +4,21 @@
 // scalars, optionally quoted, `#` comment lines — so the parser needs no YAML
 // dependency and an agent-written file cannot smuggle structure in. Known
 // keys are validated; unknown keys are ignored so later changes can add
-// settings without breaking older readers. Team tasks add `canCreateTasks`,
-// `max`, `profile`, and `approval` (team-tasks design D2/D6); team mailbox
-// management adds `canManageMailbox`; profile routing
-// adds `profiles`, `strategy`, and `onLimit`; group effort adds `effort`, the
-// reasoning effort members' agents launch with, and `profileEffort` (a flow
-// map from profile id to level) overrides it per profile; member release adds
-// `releaseOnTaskClose`, `worktreeScoped`, and `canReleaseMembers` (all strict
-// booleans, default true); durable plans add `canCreatePlans` (a strict
-// boolean like `canCreateTasks`, default false); process reports add
-// `canReportProcess` (strict, default false: members may submit process
-// reports and link proposals); group-mail-task-affinity adds `affinity`
-// (`task-owner` only) and `affinityWait` (whole minutes, default 30), kept
-// as one optional `affinity` object present only when it is on, and both
-// degrade to warnings. `profiles` and `onLimit` take
-// one single-line flow value (`[a, b]` or `{ k: v }`, scalars only — never
-// nested), as does `profileEffort`. Defaults are applied here so every reader
-// sees the same effective values. Bad `onLimit`, `effort`, and `profileEffort`
-// values are warnings (the defaults apply) rather than a rejected file, as the
-// profile-routing spec asks. `approval` accepts manual or auto, but only
-// manual takes effect: auto is a warning (unify-approval-defaults D4).
+// settings. Keys: `canCreateTasks`, `max`, `profile`, `approval` (team-tasks
+// D2/D6); `canManageMailbox`; `profiles`, `strategy`, `onLimit` (profile
+// routing); `effort` and its per-profile `profileEffort`; `releaseOnTaskClose`,
+// `worktreeScoped`, `canReleaseMembers` (strict booleans, default true);
+// `canCreatePlans` and `canReportProcess` (strict, default false); `affinity`
+// (`task-owner`) with `affinityWait` (minutes, default 30), one optional
+// object; `autoCompactWindow` and its per-profile `profileAutoCompactWindow`
+// (mimo-million-token-context D2). The maps and lists take one single-line
+// flow value (`[a, b]` or `{ k: v }`, scalars only — never nested). Defaults
+// are applied here so every reader sees the same effective values. Bad
+// `onLimit`, effort, affinity, and window values are warnings (the defaults
+// apply) rather than a rejected file, as the profile-routing spec asks.
+// `approval: auto` parses but is a warning (unify-approval-defaults D4).
 import type { ChatApprovalPolicy } from '../../shared/chat'
+import { parseWindowToken } from '../chat/claudeCompaction'
 
 /** The warning a group's `approval: auto` carries: auto comes only from the team default. */
 export const IGNORED_AUTO_WARNING = 'approval: auto has no effect; auto comes only from the team default (Team page → Members)'
@@ -96,16 +90,18 @@ export interface GroupDefinition {
   strategy: RoutingStrategy
   /** Built-in limit outcome policy. */
   onLimit: GroupLimitPolicy
-  /**
-   * The `approval:` key, unset when the file has none: spawns resolve it with
-   * the team default via `resolveSpawnApproval`, where only `manual` decides
-   * (unify-approval-defaults D3) and `auto` is reported as ignored.
-   */
+  /** The `approval:` key, unset when absent; `resolveSpawnApproval` honors only `manual` (unify-approval-defaults D3). */
   approval?: ChatApprovalPolicy
   /** Effort every member's agent launches with; unset = Claude Code settings decide. */
   effort?: GroupEffort
   /** Per-profile effort overriding `effort` for members on that profile; valid entries only. */
   profileEffort?: Record<string, GroupEffort>
+  /** Auto-compaction window members' Claude agents request (tokens); unset = the catalog decides. */
+  autoCompactWindow?: number
+  /** Per-profile windows overriding `autoCompactWindow`, keyed like `profileEffort`; valid entries only. */
+  profileAutoCompactWindow?: Record<string, number>
+  /** That map's keys in written order (a record lists integer keys first); groupCatalog resolves by it, then drops it. */
+  profileAutoCompactWindowOrder?: string[]
   /** Task-owner affinity (group-mail-task-affinity D2); unset = none. */
   affinity?: GroupAffinity
   /** Problems that fell back to defaults instead of rejecting the file. */
@@ -163,7 +159,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 type TaskSettings = Pick<GroupDefinition,
   'canCreateTasks' | 'canCreatePlans' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
   | 'canReportProcess' | 'max' | 'maxFromCaps' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'profileEffort'
-  | 'affinity' | 'warnings'>
+  | 'autoCompactWindow' | 'profileAutoCompactWindow' | 'profileAutoCompactWindowOrder' | 'affinity' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -178,18 +174,14 @@ function parseTaskSettings(
   }
   const canCreate = fields.get('canCreateTasks')?.trim()
   if (canCreate !== undefined) {
-    if (canCreate !== 'true' && canCreate !== 'false') {
-      return { ok: false, error: `canCreateTasks must be true or false, got "${canCreate}"` }
-    }
+    if (canCreate !== 'true' && canCreate !== 'false') return { ok: false, error: `canCreateTasks must be true or false, got "${canCreate}"` }
     settings.canCreateTasks = canCreate === 'true'
   }
   settings.canManageMailbox = parseCanManageMailbox(fields.get('canManageMailbox'), warnings)
   for (const key of ['canCreatePlans', 'releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers', 'canReportProcess'] as const) {
     const raw = fields.get(key)?.trim()
     if (raw === undefined) continue
-    if (raw !== 'true' && raw !== 'false') {
-      return { ok: false, error: `${key} must be true or false, got "${raw}"` }
-    }
+    if (raw !== 'true' && raw !== 'false') return { ok: false, error: `${key} must be true or false, got "${raw}"` }
     settings[key] = raw === 'true'
   }
   const profile = fields.get('profile')?.trim()
@@ -259,12 +251,20 @@ function parseTaskSettings(
   const rawModelEffort = fields.get('modelEffort')
   if (rawModelEffort !== undefined) {
     if (fields.get('profileEffort') !== undefined) warnings.push('profileEffort is ignored; modelEffort is set')
-    const modelEffort = parseProfileEffort(rawModelEffort.trim(), settings.profiles, warnings, 'modelEffort', true)
+    const modelEffort = parseProfileMap(rawModelEffort.trim(), settings.profiles, warnings, EFFORT_VALUE, 'modelEffort', true)
     if (modelEffort) settings.profileEffort = modelEffort
   } else {
-    const profileEffort = parseProfileEffort(fields.get('profileEffort'), settings.profiles, warnings)
+    const profileEffort = parseProfileMap(fields.get('profileEffort'), settings.profiles, warnings, EFFORT_VALUE, 'profileEffort')
     if (profileEffort) settings.profileEffort = profileEffort
   }
+  // Role compaction windows (mimo-million-token-context D2): warnings only.
+  const window = fields.get('autoCompactWindow')?.trim()
+  const parsedWindow = window === undefined ? null : parseWindowToken(window)
+  if (parsedWindow !== null) settings.autoCompactWindow = parsedWindow
+  else if (window !== undefined) warnings.push(`autoCompactWindow must be ${WINDOW_VALUE.expected}, got "${window}"; ignored`)
+  const order: string[] = []
+  const windows = parseProfileMap(fields.get('profileAutoCompactWindow'), settings.profiles, warnings, WINDOW_VALUE, 'profileAutoCompactWindow', true, order)
+  if (windows) Object.assign(settings, { profileAutoCompactWindow: windows, profileAutoCompactWindowOrder: order })
   const affinity = parseAffinity(fields.get('affinity'), fields.get('affinityWait'), warnings)
   if (affinity) settings.affinity = affinity
   return { ok: true, settings }
@@ -290,39 +290,49 @@ function parseAffinity(rawKind: string | undefined, rawWait: string | undefined,
   return { kind: 'task-owner', waitMs }
 }
 
+/** One value kind of a per-profile map: its parser (null = invalid) and the expected form. */
+interface ProfileValue<T> { parse: (raw: string) => T | null; expected: string; shape: string }
+
+const EFFORT_VALUE: ProfileValue<GroupEffort> = { expected: GROUP_EFFORTS.join(', '), shape: '{ profile: level, ... }',
+  parse: raw => GROUP_EFFORTS.includes(raw as GroupEffort) ? raw as GroupEffort : null }
+const WINDOW_VALUE: ProfileValue<number> = { parse: parseWindowToken, expected: 'an integer from 100000 to 1000000', shape: '{ profile: tokens, ... }' }
+
 /**
- * `profileEffort: { haiku: xhigh }`. Every problem is a warning that drops
- * only the bad entry (or the whole key when it is not a map); an entry for a
- * profile the group does not list is kept, since a human-created member can
- * run on any profile.
+ * `profileEffort: { haiku: xhigh }` or `profileAutoCompactWindow: { mimo: 300000 }`.
+ * Every problem warns and drops only the bad entry (or the whole key when it
+ * is not a map); a repeated written key keeps its first occurrence, even an
+ * invalid one. An entry for a profile the group does not list is kept: a
+ * human-created member can run on any profile.
  */
-function parseProfileEffort(
-  raw: string | undefined, listed: GroupProfile[], warnings: string[],
-  label = 'profileEffort', qualifiedKeys = false,
-): Record<string, GroupEffort> | undefined {
+function parseProfileMap<T>(
+  raw: string | undefined, listed: GroupProfile[], warnings: string[], value: ProfileValue<T>,
+  label: string, qualifiedKeys = false, order?: string[],
+): Record<string, T> | undefined {
   if (raw === undefined) return undefined
   const flow = parseFlow(raw.trim(), true, qualifiedKeys)
   if (!flow.ok || flow.value.kind !== 'map') {
-    warnings.push(`${label}: ${flow.ok ? 'expected { profile: level, ... }' : flow.error}; ignored`)
+    warnings.push(`${label}: ${flow.ok ? `expected ${value.shape}` : flow.error}; ignored`)
     return undefined
   }
   const groupProfiles = new Set(listed.length > 0 ? listed.map(entry => entry.profileId) : ['default'])
-  const result: Record<string, GroupEffort> = {}
+  const result: Record<string, T> = {}
   const seen = new Set<string>()
-  for (const [profileId, level] of flow.value.entries) {
+  for (const [profileId, written] of flow.value.entries) {
     if (seen.has(profileId)) {
       warnings.push(`${label}: "${profileId}" is listed twice; the later entry is ignored`)
       continue
     }
     seen.add(profileId)
+    const parsed = value.parse(written)
     // A `provider/model` key is left for groupCatalog to resolve against the
     // catalog; a bare key must be an id.
     if (!isFlowKeyValid(profileId, qualifiedKeys)) {
       warnings.push(`${label}: "${profileId}" is not a valid profile id; ignored`)
-    } else if (!GROUP_EFFORTS.includes(level as GroupEffort)) {
-      warnings.push(`${label}.${profileId} must be ${GROUP_EFFORTS.join(', ')}, got "${level}"; ignored`)
+    } else if (parsed === null) {
+      warnings.push(`${label}.${profileId} must be ${value.expected}, got "${written}"; ignored`)
     } else {
-      result[profileId] = level as GroupEffort
+      result[profileId] = parsed
+      order?.push(profileId)
       // A qualified key cannot be checked against the list until groupCatalog
       // resolves it; a bare key not among the group's profiles warns here.
       if (!profileId.includes('/') && !groupProfiles.has(profileId)) {
@@ -341,11 +351,7 @@ function isFlowKeyValid(key: string, qualifiedKeys: boolean): boolean {
   return parts.length === 2 && parts.every(part => PROFILE_ID_PATTERN.test(part))
 }
 
-/**
- * A rights flag degrades alone: a typo warns and leaves the right off rather
- * than dropping the group's role and membership. The one place to change if an
- * invalid value should reject the file instead.
- */
+/** A rights flag degrades alone: a typo warns and leaves the right off, keeping the group's role and membership. */
 function parseCanManageMailbox(raw: string | undefined, warnings: string[]): boolean {
   const value = raw?.trim()
   if (value === undefined || value === 'false') return false

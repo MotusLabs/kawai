@@ -201,8 +201,8 @@ describe('Claude profile resolution', () => {
     expect(minimax.model).toBe('MiniMax-M3')
     expect(minimax.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.minimax.io/anthropic', ANTHROPIC_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_OPUS_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_SONNET_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_FABLE_MODEL: 'MiniMax-M3' })
     const mimo = resolveClaudeLaunch('mimo', {}, ctx)
-    expect(mimo.model).toBe('mimo-v2.6-pro')
-    expect(mimo.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_FABLE_MODEL: 'mimo-v2.6-pro' })
+    expect(mimo.model).toBe('mimo-v2.6-pro[1m]')
+    expect(mimo.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro[1m]', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro[1m]', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.6-pro[1m]', ANTHROPIC_DEFAULT_FABLE_MODEL: 'mimo-v2.6-pro[1m]' })
     const kimi = resolveClaudeLaunch('kimi', {}, ctx)
     expect(kimi.model).toBe('kimi-k3[1m]')
     // Extracted: asymmetric matchers mutate the received object, and the env
