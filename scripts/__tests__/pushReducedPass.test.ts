@@ -47,16 +47,33 @@ function pushVerdict() {
   ).kind
 }
 
-for (const [profile, retried] of [
-  ['reduced', false],
-  ['reduced', true],
-  ['full', true],
-  [undefined, false],
-] as const) {
-  // @covers: dev-checks › A recorded pass names its retries and case profile › Pushing a reduced pass
-  test(`the pre-push hook accepts a ${profile ?? 'unknown'}-profile pass${retried ? ' with retries' : ''}`, () => {
-    recordPass(profile, retried)
-    expect(readTreeRecord(dir, TREE)?.caseProfile).toBe(profile)
-    expect(pushVerdict()).toBe('pass')
-  })
-}
+// Literal calls, unrolled from the template loop by the
+// check-time-optimization closeout (task 7.1); each title is the row's
+// rendered text, and the bodies are the loop's unchanged.
+// @covers: dev-checks › A recorded pass names its retries and case profile › Pushing a reduced pass
+test('the pre-push hook accepts a reduced-profile pass', () => {
+  recordPass('reduced', false)
+  expect(readTreeRecord(dir, TREE)?.caseProfile).toBe('reduced')
+  expect(pushVerdict()).toBe('pass')
+})
+
+// @covers: dev-checks › A recorded pass names its retries and case profile › Pushing a reduced pass
+test('the pre-push hook accepts a reduced-profile pass with retries', () => {
+  recordPass('reduced', true)
+  expect(readTreeRecord(dir, TREE)?.caseProfile).toBe('reduced')
+  expect(pushVerdict()).toBe('pass')
+})
+
+// @covers: dev-checks › A recorded pass names its retries and case profile › Pushing a reduced pass
+test('the pre-push hook accepts a full-profile pass with retries', () => {
+  recordPass('full', true)
+  expect(readTreeRecord(dir, TREE)?.caseProfile).toBe('full')
+  expect(pushVerdict()).toBe('pass')
+})
+
+// @covers: dev-checks › A recorded pass names its retries and case profile › Pushing a reduced pass
+test('the pre-push hook accepts a unknown-profile pass', () => {
+  recordPass(undefined, false)
+  expect(readTreeRecord(dir, TREE)?.caseProfile).toBeUndefined()
+  expect(pushVerdict()).toBe('pass')
+})
