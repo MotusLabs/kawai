@@ -12,7 +12,6 @@
 // the transaction.
 import type { ChatSessionRecord } from '../../db'
 import type { TeamIdentity } from '../../team/teamIdentity'
-import { loadGroupCatalog } from '../../team/groupCatalog'
 import type { PlanRevision } from '../../../shared/plans'
 import type { ImpactGate } from '../../../shared/strategyImpact'
 import { FLOOR_VERSION } from '../../../shared/planExecution'
@@ -29,14 +28,14 @@ import { PlanRefusal, type PlanCommandOutcome, type PlanRefusalReason } from '..
 import type { PlanService } from '../PlanService'
 import type { PlanStore } from '../planStore'
 import type { ValidationStanding } from '../validation/validationStanding'
-import { compareWithOriginTree, probeLanding, validatedFilesOf, type ProbeResult } from '../landing/landingProbe'
+import type { probeLanding, ProbeResult } from '../landing/landingProbe'
 import type { LandingMechanisms } from '../landing/landingMechanisms'
-import { DIRECT_MECHANISMS, directMechanism } from '../landing/directMechanism'
-import { ghTreeEntries } from '../landing/github'
+import { DIRECT_MECHANISMS } from '../landing/directMechanism'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import type { PlanExecutionSettings } from '../../team/teamCaps'
-import { evaluateStartPreconditions, type StartCheckContext, type StartRoleFact } from './startPreconditions'
-import { readIntegrationStartFacts } from '../landing/integration/integrationStart'
+import { evaluateStartPreconditions, type StartCheckContext } from './startPreconditions'
+import type { readIntegrationStartFacts } from '../landing/integration/integrationStart'
+import { gatherStart, type StartGather } from './startGather'
 import { ExecutionRevisionStore } from '../revisionControl/executionRevisionStore'
 
 export type ExecutionCaller = { kind: 'human'; team: TeamIdentity } | { kind: 'agent'; sessionId: string }
@@ -52,16 +51,7 @@ export type StartOutcome =
   | { ok: true; replayed: boolean; execution: ExecutionRow }
   | { ok: false; reason: PlanRefusalReason; message: string; failures?: Array<{ name: string; message: string }> }
 
-/** What Start and preview read before any write (D4 step 1). */
-export interface StartGather {
-  probe: ProbeResult
-  baseDiffs: Array<{ change: string; files: string[] }>
-  roles: StartRoleFact[]
-  landed: ReadonlySet<string>
-  settings: PlanExecutionSettings
-  /** integration-candidates D8: landing facts the base head lacks. */
-  offBaseLandings: StartCheckContext['offBaseLandings']
-}
+export type { StartGather } from './startGather'
 
 /**
  * A2 (effect lifecycle): the landing kinds a Retry resumes at their own step
@@ -181,48 +171,9 @@ export class ExecutionService {
     return { ok: true, failures: evaluateStartPreconditions(ctx), probe: gather.probe }
   }
 
-  /** The D4 step-1 reads: settings, group files, the probe, and the changes-on-base comparison. */
-  private async gather(team: TeamIdentity, planId: string, revisionRow: PlanRevision | null): Promise<StartGather> {
-    const changes = revisionRow?.content.changes ?? []
-    const names = changes.map(entry => entry.change)
-    const settings = await this.deps.settings.planExecution(team.teamId)
-    const catalog = loadGroupCatalog({ groupsRoot: team.groupsRoot, ...(this.deps.homeDir ? { homeDir: this.deps.homeDir } : {}) })
-    const roles: StartRoleFact[] = changes.map(entry => {
-      const found = entry.group === null ? undefined : catalog.groups.get(entry.group)
-      const groupProfiles = found ? (found.group.profiles.length > 0 ? found.group.profiles.map(profile => profile.profileId) : ['default']) : []
-      const roleProfiles = revisionRow?.content.roles.find(role => role.group === entry.group)?.profiles ?? []
-      return {
-        change: entry.change,
-        group: entry.group,
-        groupKnown: found !== undefined,
-        worktreeScoped: found?.group.worktreeScoped ?? true,
-        sharedProfiles: roleProfiles.length > 0 ? roleProfiles.filter(profile => groupProfiles.includes(profile)) : groupProfiles,
-      }
-    })
-    const landings = this.deps.store.landings(planId)
-    const landed = new Set(landings.map(landing => landing.change))
-    const probeInput = { main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }
-    const landing = revisionRow?.content.landing ?? { mode: 'direct' as const }
-    // An unregistered mode is refused by landing-mode-supported; direct's checks still report the repository.
-    const mechanism = (this.deps.mechanisms ?? DIRECT_MECHANISMS).get(landing.mode) ?? directMechanism
-    const probe = this.deps.probe !== undefined
-      ? await this.deps.probe(probeInput, this.deps.ghOptions ?? {})
-      : await mechanism.probe({ ...probeInput, teamId: team.teamId, planId, landing }, this.deps.ghOptions ?? {})
-    let baseDiffs: Array<{ change: string; files: string[] }> = []
-    if (probe.base !== null && probe.repo !== null) {
-      const tree = await ghTreeEntries(probe.repo, probe.base.tree, this.deps.ghOptions ?? {})
-      if (tree.ok) {
-        const originTree = new Map(tree.data.map(entry => [entry.path, entry.sha]))
-        const perChange = names.map(change => ({ change, files: validatedFilesOf(team.groupsRoot, change) }))
-        baseDiffs = await compareWithOriginTree(team.groupsRoot, originTree, perChange)
-      }
-    }
-    const facts = await (this.deps.startFacts ?? readIntegrationStartFacts)({
-      main: team.groupsRoot, probe, landings, runningPromotion: null,
-      baseBranchOf: executionId => this.deps.store.execution(executionId)?.baseBranch ?? null,
-    })
-    const checked = facts.error === undefined ? probe : { ...probe, findings: [...probe.findings, { code: 'base-branch' as const, message: facts.error }] }
-    return { probe: checked, baseDiffs, roles, landed, settings, offBaseLandings: facts.offBaseLandings }
+  /** The D4 step-1 reads (`startGather.ts`, shared with Apply's prepare phase). */
+  private gather(team: TeamIdentity, planId: string, revisionRow: PlanRevision | null): Promise<StartGather> {
+    return gatherStart(this.deps, team, planId, revisionRow)
   }
 
   /** The precondition context, inside Start's transaction or in preview, plus the commit's own reads. */

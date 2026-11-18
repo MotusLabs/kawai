@@ -8,6 +8,7 @@
 // the pieces resumes without a second instruction. The task's revision 1
 // carries the contract read from the change's design.md at the baseline
 // commit (implementation-contract D4), or is journaled as having none.
+import { implementTaskText } from './taskText'
 import { createHash } from 'node:crypto'
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { TaskCaller, TaskService } from '../../team/TaskService'
@@ -77,8 +78,7 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
     const snapshot = await snapshotContract(deps.showFile ?? gitShowFile, changeRow.worktree, changeRow.baselineCommit, input.change)
     const task = await refusable('implement', () => deps.tasks.create(kawaiCaller(deps.team, input.executionId), {
       title: `${input.change} — ${deps.plans.get(execution.planId)?.title ?? execution.planId}`,
-      direction: `The OpenSpec change "${input.change}" is the authoritative direction for this task; its proposal, design, and tasks under openspec/changes/${input.change}/ govern the work.\n\n${entry.guidance}`.trim(),
-      acceptance: [...entry.acceptance, ...revision.content.acceptanceRules].join('\n') || null,
+      ...implementTaskText(entry, revision.content),
       worktree: changeRow.worktree,
       openspec_change: input.change,
       plan_id: execution.planId,
