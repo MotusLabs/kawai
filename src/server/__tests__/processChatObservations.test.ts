@@ -4,6 +4,8 @@ import type { ChatEvent, ChatContextUsage } from '../../shared/chat';
 import { schemaDb } from './schemaDb';
 import { observedToolTiming } from '../metrics/observations/toolTiming';
 import { ProcessObservationService } from '../metrics/observations/service';
+import { loadMetricsInputs } from '../metrics/metricsQuery';
+import { ChatTurnUsageStore, TurnUsageTracker } from '../chat/chatTurnUsageStore';
 const origin = Date.parse('2026-10-18T00:00:00Z');
 function harness() {
   const db = schemaDb();
@@ -11,10 +13,11 @@ function harness() {
   const identity = () => ({ teamId: 'team', sessionId: 'chat', taskId, startId: 'start-1', groupId: 'dev', model });
   const service = new ProcessObservationService(db, identity, () => now);
   service.chat.recover(); // Explicit startup inventory for this timer-free fixture.
-  const emit = (data: Record<string, unknown>, second: number) => { now = origin + second * 1000; service.chat.event('chat', { id: `e${++sequence}`, at: new Date(now).toISOString(), turnId: 'turn', ...data } as ChatEvent); };
+  const emit = (data: Record<string, unknown>, second: number, turnId = 'turn') => { now = origin + second * 1000; service.chat.event('chat', { id: `e${++sequence}`, at: new Date(now).toISOString(), turnId, ...data } as ChatEvent); };
   const rows = () => service.store.forTeam('team');
   return { db, service, emit, rows, identity, time: (s: number) => { now = origin + s * 1000; }, task: (id: string | null) => { taskId = id; }, model: (value: string) => { model = value; } };
 }
+// @covers: process-observations › Turn timing includes non-completing outcomes › Interrupted turn
 test('turn identity is pinned, task-less peer mail clears it, missing usage stays unknown', () => {
   const h = harness();
   h.emit({ type: 'turn_started' }, 0);
@@ -26,6 +29,8 @@ test('turn identity is pinned, task-less peer mail clears it, missing usage stay
   h.emit({ type: 'turn_interrupted' }, 3);
   const end = h.rows().find(r => r.kind === 'turn_ended')!;
   expect(end).toMatchObject({ taskId: null, startId: 'start-1', model: 'model-a', data: { usageAvailable: false, outcome: 'interrupted' } });
+  // The interrupted turn keeps its known execution time instead of a zeroed duration.
+  expect(end.data.durationSeconds).toBe(3);
   expect(h.rows().filter(r => r.kind === 'usage')).toEqual([]);
   expect(h.rows().find(r => r.kind === 'tool')).toMatchObject({ taskId: null });
   h.db.close();
@@ -107,5 +112,62 @@ test('repeated SDK compaction identities count once across callbacks and restart
   expect((h.db.prepare("SELECT sum(value) n FROM process_export_totals WHERE family='agent_compactions_total' AND bucket='value'").get() as {
     n: number;
   }).n).toBe(1);
+  h.db.close();
+});
+// @covers: process-observations › Observations cover managed work only › Task-less coordination
+test('a task-less lead turn carries team and chat identities and never joins a task execution', () => {
+  const h = harness();
+  h.task(null);
+  h.emit({ type: 'turn_started' }, 0);
+  h.emit({ type: 'tool_call', tool: 'Bash', toolCallId: 'lead-1' }, 1);
+  h.emit({ type: 'tool_result', toolCallId: 'lead-1' }, 4);
+  h.emit({ type: 'turn_completed', subtype: 'success' }, 5);
+  expect(h.rows().filter(r => r.kind === 'tool' || r.kind === 'turn_ended').map(r => [r.kind, r.teamId, r.sessionId, r.taskId])).toEqual([
+    ['tool', 'team', 'chat', null],
+    ['turn_ended', 'team', 'chat', null],
+  ]);
+  // A task-bound turn afterwards: its measured execution through
+  // loadMetricsInputs holds its own call alone, not the lead's work.
+  h.task('task-a');
+  h.emit({ type: 'turn_started' }, 10, 'task-turn');
+  h.emit({ type: 'tool_call', tool: 'Bash', toolCallId: 'task-1' }, 11, 'task-turn');
+  h.emit({ type: 'tool_result', toolCallId: 'task-1' }, 13, 'task-turn');
+  h.emit({ type: 'turn_completed', subtype: 'success' }, 14, 'task-turn');
+  const inputs = loadMetricsInputs(h.db, 'team', origin, origin + 20000).toolInputs!;
+  expect(inputs.observations.map(r => [r.kind, r.taskId, r.data.durationSeconds])).toEqual([
+    ['tool', null, 3],
+    ['tool', 'task-a', 2],
+  ]);
+  h.db.close();
+});
+// @covers: process-observations › Observation ingestion is idempotent and non-blocking › Duplicate completion
+test('a turn completion delivered twice records its duration and usage once', () => {
+  const h = harness();
+  const usage = new ChatTurnUsageStore(h.db, () => origin);
+  const tracker = new TurnUsageTracker(usage, {
+    sessionTask: () => null,
+    latestStart: () => 'start-1',
+    context: () => ({ teamId: 'team', groupId: 'dev', profileId: 'default', model: 'model-a' }),
+  });
+  h.emit({ type: 'turn_started' }, 0);
+  const completion = {
+    id: 'evt-done', at: new Date(origin + 5000).toISOString(), turnId: 'turn',
+    type: 'turn_completed', subtype: 'success', numTurns: 2,
+    usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
+  } as unknown as ChatEvent;
+  h.service.chat.event('chat', completion);
+  tracker.onEvent('chat', completion);
+  h.service.chat.event('chat', completion); // the same completion reaches the recorder twice
+  tracker.onEvent('chat', completion);
+  h.service.reconcile.run();
+  h.service.reconcile.run();
+  expect(h.rows().filter(r => r.kind === 'turn_ended')).toHaveLength(1);
+  expect(h.rows().filter(r => r.kind === 'usage').map(r => r.data)).toEqual([
+    { input: 10, output: 5, cacheRead: 0, cacheCreation: 0, steps: 2, outcome: 'success', scope: 'completed-main-loop' },
+  ]);
+  const total = (family: string, bucket: string) => (h.db.prepare('SELECT sum(value) v FROM process_export_totals WHERE family=? AND bucket=?').get(family, bucket) as { v: number | null }).v;
+  expect(total('agent_turn_duration_seconds', 'count')).toBe(1);
+  expect(total('agent_turn_duration_seconds', 'sum')).toBe(5);
+  expect(total('agent_tokens_total', 'value')).toBe(15);
   h.db.close();
 });
