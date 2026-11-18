@@ -11,7 +11,9 @@
 // works on a phone. Every control disables while disconnected; refusals,
 // with each failing approval precondition, show inline — a pin refusal with
 // its strategy impact (strategy-revision-impact D6) beside it, the same state
-// the plan's impact badge shows, linking to the impact review.
+// the plan's impact badge shows, linking to the impact review. An approved
+// plan's detail lists its holds after the Execution section
+// (`PlanHoldsSection`, revision-control D14).
 import { useEffect, useRef, useState } from 'react'
 import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import { PLAN_STATE_LABELS, type PlanDetail, type PlanSummary } from '@shared/plans'
@@ -21,6 +23,7 @@ import PlanIntentSection from './PlanIntentSection'
 import PlanChangesSection from './PlanChangesSection'
 import PlanPolicySection from './PlanPolicySection'
 import PlanExecutionSection from './PlanExecutionSection'
+import PlanHoldsSection from './PlanHoldsSection'
 import PlanReportSection from './PlanReportSection'
 import PlanUsageSection from './PlanUsageSection'
 import { PlanDecisionsList } from './PlanDecisionCard'
@@ -244,6 +247,8 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, subsc
       <PlanPolicySection content={shown.content} />
       <PlanExecutionSection teamPath={teamPath} plan={detail.plan} detail={detail} connected={connected} onSend={sendMessage} onOpenTask={onOpenTask}
         sessions={sessions} busy={busy} revealAnchor={revealAnchor} />
+      {approved && <PlanHoldsSection teamPath={teamPath} planId={plan.id} changes={approved.content.changes.map(entry => entry.change)}
+        connected={connected} busy={busy} onSend={sendMessage} />}
       {/* Supervision (plan-supervision D15): the report, the plan-level Decisions list, and the usage totals,
           each only when the detail carries it. */}
       {detail.supervision && <PlanReportSection view={detail.supervision} sessions={sessions} onOpenImpactReview={onOpenImpactReview} />}
