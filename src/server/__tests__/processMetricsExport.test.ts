@@ -96,6 +96,7 @@ test('snapshot is cached for five seconds and unavailable adapters emit availabi
     expect(after).not.toContain(`kawai_${name}`);
   h.db.close();
 });
+// @covers: prometheus-export › Prometheus integration is optional › No Prometheus
 test('disabled or invalid configuration keeps core recording working; unauthorized scrapes never read storage', async () => {
   const h = harness();
   for (const env of [{}, { KAWAI_METRICS_ENABLED: 'true' }, { KAWAI_METRICS_ENABLED: 'invalid', KAWAI_METRICS_TOKEN: 'secret' }]) {

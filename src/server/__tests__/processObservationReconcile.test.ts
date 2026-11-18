@@ -10,6 +10,7 @@ import { ProcessObservationService } from '../metrics/observations/service';
 const at = '2026-10-18T00:00:00.000Z';
 const accepted = '2026-10-18T00:01:00.000Z';
 const nextPass = () => new Promise<void>(resolve => setTimeout(resolve, 5));
+// @covers: process-observations › Observation ingestion is idempotent and non-blocking › Recording fails
 test('post-commit acceptance and mailbox settlement survive recorder failure, recover once with identities', async () => {
   const db = schemaDb(), tasks = new TaskStore(db), mail = new MailboxStore(db);
   const service = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted), 0);
@@ -78,6 +79,7 @@ test('75-day usage survives retention while older rows prune in bounded batches 
   expect(inputs.usageHorizon).toBeGreaterThan(now - 90 * 86400000); // no invented coverage for previously pruned history
   db.close();
 });
+// @covers: process-observations › Primary completion is recorded result acceptance › Task reopened
 test('handoff and finding references survive replay, and reopen or repeated acceptance never recounts the first result', () => {
   const db = schemaDb(), mail = new MailboxStore(db), tasks = new TaskStore(db), assignments = new AssignmentStore(db, mail);
   const service = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted));
