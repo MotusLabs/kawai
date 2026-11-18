@@ -507,6 +507,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       reads: {
         db: options.db, mail: team.mailbox, executions: executionStore, plans: options.plans, decisions: decisionStore, integration: integrationStore,
         conditionsOf, runtime: team.supervision, tasks: team.taskStore, impact: (teamId, planId) => options.impact.planImpact(teamId, planId),
+        revisionControl: (teamId, planId) => readControl(teamId, planId),
       },
       ...(options.monitor ? { monitor: options.monitor } : {}),
     })

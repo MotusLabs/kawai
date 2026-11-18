@@ -40,7 +40,7 @@ export type ComposedStack = ReturnType<typeof composePlanServices> & {
 export const inDays = (days: number): string => new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
 
 /** The composed stack over the bench: core, team services, the runtime (started), and the connections. */
-export async function composeStack(world: PlanWorld, bench: PlanBench): Promise<ComposedStack> {
+export async function composeStack(world: PlanWorld, bench: PlanBench, options: { monitor?: Parameters<typeof composePlanServices>[0]['monitor'] } = {}): Promise<ComposedStack> {
   const core = composeExecutionCore(bench.db.db)
   const mail = (bench.tasks as unknown as { mail: MailboxStore }).mail
   const tasks = new TaskService(bench.tasks, {
@@ -99,6 +99,7 @@ export async function composeStack(world: PlanWorld, bench: PlanBench): Promise<
       prepareStanding: async () => ({}),
       standing: () => ({ state: 'current', report: { id: 'rep-1', inputHash: 'ih-1', readiness: { carriedConditions: [] } } }) as never,
     },
+    ...(options.monitor ? { monitor: options.monitor } : {}),
   })
   bench.service = composed.plans
   const teamScopes = new TeamScopes({ teams: { hasTeam: async () => false } as unknown as SessionTeams, repositories: () => [world.team.teamId, world.otherTeam.teamId] })
