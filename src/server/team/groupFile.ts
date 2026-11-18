@@ -17,7 +17,9 @@
 // reports and link proposals); group-mail-task-affinity adds `affinity`
 // (`task-owner` only) and `affinityWait` (whole minutes, default 30), kept
 // as one optional `affinity` object present only when it is on, and both
-// degrade to warnings. `profiles` and `onLimit` take
+// degrade to warnings; starter-team-setup adds `crossModelReview` (strict,
+// default false: review handoffs skip the authors' model families).
+// `profiles` and `onLimit` take
 // one single-line flow value (`[a, b]` or `{ k: v }`, scalars only — never
 // nested), as does `profileEffort`. Defaults are applied here so every reader
 // sees the same effective values. Bad `onLimit`, `effort`, and `profileEffort`
@@ -108,6 +110,11 @@ export interface GroupDefinition {
   profileEffort?: Record<string, GroupEffort>
   /** Task-owner affinity (group-mail-task-affinity D2); unset = none. */
   affinity?: GroupAffinity
+  /**
+   * Review handoffs go only to workers outside their authors' model
+   * families (starter-team-setup D6); a strict boolean, unset = false.
+   */
+  crossModelReview?: boolean
   /** Problems that fell back to defaults instead of rejecting the file. */
   warnings: string[]
   /** The role prompt appended to members' system prompts. */
@@ -163,7 +170,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 type TaskSettings = Pick<GroupDefinition,
   'canCreateTasks' | 'canCreatePlans' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
   | 'canReportProcess' | 'max' | 'maxFromCaps' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'profileEffort'
-  | 'affinity' | 'warnings'>
+  | 'affinity' | 'crossModelReview' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -184,7 +191,7 @@ function parseTaskSettings(
     settings.canCreateTasks = canCreate === 'true'
   }
   settings.canManageMailbox = parseCanManageMailbox(fields.get('canManageMailbox'), warnings)
-  for (const key of ['canCreatePlans', 'releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers', 'canReportProcess'] as const) {
+  for (const key of ['canCreatePlans', 'releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers', 'canReportProcess', 'crossModelReview'] as const) {
     const raw = fields.get(key)?.trim()
     if (raw === undefined) continue
     if (raw !== 'true' && raw !== 'false') {

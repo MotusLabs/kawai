@@ -28,6 +28,7 @@ import { builtinPick } from './builtin'
 import { DEFAULT_PROFILE_ID } from './candidates'
 import { evaluateEligibility, type EligibilityResult } from './workerEligibility'
 import { workerChoiceState } from './workerSelector'
+import { crossModelConstraint, otherFamilyProfiles, type CrossModelFilter } from './crossModel'
 import type { LimitEventStore } from './limitEvents'
 import type { RuleRegistry } from './ruleLoader'
 
@@ -75,6 +76,11 @@ export interface ProfileRouterOptions {
   excludedProfile?: (message: TeamMessage) => string | undefined
   /** The role's profiles execution mail may route to, in the role's order (plan-execution D15). */
   allowedProfiles?: (message: TeamMessage) => string[] | null
+  /**
+   * The cross-model filter of a review handoff to a flagged group
+   * (starter-team-setup D6); null when it does not apply.
+   */
+  crossModel?: (message: TeamMessage, group: GroupDefinition) => CrossModelFilter | null
   onDecision?: (entry: RouteDecisionLogEntry) => void
   now?: () => number
 }
@@ -114,6 +120,7 @@ export class ProfileRouter implements GroupRouter {
     // the group's model keys on each pass, so a group or catalog edit after
     // sending applies the way every other group edit does.
     const workerChoice = workerChoiceState(message.workerChoice, group, providerOf)
+    const crossModel = this.options.crossModel?.(message, group) ?? null
     // The owner counts only on a group that still routes by it (D1/D2).
     const taskOwner = group.affinity && view.taskOwner ? view.taskOwner : null
     const causes = new Map<string, MemberExclusion[]>()
@@ -137,6 +144,7 @@ export class ProfileRouter implements GroupRouter {
       })(),
       ...(this.options.allowedProfiles?.(message) ? { allowedProfiles: this.options.allowedProfiles(message)! } : {}),
       workerChoice,
+      crossModel,
       // The owner's cooling decides affinity (D3); other cooling stays the strategy's.
       cooldowns: this.memberCooldowns(members),
       now,
@@ -151,9 +159,17 @@ export class ProfileRouter implements GroupRouter {
       // check (D2/D10), beside the others' member-state causes.
       const breakdown = { ...view, exclusions: [...(view.exclusions ?? []), ...filterExclusions(excluded, eligible)] }
       // A choice waits on its own workers' caps, never on a filtered-out one's (D5).
-      const diagnosis = diagnoseNone(routeGroup, spawn, breakdown, workerChoice ? new Set(workerChoice.profiles) : null)
+      // A cross-model review waits only on its other-family workers' caps (starter-team-setup D6).
+      const groupProfiles = routeGroup.profiles.map(entry => entry.profileId)
+      const narrowed = [
+        ...(workerChoice ? [new Set(workerChoice.profiles)] : []),
+        ...(crossModel ? [new Set(otherFamilyProfiles(crossModel, groupProfiles))] : []),
+      ]
+      const waitsOn = narrowed.length === 0 ? null : new Set(groupProfiles.filter(id => narrowed.every(set => set.has(id))))
+      const diagnosis = diagnoseNone(routeGroup, spawn, breakdown, waitsOn)
       // The choice names itself beside the capacity it waits on (D5).
       if (workerChoice) diagnosis.push({ kind: 'worker-choice', detail: workerChoice.selector })
+      if (crossModel) diagnosis.push(crossModelConstraint(crossModel, groupProfiles))
       // A busy owner within its wait still names itself, and its wait's end re-arms the pass (D5).
       if (ownerHold && affinity.kind === 'hold') return { kind: 'hold', retryAt: affinity.until, diagnosis: [ownerHold, ...diagnosis] }
       return { kind: 'none', diagnosis }
@@ -331,7 +347,7 @@ function filterExclusions(excluded: EligibilityResult['excluded'], eligible: Rea
   })
 }
 
-const FILTER_KINDS: ReadonlySet<string> = new Set(['outside-role', 'worker-choice', 'excluded-profile'])
+const FILTER_KINDS: ReadonlySet<string> = new Set(['outside-role', 'worker-choice', 'excluded-profile', 'cross-model'])
 
 /** A readable cause for the no-eligible-member breakdown line. */
 const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
@@ -346,6 +362,7 @@ const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
   'outside-role': 'outside the plan role\'s profiles',
   'worker-choice': 'not on the chosen worker',
   'profile-cooling': 'cooling',
+  'cross-model': "on a review author's model family",
 }
 
 /** The no-eligible-member constraint from the dispatcher's member breakdown. */

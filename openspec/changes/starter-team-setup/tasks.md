@@ -8,16 +8,16 @@
 
 ## 2. Result authorship
 
-- [ ] 2.1 Add nullable `team_task_results.submitted_by_profile`, set in `TaskResultService.submit` from the caller's session record, and `reviewAuthors(taskId)` returning author families and unknown authors over all results (human submissions add none). Verify: tests cover the three `task-results` scenarios, and a mutant that reads only the latest result fails the "every round's author counts" row (V2).
-- [ ] 2.2 Update the Task results bullet in `docs/architecture/tasks.md`. Verify: `bun run lint` passes.
+- [x] 2.1 Add nullable `team_task_results.submitted_by_profile`, set in `TaskResultService.submit` from the caller's session record, and `reviewAuthors(taskId)` returning author families and unknown authors over all results (human submissions add none). Verify: tests cover the three `task-results` scenarios, and a mutant that reads only the latest result fails the "every round's author counts" row (V2).
+- [x] 2.2 Update the Task results bullet in `docs/architecture/tasks.md`. Verify: `bun run lint` passes.
 
 ## 3. Cross-model eligibility
 
-- [ ] 3.1 Parse `crossModelReview` as a strict boolean in `groupFile.ts` and carry it on `GroupDefinition`. Verify: the routing-spec scenarios "The flag is read" and "A non-boolean rejects the file" pass.
-- [ ] 3.2 Add the `crossModel` input and `cross-model` exclusion to `evaluateEligibility`, `crossModelState(message)` (assignment → result → `reviewAuthors`), and wire it into `ProfileRouter`, `groupDispatchPreview`, and `candidates`. Verify: Table E rows E1–E7, E10, E11 committed verbatim pass (V2); the profile-id-comparison mutant fails E3/families scenario; P1 (seed `0x5eed01`, 400 cases) and P3 (seed `0x5eed03`, 200 cases) pass; the production-composition router test fails with the `crossModelState` wiring removed (V5).
-- [ ] 3.3 Refuse review handoffs whose worker choice lies entirely within the authors' families in `TaskResultService.handoff`. Verify: E8 and E9 pass, and E8 asserts no assignment or mail row is written; a mutant that checks only the first chosen profile fails E9.
-- [ ] 3.4 Add `cross-model` to `WaitingConstraintKind` and `KIND_ORDER`, with detail naming families, unknown authors, and other-family capacity constraints, and its label in `waitingLabels.ts`. Verify: the three `team-waiting-reasons` scenarios pass; a mutant that omits the capacity detail fails "The other-family worker is at its cap".
-- [ ] 3.5 Update `docs/architecture/routing.md` (Profile routing, Worker choice), `docs/architecture/mailbox.md` (Waiting reasons), and `docs/routing/README.md` (tags remain; built-in filter added). Verify: `bun run lint` passes and the docs name the flag and the reason kind.
+- [x] 3.1 Parse `crossModelReview` as a strict boolean in `groupFile.ts` and carry it on `GroupDefinition`. Verify: the routing-spec scenarios "The flag is read" and "A non-boolean rejects the file" pass.
+- [x] 3.2 Add the `crossModel` input and `cross-model` exclusion to `evaluateEligibility`, `crossModelState(message)` (assignment → result → `reviewAuthors`), and wire it into `ProfileRouter`, `groupDispatchPreview`, and `candidates`. Verify: Table E rows E1–E7, E10, E11 committed verbatim pass (V2); the profile-id-comparison mutant fails E3/families scenario; P1 (seed `0x5eed01`, 400 cases) and P3 (seed `0x5eed03`, 200 cases) pass; the production-composition router test fails with the `crossModelState` wiring removed (V5).
+- [x] 3.3 Refuse review handoffs whose worker choice lies entirely within the authors' families in `TaskResultService.handoff`. Verify: E8 and E9 pass, and E8 asserts no assignment or mail row is written; a mutant that checks only the first chosen profile fails E9.
+- [x] 3.4 Add `cross-model` to `WaitingConstraintKind` and `KIND_ORDER`, with detail naming families, unknown authors, and other-family capacity constraints, and its label in `waitingLabels.ts`. Verify: the three `team-waiting-reasons` scenarios pass; a mutant that omits the capacity detail fails "The other-family worker is at its cap".
+- [x] 3.5 Update `docs/architecture/routing.md` (Profile routing, Worker choice), `docs/architecture/mailbox.md` (Waiting reasons), and `docs/routing/README.md` (tags remain; built-in filter added). Verify: `bun run lint` passes and the docs name the flag and the reason kind.
 
 ## 4. Starter templates and setup operation
 
