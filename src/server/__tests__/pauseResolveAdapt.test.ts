@@ -186,6 +186,7 @@ test('A2r: with the gate open the new fix row dispatches inline under its attemp
 // B4 (Adapt advisory): the inline world with the hold still active — the
 // gate, read after the decision, keeps the new row owed. The dispatch facts
 // being complete (baseline, worktree, branch) is not enough to dispatch (M2).
+// @covers: plan-pause › The owner chooses how paused work goes on › Adapt
 test('B4: with the hold still active the new fix row stays owed even with the dispatch facts present', async () => {
   const world = await wired.pausedAttempt()
   const row = wired.executions.change(world.executionId, 'api')!

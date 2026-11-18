@@ -4,8 +4,12 @@
 // the resolve's own transaction — so a refusing resolution (Q-A4) or a
 // failing choice after the release rolls the release back; a whole-plan hold
 // refuses with the narrowing guidance (H2r), an already-released one refuses
-// (H3r), and other covering holds stay and are named (H4r).
+// (H3r), and other covering holds stay and are named (H4r). The two
+// spec scenarios of "Resolutions under a hold wait or release it" run the
+// restart choice: released with the decision it dispatches at once; under a
+// whole-plan hold it is recorded and its attempt waits on the hold.
 import { expect, test } from 'bun:test'
+import { holdGate } from '../plans/revisionControl/holdGate'
 import { pauseResolveBench, targetOf } from './pauseResolveBench'
 
 const wired = await pauseResolveBench('pause-resolve-release')
@@ -149,4 +153,51 @@ test('H1r: with the release in the resolve the new fix row dispatches inline thr
   expect(attempts[1].kind).toBe('fix')
   expect(attempts[1].assignmentId).not.toBeNull()
   expect(holdReleasedEvents(world.planId)).toHaveLength(1)
+})
+
+/** The hold gate for `change` as the dispatch arms read it: the plan's active holds and open pause targets. */
+const gateFor = (planId: string, change: string) => holdGate(
+  wired.holds.active(wired.teamId, planId).map(hold => ({ id: hold.id, scope: hold.scope, changes: hold.changes })),
+  wired.pauses.forPlan(wired.teamId, planId, true).flatMap(open =>
+    wired.pauses.targets(open.id).map(row => ({ pauseId: open.id, change: row.change, decision: row.decision }))),
+  change)
+
+// @covers: plan-pause › Resolutions under a hold wait or release it › Restart and release together
+test('Restart and release together: the decision and the release commit together and the new attempt dispatches', async () => {
+  const world = await wired.pausedAttempt()
+  const holdId = pauseHold(world.planId)
+  // The dispatch reads the change's baseline (as the H1r inline test above).
+  const row = wired.executions.change(world.executionId, 'api')!
+  expect(wired.executions.transition(world.executionId, 'api', row, { baselineCommit: 'base' })).not.toBeNull()
+  const result = ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'restart', releaseHold: true, commandId: 'restart-rel-1' }))
+  expect(result.releaseHold).toMatchObject({ holdId, stillCovering: [] })
+  expect(targetOf(wired, world.pauseId, 'api').decision).toBe('restart')
+  expect(wired.bench.plans.eventByCommand(world.planId, 'restart-rel-1:release-hold')?.event.kind).toBe('hold-released')
+  expect(wired.holds.get(wired.teamId, holdId)?.releasedAt).not.toBeNull()
+  // The new attempt row is dispatched in the same command, not owed.
+  const attempts = wired.executions.attempts(world.executionId, 'api')
+  expect(attempts).toHaveLength(2)
+  expect(attempts[1].assignmentId).not.toBeNull()
+  expect(gateFor(world.planId, 'api')).toBeNull()
+})
+
+// @covers: plan-pause › Resolutions under a hold wait or release it › Restart under a plan hold
+test('Restart under a plan hold: the decision is recorded and the new attempt waits on the hold until it no longer covers the change', async () => {
+  const { planId, executionId } = await wired.executionWith(['api'])
+  await wired.inFlight(executionId, 'api')
+  const hold = wired.holds.insert({ teamId: wired.teamId, planId, scope: 'plan', rationale: 'rethink the direction', deadline: wired.inDays(10), cites: null, commandId: `hold-plan-${++sequence}`, changes: [] })
+  const pause = ok(wired.pause({ planId, holdId: hold.id, commandId: `pause-${++sequence}` })).pause
+  wired.toPaused(pause.id, 'api')
+  const before = wired.executions.attempts(executionId, 'api').length
+  ok(await wired.resolve({ planId, pauseId: pause.id, change: 'api', choice: 'restart' }))
+  expect(targetOf(wired, pause.id, 'api').decision).toBe('restart')
+  // The new row is owed: the whole-plan hold still closes the change's gate.
+  const attempts = wired.executions.attempts(executionId, 'api')
+  expect(attempts).toHaveLength(before + 1)
+  expect(attempts.at(-1)!.assignmentId).toBeNull()
+  expect(gateFor(planId, 'api')).toEqual({ holdIds: [hold.id], scope: 'plan', pauseId: null })
+  expect(wired.holds.get(wired.teamId, hold.id)?.releasedAt).toBeNull()
+  // Once the hold no longer covers the change, the gate opens for the owed row.
+  wired.holds.release({ teamId: wired.teamId, holdId: hold.id, changes: [], reason: 'settled', commandId: `release-${++sequence}` })
+  expect(gateFor(planId, 'api')).toBeNull()
 })

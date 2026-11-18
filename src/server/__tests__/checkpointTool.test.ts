@@ -163,6 +163,7 @@ describe('task_checkpoint refusals (D7)', () => {
     expect(checkpointCount(stopped).n).toBe(0)
   })
 
+  // @covers: plan-pause › Holders record checkpoints through task_checkpoint › No pause, no checkpoint
   test('no pause naming the caller as claimant is no-pause-requested', async () => {
     const unpaused = bench()
     unpaused.pauses.recordDecision({ pauseId: unpaused.pauseId, change: 'api', decision: 'continue', detail: {}, commandId: 'cmd-2' })
@@ -209,6 +210,7 @@ describe('task_checkpoint refusals (D7)', () => {
     expect(effectCount(bare)).toBe(0)
   })
 
+  // @covers: plan-pause › Holders record checkpoints through task_checkpoint › Untracked files are refused
   test('a commit that is not the branch head, or a dirty worktree, is refused and writes nothing', async () => {
     const bench1 = bench()
     const notHead = refusalOf(await bench1.tool.record(caller, { ...baseInput, commit: revParse('origin/master', world.repo) }), 'not the head')
@@ -261,6 +263,7 @@ describe('task_checkpoint refusals (D7)', () => {
     expect(effectCount(unreachable)).toBe(0)
   })
 
+  // @covers: plan-pause › Holders record checkpoints through task_checkpoint › Kawai is writing the branch
   test('a commit that does not contain origin head, or Kawai writing the branch, is refused', async () => {
     const diverged = bench()
     git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'origin moves on'], world.repo)
@@ -279,6 +282,7 @@ describe('task_checkpoint refusals (D7)', () => {
 })
 
 describe('push-checkpoint effect (D7)', () => {
+  // @covers: plan-pause › Holders record checkpoints through task_checkpoint › A clean checkpoint
   test('a valid call records, enqueues under its own key, and pushes without force', async () => {
     const bench1 = bench()
     const pushed = okOutcome(await bench1.tool.record(caller, { ...baseInput, commit: bench1.work.commit }), 'record')

@@ -133,6 +133,7 @@ describe('revision-control protocol through the router and planComposition (PT)'
     expect(holdEvents()).toBe(0)
   })
 
+  // @covers: plan-holds › Only the owner places a hold › Unknown change names are refused
   test('PT3: team-plan-hold-place naming an unknown change carries the service refusal naming it and writes nothing', async () => {
     const { planId } = await runningPlan()
     const answer = await command(place(planId, 'pt3', { changes: ['api', 'nope'] }))
@@ -177,6 +178,7 @@ describe('revision-control protocol through the router and planComposition (PT)'
     expect(pushed.holds?.[0]).toMatchObject({ scope: 'changes', changes: ['api'], releasedChanges: [], cites: null, releaseReason: null })
   })
 
+  // @covers: plan-holds › Only the owner places a hold › Agents cannot hold
   test('PT7: no agent tool places, releases, or extends a hold, pauses, or resolves a pause; task_checkpoint stays the only revision-control tool', () => {
     const stub = {} as never
     const names = teamToolTable({} as TeamMailbox, 'chat-agent', {

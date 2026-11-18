@@ -253,6 +253,7 @@ test('UI4: Pausing shows its causes and never reads Paused before paused_at', ()
   expect(label('api')).toBe('Pausing: checkpoint-pushing')
 })
 
+// @covers: plan-pause › Paused is recorded only when work is safe and the holder has stopped › The holder is killed first
 test('UI5: a Paused target offers Continue, Adapt, Restart, and Stop; holder-killed and checkpoint-push-failed offer only Restart and Stop', () => {
   mount()
   const offered = (change: string) => {

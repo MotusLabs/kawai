@@ -66,8 +66,10 @@ describe('supervision causes paused, pausing, and hold (CA)', () => {
     // None of the three raises a `no-progress` stall.
     expect(view.stall?.kind).not.toBe('no-progress')
   }
+  // @covers: plan-pause › Pauses are visible to the owner and agents › A paused change's cause
   test('CA1: waits paused read the cause and the also-applying list', () => caRow('CA1'))
   test('CA2: waits pausing read the cause and the also-applying list', () => caRow('CA2'))
+  // @covers: plan-holds › Holds are visible to the owner and agents › A held change's cause
   test('CA3: waits hold (CI passed, review waiting for the release) read the cause and the also-applying list', () => caRow('CA3'))
   test('CA4: waits effect, hold read the cause and the also-applying list', () => caRow('CA4'))
   test('CA5: waits hold, uncertain-delivery read the cause and the also-applying list', () => caRow('CA5'))
@@ -141,6 +143,7 @@ describe('CA3 through the real SupervisionMonitor', () => {
     expect(stallAlerts(planId)).toEqual(['no-progress'])
   })
 
+  // @covers: plan-holds › Holds are visible to the owner and agents › A held change's cause
   test('CA3: a held change with a long-delivered instruction reads hold through the monitor and raises no no-progress stall alert', async () => {
     const { planId } = await inFlightTarget(world, bench, stack, 'ca3-dev', 'attempt')
     const placed = stack.holds.place(bench.human, { planId, scope: 'changes', changes: ['api'], rationale: 'look again', deadline: inDays(2), commandId: 'ca3-hold' })

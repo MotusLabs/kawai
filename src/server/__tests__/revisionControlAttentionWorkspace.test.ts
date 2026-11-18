@@ -54,6 +54,7 @@ const manager = () => ({
 })
 
 describe('AT1 through the real workspace read', () => {
+  // @covers: plan-holds › Holds are released only by the owner › The deadline passes
   test('AT1: an open plan\'s active hold past its deadline reaches the snapshot\'s attention as plan-hold-overdue', async () => {
     const { planId } = await bench.draftInReview()
     // The service refuses a past deadline, so the overdue hold is a store row whose deadline already passed.

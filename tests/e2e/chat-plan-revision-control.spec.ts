@@ -130,6 +130,9 @@ function recordCheckpoint(sessionId: string, input: Record<string, unknown>): Re
   return JSON.parse(line.slice('CHECKPOINT:'.length)) as Record<string, unknown>
 }
 
+// @covers: plan-pause › Holders record checkpoints through task_checkpoint › A clean checkpoint
+// @covers: plan-pause › Paused is recorded only when work is safe and the holder has stopped › Checkpoint pushed, holder still busy
+// @covers: plan-pause › The owner chooses how paused work goes on › Continue
 test('revision-control walkthrough: hold, pause, checkpoint, Pausing to Paused, Continue', async ({ page }, info) => {
   test.setTimeout(300_000)
   const root = mkdtempSync(join(tmpdir(), 'kawai-revision-control-run-'))

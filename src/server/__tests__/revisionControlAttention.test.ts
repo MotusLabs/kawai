@@ -183,8 +183,10 @@ describe('the revision-control attention rows (AT)', () => {
       expect(world.items(new Date(Date.parse(deadline) + 1)).map(item => item.id)).toEqual([`plan-hold-overdue:${holdId}:${deadline}`])
     }
   }
+  // @covers: plan-holds › Holds are released only by the owner › The deadline passes
   test('AT1: open plan, active hold, deadline passed', () => holdCase({ id: 'AT1', situation: 'open plan, active hold, deadline passed', open: true, state: 'active' as HoldState, passed: true }))
   test('AT2: the hold released', () => holdCase({ id: 'AT2', situation: 'the hold released', open: true, state: 'released' as HoldState, passed: true }))
+  // @covers: plan-holds › Holds are visible to the owner and agents › Extending clears the item
   test('AT3: the hold extended to a later deadline', () => holdCase({ id: 'AT3', situation: 'the hold extended to a later deadline', open: true, state: 'extended' as HoldState, passed: false }))
   test('AT4: the plan closed', () => holdCase({ id: 'AT4', situation: 'the plan closed', open: false, state: 'active' as HoldState, passed: true }))
   test('AT11: open plan, active hold, deadline not passed', () => holdCase({ id: 'AT11', situation: 'open plan, active hold, deadline not passed', open: true, state: 'active' as HoldState, passed: false }))
@@ -195,15 +197,20 @@ describe('the revision-control attention rows (AT)', () => {
     expect(targetRow(true, state, passed, running)).toBe(id)
     expect(shape(world.items(NOW))).toEqual(expectedTargetItems(id, pauseId))
   }
+  // @covers: plan-pause › Pausing never resolves a pending request › The pause deadline passes
   test('AT5: target Pausing for another cause, pause deadline passed', () => targetCase({ id: 'AT5', situation: 'target Pausing for another cause, pause deadline passed', state: 'pausing-other' as TargetState, passed: true, running: true }))
+  // @covers: plan-pause › Pauses are visible to the owner and agents › A paused change's cause
   test('AT6: target Paused, undecided, before the deadline', () => targetCase({ id: 'AT6', situation: 'target Paused, undecided, before the deadline', state: 'paused' as TargetState, passed: false, running: true }))
   test('AT6: target Paused, undecided, after the deadline', () => targetCase({ id: 'AT6', situation: 'target Paused, undecided, after the deadline', state: 'paused' as TargetState, passed: true, running: true }))
   test('AT7: target Pausing as holder-killed, after the deadline', () => targetCase({ id: 'AT7', situation: 'target Pausing as holder-killed, after the deadline', state: 'holder-killed' as TargetState, passed: true, running: true }))
+  // @covers: plan-pause › Pausing never resolves a pending request › A failed checkpoint push past the deadline
   test('AT7: target Pausing as checkpoint-push-failed, before the deadline', () => targetCase({ id: 'AT7', situation: 'target Pausing as checkpoint-push-failed, before the deadline', state: 'checkpoint-push-failed' as TargetState, passed: false, running: true }))
   test('AT8: target decided', () => targetCase({ id: 'AT8', situation: 'target decided', state: 'decided' as TargetState, passed: true, running: true }))
+  // @covers: plan-pause › Pauses are visible to the owner and agents › Stop clears decisions
   test('AT9: execution stopped or finished', () => targetCase({ id: 'AT9', situation: 'execution stopped or finished', state: 'paused' as TargetState, passed: true, running: false }))
   test('AT10: target Pausing for another cause, deadline not passed', () => targetCase({ id: 'AT10', situation: 'target Pausing for another cause, deadline not passed', state: 'pausing-other' as TargetState, passed: false, running: true }))
 
+  // @covers: plan-pause › Pausing never resolves a pending request › A failed checkpoint push past the deadline
   test('completeness: every axis combination matches exactly one row and yields that row\'s items', () => {
     let combinations = 0
     for (const open of [true, false]) {

@@ -95,6 +95,8 @@ function depsFor(): DispatchDeps {
 // attempt mints, and one resume names the newest revision. The
 // revisionPending-guarded drop leaves the planner nothing to dispatch (the
 // H5 write-nothing under the still-covered gate).
+// @covers: plan-pause › The owner chooses how paused work goes on › Continue
+// @covers: plan-pause › A paused change gets no new work until decided › Continue after a published revision
 test('T2: Continue on an attempt target supersedes the passable pending round, leaves the change at the round\'s own gating state with no slot-releasing transition, creates no attempt, and sends one resume naming the newest revision', async () => {
   const world = await wired.pausedAttempt()
   const roundId = wired.answerNewestRow(world.executionId, 'api', 1)
@@ -189,6 +191,7 @@ async function assertAdaptOnce(world: { planId: string; executionId: string; tas
 // row was (no row, a claimed failed-round fix, an owed fix, a passable
 // round), Adapt mints exactly one new fix row at revision N+1 and dispatches
 // it once; the older rows' keys never go out.
+// @covers: plan-pause › The owner chooses how paused work goes on › Adapt
 test('T4: Adapt makes exactly one new attempt naming revision N+1 — over no round, a claimed failed-round fix, an owed one, and a pending passable round — with one dispatch, and the older row never dispatched', async () => {
   // (a) over no attempt row at all.
   const noRow = await wired.pausedAttempt({ mintAttempt: false })
