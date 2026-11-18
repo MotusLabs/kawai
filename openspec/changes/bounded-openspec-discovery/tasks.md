@@ -9,7 +9,7 @@ Implementation notes (feat/bounded-openspec-discovery, 2026-11-11):
 
 ## 1. Baseline evidence
 
-- [ ] 1.1 **Proposed for retirement (2026-11-18, needs the owner's plan approval; see design "Closeout").** Before any code change, on the live instance with no OpenSpec edits for 10 minutes, record one-second samples of `pgrep -fc 'openspec list --json'` and `/sys/fs/cgroup/cpu.pressure` for 10 minutes, and the worktree count. Keep the raw log. Verify: the log holds 600 samples, and the result reports the peak, the mean, and the pressure range (the V5 "before" half).
+- [ ] 1.1 **Retired through plan approval (2026-11-18): plan `plan-2eb5f292-a41f-4b63-b5d4-2dbc623b5f59` revision 2, approved by the owner, selects the proposed retirement of the unrecoverable historical comparative tasks, with no fabricated baseline or speedup claim (see design "Retirements").** The box stays unticked: the measurement never ran, and none is invented. Original text: Before any code change, on the live instance with no OpenSpec edits for 10 minutes, record one-second samples of `pgrep -fc 'openspec list --json'` and `/sys/fs/cgroup/cpu.pressure` for 10 minutes, and the worktree count. Keep the raw log. Verify: the log holds 600 samples, and the result reports the peak, the mean, and the pressure range (the V5 "before" half).
 
 ## 2. Fingerprint (D1)
 
@@ -35,7 +35,7 @@ Implementation notes (feat/bounded-openspec-discovery, 2026-11-11):
 
 - [x] 6.1 Add the `@covers: openspec-visibility › …` annotations for every scenario of the two new requirements above their tests. Verify: `scripts/__tests__/specCoverageGuard.test.ts` passes.
 - [x] 6.2 Add or update the workspace-discovery bullet in `docs/architecture/` (fingerprint reuse, the 10-minute limit, the pool of 3, the debug line). Add a `docs/recovery-matrix.md` row: the fault is an input missed by the fingerprint, the mechanism is the 10-minute reuse limit, and the test is RD5's title. Verify: `recoveryMatrix.test.ts` passes.
-- [ ] 6.3 **Proposed for retirement (2026-11-18, needs the owner's plan approval; see design "Closeout").** After the change ships in a release and the live instance runs it, repeat 1.1 for 10 minutes and collect the `workspace_openspec_pass` lines. Verify V5: the peak is 3 or less, and the result reports runs per 10 minutes and the median pass duration beside 1.1's figures, with both raw logs attached.
+- [ ] 6.3 **Retired through plan approval (2026-11-18): plan `plan-2eb5f292-a41f-4b63-b5d4-2dbc623b5f59` revision 2, approved by the owner, selects the proposed retirement of the unrecoverable historical comparative tasks, with no fabricated baseline or speedup claim (see design "Retirements").** The box stays unticked: the after measurement never ran, and none is invented; the concurrency bound itself is covered by PL1 and PC1. Original text: After the change ships in a release and the live instance runs it, repeat 1.1 for 10 minutes and collect the `workspace_openspec_pass` lines. Verify V5: the peak is 3 or less, and the result reports runs per 10 minutes and the median pass duration beside 1.1's figures, with both raw logs attached.
 - [ ] 6.4 Carried out by group 7 below. Run `bun run check` on the clean committed tree (V6). Map every oracle id (FP1–FP15, RD1–RD5, DO1–DO7, PL1, QT1, PC1) to its test title and killed mutant, and A1–A6, I1–I4, and V1–V6 to evidence. Verify: no id is unmapped.
 
 ## 7. Closeout (proposed slice; contract at the end of design.md)

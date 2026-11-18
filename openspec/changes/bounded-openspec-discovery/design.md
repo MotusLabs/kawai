@@ -224,17 +224,19 @@ The contract the implementation was judged against, kept verbatim for history. T
 
 - Landed: `src/server/workspace/openspecFingerprint.ts`, `openspecDiscoveryCache.ts`, `openspecPool.ts`, and their wiring in `openspecDiscovery.ts` and `workspaceCoordinator.ts` (PR #384, `977db6a9`); the retention fix PR #411 (`09535dfc`). No production file of this change changed after `09535dfc`.
 - Every scenario of both requirements carries a `@covers: openspec-visibility › …` annotation (8 scenarios, 10 annotations in `openspecDiscoveryReuse.test.ts`, `openspecFingerprint.test.ts`, `openspecPool.test.ts`, and `workspaceOpenspecComposition.integration.test.ts`; closeout 7.1 moved the FP loop's two annotations onto the rows that exercise the scenarios: FP6, FP7, FP11).
-- Mutant evidence for V1–V4 is recorded in tasks.md's implementation notes and the implementation task's result; it is a historical claim until the closeout reruns it.
-- Open: tasks 1.1, 6.3, 6.4. 6.4 is the oracle map below. 1.1 and 6.3 (V5) are proposed for retirement.
+- Mutant evidence for V1–V4 was a historical claim at `f52963d0`; the closeout reran all 13 named mutants at its head with each script and log kept (closeout/mutants/).
+- Open at the closeout's start: tasks 1.1, 6.3, 6.4. 6.4 is the oracle map above, completed by the closeout. Tasks 1.1 and 6.3 (V5) are retired through plan approval (below).
 
-### Proposed retirements (need the owner's approval)
+### Retirements (approved through plan revision 2)
 
-| Item | Why it cannot be met now | Proposed disposition |
+The owner approved plan `plan-2eb5f292-a41f-4b63-b5d4-2dbc623b5f59` revision 2 on 2026-11-18 (approval event 2026-11-18T07:26:39Z). Its approach states under "Explicit owner dispositions proposed by this revision": "Approval selects retirement of the unrecoverable historical discovery/check-time comparative tasks, with no fabricated baseline or speedup claim." Tasks 1.1 and 6.3 and the landed contract's V5 are therefore retired; V5's live before/after measurement is excluded (closeout X1), and this delivery claims no speedup or CPU-pressure result. The 2026-11-10 figures remain motivation only.
+
+| Item | Why it cannot be met now | Disposition (approved) |
 | --- | --- | --- |
-| Task 1.1, V5 "before" half | The pre-change code no longer runs anywhere; a fresh "before" sample would measure the changed code. The only pre-change figures are the 2026-11-10 measurements in Why, which were not taken with 1.1's protocol. | Retire. Keep the 2026-11-10 figures as motivation only. |
-| Task 6.3, V5 "after" half | It is a comparison with 1.1; without a baseline it proves no effect. It is also a live-instance probe, which planning cannot run. No spec scenario depends on it; the bound itself is covered by PL1 and PC1. | Retire. Claim no speedup or CPU-pressure result. |
+| Task 1.1, V5 "before" half | The pre-change code no longer runs anywhere; a fresh "before" sample would measure the changed code. The only pre-change figures are the 2026-11-10 measurements in Why, which were not taken with 1.1's protocol. | Retired. The 2026-11-10 figures stay motivation only. |
+| Task 6.3, V5 "after" half | It is a comparison with 1.1; without a baseline it proves no effect. It is also a live-instance probe, which planning cannot run. No spec scenario depends on it; the bound itself is covered by PL1 and PC1. | Retired. No speedup or CPU-pressure result is claimed. |
 
-If the owner declines, both stay open as owner-gated live evidence, and the change does not archive.
+The retirement is what authorizes the sync and archive below (acceptance A5).
 
 ### Oracle evidence map
 
