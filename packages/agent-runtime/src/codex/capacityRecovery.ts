@@ -30,6 +30,13 @@
 //   sends the input as a new turn (L13). A start reply arriving after a Stop
 //   binds the cancelled attempt only, through the session's interruptOwed
 //   handshake: the single cleanup turn/interrupt for that attempt's id.
+// - Start ownership. turn/started names no request, so the session binds it
+//   to the oldest unbound turn. While a dispatched continuation's start reply
+//   is outstanding, a new turn's turn/start waits for that reply (or its
+//   rejection, bounded by the request deadline): a cancelled attempt's
+//   cleanup identity never competes with a successor's native id. A turn
+//   ended while it waited sends nothing; a refused continuation leaves the
+//   unbound queue.
 // - Ephemeral. Nothing is persisted; a new session (backend restart) has no
 //   recovery and schedules nothing (L16).
 import type { TurnOutcome } from '../contract.js'
@@ -54,8 +61,8 @@ export interface RecoveryHost {
   current(): CodexGeneration | null
   /** The fallback turn/start parameters of a turn the runtime did not start (an agent-started turn). */
   turnParams(threadId: string | null): Record<string, unknown>
-  /** The turn awaits its next native id (turn/started binds the oldest unbound turn). */
-  unbound(turn: CodexTurnState): void
+  /** The turn awaits its next native id (turn/started binds the oldest unbound turn), or with `waiting` false leaves that queue. */
+  unbound(turn: CodexTurnState, waiting?: boolean): void
   bindNative(turn: CodexTurnState, id: string): void
   settle(turn: CodexTurnState, outcome: TurnOutcome, error: AgentErrorInfo, subtype: string, terminalReason?: string | null): void
   runOwned<T>(label: string, body: () => Promise<T>): Promise<T> | null
@@ -87,10 +94,27 @@ export class CapacityRecovery {
   /** Bumped by every arm, dispatch and cancel: only the newest timer's callback may act. */
   private token = 0
 
+  /** The dispatched continuation's start reply, until it resolves or rejects. */
+  private starting: Promise<void> | null = null
+
   private readonly clock: CapacityClock
 
   constructor(private readonly host: RecoveryHost) {
     this.clock = host.clock ?? systemCapacityClock
+  }
+
+  /**
+   * Run a new turn's turn/start `send` now, or once no continuation start reply is outstanding. A turn
+   * settled, superseded or orphaned by its generation meanwhile leaves the unbound queue and `skip`s.
+   */
+  afterStarts(turn: CodexTurnState, generation: CodexGeneration, send: () => void, skip: () => void): void {
+    const starting = this.starting
+    if (!starting) return send()
+    void starting.then(() => {
+      if (!turn.settled && turn === this.host.open() && generation === this.host.current() && !generation.retired && !this.host.stopBegun()) return this.afterStarts(turn, generation, send, skip)
+      this.host.unbound(turn, false)
+      skip()
+    })
   }
 
   /** Whether a backoff timer (not an attempt) is pending. */
@@ -193,11 +217,15 @@ export class CapacityRecovery {
         // A reply after a Stop binds the cancelled attempt only: its owed cleanup interrupt (L1).
         if (typeof id === 'string') this.host.bindNative(turn, id)
       } catch (error) {
+        // A refused start never binds: it must not take a later turn's turn/started id.
+        this.host.unbound(turn, false)
         if (this.host.stopBegun() && error instanceof AgentRuntimeError && error.category === 'stopped') return
         if (token === this.token) this.host.settle(turn, 'failed', rpcError(error, 'Codex refused the capacity retry'), 'error_during_execution')
       }
     })
     if (!job) return
+    const starting: Promise<void> = job.then(() => {}, () => {}).then(() => void (this.starting === starting && (this.starting = null)))
+    this.starting = starting
     try {
       write(generation.transport.request('turn/start', params as JsonObject))
     } catch (error) {

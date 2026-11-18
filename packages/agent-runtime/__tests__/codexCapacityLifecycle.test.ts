@@ -228,6 +228,24 @@ describe('codex-capacity-retry lifecycle rows L1-L10, L17', () => {
     }
   })
 
+  test('L6: after a refused continuation start the next turn binds its own native id and completes once', async () => {
+    // Found by P1: the refused turn stayed first in the unbound queue and took the next turn's turn/started id.
+    const s = scripted('bounded')
+    await opened(s)
+    await failAttempt(s, 'a1')
+    s.fail((await wake(s))!.id, 'turn refused', 'serverOverloaded')
+    await s.flush()
+    const next = await s.driver.send('next task')
+    await s.flush()
+    s.notify(...frames.started('b1'))
+    s.reply(s.turnStarts().at(-1)!.id, { turn: { id: 'b1' } })
+    await s.flush()
+    s.notify(...frames.failed('b1', 'contextWindowExceeded'))
+    await s.flush()
+    expect(await next.result).toMatchObject({ outcome: 'failed', turnId: next.turnId })
+    expect(recovery(s)).toEqual({ timers: 0, retries: 1, continuations: 1, terminals: 2, state: 'idle' })
+  })
+
   // @covers: codex-chat-sessions › Codex internal retries retain control of their attempt › Codex retries internally
   test('L7: an upstream error notification during an attempt starts no competing dispatch or completion', async () => {
     for (const willRetry of [true, false]) {

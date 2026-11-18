@@ -142,7 +142,7 @@ export class CodexSession {
       warn: (fields, message) => options.logger?.warn(fields, message),
     })
     this.recovery = new CapacityRecovery({ bounded: options.capacityRecovery === 'bounded', clock: options.capacityClock, native: this.native, open: () => this.turn, stopBegun: () => this.stopBegun(), current: () => this.current(), emit: (body) => this.emit(body),
-      turnParams: (threadId) => codexTurnStartParams({ threadId }, this.permissions), unbound: (turn) => void this.unbound.push(turn), bindNative: (turn, id) => this.bindNative(turn, id), activity: (input) => this.activity.capacity(input), cancelRequests: () => this.requests.cancelAll(),
+      turnParams: (threadId) => codexTurnStartParams({ threadId }, this.permissions), unbound: (turn, waiting = true) => void (this.unbound = [...this.unbound.filter((t) => t !== turn), ...(waiting ? [turn] : [])]), bindNative: (turn, id) => this.bindNative(turn, id), activity: (input) => this.activity.capacity(input), cancelRequests: () => this.requests.cancelAll(),
       settle: (turn, outcome, error, subtype, reason) => this.settle(turn, outcome, error, subtype, reason), runOwned: (label, body) => this.runOwned(label, body) })
   }
 
@@ -481,11 +481,9 @@ export class CodexSession {
         if (!turn.retiredAttempts) this.settle(turn, 'failed', rpcError(error, 'Codex refused the turn'), 'error_during_execution')
       }
     })
-    try {
-      write(generation.transport.request('turn/start', params as JsonObject))
-    } catch (error) {
-      write(Promise.reject(error))
-    }
+    const send = () => { try { write(generation.transport.request('turn/start', params as JsonObject)) } catch (error) { write(Promise.reject(error)) } }
+    // Behind an outstanding capacity continuation's start reply (capacityRecovery.ts); a turn ended meanwhile sends nothing.
+    this.recovery.afterStarts(turn, generation, send, () => write(Promise.resolve(null)))
     if (!turn.settled && turn === this.turn && !this.stopBegun()) this.lifecycle.holdState(() => this.openTurn(turn, false))
     return { turnId: turn.turnId, messageUuid: prepared.messageUuid, result: turn.result }
   }

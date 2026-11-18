@@ -68,6 +68,8 @@ export interface ClientRequest {
   id: number
   method: string
   params: Record<string, any>
+  /** The fake clock's monotonic time when the session wrote it. */
+  at: number
 }
 
 export interface Scripted {
@@ -149,25 +151,29 @@ export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: Fak
       exit: (code) => void setImmediate(() => end({ kind: 'exited', code, signal: null })),
     }
     let buffer = ''
-    stdin.on('data', (chunk: Buffer) => void setImmediate(() => {
-      if (exited) return
-      buffer += chunk.toString('utf8')
-      for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
-        const line = buffer.slice(0, newline)
-        buffer = buffer.slice(newline + 1)
-        if (line.trim()) handle(JSON.parse(line) as Record<string, any>)
-      }
-    }))
+    stdin.on('data', (chunk: Buffer) => {
+      // The write's own time, before the delivery hop.
+      const at = clock.now
+      setImmediate(() => {
+        if (exited) return
+        buffer += chunk.toString('utf8')
+        for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+          const line = buffer.slice(0, newline)
+          buffer = buffer.slice(newline + 1)
+          if (line.trim()) handle(JSON.parse(line) as Record<string, any>, at)
+        }
+      })
+    })
     return owned
   }
   const answers = new Map<number, (message: Record<string, any>) => void>()
   let nextAsk = 9000
   const reply = (id: number, result: unknown) => send({ jsonrpc: '2.0', id, result })
   const fail = (id: number, message: string, info?: unknown) => send({ jsonrpc: '2.0', id, error: { code: -32000, message, ...(info !== undefined ? { data: { codexErrorInfo: info } } : {}) } })
-  function handle(message: Record<string, any>): void {
+  function handle(message: Record<string, any>, at: number): void {
     const { id, method, params = {} } = message
     if (method === undefined) return void answers.get(id)?.(message)
-    recorded.requests.push({ id, method, params })
+    recorded.requests.push({ id, method, params, at })
     if (method === 'initialize') return reply(id, { userAgent: 'scripted-codex/0.163.0', codexHome: '/nonexistent', platformFamily: 'unix', platformOs: 'linux' })
     if (method === 'thread/start' || method === 'thread/resume') return reply(id, { thread: { id: THREAD, path: '' }, model: 'fake-model' })
     if (method === 'turn/interrupt') return reply(id, {})
