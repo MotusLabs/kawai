@@ -148,10 +148,12 @@ test('revision-control walkthrough: hold, pause, checkpoint, Pausing to Paused, 
   initOrigin(root, origin, 'https://github.com/acme/revision-control-walk.git')
   try {
     await page.goto('/')
-    // Names unique across the fixture suite: specs share one server, and
-    // others pick their sessions by text (chat-task-revision's 'Revision lead').
-    await createChat(page, root, 'Holdwalk implementer', 'devs')
-    await createChat(page, root, 'Holdwalk lead', 'leads')
+    // Names unique across the fixture suite: specs share one server and pick
+    // their sessions with hasText, a case-insensitive substring match, so no
+    // other spec's name may be part of these, nor these of theirs
+    // (chat-task-revision's 'Revision lead', plan-execution's 'Walk implementer').
+    await createChat(page, root, 'Pausecase developer', 'devs')
+    await createChat(page, root, 'Pausecase coordinator', 'leads')
     seedPlan(root, {
       title: 'Revision control walkthrough', goal: 'Show holds and pauses', leadGroup: 'leads',
       roles: [{ group: 'devs', profiles: [] }, { group: 'leads', profiles: [] }, { group: 'reviewers', profiles: [] }],
