@@ -1,6 +1,6 @@
 // Composer state stays below ChatView so editing never renders history.
 // Remounted by session id to reset caret/menu state while stored drafts survive.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ChatCommandState } from '@shared/chat'
 import type { SessionStatus } from '@shared/types'
 import { useChatStore } from '../../stores/chatStore'
@@ -24,7 +24,17 @@ export default function ChatComposer({ sessionId, status, connected, commandStat
   const [menuDismissed, setMenuDismissed] = useState(false)
   const [caret, setCaret] = useState<number | null>(null)
   const token = useMemo(() => (caret == null ? null : slashTokenAt(text, caret)), [text, caret])
-  useEffect(() => { setHighlighted(0); setMenuDismissed(false) }, [token?.start, token?.query])
+  // A new token starts on its first match and undismissed in the same render
+  // that first sees it (React's adjust-state-while-rendering pattern), so the
+  // next key never acts on the previous token's highlight or Escape. A
+  // passive-effect reset is a deferred update that a quick key can beat.
+  const tokenKey = token ? `${token.start}:${token.query}` : null
+  const [seenTokenKey, setSeenTokenKey] = useState(tokenKey)
+  if (seenTokenKey !== tokenKey) {
+    setSeenTokenKey(tokenKey)
+    setHighlighted(0)
+    setMenuDismissed(false)
+  }
   const menuOpen =
     token !== null && !menuDismissed && commandState.status !== 'unavailable'
   const matches = useMemo(
