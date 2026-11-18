@@ -5,6 +5,9 @@
 // workspace owns no tables; every function here is a pure projection, so the
 // connection layer can recompute on the same triggers the mailbox and task
 // views already use and diff before pushing.
+// The snapshot's `setupAvailable` (starter-team-setup D2) reads the project
+// groups directory at snapshot time, so a run's publish withdraws the offer.
+import { setupAvailable } from './teamSetup'
 import type { ChatApprovalPolicy, ChatPendingRequest } from '../../shared/chat'
 import { resolveSpawnApproval } from '../../shared/spawnApproval'
 import type {
@@ -109,6 +112,8 @@ export function memberRows(
         : { parkIfResetWithinMs: group.onLimit.parkIfResetWithinMs, otherwise: group.onLimit.otherwise },
       ...(group.effort !== undefined ? { effort: group.effort } : {}),
       ...(group.profileEffort !== undefined ? { profileEffort: { ...group.profileEffort } } : {}),
+      ...(group.autoCompactWindow !== undefined ? { autoCompactWindow: group.autoCompactWindow } : {}),
+      ...(group.profileAutoCompactWindow !== undefined ? { profileAutoCompactWindow: { ...group.profileAutoCompactWindow } } : {}),
       warnings: [...group.warnings],
       sources: sources.map(({ file, layer, inEffect }) => ({ file, layer, inEffect })),
       members,
@@ -403,6 +408,7 @@ export class WorkspaceRead {
         manager.groupProfileCounts(teamId, groupId), approvalDefault),
       approvalDefault,
       autoRequestedBy: autoRequestedBy(catalog, approvalDefault),
+      setupAvailable: setupAvailable(team.groupsRoot),
       summary: morningSummary({
         now,
         sessions,

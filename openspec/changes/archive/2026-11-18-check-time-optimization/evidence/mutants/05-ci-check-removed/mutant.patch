@@ -1,0 +1,12 @@
+diff --git a/src/server/__tests__/helpers/propertyCases.ts b/src/server/__tests__/helpers/propertyCases.ts
+index c5ebcc3c..945509b5 100644
+--- a/src/server/__tests__/helpers/propertyCases.ts
++++ b/src/server/__tests__/helpers/propertyCases.ts
+@@ -16,6 +16,6 @@ export const REDUCTION_FACTOR = 4
+ 
+ export function propertyCases(declared: number, env: NodeJS.ProcessEnv = process.env): number {
+   if (declared < REDUCTION_THRESHOLD) return declared
+-  if (env.CI === 'true' || env.KAWAI_FULL_PROPERTIES === '1') return declared
++  if (env.KAWAI_FULL_PROPERTIES === '1') return declared // MUTANT ci-check-removed
+   return Math.ceil(declared / REDUCTION_FACTOR)
+ }

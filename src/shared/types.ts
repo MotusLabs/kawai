@@ -7,6 +7,7 @@ export const QUESTION_AUTO_ANSWER_MIN_MINUTES = 0
 export const QUESTION_AUTO_ANSWER_MAX_MINUTES = 1440
 export const QUESTION_AUTO_ANSWER_DEFAULT_MINUTES = 5
 
+import type { TeamSetupPreview, TeamSetupResult } from './teamSetup'
 import type {
   MessageCursor,
   MessageQueryFilters,
@@ -577,6 +578,9 @@ export type ServerMessage =
   // every outcome carries `teamPath`, a refusal names what was refused.
   | { type: 'team-workspace-approval-default-result'; teamPath: string; ok: true; policy: ChatApprovalPolicy }
   | { type: 'team-workspace-approval-default-result'; teamPath: string; ok: false; error: string }
+  | { type: 'team-workspace-setup-preview-result'; teamPath: string; ok: true; preview: TeamSetupPreview }
+  | { type: 'team-workspace-setup-preview-result'; teamPath: string; ok: false; error: string }
+  | ({ type: 'team-workspace-setup-result'; teamPath: string } & TeamSetupResult)
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
   // Full background-task roster of a chat session (background tasks D2): a
   // level signal like chat-workers — the whole set on every change, additive
@@ -923,6 +927,9 @@ export type ClientMessage =
   // (team-approval-default D4); no agent tool reaches it. `policy` is checked
   // on the server, so a bad wire value is refused, never stored.
   | { type: 'team-workspace-approval-default-set'; teamPath: string; policy: ChatApprovalPolicy }
+  // Set up team (starter-team-setup D3): the human previews and writes the
+  // starter role groups into the team's main checkout; no agent tool reaches it.
+  | { type: 'team-workspace-setup-preview' | 'team-workspace-setup-run'; teamPath: string }
   | {
       type: 'strategy-save-draft'
       teamPath: string

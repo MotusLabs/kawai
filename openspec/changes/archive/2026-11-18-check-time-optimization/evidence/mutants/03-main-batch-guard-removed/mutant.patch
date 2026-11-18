@@ -1,0 +1,17 @@
+diff --git a/scripts/runPlan.ts b/scripts/runPlan.ts
+index 0159db65..5b16b156 100644
+--- a/scripts/runPlan.ts
++++ b/scripts/runPlan.ts
+@@ -154,7 +154,11 @@ export async function runBatchesAndPublish(input: BatchRunInput): Promise<BatchR
+         continue
+       }
+     } else {
+-      await input.runCommand(batch.cmd, input.env, batch.label)
++      try {
++        await input.runCommand(batch.cmd, input.env, batch.label)
++      } catch {
++        // MUTANT main-batch-guard-removed: the failure no longer stops later batches.
++      }
+     }
+     if (input.publishTimingsPath !== null && !published) {
+       published = true

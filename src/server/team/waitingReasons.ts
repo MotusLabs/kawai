@@ -23,25 +23,28 @@ const KIND_ORDER: Record<WaitingConstraintKind, number> = {
   // definition has no affinity, so the two never meet.
   'owner-busy': 0,
   'group-missing': 1,
-  'group-cap': 2,
-  'profile-cap': 3,
-  'team-spawn-cap': 4,
-  'worktree-occupied': 5,
-  'startup-failed': 6,
-  'no-eligible-member': 7,
-  'recipient-busy': 8,
-  'recipient-pending-request': 9,
-  'recipient-unavailable': 10,
-  'outside-role': 11,
-  'profile-cooling': 12,
-  'spawn-backoff': 13,
+  // A cross-model review names its own hold first (starter-team-setup D6):
+  // the other-family workers' caps follow it as the context it waits on.
+  'cross-model': 2,
+  'group-cap': 3,
+  'profile-cap': 4,
+  'team-spawn-cap': 5,
+  'worktree-occupied': 6,
+  'startup-failed': 7,
+  'no-eligible-member': 8,
+  'recipient-busy': 9,
+  'recipient-pending-request': 10,
+  'recipient-unavailable': 11,
+  'outside-role': 12,
+  'profile-cooling': 13,
+  'spawn-backoff': 14,
   // A routing specific after the capacity constraints (dispatch-worker-choice
   // D5): a capped chosen worker's `profile-cap` stays the blocker, and a
   // cooling choice names itself ahead of the generic all-cooling hold.
-  'worker-choice': 14,
-  'routing-hold': 15,
-  'all-profiles-cooling': 16,
-  'starting-agent': 17,
+  'worker-choice': 15,
+  'routing-hold': 16,
+  'all-profiles-cooling': 17,
+  'starting-agent': 18,
 }
 
 /** Constraints in blocker-first order; the sort is stable within a kind. */

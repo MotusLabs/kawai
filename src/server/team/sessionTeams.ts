@@ -160,6 +160,20 @@ export class SessionTeams {
   }
 
   /**
+   * The role's auto-compaction window for a spawn (mimo-million-token-context
+   * D3), read from the files as they are now like `effortFor`: the group's
+   * `profileAutoCompactWindow` entry for the member's profile, else its
+   * `autoCompactWindow`; undefined without a group, team, or either, leaving
+   * the catalog scalar or today's launch to decide.
+   */
+  compactWindowFor(
+    sessionId: string, groupId: string | null | undefined, profileId: string
+  ): number | undefined {
+    const group = groupId ? this.catalogOf(sessionId)?.groups.get(groupId)?.group : undefined
+    return group?.profileAutoCompactWindow?.[profileId] ?? group?.autoCompactWindow
+  }
+
+  /**
    * The session's team catalog; undefined until resolved. A per-cycle `cache`
    * map shares one read across a dispatch pass; behind both sits a parsed
    * catalog reused while its files' stamp is unchanged, so frequent callers

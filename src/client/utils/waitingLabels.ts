@@ -69,6 +69,8 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
     case 'worker-choice':
       return `Waiting for the chosen worker ${constraint.detail ?? ''}`.trimEnd()
         + (constraint.retryAt ? ` (cooling until ${new Date(constraint.retryAt).toLocaleTimeString()})` : '')
+    case 'cross-model':
+      return `Waiting for a reviewer on another model family${constraint.detail ? ` (${constraint.detail})` : ''}`
     case 'routing-hold':
       return `Routing hold${constraint.detail ? `: ${constraint.detail}` : ''}`
     case 'owner-busy':

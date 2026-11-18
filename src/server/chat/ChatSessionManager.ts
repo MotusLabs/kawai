@@ -1511,6 +1511,12 @@ export class ChatSessionManager {
     this.teamMail.staffing.approvalDefaults.set(teamId, policy)
   }
 
+  /** The profile ids a project path's resolved catalog defines (the Set up team preview's warnings). */
+  catalogProfileIds(projectPath: string): Set<string> {
+    const ctx = { projectPath, ...(this.options.profileCatalogHome ? { homeDir: this.options.profileCatalogHome } : {}) }
+    return new Set(resolvedCatalog(ctx).catalog.profiles.keys())
+  }
+
   groupProfileCounts(teamId: string, groupId: string): Record<string, number> {
     const counts: Record<string, number> = {}
     for (const record of this.records.values()) {
@@ -2983,6 +2989,12 @@ export class ChatSessionManager {
                 (this.options.getQuestionAutoAnswerMinutes?.() ?? 0) * 60_000,
               teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               getProviderEnv: () => this.providerEnv(),
+              // The role's window, read per spawn (mimo-million-token-context D3).
+              getCompactWindow: () => this.teams.compactWindowFor(
+                record.sessionId,
+                this.records.get(record.sessionId)?.groupId,
+                this.records.get(record.sessionId)?.claudeProfileId ?? 'default'
+              ),
               // The secret-name registry observes and persists at every
               // Claude spawn (provider-relay-setup D2), so a name once seen
               // survives its catalog entry's removal.

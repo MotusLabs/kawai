@@ -124,6 +124,66 @@ test('I1: keyboard wraps past both list ends and stationary boundary events do n
   h.renderer.unmount()
 })
 
+// task-748ad131 A1: a new slash token owns its highlight and Escape state from
+// its first render. Outside act() each handler renders synchronously while the
+// passive effects stay pending (as a pending Scheduler task does in the
+// browser), so a reset left to a passive effect would let the previous token's
+// index or dismissal act on the reopened menu (the CI failure at
+// chat-codex-autocomplete.spec.ts:121). act() afterwards flushes them.
+function withoutAct(run: () => void) {
+  const scope = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  const previous = scope.IS_REACT_ACT_ENVIRONMENT
+  scope.IS_REACT_ACT_ENVIRONMENT = false
+  try { run() } finally { scope.IS_REACT_ACT_ENVIRONMENT = previous }
+  act(() => {})
+}
+const rawType = (h: ReturnType<typeof composer>, value: string) =>
+  h.textarea().props.onChange({ target: { value, selectionStart: value.length, selectionEnd: value.length } })
+const rawKey = (h: ReturnType<typeof composer>, key: string) =>
+  h.textarea().props.onKeyDown({ key, preventDefault() {}, currentTarget: { form: { requestSubmit: h.submit } } })
+const selected = (h: ReturnType<typeof composer>) => h.options().map(option => option.props['aria-selected'])
+// @covers: chat-sessions › The slash-command menu marks the selected option › The first option starts selected
+test('A1: a reopened token starts on its first match before passive effects run', () => {
+  const h = composer('codex')
+  h.type('/'); h.key('ArrowUp')
+  expect(h.options()[1]!.props['aria-selected']).toBe(true)
+  h.key('Tab')
+  expect(h.textarea().props.value).toBe('/review ')
+  const seen: boolean[][] = []
+  withoutAct(() => {
+    rawType(h, '/'); seen.push(selected(h))
+    rawKey(h, 'ArrowDown'); seen.push(selected(h))
+    rawKey(h, 'ArrowDown'); seen.push(selected(h))
+  })
+  expect(seen).toEqual([[true, false], [false, true], [true, false]])
+  expect(selected(h)).toEqual([true, false])
+  h.key('Enter')
+  expect(h.textarea().props.value).toBe('/explore ')
+  expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+  h.renderer.unmount()
+})
+
+// Preserved behavior (A3): Escape dismisses only its own token. The legacy
+// test root flushes the pending passive effect before the reopening's second
+// render, so this row passes on the effect-based reset too; the browser spec's
+// same-task Escape probe is the discriminating oracle for dismissal.
+// @covers: chat-sessions › The composer offers a slash-command menu › Dismiss the menu
+test('A3: Escape dismissal ends when the token changes, without passive effects', () => {
+  const h = composer('codex')
+  h.type('/expl'); h.key('Escape')
+  expect(h.options()).toHaveLength(0)
+  expect(h.textarea().props.value).toBe('/expl')
+  const seen: string[][] = []
+  withoutAct(() => {
+    rawType(h, '/'); seen.push(h.options().map(option => option.props['data-command-name']))
+    rawKey(h, 'Enter')
+  })
+  expect(seen).toEqual([['explore', 'review']])
+  expect(h.textarea().props.value).toBe('/explore ')
+  expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+  h.renderer.unmount()
+})
+
 for (const command of ['/clear', '/reset', '/new']) {
   test(`W4: Codex ${command} keeps the profile and policy, archives after creation, and middle /clear stays text`, () => {
     const h = composer('codex')

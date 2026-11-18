@@ -158,33 +158,94 @@ const REUSE: ReuseRow[] = [
 ]
 
 describe('reuse table (check-time-optimization D3, task 3.5)', () => {
-  for (const row of REUSE) {
-    test(`${row.id}: ${row.force ? '--force with ' : ''}${row.request} request, ${row.existing} record → ${row.result}`, async () => {
-      if (row.existing !== 'none') seed(row.existing)
-      const { spawns, spawn } = counting()
-      const outcome = await runCheck({
-        cwd: repo,
-        steps: STEPS,
-        env: LOCAL_ENV,
-        junit: null,
-        spawn,
-        force: row.force,
-        fullProperties: row.request === 'full-properties',
-      })
-      if (row.result === 'reuse') {
-        expect(outcome.kind).toBe('recorded')
-        expect(spawns).toHaveLength(0)
-        return
-      }
-      expect(outcome.kind).toBe('passed')
-      expect(spawns).toHaveLength(STEPS.length)
-      // The run records the profile it executed: --full-properties exports
-      // the full counts to every step and records `full` (RU4, A6).
-      const expected = row.request === 'full-properties' ? 'full' : 'reduced'
-      expect(readRecord(recordsDir(repo), key())?.caseProfile).toBe(expected)
-      for (const request of spawns) {
-        expect(request.env.KAWAI_FULL_PROPERTIES).toBe(row.request === 'full-properties' ? '1' : undefined)
-      }
+  // One literal call per table row, unrolled from the template loop by the
+  // check-time-optimization closeout (task 7.1); each title is the row's
+  // rendered text, and the body is the loop's unchanged.
+  const expectReuseRow = async (row: ReuseRow) => {
+    if (row.existing !== 'none') seed(row.existing)
+    const { spawns, spawn } = counting()
+    const outcome = await runCheck({
+      cwd: repo,
+      steps: STEPS,
+      env: LOCAL_ENV,
+      junit: null,
+      spawn,
+      force: row.force,
+      fullProperties: row.request === 'full-properties',
     })
+    if (row.result === 'reuse') {
+      expect(outcome.kind).toBe('recorded')
+      expect(spawns).toHaveLength(0)
+      return
+    }
+    expect(outcome.kind).toBe('passed')
+    expect(spawns).toHaveLength(STEPS.length)
+    // The run records the profile it executed: --full-properties exports
+    // the full counts to every step and records `full` (RU4, A6).
+    const expected = row.request === 'full-properties' ? 'full' : 'reduced'
+    expect(readRecord(recordsDir(repo), key())?.caseProfile).toBe(expected)
+    for (const request of spawns) {
+      expect(request.env.KAWAI_FULL_PROPERTIES).toBe(row.request === 'full-properties' ? '1' : undefined)
+    }
   }
+
+  test('RU1: default request, none record → run', async () => {
+    await expectReuseRow(REUSE[0]!)
+  })
+
+  test('RU2: default request, reduced record → reuse', async () => {
+    await expectReuseRow(REUSE[1]!)
+  })
+
+  test('RU2: default request, full record → reuse', async () => {
+    await expectReuseRow(REUSE[2]!)
+  })
+
+  test('RU2: default request, unknown record → reuse', async () => {
+    await expectReuseRow(REUSE[3]!)
+  })
+
+  test('RU3: full-properties request, full record → reuse', async () => {
+    await expectReuseRow(REUSE[4]!)
+  })
+
+  test('RU3: full-properties request, unknown record → reuse', async () => {
+    await expectReuseRow(REUSE[5]!)
+  })
+
+  test('RU4: full-properties request, reduced record → run', async () => {
+    await expectReuseRow(REUSE[6]!)
+  })
+
+  test('RU5: --force with default request, none record → run', async () => {
+    await expectReuseRow(REUSE[7]!)
+  })
+
+  test('RU5: --force with full-properties request, none record → run', async () => {
+    await expectReuseRow(REUSE[8]!)
+  })
+
+  test('RU5: --force with default request, reduced record → run', async () => {
+    await expectReuseRow(REUSE[9]!)
+  })
+
+  test('RU5: --force with full-properties request, reduced record → run', async () => {
+    await expectReuseRow(REUSE[10]!)
+  })
+
+  test('RU5: --force with default request, full record → run', async () => {
+    await expectReuseRow(REUSE[11]!)
+  })
+
+  test('RU5: --force with full-properties request, full record → run', async () => {
+    await expectReuseRow(REUSE[12]!)
+  })
+
+  test('RU5: --force with default request, unknown record → run', async () => {
+    await expectReuseRow(REUSE[13]!)
+  })
+
+  test('RU5: --force with full-properties request, unknown record → run', async () => {
+    await expectReuseRow(REUSE[14]!)
+  })
 })

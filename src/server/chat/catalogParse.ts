@@ -10,6 +10,7 @@
 // `balanceKeyEnv`); the values never appear in a catalog file.
 import path from 'node:path'
 import { isResetTimeZone } from './limitSignals'
+import { isAutoCompactWindow } from './claudeCompaction'
 
 /**
  * The only environment variables a catalog file may set: provider routing,
@@ -33,11 +34,11 @@ export const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
 const MAX_ENV_ENTRIES = 32
 const MAX_ENV_VALUE_LENGTH = 4096
 /** Fields a `runtime: "codex"` entry may set (design D4, ruling R1). */
-const CODEX_ENTRY_FIELDS = new Set(['label', 'model', 'codexHome', 'network'])
+const CODEX_ENTRY_FIELDS = new Set(['label', 'model', 'codexHome', 'network', 'family'])
 /** Fields a Claude entry may set: today's set (the implicit runtime). */
-const CLAUDE_ENTRY_FIELDS = new Set(['label', 'model', 'executable', 'env', 'limitResetTimeZone'])
+const CLAUDE_ENTRY_FIELDS = new Set(['label', 'model', 'executable', 'env', 'limitResetTimeZone', 'autoCompactWindow', 'family'])
 /** Claude-only fields, named specifically when they land on a Codex entry. */
-const CLAUDE_ONLY_FIELDS = new Set(['env', 'executable', 'limitResetTimeZone'])
+const CLAUDE_ONLY_FIELDS = new Set(['env', 'executable', 'limitResetTimeZone', 'autoCompactWindow'])
 /** Codex-only fields, named specifically when they land on a Claude entry. */
 const CODEX_ONLY_FIELDS = new Set(['codexHome', 'network'])
 const CONTROLLED = new Set<string>(PROFILE_CONTROLLED_ENV)
@@ -47,18 +48,41 @@ export const CREDENTIAL_NAME_FIELDS = ['authTokenEnv', 'balanceKeyEnv'] as const
 const CREDENTIAL_FIELDS = new Set<string>(CREDENTIAL_NAME_FIELDS)
 const CREDENTIAL_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/
 
+/**
+ * A model family names the lineage a profile runs (`claude`, `gpt`, `glm`),
+ * so cross-model review can tell an alias of the author's model from another
+ * model (starter-team-setup D4). Trusted tier only, like `codexHome`: a
+ * project file agents can write must not relabel its own model's lineage.
+ */
+export const FAMILY_PATTERN = /^[a-z0-9][a-z0-9-]*$/
+
+/** Validates one `family` value; `subject` names the entry in every message. */
+function validateFamily(file: string, subject: string, value: unknown, trusted: boolean): string | { family: string } {
+  if (!trusted) {
+    return `${file}: family is allowed only in the user-level catalog (~/.kawai); this file is not operator-owned.`
+  }
+  if (typeof value !== 'string' || !FAMILY_PATTERN.test(value)) {
+    return `${file}: ${subject} family must match ${FAMILY_PATTERN}.`
+  }
+  return { family: value }
+}
+
 export interface PartialProfile {
   label?: string
   env: Record<string, string>
   model?: string
   executable?: string
   limitResetTimeZone?: string
+  /** The auto-compaction window preference (mimo-million-token-context D2). */
+  autoCompactWindow?: number
   /** The entry's runtime (ruling R1); absent reads as `claude`. */
   runtime?: 'claude' | 'codex'
   /** A Codex home the user-level catalog names; trusted tier only. */
   codexHome?: string
   /** Whether the Codex sandbox may reach the network; trusted tier only. */
   network?: boolean
+  /** The model family (starter-team-setup D4); trusted tier only. */
+  family?: string
 }
 
 export type FileParse =
@@ -159,6 +183,11 @@ function validateEntry(
       profile.limitResetTimeZone = value
       continue
     }
+    if (field === 'autoCompactWindow') {
+      if (!isAutoCompactWindow(value)) return windowError(file, `profile "${id}"`)
+      profile.autoCompactWindow = value
+      continue
+    }
     if (field === 'codexHome') {
       if (typeof value !== 'string' || !value.trim()) {
         return `${file}: profile "${id}" codexHome must be a non-empty path string.`
@@ -170,6 +199,12 @@ function validateEntry(
         return `${file}: profile "${id}" codexHome must be an absolute path or start with ~/.`
       }
       profile.codexHome = value
+      continue
+    }
+    if (field === 'family') {
+      const family = validateFamily(file, `profile "${id}"`, value, trusted)
+      if (typeof family === 'string') return family
+      profile.family = family.family
       continue
     }
     if (field === 'network') {
@@ -187,7 +222,22 @@ function validateEntry(
     }
     profile[field === 'label' ? 'label' : 'model'] = value
   }
+  // A wrapper owns its launch configuration, so it cannot take a window the
+  // launch would compose (mimo-million-token-context D2).
+  if (profile.executable !== undefined && profile.autoCompactWindow !== undefined) {
+    return executableWindowError(file, `profile "${id}"`)
+  }
   return profile
+}
+
+/** The actionable error for an invalid catalog window (D2, row C4). */
+function windowError(file: string, subject: string): string {
+  return `${file}: ${subject} autoCompactWindow must be a JSON integer from 100000 to 1000000 tokens.`
+}
+
+/** The incompatibility error for a window on an executable-backed entry (row L5). */
+function executableWindowError(file: string, subject: string): string {
+  return `${file}: ${subject} sets executable and autoCompactWindow; a wrapper owns its own configuration, so remove one of them.`
 }
 
 /**
@@ -215,6 +265,9 @@ export interface ParsedModel {
   label?: string
   model?: string
   env: Record<string, string>
+  autoCompactWindow?: number
+  /** The model's family; wins over its provider's (trusted tier only). */
+  family?: string
 }
 
 /** One parsed provider: the account facts plus its models. */
@@ -227,6 +280,10 @@ export interface ParsedProvider {
   authTokenEnv?: string
   /** Server variable holding a balance-reading key, never given to agents. */
   balanceKeyEnv?: string
+  /** The provider's window preference, inherited by models without their own (D2). */
+  autoCompactWindow?: number
+  /** The family of the provider's models that name none (trusted tier only). */
+  family?: string
   models: Map<string, ParsedModel>
 }
 
@@ -234,8 +291,8 @@ export type ProviderFileParse =
   | { ok: true; providers: Map<string, ParsedProvider> }
   | { ok: false; error: string }
 
-const PROVIDER_FIELDS = new Set(['label', 'env', 'limitResetTimeZone', 'executable', 'models', ...CREDENTIAL_NAME_FIELDS])
-const MODEL_FIELDS = new Set(['label', 'model', 'env'])
+const PROVIDER_FIELDS = new Set(['label', 'env', 'limitResetTimeZone', 'executable', 'models', 'autoCompactWindow', 'family', ...CREDENTIAL_NAME_FIELDS])
+const MODEL_FIELDS = new Set(['label', 'model', 'env', 'autoCompactWindow', 'family'])
 
 /**
  * The one `providers.json` validator, shared by file reads and the embedded
@@ -301,6 +358,17 @@ export function parseProviderCatalogValue(
         provider.limitResetTimeZone = fieldValue
         continue
       }
+      if (field === 'autoCompactWindow') {
+        if (!isAutoCompactWindow(fieldValue)) return { ok: false, error: windowError(source, `provider "${id}"`) }
+        provider.autoCompactWindow = fieldValue
+        continue
+      }
+      if (field === 'family') {
+        const family = validateFamily(source, `provider "${id}"`, fieldValue, trusted)
+        if (typeof family === 'string') return { ok: false, error: family }
+        provider.family = family.family
+        continue
+      }
       if (field === 'label') {
         if (typeof fieldValue !== 'string' || !fieldValue.trim()) {
           return { ok: false, error: `${source}: provider "${id}" label must be a non-empty string.` }
@@ -345,6 +413,17 @@ export function parseProviderCatalogValue(
             model.env = env
             continue
           }
+          if (modelField === 'autoCompactWindow') {
+            if (!isAutoCompactWindow(modelFieldValue)) return { ok: false, error: windowError(source, `model "${modelKey}" of provider "${id}"`) }
+            model.autoCompactWindow = modelFieldValue
+            continue
+          }
+          if (modelField === 'family') {
+            const family = validateFamily(source, `model "${modelKey}" of provider "${id}"`, modelFieldValue, trusted)
+            if (typeof family === 'string') return { ok: false, error: family }
+            model.family = family.family
+            continue
+          }
           if (typeof modelFieldValue !== 'string' || !modelFieldValue.trim()) {
             return { ok: false, error: `${source}: model "${modelKey}" of provider "${id}" field "${modelField}" must be a non-empty string.` }
           }
@@ -361,6 +440,10 @@ export function parseProviderCatalogValue(
     // file is refused whole, naming the provider and the field.
     if (provider.executable !== undefined && (provider.authTokenEnv !== undefined || provider.balanceKeyEnv !== undefined)) {
       return { ok: false, error: `${source}: provider "${id}" has credential variables and must not set executable; the wrapper would choose where the key is sent. The file is refused.` }
+    }
+    if (provider.executable !== undefined
+      && (provider.autoCompactWindow !== undefined || [...provider.models.values()].some(model => model.autoCompactWindow !== undefined))) {
+      return { ok: false, error: executableWindowError(source, `provider "${id}"`) }
     }
     providers.set(id, provider)
   }

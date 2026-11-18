@@ -5,7 +5,9 @@
 // so the dialog can warn before a session exceeds a cap. It also returns the
 // team's default approval policy for the path it answered
 // (unify-approval-defaults D2): null until that answer, a null policy when
-// the team has none or the lookup failed.
+// the team has none or the lookup failed. `setupAvailable` is tagged the same
+// way (starter-team-setup D2): whether the path's team has no project group
+// file, so the dialog can point to Set up team; false when the lookup failed.
 import type { ChatApprovalPolicy } from '@shared/chat'
 import { useEffect, useState } from 'react'
 
@@ -35,9 +37,15 @@ export interface TeamApprovalDefaultAnswer {
   policy: ChatApprovalPolicy | null
 }
 
-function parseGroups(data: unknown): { groups: TeamGroupOption[]; errors: string[]; approvalDefault: ChatApprovalPolicy | null } {
-  const { groups, errors, warnings, approvalDefault } = (typeof data === 'object' && data !== null ? data : {}) as {
-    groups?: unknown; errors?: unknown; warnings?: unknown; approvalDefault?: unknown
+/** Whether the team of one project path has no project group file (the setup offer). */
+export interface TeamSetupAnswer {
+  projectPath: string
+  available: boolean
+}
+
+function parseGroups(data: unknown): { groups: TeamGroupOption[]; errors: string[]; approvalDefault: ChatApprovalPolicy | null; setupAvailable: boolean } {
+  const { groups, errors, warnings, approvalDefault, setupAvailable } = (typeof data === 'object' && data !== null ? data : {}) as {
+    groups?: unknown; errors?: unknown; warnings?: unknown; approvalDefault?: unknown; setupAvailable?: unknown
   }
   const valid = Array.isArray(groups)
     ? groups.filter((group): group is TeamGroupOption =>
@@ -52,6 +60,7 @@ function parseGroups(data: unknown): { groups: TeamGroupOption[]; errors: string
   return {
     groups: valid, errors: [...strings(errors), ...strings(warnings)],
     approvalDefault: approvalDefault === 'auto' || approvalDefault === 'manual' ? approvalDefault : null,
+    setupAvailable: setupAvailable === true,
   }
 }
 
@@ -72,6 +81,7 @@ export function useTeamGroups(enabled: boolean, projectPath?: string) {
   const [groups, setGroups] = useState<TeamGroupOption[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
   const [approvalDefault, setApprovalDefault] = useState<TeamApprovalDefaultAnswer | null>(null)
+  const [setupAvailable, setSetupAvailable] = useState<TeamSetupAnswer | null>(null)
   // Invalidate during render, before the next path becomes interactive. A
   // path tag alone is insufficient for A → B → A while B is still pending:
   // the last completed A answer belongs to an earlier lookup.
@@ -80,6 +90,7 @@ export function useTeamGroups(enabled: boolean, projectPath?: string) {
   if (previousLookupPath !== lookupPath) {
     setPreviousLookupPath(lookupPath)
     setApprovalDefault(null)
+    setSetupAvailable(null)
   }
   useEffect(() => {
     const trimmed = projectPath?.trim()
@@ -87,6 +98,7 @@ export function useTeamGroups(enabled: boolean, projectPath?: string) {
       setGroups([])
       setWarnings([])
       setApprovalDefault(null)
+      setSetupAvailable(null)
       return
     }
     const controller = new AbortController()
@@ -100,14 +112,16 @@ export function useTeamGroups(enabled: boolean, projectPath?: string) {
         setGroups(data.groups)
         setWarnings(data.errors)
         setApprovalDefault({ projectPath: trimmed, policy: data.approvalDefault })
+        setSetupAvailable({ projectPath: trimmed, available: data.setupAvailable })
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return
         setGroups([])
         setApprovalDefault({ projectPath: trimmed, policy: null })
+        setSetupAvailable({ projectPath: trimmed, available: false })
         setWarnings([cause instanceof Error ? cause.message : String(cause)])
       })
     return () => controller.abort()
   }, [enabled, projectPath])
-  return { groups, warnings, approvalDefault }
+  return { groups, warnings, approvalDefault, setupAvailable }
 }

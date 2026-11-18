@@ -1,0 +1,24 @@
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/checkRunReuse.test.ts:
+176 |     if (row.result === 'reuse') {
+177 |       expect(outcome.kind).toBe('recorded')
+178 |       expect(spawns).toHaveLength(0)
+179 |       return
+180 |     }
+181 |     expect(outcome.kind).toBe('passed')
+                               ^
+error: expect(received).toBe(expected)
+
+Expected: "passed"
+Received: "recorded"
+
+      at <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/src/server/__tests__/checkRunReuse.test.ts:181:26)
+      at async <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/src/server/__tests__/checkRunReuse.test.ts:217:11)
+(fail) reuse table (check-time-optimization D3, task 3.5) > RU4: full-properties request, reduced record → run [20.55ms]
+
+ 0 pass
+ 18 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [29.00ms]

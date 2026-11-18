@@ -88,6 +88,8 @@ export const CHAT_CONNECTION_TYPES = [
   'team-workspace-open',
   'team-workspace-close',
   'team-workspace-approval-default-set',
+  'team-workspace-setup-preview',
+  'team-workspace-setup-run',
   'team-plans-open',
   'team-plans-close',
   'team-plan-open',

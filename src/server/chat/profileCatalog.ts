@@ -90,6 +90,8 @@ export interface CatalogProfile {
   executable?: string
   /** Zone of reset times the provider writes without one (IANA or ±HH:MM). */
   limitResetTimeZone?: string
+  /** The flattened auto-compaction window preference (mimo-million-token-context D2). */
+  autoCompactWindow?: number
   /**
    * The entry's runtime (ruling R1). Absent reads as `claude`, keeping every
    * existing profile's shape unchanged.
@@ -128,8 +130,19 @@ export interface ProfileCatalog {
    * the secret-name registry withholds them whatever happens to the entry.
    */
   credentialNames: ReadonlySet<string>
+  /**
+   * Profile id → model family (starter-team-setup D4): the trusted tiers'
+   * model `family`, else its provider's, else the profile id itself. Read it
+   * through `familyOf`, which applies the same fallback to unknown ids.
+   */
+  families: ReadonlyMap<string, string>
   /** Per-file validation failures; the rest of the catalog still resolves. */
   errors: string[]
+}
+
+/** A profile's model family: the catalog's, else the id itself (D4). */
+export function familyOf(catalog: Pick<ProfileCatalog, 'families'>, profileId: string): string {
+  return catalog.families.get(profileId) ?? profileId
 }
 
 /**
@@ -295,6 +308,11 @@ export function resolveProfileCatalog(
   // profiles.json entries and Codex entries cannot name credentials — the
   // parsers refuse the fields — so the providers layers are the whole set.
   const credentialNames = new Set<string>()
+  // Families (starter-team-setup D4) come from trusted levels only — the
+  // parsers refuse `family` elsewhere — keyed by model key and by provider,
+  // nearer trusted levels winning, so a re-home keeps the key's lineage.
+  const keyFamily = new Map<string, string>()
+  const providerFamily = new Map<string, string>()
   const levels = profileCatalogLevels(ctx)
   for (const level of levels) {
     // Only the shipped base falls back to the embedded shipped defaults;
@@ -310,9 +328,14 @@ export function resolveProfileCatalog(
         errors.push(parsed.error)
         continue
       }
-      for (const provider of parsed.providers.values()) {
+      for (const [providerId, provider] of parsed.providers) {
         if (provider.authTokenEnv !== undefined) credentialNames.add(provider.authTokenEnv)
         if (provider.balanceKeyEnv !== undefined) credentialNames.add(provider.balanceKeyEnv)
+        if (provider.family !== undefined) providerFamily.set(providerId, provider.family)
+        for (const [modelKey, model] of provider.models) {
+          const family = model.family ?? provider.family
+          if (family !== undefined) keyFamily.set(modelKey, family)
+        }
       }
       merger.addProviders(level.file, level.shipped ?? false, parsed.providers, level.tier, level.trusted)
       continue
@@ -323,6 +346,9 @@ export function resolveProfileCatalog(
     if (!parsed.ok) {
       errors.push(parsed.error)
       continue
+    }
+    for (const [id, entry] of parsed.entries) {
+      if (entry.family !== undefined) keyFamily.set(id, entry.family)
     }
     merger.addProfiles(level.file, level.shipped ?? false, parsed.entries, level.tier, level.trusted)
   }
@@ -348,12 +374,20 @@ export function resolveProfileCatalog(
   for (const [providerId, provider] of merger.providers) {
     for (const [modelKey, model] of provider.models) {
       const flat = flattenModel(provider, model)
+      // A wrapper owns its configuration (mimo-million-token-context D2): a
+      // window assembled across files onto an executable-backed model is
+      // reported and dropped; within one file the parser refuses it.
+      if (flat.executable !== undefined && flat.autoCompactWindow !== undefined) {
+        errors.push(`${provider.originFile}: model "${modelKey}" is executable-backed, so its autoCompactWindow is ignored; a wrapper owns its own configuration.`)
+        flat.autoCompactWindow = undefined
+      }
       profiles.set(modelKey, {
         label: flat.label?.trim() || modelKey,
         env: flat.env,
         ...(flat.model !== undefined ? { model: flat.model } : {}),
         ...(flat.executable !== undefined ? { executable: flat.executable } : {}),
         ...(flat.limitResetTimeZone !== undefined ? { limitResetTimeZone: flat.limitResetTimeZone } : {}),
+        ...(flat.autoCompactWindow !== undefined ? { autoCompactWindow: flat.autoCompactWindow } : {}),
         providerId,
         ...(flat.authTokenEnv !== undefined ? { authTokenEnv: flat.authTokenEnv } : {}),
         ...(flat.balanceKeyEnv !== undefined ? { balanceKeyEnv: flat.balanceKeyEnv } : {}),
@@ -386,7 +420,11 @@ export function resolveProfileCatalog(
   if (!profiles.has('default')) {
     profiles.set('default', { label: 'Default', env: {}, providerId: 'default' })
   }
-  return { profiles, providers, merged: merger.providers, credentialNames, errors }
+  const families = new Map<string, string>()
+  for (const [id, profile] of profiles) {
+    families.set(id, keyFamily.get(id) ?? (profile.runtime === 'codex' ? undefined : providerFamily.get(profile.providerId)) ?? id)
+  }
+  return { profiles, providers, merged: merger.providers, credentialNames, families, errors }
 }
 
 /**

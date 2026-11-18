@@ -1,0 +1,33 @@
+# mutant V1-archive-walked
+# target: src/server/workspace/openspecFingerprint.ts
+# before: if (entry.isDirectory() && entry.name !== 'archive') {
+# after:  if (entry.isDirectory()) {
+# command: bun test src/server/__tests__/openspecFingerprint.test.ts -t FP8: --timeout 20000
+# required: the named row FP8 fails (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/openspecFingerprint.test.ts:
+220 |   row.apply(fixture)
+221 |   const after = await fingerprintOpenSpecInputs(fixture.wt)
+222 |   if (row.expected === 'null') {
+223 |     expect(after).toBeNull()
+224 |   } else if (row.expected === 'equal') {
+225 |     expect(after).toBe(base)
+                        ^
+error: expect(received).toBe(expected)
+
+Expected: "f2157c90fcaf3357ada1a9fb3019309578409ecdb6b67c4e4d9bba36dae71d66"
+Received: "1b27f7ff39be1db6e4957480a1fab0fba95a2a72269c065efaabd0635032b48a"
+
+      at runFpRow (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecFingerprint.test.ts:225:19)
+      at async <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecFingerprint.test.ts:272:11)
+(fail) fingerprintOpenSpecInputs FP table > FP8: a file under archive/ rewritten -> equal [5.60ms]
+
+ 0 pass
+ 14 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [14.00ms]
+
+verdict: KILLED (named row failed, as required)
