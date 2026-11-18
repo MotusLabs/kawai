@@ -287,3 +287,14 @@ export default {
 
 Without a rule the tags are metadata only: the built-in strategy routes the
 review as usual and the tags show on the mailbox row.
+
+For a guarantee that does not depend on a rule, set `crossModelReview: true`
+in the review group's file. Kawai then routes every review handoff to that
+group — from an agent, the human, or a plan execution — only to a worker
+whose model family (`family` in the catalog, see
+`docs/claude-session-profiles.md`) differs from the family of every profile
+that submitted a result on the task, in every round. The filter runs before
+the rule, so a rule sees only the remaining candidates; a review with none
+waits with a `cross-model` reason, and a handoff whose `worker` names only
+the authors' family is refused. The tags stay on execution reviews either
+way.

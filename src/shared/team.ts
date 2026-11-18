@@ -264,6 +264,8 @@ export type WaitingConstraintKind =
   | 'outside-role'
   /** Group mail held by its worker choice (dispatch-worker-choice D5): `detail` is the selector, `retryAt` a cooldown end. */
   | 'worker-choice'
+  /** A review held for a worker outside its authors' model families (starter-team-setup D6): `detail` names the families. */
+  | 'cross-model'
   | 'profile-cooling'
   | 'startup-failed'
   | 'no-eligible-member'

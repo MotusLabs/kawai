@@ -36,7 +36,8 @@
 // (`plan-workspace`) the bindings, document references, turn-context
 // snapshots, and command-ledger tables; migration 27 (`task-affinity`) the
 // nullable `affinity_task` on `team_messages` and `owner_session` on
-// `team_tasks`.
+// `team_tasks`; migration 28 (`result-author-profile`) the nullable
+// `submitted_by_profile` on `team_task_results`.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -581,7 +582,8 @@ test('a fresh database opened by this build has the same shape plus each migrati
   // Migration 20's: the submitter's nullable coverage map (independent-
   // verification D4), appended after the baseline columns.
   const results = expected.tables.team_task_results!
-  const withCoverage = { ...results, columns: [...results.columns, optional('coverage')] }
+  // Migration 28's: the result's author profile (starter-team-setup D5), after the coverage map.
+  const withCoverage = { ...results, columns: [...results.columns, optional('coverage'), optional('submitted_by_profile')] }
   const messages = expected.tables.team_messages!
   // Migration 18's: the sender's worker choice (dispatch-worker-choice D1);
   // migration 27's: the affinity task (group-mail-task-affinity D1).

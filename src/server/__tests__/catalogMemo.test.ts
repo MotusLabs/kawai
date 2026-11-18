@@ -152,7 +152,7 @@ describe('Table E — eviction', () => {
     const resolved: string[] = []
     const memo = new CatalogMemo(c => {
       resolved.push(c.homeDir ?? '')
-      return { profiles: new Map(), providers: new Map(), merged: new Map(), credentialNames: new Set(), errors: [] } satisfies ProfileCatalog
+      return { profiles: new Map(), providers: new Map(), merged: new Map(), credentialNames: new Set(), families: new Map(), errors: [] } satisfies ProfileCatalog
     })
     return { memo, resolved }
   }

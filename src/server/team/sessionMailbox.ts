@@ -48,7 +48,8 @@ import type { ChatUsageReport, ChatWorker } from '../../shared/chat'
 import type { RouteDecisionLogEntry } from '../../shared/routing'
 import type { Database } from 'bun:sqlite'
 import { decisionReplyGuardOver } from '../plans/decisions/decisionReplyGuard'
-import { withCatalogSnapshot } from '../chat/catalogMemo'
+import { modelFamilyOf, withCatalogSnapshot } from '../chat/catalogMemo'
+import { crossModelFilter, profileOfRecord, type CrossModelFilter } from './routing/crossModel'
 
 /** An identity of one claimed message, captured when a settle is attempted. */
 export interface ClaimRef {
@@ -85,6 +86,8 @@ export class SessionMailbox {
   /** Per-team waiting reasons (D3): in-memory, rebuilt by the first pass. */
   private readonly reasons = new ReasonLedger()
   private readonly catalogs = new Map<string, GroupCatalog>()
+  /** The cross-model filter of one group message (starter-team-setup D6); routing and the handoff refusal share it. */
+  readonly crossModelFor: (message: TeamMessage, group: GroupDefinition) => CrossModelFilter | null
   private releaseSubscription?: () => void
   private releaseLimitSubscription?: () => void
   private releaseTaskSubscription?: () => void
@@ -264,6 +267,18 @@ export class SessionMailbox {
       if (worktree === null || message.toKind !== 'group' || message.toId === null) return worktree
       return this.catalogs.get(message.teamId)?.groups.get(message.toId)?.group.worktreeScoped === false ? null : worktree
     }
+    const crossModelFor = (message: TeamMessage, group: GroupDefinition): CrossModelFilter | null => {
+      if (!group.crossModelReview) return null
+      const assignment = assignments.byMessage(message.id)
+      return crossModelFilter({
+        groupFlag: true,
+        handoff: assignment ? { handoffKind: assignment.handoffKind ?? null, resultId: assignment.resultId ?? null, taskId: assignment.taskId } : null,
+        authors: taskId => taskStore.results.authorsOf(taskId),
+        profileOfSession: sessionId => profileOfRecord(options.getRecord(sessionId)),
+        familyOf: profileId => modelFamilyOf(profileId, { homeDir: options.homeDir }),
+      })
+    }
+    this.crossModelFor = crossModelFor
     this.router = new ProfileRouter({
       // Read through a live team member's cached catalog (one read per team
       // per cycle); with no live member, resolve from the message's origin.
@@ -286,6 +301,9 @@ export class SessionMailbox {
       providerUsageOf: providerId => options.providerUsageOf?.(providerId) ?? null,
       excludedProfile: message => message.excludedProfile ?? undefined,
       allowedProfiles: message => message.allowedProfiles ?? null,
+      // starter-team-setup D6: a review handoff to a flagged group skips its
+      // authors' model families; the one derivation the handoff refusal uses.
+      crossModel: (message, group) => crossModelFor(message, group),
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
       // The owner hold's wait reads the mailbox's clock too, so a test can hold it (production: wall clock).
       ...(options.now ? { now: options.now } : {}),
