@@ -5,7 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { initDatabase, type SessionDatabase } from '../db'
-import { anyDirectory, closeDispatchers, createHarness, flush, installManagerCleanup, spawned } from './helpers/chatSessionManagerHarness'
+import { loadMetricsInputs } from '../metrics/metricsQuery'
+import { anyDirectory, closeDispatchers, createHarness, flush, initMessage, installManagerCleanup, resultWithWindow, spawned } from './helpers/chatSessionManagerHarness'
 import { freshTestDatabase } from './helpers/testDatabase'
 
 installManagerCleanup()
@@ -341,5 +342,32 @@ describe('ChatSessionManager usage', () => {
     harnessB.manager.shutdown()
     closeDispatchers()
     dbB.close()
+  })
+
+  // @covers: chat-turn-usage › Usage rows are retained for 90 days › A killed session's usage
+  test('killing a session leaves its usage rows counted toward its team', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    const h = await createHarness(db)
+    const task = h.manager.tasks.store.create({ teamId: '/tmp/proj', title: 'usage after kill', direction: 'fixture only', creator: { kind: 'human', sessionId: null } })
+    const created = h.manager.createSession({ projectPath: '/tmp/proj', taskId: task.id })
+    if (!created.ok) throw new Error(created.error)
+    expect((await h.manager.send(created.session.id, 'work a turn')).ok).toBe(true)
+    await spawned(h.handles)
+    const handle = h.handles[0]!
+    handle.push(initMessage('sdk-killed'))
+    handle.push(resultWithWindow())
+    await flush()
+    const recorded = h.manager.turnUsage.forSession(created.session.id)
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]).toMatchObject({ teamId: '/tmp/proj', taskId: task.id })
+    expect(h.manager.kill(created.session.id)).toBe(true)
+    // The kill removed the session, not its usage: the row remains and the
+    // team's metrics read still counts it.
+    const rows = db.db.prepare('SELECT session_id, task_id, input_tokens FROM chat_turn_usage WHERE session_id = ?').all(created.session.id)
+    expect(rows).toHaveLength(1)
+    const end = Date.now() + 60000
+    const inputs = loadMetricsInputs(db.db, '/tmp/proj', end - 7 * 86400000, end)
+    expect(inputs.usage.map(row => row.sessionId)).toEqual([created.session.id])
+    h.manager.shutdown()
   })
 })

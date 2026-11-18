@@ -8,6 +8,8 @@ import { BoundedLabels } from '../metrics/export/boundedLabels';
 import { REGISTRY } from '../metrics/export/registry';
 import { renderMetrics } from '../metrics/export/renderer';
 import { registerMetricsRoute } from '../metrics/export/route';
+import { MetricsReader } from '../metrics/computeMetrics';
+import { TaskStore } from '../team/taskStore';
 const origin = Date.parse('2026-10-18T00:00:00Z');
 function harness() {
   const db = schemaDb();
@@ -102,6 +104,10 @@ test('disabled or invalid configuration keeps core recording working; unauthoriz
     expect((await app.request('/metrics')).status).toBe(404);
   }
   h.record('while-disabled');
+  // With export unconfigured, the observation recorded while disabled exists
+  // in process_observations and a report read succeeds.
+  expect(h.service.store.forTeam('/private/repo').map(row => row.sourceKey)).toEqual(['while-disabled']);
+  expect(new MetricsReader(h.db, () => origin).read('/private/repo', '7d', null).teamId).toBe('/private/repo');
   const app = new Hono();
   registerMetricsRoute(app, h.service, { KAWAI_METRICS_ENABLED: 'true', KAWAI_METRICS_TOKEN: 'secret' });
   expect((await app.request('/metrics', { headers: { Authorization: 'Bearer secret' } })).status).toBe(200);
@@ -113,4 +119,97 @@ test('disabled or invalid configuration keeps core recording working; unauthoriz
   const unavailable = new Hono();
   registerMetricsRoute(unavailable, h.service, { KAWAI_METRICS_ENABLED: 'true', KAWAI_METRICS_TOKEN: 'secret' });
   expect((await unavailable.request('/metrics', { headers: { Authorization: 'Bearer secret' } })).status).toBe(503);
+});
+// @covers: prometheus-export › Prometheus integration is optional › Scraper unavailable
+test('recording continues through a period with no scrape and makes no outbound request', () => {
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: unknown) => {
+    requests.push(String(input));
+    return Promise.reject(new Error('no outbound request is expected'));
+  }) as typeof fetch;
+  try {
+    const h = harness();
+    for (const second of [0, 60, 120, 180]) {
+      h.time(second * 1000);
+      h.record(`usage:gap-${second}`);
+    }
+    // Nothing scraped the whole period: recording continued and the durable
+    // rows and cumulative totals are all there when a scrape resumes.
+    expect(h.service.store.forTeam('/private/repo')).toHaveLength(4);
+    expect(new MetricsSnapshot(h.service).read()).toContain('kind="input"} 168');
+    expect(requests).toEqual([]);
+    h.db.close();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+// @covers: prometheus-export › Export is a protected read-only scrape endpoint › Repeated scrape
+test('repeated authorized scrapes write no row and create no provider request', async () => {
+  const h = harness();
+  h.record('one');
+  const app = new Hono();
+  registerMetricsRoute(app, h.service, { KAWAI_METRICS_ENABLED: 'true', KAWAI_METRICS_TOKEN: 'secret' });
+  const rows = () => (h.db.prepare('SELECT count(*) n FROM process_observations').get() as { n: number }).n;
+  const before = rows();
+  const requests: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: unknown) => {
+    requests.push(String(input));
+    return Promise.reject(new Error('no provider request is expected'));
+  }) as typeof fetch;
+  const texts: string[] = [];
+  try {
+    for (let scrape = 0; scrape < 3; scrape++) {
+      const response = await app.request('/metrics', { headers: { Authorization: 'Bearer secret' } });
+      expect(response.status).toBe(200);
+      texts.push(await response.text());
+    }
+    // Every scrape returns the same committed aggregates and current gauges.
+    expect(new Set(texts).size).toBe(1);
+    expect(requests).toEqual([]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  expect(rows()).toBe(before);
+  h.db.close();
+});
+// @covers: prometheus-export › Export distinguishes counters histograms and current gauges › Completion distribution
+test('a first acceptance enters the acceptance histogram once with its count, sum and matching bucket', () => {
+  const at = new Date(origin).toISOString(), accepted = new Date(origin + 60000).toISOString();
+  const db = schemaDb(), tasks = new TaskStore(db), service = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted));
+  const task = tasks.create({ teamId: 'team', title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } }, at);
+  const result = tasks.results.insert({ teamId: 'team', taskId: task.id, taskRevision: 1, summary: 's', commit: null, diff: null, worktree: null, tests: [], limitations: null, submittedBy: { kind: 'agent', sessionId: 'dev' } }, at);
+  tasks.results.markAccepted(result.id, { kind: 'human', sessionId: null }, accepted);
+  service.reconcile.run();
+  const text = new MetricsSnapshot(service).read();
+  expect(text).toContain('kawai_task_acceptance_duration_seconds_count{team="team_1",mechanism="manual"} 1');
+  expect(text).toContain('kawai_task_acceptance_duration_seconds_sum{team="team_1",mechanism="manual"} 60');
+  expect(text).toContain('kawai_task_acceptance_duration_seconds_bucket{team="team_1",mechanism="manual",le="60"} 1');
+  // A replay of the same acceptance accumulates nothing further.
+  service.reconcile.run();
+  expect(new MetricsSnapshot(service).read()).toBe(text);
+  db.close();
+});
+// @covers: prometheus-export › Historical gaps remain explicit › Missed scrape interval
+test('totals after a simulated scrape gap equal uninterrupted totals', () => {
+  const scraped = harness(), gapped = harness();
+  const timeline = (h: ReturnType<typeof harness>, scrape: boolean) => {
+    h.record('usage:a');
+    if (scrape) expect(new MetricsSnapshot(h.service).read()).toContain('kind="input"} 42');
+    h.time(60000);
+    h.record('usage:b', 10);
+    h.time(120000); // the outage window: the gapped timeline is never read here
+    h.record('usage:c', 7);
+    if (scrape) expect(new MetricsSnapshot(h.service).read()).toContain('kind="input"} 59');
+    h.time(180000);
+    // Resuming sees the cumulative totals, and Kawai's own timeline kept every incident.
+    expect(new MetricsSnapshot(h.service).read()).toContain('kind="input"} 59');
+    expect(new MetricsSnapshot(h.service).read()).toContain('kind="input",le="1000"} 3');
+    expect(h.service.store.forTeam('/private/repo')).toHaveLength(3);
+    const text = new MetricsSnapshot(h.service).read();
+    h.db.close();
+    return text;
+  };
+  expect(timeline(gapped, false)).toBe(timeline(scraped, true));
 });
