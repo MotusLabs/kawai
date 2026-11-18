@@ -1,0 +1,45 @@
+# mutant V4-timer-at-submission
+# target: src/server/workspace/openspecPool.ts
+# before:   return (options) => pool.run(() => runner(options))
+# after:  "  return (options) => {\n    const submittedAt = Date.now()\n    return pool.run(() => runner({ ...options, timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - submittedAt)) }))\n  }"
+# command: bun test src/server/__tests__/openspecPool.test.ts -t QT1: --timeout 20000
+# required: the named row QT1 fails (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/openspecPool.test.ts:
+173 |     await new Promise((resolve) => setTimeout(resolve, 1_500))
+174 |     release()
+175 |     await blocker
+176 |     const result = await queued
+177 |     expect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_500)
+178 |     expect(result).toEqual({ ok: true, exitCode: 0, stdout: '{"changes":[]}\n', stderr: '' })
+                         ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "exitCode": 0,
+-   "ok": true,
++   "exitCode": 143,
++   "ok": false,
+    "stderr": "",
+-   "stdout": 
+- "{"changes":[]}
+- "
+- ,
++   "stdout": "",
+  }
+
+- Expected  - 6
++ Received  + 3
+
+      at <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecPool.test.ts:178:20)
+(fail) pooled runner QT1 > QT1: a run queued behind a full pool for longer than its timeout still succeeds when its process answers in time [1803.65ms]
+
+ 0 pass
+ 2 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [1.87s]
+
+verdict: KILLED (named row failed, as required)
