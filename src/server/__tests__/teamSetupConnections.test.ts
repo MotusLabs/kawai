@@ -135,6 +135,21 @@ describe('Set up team over the workspace connection', () => {
     expect(push.members.map(member => member.id).sort()).toEqual(['devs', 'lead', 'reviewers'])
   })
 
+  // @covers: team-setup › Set-up groups are editable files the Members tab names › An edit is picked up like any group edit
+  test('an edit to a written file is picked up like any group edit, and the offer stays withdrawn', async () => {
+    await send({ type: 'team-workspace-setup-run', teamPath: '/repo' })
+    await connections.flushWorkspace()
+    const file = path.join(dir, '.kawai', 'groups', 'devs.md')
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/^workers: .*$/m, 'workers: { opus: 2, codex-sol: 1 }'))
+    const watched: ServerMessage[] = []
+    await connections.handle({ send: (message: ServerMessage) => watched.push(message) }, { type: 'team-workspace-open', teamPath: '/repo' })
+    const snapshot = watched.find(message => message.type === 'team-workspace-snapshot') as Extract<ServerMessage, { type: 'team-workspace-snapshot' }>
+    expect(snapshot.setupAvailable).toBe(false)
+    const devs = snapshot.members.find(member => member.id === 'devs')!
+    expect(devs.profiles.map(profile => [profile.profileId, profile.cap])).toEqual([['opus', 2], ['codex-sol', 1]])
+    expect(devs.sources.map(source => source.file)).toEqual([file])
+  })
+
   test('a second run is refused with the same envelope and pushes nothing', async () => {
     await send({ type: 'team-workspace-setup-run', teamPath: '/repo' })
     await connections.flushWorkspace()

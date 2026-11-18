@@ -164,3 +164,14 @@ test('every control is disabled while disconnected, and a dropped connection rel
   expect(useTeamSetupStore.getState().setups['/repo']!.pending).toBeNull()
   expect(byId(renderer, 'team-setup-preview')).toHaveLength(1)
 })
+
+// @covers: team-workspace › Members is a read-only inspection of group settings › The only write is the setup action
+test('with no project group files, Set up team is the tab’s only group-file write', () => {
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<TeamMembersPanel loaded members={[row('reviewers-sol')]} onOpenSession={() => {}}
+      setupControl={control(true)} />)
+  })
+  const buttons = renderer.root.findAll(node => node.type === 'button').map(node => node.props['data-testid'] ?? textOf(node))
+  expect(buttons).toEqual(['team-setup-open'])
+})
