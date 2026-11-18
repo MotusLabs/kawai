@@ -61,6 +61,8 @@ import { AssignmentStore } from '../team/assignmentStore'
 import { CheckpointStore } from './revisionControl/checkpointStore'
 import type { PauseTickDeps } from './revisionControl/pauseTick'
 import { CheckpointTool } from './revisionControl/checkpointTool'
+import { readRevisionControl } from './revisionControl/revisionControlRead'
+import { attachRevisionControl } from './revisionControl/revisionControlServices'
 import type { ActiveHold } from '../../shared/planRevisionControl'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
 import type { SupervisionRuntime } from './supervision/supervisionRead'
@@ -266,8 +268,9 @@ export function composePlanServices(options: PlanServicesOptions): {
   }
   // Set once the team services exist; the detail reads it at each push (plan-supervision D15/D16).
   let supervisionReads: SupervisionDetailReads | null = null
-  // The pause service (revision-control D6), built with the team services; null without them.
+  // The pause service (revision-control D6) and the tick's pause pass, built with the team services; null without them.
   let composedPauses: PauseService | null = null
+  let pauseTick: PauseTickDeps | undefined
   const plans = new PlanService(options.plans, {
     getSession: options.getSession,
     strategies: options.strategies,
@@ -437,8 +440,10 @@ export function composePlanServices(options: PlanServicesOptions): {
       // revision-control D8 (4.3): the tick's pause pass — the owed mail,
       // then Paused recorded from stored rows and the live holder facts,
       // and a settled pause closed.
-      pauses: {
+      pauses: pauseTick = {
         pauses: pauseStore, checkpoints: checkpointStore, executions: executionStore, mailbox: team.mailbox,
+        // DV3: a recorded Paused or a closed pause re-pushes the plan's detail.
+        announce: planId => options.plans.announce(planId),
         deliverOwed: (teamId, groupsRoot, pauseId) => pauses.deliverOwed(teamId, groupsRoot, pauseId),
         // F5: `starting` names an unclaimed spawn only — a forward successor
         // that has not claimed reads as its owed mail.
@@ -488,6 +493,11 @@ export function composePlanServices(options: PlanServicesOptions): {
     strategies: options.strategies, impact: options.impact.store, decisions: decisionStore,
     executions: executionStore, wake: teamId => runtime?.command(teamId),
   })
+  // revision-control D14/D15: the commands and the one holds-and-pauses reader ride the PlanService.
+  const readControl = (teamId: string, planId: string, now?: Date) => readRevisionControl({
+    holds: holdStore, pauses: pauseStore, checkpoints: checkpointStore, executions: executionStore, ...(pauseTick ? { tick: pauseTick } : {}),
+  }, teamId, planId, now)
+  attachRevisionControl(plans, { holds, pauses: composedPauses, read: readControl })
   let monitor: SupervisionMonitor | null = null
   if (team?.supervision) {
     // The detail and the monitor's sweeps read one loader with the monitor's own `waitEndedAt` (D11).
