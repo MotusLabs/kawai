@@ -31,6 +31,10 @@ export interface CodexTurnState {
   readonly itemPhases: Map<string, 'started' | 'completed'>
   /** turn/interrupt was sent (or is owed once the native id is known). */
   interruptOwed: boolean
+  /** The turn/start parameters this turn was begun with; a capacity retry reuses them (capacityRecovery.ts). */
+  startParams?: Record<string, unknown>
+  /** Native ids of this turn's retired capacity attempts, oldest first. */
+  retiredAttempts?: string[]
   resolve(result: TurnResult): void
   result: Promise<TurnResult>
 }
@@ -50,6 +54,30 @@ export function newCodexTurn(turnId: string, messageUuid: string | null, text: s
     finalText: null, model, usage: null, toolIds: new Set(), compactionIds: new Set(), itemPhases: new Map(), interruptOwed: false, resolve, result,
   }
   return turn
+}
+
+/** A settled stand-in a retired attempt's native id maps to: frames naming it find no open turn. */
+const RETIRED: CodexTurnState = Object.assign(newCodexTurn('retired-attempt', null, '', null), { settled: true })
+
+/** Retire the turn's current attempt: its native id now names no open turn (codex-capacity-retry L1). */
+export function retiredAttempt(turn: CodexTurnState, native: Map<string, CodexTurnState>): void {
+  const id = turn.codexTurnId
+  if (id === null) return
+  native.set(id, RETIRED)
+  ;(turn.retiredAttempts ??= []).push(id)
+}
+
+/** Open the turn for its next attempt's native id: a fresh binding and native wait, nothing owed. */
+export function rearmAttempt(turn: CodexTurnState): void {
+  let bound!: (id: string) => void
+  turn.native = new Promise<string>((r) => (bound = r))
+  turn.codexTurnId = null
+  turn.interruptOwed = false
+  turn.bind = (id) => {
+    if (turn.codexTurnId !== null) return
+    turn.codexTurnId = id
+    bound(id)
+  }
 }
 
 export function codexTurnResult(turn: CodexTurnState, outcome: TurnOutcome, error: AgentErrorInfo | null): TurnResult {

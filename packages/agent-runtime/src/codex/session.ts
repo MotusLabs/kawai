@@ -21,13 +21,11 @@
 //   (requests.ts), a host tool call or a deliberate error reply; requests and
 //   tools of a retired generation reach no host code. All host work is owned.
 // - Quota. One optional rate-limit read per driver, or per ready generation its claim permits.
-// - Skills. The generation's own skills/list catalog (skills.ts) publishes
-//   onCommandState, and a new turn's input appends the typed skill inputs
-//   its text names unless the send chose codexSkills 'none' (R9); they are
-//   taken from the catalog when send() is called, before any wait, so a later
-//   move or skills/changed cannot change an accepted send's inputs
-//   (task-752c9e4c C2); a steer carries text only, as before. setSkillDirectory (R11) moves the live
-//   generation's catalog to another directory.
+// - Skills. The generation's skills/list catalog (skills.ts) publishes onCommandState; a new turn's input appends the
+//   typed skill inputs its text names unless codexSkills is 'none' (R9), taken at send() before any wait (task-752c9e4c
+//   C2); a steer carries text only. setSkillDirectory (R11) moves the live generation's catalog to another directory.
+// - Capacity (option 'bounded'). A failed serverOverloaded attempt goes to capacityRecovery.ts before the turn is
+//   decided; every decision goes through decide(), which ends that recovery; a steer during its backoff supersedes it.
 // - Activity. The in-tree driver's rules (activity.ts) publish onActivity
 //   from the published events and the open turn's notifications; a settled,
 //   foreign or retired frame publishes nothing.
@@ -59,6 +57,7 @@ import { cancelReply, CodexRequests } from './requests.js'
 import type { CodexSessionOptions } from './sessionOptions.js'
 import { CodexSkillDiscovery, type CodexSkillInput } from './skills.js'
 import { CodexActivity } from './activity.js'
+import { CapacityRecovery } from './capacityRecovery.js'
 import { dispatchCodexToolCall, type CodexDynamicToolCall } from './tools.js'
 import { completionOutcome, decideTurn, INTERRUPTED, newCodexTurn, type CodexTurnState } from './turns.js'
 export type { CodexSessionOptions } from './sessionOptions.js'
@@ -100,6 +99,7 @@ export class CodexSession {
   private readonly skills: CodexSkillDiscovery
   /** C1: the in-tree driver's activity rules (activity.ts), fed from published events and open-turn notifications. */
   private readonly activity: CodexActivity
+  private readonly recovery: CapacityRecovery
 
   constructor(private readonly options: CodexSessionOptions) {
     this.tools = bindToolSet(options.tools)
@@ -129,7 +129,7 @@ export class CodexSession {
     this.facts = new CodexFacts({
       emit: (body) => this.events.emit(body),
       notify: (name, callback) => this.notify(name, callback),
-      callbacks,
+      callbacks, capacityBounded: options.capacityRecovery === 'bounded',
       ...(options.onToolObservation ? { onToolObservation: options.onToolObservation } : {}),
       ...(options.auditHooks ? { auditHooks: options.auditHooks } : {}),
     })
@@ -141,6 +141,9 @@ export class CodexSession {
       },
       warn: (fields, message) => options.logger?.warn(fields, message),
     })
+    this.recovery = new CapacityRecovery({ bounded: options.capacityRecovery === 'bounded', clock: options.capacityClock, native: this.native, open: () => this.turn, stopBegun: () => this.stopBegun(), current: () => this.current(), emit: (body) => this.emit(body),
+      turnParams: (threadId) => codexTurnStartParams({ threadId }, this.permissions), unbound: (turn) => void this.unbound.push(turn), bindNative: (turn, id) => this.bindNative(turn, id), activity: (input) => this.activity.capacity(input), cancelRequests: () => this.requests.cancelAll(),
+      settle: (turn, outcome, error, subtype, reason) => this.settle(turn, outcome, error, subtype, reason), runOwned: (label, body) => this.runOwned(label, body) })
   }
 
   /** One owned skills/list on that generation; the job itself never fails (discovery is optional). */
@@ -164,13 +167,9 @@ export class CodexSession {
     }
   }
 
-  private emit(body: EventBody): void {
-    this.events.emit(body)
-  }
+  private emit(body: EventBody): void { this.events.emit(body) }
 
-  get state() {
-    return this.lifecycle.state
-  }
+  get state() { return this.lifecycle.state }
 
   /** onSpawn (R2): one actual app-server construction's launch provenance. */
   private reportSpawn(generation: CodexGeneration, launch: { cwd: string; childEnv: Readonly<Record<string, string>> }): void {
@@ -198,9 +197,7 @@ export class CodexSession {
     return this.lifecycle.state === 'stopping' || this.lifecycle.state === 'stopped'
   }
 
-  private current(): CodexGeneration | null {
-    return this.generations.at(-1) ?? null
-  }
+  private current(): CodexGeneration | null { return this.generations.at(-1) ?? null }
 
   /** Owned host work; refused (null) once stop has begun. */
   private runOwned<T>(label: string, body: () => Promise<T>): Promise<T> | null {
@@ -367,6 +364,7 @@ export class CodexSession {
     if (!turn || turn !== this.turn) return
     this.facts.finalText(turn, raw.items)
     const { outcome, error } = completionOutcome(raw, () => this.facts.turnError(raw.error ?? null))
+    if (outcome === 'failed' && error && this.recovery.failed(turn, raw.error, error)) return
     // F2/INV-A2: the outcome is decided before the final limit observer runs, and the frame's publications and
     // observations run in the old-frame scope, so a callback reentered from them neither replaces it nor reaches a successor.
     this.oldFrame.run(() => {
@@ -384,6 +382,7 @@ export class CodexSession {
 
   /** Decide a turn's result now (marking it settled) and return the step that publishes it (turns.ts), then ends its wait. */
   private decide(turn: CodexTurnState, outcome: TurnOutcome, error: AgentErrorInfo | null, subtype: string, terminalReason: string | null = null): (() => void) | null {
+    this.recovery.settled(turn)
     const publish = decideTurn(turn, outcome, error, subtype, terminalReason, { emit: (body) => this.emit(body), notify: (name, callback) => this.notify(name, callback), onTurnResult: this.options.callbacks.onTurnResult })
     return publish && (() => (publish(), this.facts.turnSettled(turn.turnId, outcome)))
   }
@@ -442,7 +441,7 @@ export class CodexSession {
         return { messageUuid, turnId, text, skills, steers }
       },
       commit: (admission, prepared) => {
-        if ((admission === 'steer') !== (prepared.steers !== null) || (prepared.steers && prepared.steers !== this.turn)) {
+        if ((admission === 'steer') !== (prepared.steers !== null) || (prepared.steers && (prepared.steers !== this.turn || this.recovery.supersede(prepared.steers, INTERRUPTED)))) {
           throw new AgentRuntimeError({ category: 'not-ready', code: 'turn-ended', message: 'the turn this message was prepared for has ended' })
         }
         return admission === 'steer' ? this.steer(prepared, prepared.steers!) : this.begin(prepared, this.turnEffort())
@@ -466,7 +465,7 @@ export class CodexSession {
     const turn = newCodexTurn(prepared.turnId, prepared.messageUuid, prepared.text, this.facts.model)
     // A numeric effort has no Codex equivalent and is omitted, as before.
     const effort = typeof chosen === 'string' ? { effort: chosen } : {}
-    const params = codexTurnStartParams({ threadId: generation.threadId, input: [...this.input(prepared.text), ...prepared.skills], clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions)
+    const params = (turn.startParams = codexTurnStartParams({ threadId: generation.threadId, input: [...this.input(prepared.text), ...prepared.skills], clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions))
     this.turn = turn
     this.unbound.push(turn)
     let write!: (reply: Promise<unknown>) => void
@@ -478,7 +477,7 @@ export class CodexSession {
         if (typeof id === 'string') this.bindNative(turn, id)
       } catch (error) {
         if (this.stopBegun() && error instanceof AgentRuntimeError && error.category === 'stopped') return
-        this.failTurn(turn, rpcError(error, 'Codex refused the turn'))
+        this.settle(turn, 'failed', rpcError(error, 'Codex refused the turn'), 'error_during_execution')
       }
     })
     try {
@@ -525,14 +524,14 @@ export class CodexSession {
     return { turnId: turn.turnId, messageUuid: prepared.messageUuid, result: turn.result }
   }
 
-  private failTurn(turn: CodexTurnState, error: AgentErrorInfo): void {
+  /** Settle the open turn now (a refused start, or capacity recovery's end); a failure then reports its error. */
+  private settle(turn: CodexTurnState, outcome: TurnOutcome, error: AgentErrorInfo, subtype: string, reason: string | null = null): void {
     const settled = this.lifecycle.holdState(() => {
       if (turn.settled || turn !== this.turn || !this.lifecycle.result(turn.turnId)) return false
       this.turn = null
-      this.decide(turn, 'failed', error, 'error_during_execution')?.()
-      return true
+      return this.decide(turn, outcome, error, subtype, reason)?.(), true
     })
-    if (settled) this.emit({ type: 'error', error })
+    if (settled && outcome === 'failed') this.emit({ type: 'error', error })
   }
 
   private openTurn(turn: CodexTurnState, agentStarted: boolean): void {
