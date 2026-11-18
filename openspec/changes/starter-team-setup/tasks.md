@@ -2,9 +2,9 @@
 
 ## 1. Model families in the catalog
 
-- [ ] 1.1 Accept `family` on providers, provider models, and `profiles.json` entries in `catalogParse.ts` as a trusted-tier field (rejected below the user level like `codexHome`), with model-over-provider-over-profile-id resolution exposed as `familyOf` from the catalog memo and on browser profile metadata. Verify: Table F (F1–F5) committed verbatim as a table-driven test passes; the mutant that accepts `family` from a project-level file fails F4 (V3).
-- [ ] 1.2 Add `family` to every entry of `config/providers.default.json` and `config/profiles.default.json` (`claude`, `gpt`, `glm`, `minimax`, `mimo`, `kimi`, `deepseek`). Verify: F6 asserts every shipped model resolves to an explicit family, and the mutant that drops `openrouter-opus`'s family fails it.
-- [ ] 1.3 Document `family`, its trust tier, the id fallback, and the downgrade note in `docs/claude-session-profiles.md` and the chat-profiles bullet of `docs/architecture/chat.md`. Verify: the `@reads` guard and `bun run lint` pass.
+- [x] 1.1 Accept `family` on providers, provider models, and `profiles.json` entries in `catalogParse.ts` as a trusted-tier field (rejected below the user level like `codexHome`), with model-over-provider-over-profile-id resolution exposed as `familyOf` from the catalog memo and on browser profile metadata. Verify: Table F (F1–F5) committed verbatim as a table-driven test passes; the mutant that accepts `family` from a project-level file fails F4 (V3).
+- [x] 1.2 Add `family` to every entry of `config/providers.default.json` and `config/profiles.default.json` (`claude`, `gpt`, `glm`, `minimax`, `mimo`, `kimi`, `deepseek`). Verify: F6 asserts every shipped model resolves to an explicit family, and the mutant that drops `openrouter-opus`'s family fails it.
+- [x] 1.3 Document `family`, its trust tier, the id fallback, and the downgrade note in `docs/claude-session-profiles.md` and the chat-profiles bullet of `docs/architecture/chat.md`. Verify: the `@reads` guard and `bun run lint` pass.
 
 ## 2. Result authorship
 

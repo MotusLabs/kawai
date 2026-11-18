@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Catalog entries may name a model family
-A provider, a provider's model, and a `profiles.json` entry SHALL accept a `family`: a lowercase identifier matching `^[a-z0-9][a-z0-9-]*$` naming the model lineage the profile runs, such as `claude`, `gpt`, or `glm`. A model's own `family` SHALL win over its provider's. A profile with no family from either SHALL be its own family, equal to its profile id. Family SHALL be exposed to browsers with the profile's label.
+A provider, a provider's model, and a `profiles.json` entry SHALL accept a `family`: a lowercase identifier matching `^[a-z0-9][a-z0-9-]*$` naming the model lineage the profile runs, such as `claude`, `gpt`, or `glm`. A model's own `family` SHALL win over its provider's. A profile with no family from either SHALL be its own family, equal to its profile id.
 
 #### Scenario: A model inherits its provider's family
 - **WHEN** provider `zai` sets `family: glm` and its model `glm-flash` sets none
