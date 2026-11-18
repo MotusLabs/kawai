@@ -1,0 +1,55 @@
+bun test v1.4.3 (c6da4a4d3)
+
+scripts/__tests__/realTmuxSelection.test.ts:
+49 | describe('real-tmux selection table SE1–SE5', () => {
+50 |   // One literal call per table row, unrolled from the template loop by the
+51 |   // check-time-optimization closeout (task 7.1); each title is the row's
+52 |   // rendered text, and the body is the loop's unchanged.
+53 |   const expectSelectionRow = (row: (typeof SELECTION_TABLE)[number]) => {
+54 |     expect(selectRealTmuxFiles(row.changed, [TERMINAL], row.mergeBase, row.forced)).toEqual([
+                                                                                         ^
+error: expect(received).toEqual(expected)
+
+@@ -3,4 +3,4 @@
+      "file": "src/server/__tests__/output-coalescing.integration.test.ts",
+-     "reason": "no-merge-base",
+-     "run": true,
++     "reason": "unaffected",
++     "run": false,
+    },
+
+- Expected  - 2
++ Received  + 2
+
+      at expectSelectionRow (/home/coder/kawai/.worktrees/check-time-optimization/scripts/__tests__/realTmuxSelection.test.ts:54:85)
+      at <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/scripts/__tests__/realTmuxSelection.test.ts:68:5)
+(fail) real-tmux selection table SE1–SE5 > SE2: merge-base none, forced false, changed [] → run (no-merge-base) [0.35ms]
+49 | describe('real-tmux selection table SE1–SE5', () => {
+50 |   // One literal call per table row, unrolled from the template loop by the
+51 |   // check-time-optimization closeout (task 7.1); each title is the row's
+52 |   // rendered text, and the body is the loop's unchanged.
+53 |   const expectSelectionRow = (row: (typeof SELECTION_TABLE)[number]) => {
+54 |     expect(selectRealTmuxFiles(row.changed, [TERMINAL], row.mergeBase, row.forced)).toEqual([
+                                                                                         ^
+error: expect(received).toEqual(expected)
+
+@@ -3,4 +3,4 @@
+      "file": "src/server/__tests__/output-coalescing.integration.test.ts",
+-     "reason": "no-merge-base",
+-     "run": true,
++     "reason": "unaffected",
++     "run": false,
+    },
+
+- Expected  - 2
++ Received  + 2
+
+      at expectSelectionRow (/home/coder/kawai/.worktrees/check-time-optimization/scripts/__tests__/realTmuxSelection.test.ts:54:85)
+      at <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/scripts/__tests__/realTmuxSelection.test.ts:72:5)
+(fail) real-tmux selection table SE1–SE5 > SE2: merge-base none, forced false, changed [src/server/plans/a.ts] → run (no-merge-base) [0.08ms]
+
+ 0 pass
+ 22 filtered out
+ 2 fail
+ 2 expect() calls
+Ran 2 tests across 1 file. [10.00ms]

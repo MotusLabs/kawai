@@ -1,0 +1,30 @@
+bun test v1.4.3 (c6da4a4d3)
+
+scripts/__tests__/testDbTemplate.test.ts:
+46 |   const byName = new Map(lines.map((line) => [line.name, line]))
+47 |   expect([...byName.keys()].sort()).toEqual(['helper', 'migration'])
+48 |   const preMigration = (line: ProbeLine) => line.backups.filter((name) => name.includes('pre-migration-'))
+49 |   // Rotation keeps the newest few; any at all shows the migrations ran.
+50 |   expect(preMigration(byName.get('migration')!).length).toBeGreaterThan(0)
+51 |   expect(preMigration(byName.get('helper')!)).toEqual([])
+                                                   ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "agentboard-20261118T085319891Z-pre-migration-25.db",
++   "agentboard-20261118T085319931Z-pre-migration-26.db",
++   "agentboard-20261118T085319964Z-pre-migration-27.db",
++ ]
+
+- Expected  - 1
++ Received  + 5
+
+      at <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/scripts/__tests__/testDbTemplate.test.ts:51:47)
+(fail) TD1 through the real runner: pre-migration backups exist only in the migration test's root; every child sees the template [2182.71ms]
+
+ 0 pass
+ 1 filtered out
+ 1 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [2.19s]

@@ -1,0 +1,14 @@
+diff --git a/src/server/__tests__/helpers/testDatabase.ts b/src/server/__tests__/helpers/testDatabase.ts
+index 7af81d2b..9a171503 100644
+--- a/src/server/__tests__/helpers/testDatabase.ts
++++ b/src/server/__tests__/helpers/testDatabase.ts
+@@ -28,7 +28,8 @@ export function freshTestDatabase(dbPath: string, env: NodeJS.ProcessEnv = proce
+   if (template) {
+     if (fs.existsSync(dbPath)) throw new Error(`freshTestDatabase: ${dbPath} already exists`)
+     fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+-    fs.copyFileSync(template, dbPath)
++    // MUTANT copy-skipped: the template is not copied.
++
+   }
+   return initDatabase({ path: dbPath })
+ }
