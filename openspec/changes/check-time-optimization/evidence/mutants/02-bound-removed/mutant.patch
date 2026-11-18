@@ -1,0 +1,13 @@
+diff --git a/scripts/runPlan.ts b/scripts/runPlan.ts
+index 0159db65..914717da 100644
+--- a/scripts/runPlan.ts
++++ b/scripts/runPlan.ts
+@@ -108,7 +108,7 @@ export interface RetryWiring {
+ 
+ /** At most this many failed real-tmux files are rerun (D2): more signal a
+  * broken environment or real breakage. */
+-export const MAX_REAL_TMUX_RETRIES = 2
++export const MAX_REAL_TMUX_RETRIES = 7 // MUTANT bound-removed
+ 
+ /** A real-tmux file that failed once and passed when rerun alone. */
+ export interface RealTmuxRetry {

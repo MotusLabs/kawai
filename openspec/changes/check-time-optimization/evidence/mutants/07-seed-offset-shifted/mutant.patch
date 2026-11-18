@@ -1,0 +1,12 @@
+diff --git a/scripts/__tests__/fixtures/caseProfile/caseCount.test.ts b/scripts/__tests__/fixtures/caseProfile/caseCount.test.ts
+index 395c02bf..572764b1 100644
+--- a/scripts/__tests__/fixtures/caseProfile/caseCount.test.ts
++++ b/scripts/__tests__/fixtures/caseProfile/caseCount.test.ts
+@@ -13,6 +13,6 @@ const CASES = 300
+ 
+ test(`records its executed seeds (seed 0x7e57, ${CASES} cases)`, () => {
+   const seeds: number[] = []
+-  for (let index = 0; index < propertyCases(CASES); index++) seeds.push(SEED + index)
++  for (let index = 0; index < propertyCases(CASES); index++) seeds.push(SEED + index + 1) // MUTANT seed-offset-shifted
+   fs.writeFileSync(process.env.KAWAI_PROBE_OUT!, JSON.stringify(seeds))
+ })
