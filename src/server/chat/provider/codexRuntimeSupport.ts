@@ -94,7 +94,8 @@ export function teamToolSet(table: NonNullable<CodexSessionDriverOptions['teamTo
 /**
  * The per-spawn launch fields (see codexRuntime.ts's header): the logger, the
  * launch inputs, the one workspace-write sandbox with the Git common
- * directory as its extra root, the wire, waiting requests, and the R2 claim.
+ * directory as its extra root, the wire, waiting requests, bounded capacity
+ * recovery, and the R2 claim.
  */
 export function launchFields(options: CodexSessionDriverOptions, cwd: string, env: Record<string, string>, commonDir: string | null) {
   return {
@@ -103,6 +104,8 @@ export function launchFields(options: CodexSessionDriverOptions, cwd: string, en
     permissions: { approvalPolicy: 'on-request', sandbox: 'workspace-write', networkAccess: options.network, writableRoots: commonDir ? [commonDir] : [], userInput: 'enabled', elicitation: 'disabled' },
     wire: { record: (frame) => options.wire.record(frame.direction, frame.text) },
     unansweredRequests: 'wait',
+    // codex-capacity-retry D1: the package retries a terminal model-capacity failure within its window.
+    capacityRecovery: 'bounded',
     ...(options.claimRateLimitsRead ? { claimRateLimitsRead: options.claimRateLimitsRead } : {}),
   } satisfies Partial<CodexDriverOptions>
 }
