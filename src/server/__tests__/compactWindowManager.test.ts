@@ -166,63 +166,71 @@ describe('L1: human-created and staffed MiMo members with a role override', () =
   })
 })
 
-/** The three launch branches a refusal must cover (row L6). */
-const BRANCHES = [
-  { branch: 'Default', profile: 'default' },
-  { branch: 'named', profile: 'mimo' },
-  { branch: 'credentialed', profile: 'relay-opus' },
-] as const
+/**
+ * Row L6 on one launch branch: the start succeeds (the L7 control), then the
+ * composed DISABLE_COMPACT is registered after driver creation — bound as a
+ * credential name, then unbound so only the retained row keeps it — and the
+ * respawn, a second respawn, and a fresh session's start all refuse.
+ */
+async function refusalAfterRegistration(branch: string, profile: string): Promise<void> {
+  writeUserCatalog()
+  writeGroup('autoCompactWindow: 250000')
+  const { manager, handles } = await startManager()
+  try {
+    const id = await create(manager, { claudeProfileId: profile })
+    // L7 control: no collision yet, so the start launches the window.
+    expect((await manager.send(id, 'first')).ok).toBe(true)
+    await spawned(handles)
+    await finishTurn(handles[0]!, `sdk-${branch}`)
+    expect(layers(handles[0]!.options).env.DISABLE_COMPACT).toBe('')
+    // Bind DISABLE_COMPACT as a credential name (registered and retained),
+    // then remove the binding: only the retained row keeps it registered.
+    // The credentialed branch reads its token from the bound name.
+    process.env.DISABLE_COMPACT = 'bound-token-value'
+    writeUserCatalog('DISABLE_COMPACT')
+    expect([...readRetainedNames(db)]).not.toContain('DISABLE_COMPACT')
+    handles[0]!.query.close()
+    await flush()
+    const respawn = await manager.send(id, 'respawn')
+    expect(respawn.ok).toBe(false)
+    if (respawn.ok) throw new Error('expected a refused respawn')
+    expect(respawn.error).toContain('DISABLE_COMPACT')
+    expect(respawn.error).toContain('auto-compaction')
+    expect(respawn.error).not.toContain('bound-token-value')
+    expect(handles).toHaveLength(1)
+    writeUserCatalog()
+    expect([...readRetainedNames(db)]).toContain('DISABLE_COMPACT')
+    // The binding is gone; the retained name still refuses the respawn.
+    const retainedOnly = await manager.send(id, 'respawn again')
+    expect(retainedOnly.ok).toBe(false)
+    if (retainedOnly.ok) throw new Error('expected a refused respawn')
+    expect(retainedOnly.error).toContain('DISABLE_COMPACT')
+    expect(handles).toHaveLength(1)
+    // A fresh session's first start refuses on the retained name alone.
+    const fresh = await create(manager, { claudeProfileId: profile })
+    const start = await manager.send(fresh, 'start')
+    expect(start.ok).toBe(false)
+    if (start.ok) throw new Error('expected a refused start')
+    expect(start.error).toContain('DISABLE_COMPACT')
+    expect(handles).toHaveLength(1)
+  } finally {
+    manager.shutdown()
+  }
+}
 
 describe('L6/L7: a composed name registered after driver creation', () => {
-  for (const { branch, profile } of BRANCHES) {
-    // @covers: agent-teams › Roles can choose an auto-compaction window › Preference colliding with a registered name
-    // @covers: claude-session-profiles › Selected window preferences compose within the launch's protections › Registered-name collision refuses the launch
-    test(`L6 ${branch} branch: the start succeeds, then a respawn and a later start refuse names-only with zero launches`, async () => {
-      writeUserCatalog()
-      writeGroup('autoCompactWindow: 250000')
-      const { manager, handles } = await startManager()
-      try {
-        const id = await create(manager, { claudeProfileId: profile })
-        // L7 control: no collision yet, so the start launches the window.
-        expect((await manager.send(id, 'first')).ok).toBe(true)
-        await spawned(handles)
-        await finishTurn(handles[0]!, `sdk-${branch}`)
-        expect(layers(handles[0]!.options).env.DISABLE_COMPACT).toBe('')
-        // Bind DISABLE_COMPACT as a credential name (registered and retained),
-        // then remove the binding: only the retained row keeps it registered.
-        // The credentialed branch reads its token from the bound name.
-        process.env.DISABLE_COMPACT = 'bound-token-value'
-        writeUserCatalog('DISABLE_COMPACT')
-        expect([...readRetainedNames(db)]).not.toContain('DISABLE_COMPACT')
-        handles[0]!.query.close()
-        await flush()
-        const respawn = await manager.send(id, 'respawn')
-        expect(respawn.ok).toBe(false)
-        if (respawn.ok) throw new Error('expected a refused respawn')
-        expect(respawn.error).toContain('DISABLE_COMPACT')
-        expect(respawn.error).toContain('auto-compaction')
-        expect(respawn.error).not.toContain('bound-token-value')
-        expect(handles).toHaveLength(1)
-        writeUserCatalog()
-        expect([...readRetainedNames(db)]).toContain('DISABLE_COMPACT')
-        // The binding is gone; the retained name still refuses the respawn.
-        const retainedOnly = await manager.send(id, 'respawn again')
-        expect(retainedOnly.ok).toBe(false)
-        if (retainedOnly.ok) throw new Error('expected a refused respawn')
-        expect(retainedOnly.error).toContain('DISABLE_COMPACT')
-        expect(handles).toHaveLength(1)
-        // A fresh session's first start refuses on the retained name alone.
-        const fresh = await create(manager, { claudeProfileId: profile })
-        const start = await manager.send(fresh, 'start')
-        expect(start.ok).toBe(false)
-        if (start.ok) throw new Error('expected a refused start')
-        expect(start.error).toContain('DISABLE_COMPACT')
-        expect(handles).toHaveLength(1)
-      } finally {
-        manager.shutdown()
-      }
-    })
-  }
+  // @covers: agent-teams › Roles can choose an auto-compaction window › Preference colliding with a registered name
+  // @covers: claude-session-profiles › Selected window preferences compose within the launch's protections › Registered-name collision refuses the launch
+  test('L6 Default branch: the start succeeds, then a respawn and a later start refuse names-only with zero launches', () =>
+    refusalAfterRegistration('Default', 'default'))
+
+  // @covers: claude-session-profiles › Selected window preferences compose within the launch's protections › Registered-name collision refuses the launch
+  test('L6 named branch: the start succeeds, then a respawn and a later start refuse names-only with zero launches', () =>
+    refusalAfterRegistration('named', 'mimo'))
+
+  // @covers: claude-session-profiles › Selected window preferences compose within the launch's protections › Registered-name collision refuses the launch
+  test('L6 credentialed branch: the start succeeds, then a respawn and a later start refuse names-only with zero launches', () =>
+    refusalAfterRegistration('credentialed', 'relay-opus'))
 
   test('L7 a noncolliding preference launches at start and respawn and leaves the retained set unchanged', async () => {
     writeUserCatalog()
