@@ -1511,6 +1511,12 @@ export class ChatSessionManager {
     this.teamMail.staffing.approvalDefaults.set(teamId, policy)
   }
 
+  /** The profile ids a project path's resolved catalog defines (the Set up team preview's warnings). */
+  catalogProfileIds(projectPath: string): Set<string> {
+    const ctx = { projectPath, ...(this.options.profileCatalogHome ? { homeDir: this.options.profileCatalogHome } : {}) }
+    return new Set(resolvedCatalog(ctx).catalog.profiles.keys())
+  }
+
   groupProfileCounts(teamId: string, groupId: string): Record<string, number> {
     const counts: Record<string, number> = {}
     for (const record of this.records.values()) {

@@ -18,6 +18,7 @@ import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 import type { TeamIdentity } from './teamIdentity'
 import { WorkspaceRead } from './workspaceRead'
+import { runTeamSetup, setupPreview } from './teamSetup'
 
 type WorkspaceClientMessage = Extract<ClientMessage, { type: `team-workspace-${string}` }>
 
@@ -154,8 +155,42 @@ export class WorkspaceConnections {
     return JSON.stringify({ ...payload, summary: { ...payload.summary, since: '' } })
   }
 
+  /**
+   * Set up team's preview (starter-team-setup D3): the starter groups, the
+   * target directory, and the workers this team's catalog lacks. Read-only.
+   */
+  private async setupPreview(connection: ChatConnection, teamPath: string) {
+    const team = await this.manager.teamScopes.resolve(teamPath)
+    if (!team) {
+      connection.send({ type: 'team-workspace-setup-preview-result', teamPath, ok: false, error: unknownTeamError(teamPath) })
+      return
+    }
+    const preview = setupPreview(team.groupsRoot, this.manager.catalogProfileIds(team.groupsRoot))
+    connection.send({ type: 'team-workspace-setup-preview-result', teamPath, ok: true, preview })
+  }
+
+  /**
+   * Set up team's write (D3): into the resolved team's main checkout (a
+   * worktree path resolves to the same `groupsRoot`), never overwriting,
+   * then every open view of the team follows on the publish. Refusals carry
+   * the success envelope.
+   */
+  private async setupRun(connection: ChatConnection, teamPath: string) {
+    const team = await this.manager.teamScopes.resolve(teamPath)
+    if (!team) {
+      connection.send({ type: 'team-workspace-setup-result', teamPath, ok: false, reason: 'unknown-team', error: unknownTeamError(teamPath), created: [], skipped: [] })
+      return
+    }
+    const result = runTeamSetup(team.groupsRoot)
+    logger.info('team_setup_run', { teamId: team.teamId, ok: result.ok, created: result.created, skipped: result.skipped, ...(result.reason ? { reason: result.reason } : {}) })
+    connection.send({ type: 'team-workspace-setup-result', teamPath, ...result })
+    if (result.created.length > 0) this.publish(team.teamId)
+  }
+
   async handle(connection: ChatConnection, message: WorkspaceClientMessage) {
     if (message.type === 'team-workspace-approval-default-set') return this.setApprovalDefault(connection, message)
+    if (message.type === 'team-workspace-setup-preview') return this.setupPreview(connection, message.teamPath)
+    if (message.type === 'team-workspace-setup-run') return this.setupRun(connection, message.teamPath)
     const { teamPath } = message
     if (message.type === 'team-workspace-close') {
       this.pendingOpen.get(connection)?.delete(teamPath)

@@ -74,8 +74,7 @@ results; reviewers read only and submit findings):
 ### D2 — Offer condition: no `*.md` in the project groups directory
 
 The action, the Members empty state, and the New Session notice all use one
-function, `setupAvailability(groupsRoot)` →
-`{ available, reason }`, reading only `<groupsRoot>/.kawai/groups/`.
+function, `setupAvailable(groupsRoot)` → boolean, reading only `<groupsRoot>/.kawai/groups/`.
 User-level groups do not count: the owner's `~/.kawai/groups/` holds reviewer
 groups for every repository, and a rule over the resolved catalog would
 never offer setup to them. *Alternative:* "no group with id `lead`" —
@@ -83,9 +82,9 @@ rejected: it would offer a partial write into a hand-made team.
 
 ### D3 — Write path: WS mutation, lstat guard, exclusive per-file link
 
-Client sends `team-setup-run { teamPath }` after the preview (the preview
-itself is client-rendered from `team-setup-preview { teamPath }` →
-`team-setup-preview-result { groups, targetDir, warnings }`, where warnings
+Client sends `team-workspace-setup-run { teamPath }` after the preview (the preview
+itself is client-rendered from `team-workspace-setup-preview { teamPath }` →
+`team-workspace-setup-preview-result { groups, targetDir, warnings }`, where warnings
 come from resolving each template's workers against the team's catalog).
 The server:
 
@@ -99,7 +98,7 @@ The server:
    atomic: `EEXIST` keeps the other file and records `skipped`), then unlinks
    the temp; any other error stops, unlinks the temp, and reports the files
    created so far;
-5. replies `team-setup-result { ok, created, skipped, error? }` — the same
+5. replies `team-workspace-setup-result { ok, created, skipped, error? }` — the same
    envelope for refusals and success — and calls `publish(teamId)`.
 
 Temp names never end in `.md`, so a concurrent catalog read never sees a
@@ -107,8 +106,8 @@ partial group. *Alternative:* `writeFile(…, { flag: 'wx' })` — rejected: it
 can leave a truncated `<id>.md` on a write error.
 
 No agent tool is added; the WS router whitelist gains the two types.
-`GET /api/team-groups` adds `teamKey` and `setupAvailable` for the New
-Session notice, whose link calls the existing
+`GET /api/team-groups` adds `setupAvailable` for the New
+Session notice (the client derives the team key with `teamKeyOf`), whose link calls the existing
 `useTeamLocationStore.navigate({ teamKey, tab: 'members' })` and closes the
 dialog.
 
@@ -304,7 +303,7 @@ build. The rollback note in `docs/claude-session-profiles.md` says to remove
 - V2: Table E committed verbatim in `src/server/team/routing/__tests__/crossModelEligibility.test.ts`, killing a mutant that compares profile ids instead of families and one that omits earlier rounds' authors.
 - V3: Table F committed verbatim in the catalog tests, killing a mutant that accepts `family` from a project-level file.
 - V4: P1–P3 as seeded property tests with the seeds and case counts above, through `propertyCases`.
-- V5: One production-composition test sends `team-setup-run` through the real workspace WS handler and asserts files plus a `team-workspace` push; one routes a real review handoff through `ProfileRouter` with a flagged group (kills a mutant that removes the `crossModelState` wiring from the router).
+- V5: One production-composition test sends `team-workspace-setup-run` through the real workspace WS handler and asserts files plus a `team-workspace` push; one routes a real review handoff through `ProfileRouter` with a flagged group (kills a mutant that removes the `crossModelState` wiring from the router).
 - V6: A client test for `NewSessionModal` covers the notice, link navigation to `{ tab: 'members' }`, and absence for terminal and set-up projects; a Playwright walkthrough covers Set up team from the notice to the listed groups.
 - V7: `openspec validate starter-team-setup --strict` and `bun run check` pass.
 

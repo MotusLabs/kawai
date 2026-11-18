@@ -31,6 +31,7 @@ describe('team group routes', () => {
       errors: [],
       warnings: [],
       approvalDefault: null,
+      setupAvailable: false,
     })
   })
 
@@ -91,8 +92,19 @@ describe('team group routes', () => {
     expect(new Set(asked)).toEqual(new Set([teamId]))
   })
 
+  // starter-team-setup D2 (Table O): the New Session notice reads this flag;
+  // only project `*.md` files withdraw it, user-level groups never do.
+  test('setupAvailable is true exactly while the project groups directory holds no group file', async () => {
+    const available = async () => (await get(`?projectPath=${encodeURIComponent(project)}`) as { setupAvailable: boolean }).setupAvailable
+    fs.writeFileSync(path.join(home, '.kawai', 'groups', 'qa.md'), '---\nlabel: QA\n---\nTest.')
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'notes.txt'), 'not a group')
+    expect(await available()).toBe(true)
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'broken.md'), '---\nlabel: x\n')
+    expect(await available()).toBe(false)
+  })
+
   test('a missing or nonexistent project yields no groups', async () => {
-    expect(await get('')).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null })
-    expect(await get(`?projectPath=${encodeURIComponent(path.join(root, 'nope'))}`)).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null })
+    expect(await get('')).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null, setupAvailable: false })
+    expect(await get(`?projectPath=${encodeURIComponent(path.join(root, 'nope'))}`)).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null, setupAvailable: false })
   })
 })
