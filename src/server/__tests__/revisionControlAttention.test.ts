@@ -166,13 +166,7 @@ function expectedTargetItems(row: string, pauseId: string): Array<{ id: string; 
 const shape = (items: AttentionItem[]) => items.map(item => ({ id: item.id, kind: item.kind, nextAction: item.nextAction }))
 
 describe('the revision-control attention rows (AT)', () => {
-  test.each([
-    { id: 'AT1', situation: 'open plan, active hold, deadline passed', open: true, state: 'active' as HoldState, passed: true },
-    { id: 'AT2', situation: 'the hold released', open: true, state: 'released' as HoldState, passed: true },
-    { id: 'AT3', situation: 'the hold extended to a later deadline', open: true, state: 'extended' as HoldState, passed: false },
-    { id: 'AT4', situation: 'the plan closed', open: false, state: 'active' as HoldState, passed: true },
-    { id: 'AT11', situation: 'open plan, active hold, deadline not passed', open: true, state: 'active' as HoldState, passed: false },
-  ])('$id: $situation', ({ id, open, state, passed }) => {
+  const holdCase = ({ id, open, state, passed }: { id: string; situation: string; open: boolean; state: HoldState; passed: boolean }) => {
     const world = new World()
     const { holdId, deadline, oldDeadline } = holdSituation(world, open, state, passed)
     expect(holdRow(open, state, passed)).toBe(id)
@@ -188,23 +182,27 @@ describe('the revision-control attention rows (AT)', () => {
       expect(items.map(item => item.id)).not.toContain(`plan-hold-overdue:${holdId}:${oldDeadline}`)
       expect(world.items(new Date(Date.parse(deadline) + 1)).map(item => item.id)).toEqual([`plan-hold-overdue:${holdId}:${deadline}`])
     }
-  })
+  }
+  test('AT1: open plan, active hold, deadline passed', () => holdCase({ id: 'AT1', situation: 'open plan, active hold, deadline passed', open: true, state: 'active' as HoldState, passed: true }))
+  test('AT2: the hold released', () => holdCase({ id: 'AT2', situation: 'the hold released', open: true, state: 'released' as HoldState, passed: true }))
+  test('AT3: the hold extended to a later deadline', () => holdCase({ id: 'AT3', situation: 'the hold extended to a later deadline', open: true, state: 'extended' as HoldState, passed: false }))
+  test('AT4: the plan closed', () => holdCase({ id: 'AT4', situation: 'the plan closed', open: false, state: 'active' as HoldState, passed: true }))
+  test('AT11: open plan, active hold, deadline not passed', () => holdCase({ id: 'AT11', situation: 'open plan, active hold, deadline not passed', open: true, state: 'active' as HoldState, passed: false }))
 
-  test.each([
-    { id: 'AT5', situation: 'target Pausing for another cause, pause deadline passed', state: 'pausing-other' as TargetState, passed: true, running: true },
-    { id: 'AT6', situation: 'target Paused, undecided, before the deadline', state: 'paused' as TargetState, passed: false, running: true },
-    { id: 'AT6', situation: 'target Paused, undecided, after the deadline', state: 'paused' as TargetState, passed: true, running: true },
-    { id: 'AT7', situation: 'target Pausing as holder-killed, after the deadline', state: 'holder-killed' as TargetState, passed: true, running: true },
-    { id: 'AT7', situation: 'target Pausing as checkpoint-push-failed, before the deadline', state: 'checkpoint-push-failed' as TargetState, passed: false, running: true },
-    { id: 'AT8', situation: 'target decided', state: 'decided' as TargetState, passed: true, running: true },
-    { id: 'AT9', situation: 'execution stopped or finished', state: 'paused' as TargetState, passed: true, running: false },
-    { id: 'AT10', situation: 'target Pausing for another cause, deadline not passed', state: 'pausing-other' as TargetState, passed: false, running: true },
-  ])('$id: $situation', ({ id, state, passed, running }) => {
+  const targetCase = ({ id, state, passed, running }: { id: string; situation: string; state: TargetState; passed: boolean; running: boolean }) => {
     const world = new World()
     const pauseId = targetSituation(world, true, state, passed, running)
     expect(targetRow(true, state, passed, running)).toBe(id)
     expect(shape(world.items(NOW))).toEqual(expectedTargetItems(id, pauseId))
-  })
+  }
+  test('AT5: target Pausing for another cause, pause deadline passed', () => targetCase({ id: 'AT5', situation: 'target Pausing for another cause, pause deadline passed', state: 'pausing-other' as TargetState, passed: true, running: true }))
+  test('AT6: target Paused, undecided, before the deadline', () => targetCase({ id: 'AT6', situation: 'target Paused, undecided, before the deadline', state: 'paused' as TargetState, passed: false, running: true }))
+  test('AT6: target Paused, undecided, after the deadline', () => targetCase({ id: 'AT6', situation: 'target Paused, undecided, after the deadline', state: 'paused' as TargetState, passed: true, running: true }))
+  test('AT7: target Pausing as holder-killed, after the deadline', () => targetCase({ id: 'AT7', situation: 'target Pausing as holder-killed, after the deadline', state: 'holder-killed' as TargetState, passed: true, running: true }))
+  test('AT7: target Pausing as checkpoint-push-failed, before the deadline', () => targetCase({ id: 'AT7', situation: 'target Pausing as checkpoint-push-failed, before the deadline', state: 'checkpoint-push-failed' as TargetState, passed: false, running: true }))
+  test('AT8: target decided', () => targetCase({ id: 'AT8', situation: 'target decided', state: 'decided' as TargetState, passed: true, running: true }))
+  test('AT9: execution stopped or finished', () => targetCase({ id: 'AT9', situation: 'execution stopped or finished', state: 'paused' as TargetState, passed: true, running: false }))
+  test('AT10: target Pausing for another cause, deadline not passed', () => targetCase({ id: 'AT10', situation: 'target Pausing for another cause, deadline not passed', state: 'pausing-other' as TargetState, passed: false, running: true }))
 
   test('completeness: every axis combination matches exactly one row and yields that row\'s items', () => {
     let combinations = 0

@@ -165,7 +165,8 @@ const DIALOGS: DialogCase[] = [
   },
 ]
 
-test.each(DIALOGS)('UI1 and UI2: $name mints at open, reuses on a resend, re-mints on a change, shows every failing check, and retires on success', ({ open, type, fill, edit, fields }) => {
+function dialogCase(name: string): void {
+  const { open, type, fill, edit, fields } = DIALOGS.find(entry => entry.name === name)!
   mount()
   click(open)
   fill()
@@ -202,7 +203,15 @@ test.each(DIALOGS)('UI1 and UI2: $name mints at open, reuses on a resend, re-min
   fire({ type: 'team-plan-result', teamPath: TEAM, requestId: fresh.requestId, replayed: false })
   expect(present(`${open}-dialog`)).toBe(false)
   expect(useTeamPlanStore.getState().views[TEAM]!.commands).toEqual({})
-})
+}
+
+test('UI1 and UI2: Hold from the plan detail mints at open, reuses on a resend, re-mints on a change, shows every failing check, and retires on success', () => dialogCase('Hold from the plan detail'))
+test('UI1 and UI2: Hold from the execution section mints at open, reuses on a resend, re-mints on a change, shows every failing check, and retires on success', () => dialogCase('Hold from the execution section'))
+test('UI1 and UI2: Release a changes hold in part mints at open, reuses on a resend, re-mints on a change, shows every failing check, and retires on success', () => dialogCase('Release a changes hold in part'))
+test('UI1 and UI2: Narrow a plan hold mints at open, reuses on a resend, re-mints on a change, shows every failing check, and retires on success', () => dialogCase('Narrow a plan hold'))
+test('UI1 and UI2: Extend mints at open, reuses on a resend, re-mints on a change, shows every failing check, and retires on success', () => dialogCase('Extend'))
+test('UI1 and UI2: Pause mints at open, reuses on a resend, re-mints on a change, shows every failing check, and retires on success', () => dialogCase('Pause'))
+test('UI1 and UI2: the checkpoint decision mints at open, reuses on a resend, re-mints on a change, shows every failing check, and retires on success', () => dialogCase('the checkpoint decision'))
 
 test('UI3: every control disables while disconnected, open dialogs included, and the openers are off', () => {
   mount()

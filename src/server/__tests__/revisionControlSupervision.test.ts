@@ -58,13 +58,20 @@ const ROWS: Array<{ id: string; waits: string; extra: Partial<SupervisionInput>;
 ]
 
 describe('supervision causes paused, pausing, and hold (CA)', () => {
-  test.each(ROWS)('$id: waits $waits read the cause and the also-applying list', ({ extra, cause, also }) => {
+  const caRow = (id: string) => {
+    const { extra, cause, also } = ROWS.find(row => row.id === id)!
     const view = changeSupervision(input(extra), NOW)
     expect(view.cause).toEqual(cause as never)
     expect(view.alsoApplying).toEqual(also)
     // None of the three raises a `no-progress` stall.
     expect(view.stall?.kind).not.toBe('no-progress')
-  })
+  }
+  test('CA1: waits paused read the cause and the also-applying list', () => caRow('CA1'))
+  test('CA2: waits pausing read the cause and the also-applying list', () => caRow('CA2'))
+  test('CA3: waits hold (CI passed, review waiting for the release) read the cause and the also-applying list', () => caRow('CA3'))
+  test('CA4: waits effect, hold read the cause and the also-applying list', () => caRow('CA4'))
+  test('CA5: waits hold, uncertain-delivery read the cause and the also-applying list', () => caRow('CA5'))
+  test('CA6: waits repeating-failure outcome, hold read the cause and the also-applying list', () => caRow('CA6'))
 
   test('the order rule: effect, paused, pausing, hold, uncertain-delivery, then the shipped waits', () => {
     const view = changeSupervision(input({
