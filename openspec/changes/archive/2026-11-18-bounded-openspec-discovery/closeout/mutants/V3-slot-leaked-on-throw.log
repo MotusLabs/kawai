@@ -1,0 +1,20 @@
+# mutant V3-slot-leaked-on-throw
+# target: src/server/workspace/openspecPool.ts
+# before: "    try {\n      return await task()\n    } finally {\n      this.release()\n    }"
+# after:  "    const value = await task()\n    this.release()\n    return value"
+# command: bun test src/server/__tests__/openspecPool.test.ts -t PL1: --timeout 20000
+# required: the named row PL1 fails (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/openspecPool.test.ts:
+(fail) ConcurrencyPool PL1 > PL1: at most 3 run at once, each result reaches its own caller once, a throw releases its slot (300 cases, seed 0x0a5e) [20000.01ms]
+  ^ this test timed out after 20000ms.
+
+ 0 pass
+ 2 filtered out
+ 1 fail
+ 21 expect() calls
+Ran 1 test across 1 file. [20.01s]
+
+verdict: KILLED (named row failed, as required)

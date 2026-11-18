@@ -1,0 +1,47 @@
+// Mutant V2-age-ignored (closeout 7.3, contract A3): the reuse decision no
+// longer compares age, so a 10-minute-old result is reused like a fresh one.
+// Required: every RD5 title fails - the two unrolled rows
+// (`RD5: previous entry, fingerprint fp-a, age 600000 ms -> run`,
+// `RD5: previous entry, fingerprint fp-a, age 1800000 ms -> run`) and
+// `RD5: a result exactly 10 minutes old is rediscovered even when the fingerprint matches`.
+import fs from 'node:fs'
+
+const repo = '/home/coder/kawai/.worktrees/bounded-openspec-discovery'
+const target = `${repo}/src/server/workspace/openspecDiscoveryCache.ts`
+const logPath = `${repo}/openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V2-age-ignored.log`
+const before = '  return now - previous.discoveredAt >= OPENSPEC_REUSE_MAX_AGE_MS'
+const after = '  return false'
+const command = ['bun', 'test', 'src/server/__tests__/openspecDiscoveryReuse.test.ts', '-t', 'RD5', '--timeout', '20000']
+
+const original = fs.readFileSync(target, 'utf8')
+const hits = original.split(before).length - 1
+if (hits !== 1) {
+  console.error(`pattern found ${hits} times, expected exactly 1; aborting without patching`)
+  process.exit(2)
+}
+fs.writeFileSync(target, original.replace(before, after))
+let code = 1
+try {
+  const run = Bun.spawnSync(command, { cwd: repo, stdout: 'pipe', stderr: 'pipe' })
+  const killed = run.exitCode !== 0
+  fs.writeFileSync(
+    logPath,
+    [
+      '# mutant V2-age-ignored',
+      '# target: src/server/workspace/openspecDiscoveryCache.ts',
+      `# before: ${before}`,
+      `# after:  ${after}`,
+      `# command: ${command.join(' ')}`,
+      '# required: the named rows RD5 fail (the mutant is killed)',
+      '',
+      run.stdout.toString() + run.stderr.toString(),
+      `verdict: ${killed ? 'KILLED (named rows failed, as required)' : 'SURVIVED (named rows passed - NOT detected)'}`,
+      '',
+    ].join('\n'),
+  )
+  console.log(killed ? 'V2-age-ignored: killed' : 'V2-age-ignored: SURVIVED')
+  code = killed ? 0 : 1
+} finally {
+  fs.writeFileSync(target, original)
+}
+process.exit(code)

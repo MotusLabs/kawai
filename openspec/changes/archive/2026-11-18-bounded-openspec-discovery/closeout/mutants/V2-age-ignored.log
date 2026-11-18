@@ -1,0 +1,60 @@
+# mutant V2-age-ignored
+# target: src/server/workspace/openspecDiscoveryCache.ts
+# before:   return now - previous.discoveredAt >= OPENSPEC_REUSE_MAX_AGE_MS
+# after:    return false
+# command: bun test src/server/__tests__/openspecDiscoveryReuse.test.ts -t RD5 --timeout 20000
+# required: the named rows RD5 fail (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/openspecDiscoveryReuse.test.ts:
+81 |     expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+82 |   })
+83 | 
+84 |   test('RD5: previous entry, fingerprint fp-a, age 600000 ms -> run', () => {
+85 |     const row = rows[7]
+86 |     expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+                                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecDiscoveryReuse.test.ts:86:76)
+(fail) shouldRunOpenSpec RD table > RD5: previous entry, fingerprint fp-a, age 600000 ms -> run [0.13ms]
+86 |     expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+87 |   })
+88 | 
+89 |   test('RD5: previous entry, fingerprint fp-a, age 1800000 ms -> run', () => {
+90 |     const row = rows[8]
+91 |     expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+                                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecDiscoveryReuse.test.ts:91:76)
+(fail) shouldRunOpenSpec RD table > RD5: previous entry, fingerprint fp-a, age 1800000 ms -> run [0.04ms]
+92 |   })
+93 | 
+94 |   // @covers: openspec-visibility › Reuse unchanged OpenSpec discovery results › The result is old
+95 |   test('RD5: a result exactly 10 minutes old is rediscovered even when the fingerprint matches', () => {
+96 |     expect(OPENSPEC_REUSE_MAX_AGE_MS).toBe(600_000)
+97 |     expect(shouldRunOpenSpec(ENTRY, 'fp-a', T0 + 600_000)).toBe(true)
+                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecDiscoveryReuse.test.ts:97:60)
+(fail) shouldRunOpenSpec RD table > RD5: a result exactly 10 minutes old is rediscovered even when the fingerprint matches [0.03ms]
+
+ 0 pass
+ 16 filtered out
+ 3 fail
+ 4 expect() calls
+Ran 3 tests across 1 file. [21.00ms]
+
+verdict: KILLED (named rows failed, as required)

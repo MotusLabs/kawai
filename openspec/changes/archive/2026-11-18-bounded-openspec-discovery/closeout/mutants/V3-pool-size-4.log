@@ -1,0 +1,32 @@
+# mutant V3-pool-size-4
+# target: src/server/workspace/openspecPool.ts
+# before: export const OPENSPEC_POOL_SIZE = 3
+# after:  export const OPENSPEC_POOL_SIZE = 4
+# command: bun test src/server/__tests__/openspecPool.test.ts -t PL1: --timeout 20000
+# required: the named row PL1 fails (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/openspecPool.test.ts:
+35 | describe('ConcurrencyPool PL1', () => {
+36 |   // @covers: openspec-visibility › Bound concurrent OpenSpec discovery › A full reconciliation
+37 |   // The title is the template above unrolled to a literal (closeout task
+38 |   // 7.1); the body still reads OPENSPEC_POOL_SIZE and CASES.
+39 |   test('PL1: at most 3 run at once, each result reaches its own caller once, a throw releases its slot (300 cases, seed 0x0a5e)', async () => {
+40 |     expect(OPENSPEC_POOL_SIZE).toBe(3)
+                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 3
+Received: 4
+
+      at <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecPool.test.ts:40:32)
+(fail) ConcurrencyPool PL1 > PL1: at most 3 run at once, each result reaches its own caller once, a throw releases its slot (300 cases, seed 0x0a5e) [0.51ms]
+
+ 0 pass
+ 2 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [9.00ms]
+
+verdict: KILLED (named row failed, as required)

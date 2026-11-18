@@ -1,0 +1,3 @@
+# Contract A3 evidence: the named-failure logs of the closeout mutant reruns
+# are versioned archive artifacts, exempt from the root `*.log` ignore rule.
+!*.log
