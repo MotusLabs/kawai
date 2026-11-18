@@ -6,7 +6,8 @@
 // - `SupervisionCause`, `SupervisionStall`, progress and activity, and the
 //   derived `ChangeSupervision`;
 // - the cause and stop-reason labels, rendering an unknown kind verbatim
-//   (causes are append-only: `revision-control` adds `hold`).
+//   (causes are append-only: `revision-control` adds `paused`, `pausing`,
+//   and `hold` after `effect`).
 // `changeSupervision(input, now)` owns the outcome precedence, the waits, and
 // both stalls; `failureSignature` the repeating-failure key. The report
 // (`blockedDependents`, `planReport`) lives in `planReport.ts`.
@@ -14,6 +15,7 @@ import type { CandidateState } from './planIntegration'
 import { agentHeldStage, type AttemptKind, type AttemptStatus, type ChangeState, type ChangeStep, type CiCheck, type RoundOutcome, type StopDetail } from './planExecution'
 import { ciClass, flakyChecks, runsByName } from './planExecutionGates'
 import type { DiagnosisSignal } from './reviewConvergence'
+import type { HoldScope, PausingCause } from './planRevisionControl'
 
 export type SupervisionOutcome = 'landed' | 'running' | 'waiting' | 'stalled' | 'stopped' | 'cancelled' | 'not-started'
 export const SUPERVISION_OUTCOMES: readonly SupervisionOutcome[] = ['landed', 'running', 'waiting', 'stalled', 'stopped', 'cancelled', 'not-started']
@@ -23,6 +25,12 @@ export type SupervisionWait =
   | { kind: 'dependency'; changes: string[]; stopped: string[] }
   | { kind: 'parallel-limit'; limit: number | null }
   | { kind: 'effect'; effect: string; state: string; tries: number; nextAt: string | null }
+  /** revision-control D13: an undecided Paused target, awaiting the owner's decision. */
+  | { kind: 'paused'; pauseId: string; awaiting: 'decision' }
+  /** revision-control D13: a Pausing target and its D8 causes. */
+  | { kind: 'pausing'; pauseId: string; causes: PausingCause[] }
+  /** revision-control D13: the active holds covering the change, with their scope and deadline. */
+  | { kind: 'hold'; holds: Array<{ id: string; scope: HoldScope; deadline: string }> }
   | { kind: 'uncertain-delivery'; messageId: string | null }
   | { kind: 'staffing'; blocker: string | null }
   | { kind: 'parked'; session: string | null; profile: string | null; until: string | null; cooling: boolean }
@@ -125,6 +133,10 @@ export interface SupervisionInput {
   waitEndedAt: string | null
   /** The change's open diagnosis (review-convergence decision 8); `awaitingRevision` is set once Amend applied. */
   diagnosis: { id: string; signals: DiagnosisSignal[]; cardId: string; taskId: string | null; awaitingRevision: number | null } | null
+  /** revision-control D13: the active holds covering the change; absent or empty when none does. */
+  holds?: Array<{ id: string; scope: HoldScope; deadline: string }>
+  /** revision-control D13: the change's undecided pause target — Paused only from a recorded `paused_at` (I2); absent or null when none. */
+  pause?: { pauseId: string; state: 'paused' } | { pauseId: string; state: 'pausing'; causes: PausingCause[] } | null
 }
 
 export interface ChangeSupervision {
@@ -210,7 +222,11 @@ function convergenceStall(input: SupervisionInput): Extract<SupervisionStall, { 
   return { kind: 'convergence', episodeKey: diagnosis.id, signals: diagnosis.signals, cardId: diagnosis.cardId, awaitingRevision: diagnosis.awaitingRevision }
 }
 
-/** D10's ten running-stage waits, in order; every applicable one. */
+/**
+ * D10's running-stage waits, in order, every applicable one: effect, then
+ * revision-control D13's paused, pausing, and hold, then uncertain-delivery
+ * and the rest (S2's append-only rule).
+ */
 function stageWaits(input: SupervisionInput, now: Date): SupervisionWait[] {
   const waits: SupervisionWait[] = []
   const nowIso = now.toISOString()
@@ -220,6 +236,10 @@ function stageWaits(input: SupervisionInput, now: Date): SupervisionWait[] {
       break
     }
   }
+  const pause = input.pause ?? null
+  if (pause?.state === 'paused') waits.push({ kind: 'paused', pauseId: pause.pauseId, awaiting: 'decision' })
+  if (pause?.state === 'pausing') waits.push({ kind: 'pausing', pauseId: pause.pauseId, causes: pause.causes })
+  if (input.holds && input.holds.length > 0) waits.push({ kind: 'hold', holds: input.holds })
   const instruction = input.instruction
   const holder = instruction?.holder ?? null
   if (instruction?.state === 'uncertain') waits.push({ kind: 'uncertain-delivery', messageId: instruction.messageId })
@@ -310,7 +330,8 @@ export function changeSupervision(input: SupervisionInput, now: Date): ChangeSup
     if (unlanded.length > 0) {
       waits.push({ kind: 'dependency', changes: unlanded.map(entry => entry.change), stopped: unlanded.filter(entry => entry.outcome === 'stopped').map(entry => entry.change) })
     }
-    const effect = stageWaits({ ...input, instruction: null, openCards: [], step: null }, now)[0]
+    // A waiting change reads only its effect here; the revision-control waits are running-stage (D13).
+    const effect = stageWaits({ ...input, instruction: null, openCards: [], step: null, holds: [], pause: null }, now)[0]
     if (effect) waits.push(effect)
     if (waits.length === 0) waits.push({ kind: 'parallel-limit', limit: input.parallelLimit })
     return { ...base, outcome: 'waiting', cause: waits[0]!, alsoApplying: waits.slice(1) }
@@ -367,6 +388,10 @@ export function causeLabel(cause: SupervisionCause | { kind: string }): string {
     case 'dependency': return known.stopped.length > 0 ? `Blocked by stopped ${list(known.stopped)}` : `Waiting on ${list(known.changes)}`
     case 'parallel-limit': return known.limit === null ? 'Waiting for a parallel slot' : `Waiting for a parallel slot (limit ${known.limit})`
     case 'effect': return `Waiting on Kawai's ${known.effect} (${known.state}, try ${known.tries}${known.nextAt ? `, next ${known.nextAt}` : ''})`
+    case 'paused': return `Paused (${known.pauseId}): waiting for the owner's decision`
+    case 'pausing': return `Pausing (${known.pauseId})${known.causes.length > 0 ? `: ${list(known.causes.map(cause => cause.kind))}` : ''}`
+    // A hold cause without its holds (an older peer's shape) renders its kind verbatim, like an unknown one.
+    case 'hold': return Array.isArray(known.holds) ? `Held by ${list(known.holds.map(hold => `${hold.id} (${hold.scope}, review by ${hold.deadline})`))}` : known.kind
     case 'uncertain-delivery': return 'Waiting on an uncertain delivery'
     case 'staffing': return known.blocker ? `Waiting for staffing: ${known.blocker}` : 'Waiting for staffing'
     case 'parked': return `${known.cooling ? 'Profile cooling' : 'Holder parked'}${known.until ? ` until ${known.until}` : ''}`

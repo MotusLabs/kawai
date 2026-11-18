@@ -126,6 +126,7 @@ describe('PromotionService (5.1, D9)', () => {
 })
 
 describe('PromotionService under holds (revision-control 3.3)', () => {
+  // @covers: plan-holds › A held change never lands or is promoted › Promotion with a held change
   test('Promote carrying a held change is refused naming no-hold, and writes nothing', async () => {
     const branch = `wave/svc-${n}`
     const planId = await twoLandings(h, i, p, branch, String(n))

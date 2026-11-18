@@ -147,6 +147,7 @@ describe('START_PRECONDITIONS', () => {
     expect(check('landings-on-base', { offBaseLandings: [] })).toBeNull()
   })
 
+  // @covers: plan-holds › A whole-plan hold refuses Start › Start under a plan hold
   test('no-hold: a whole-plan hold is named; a changes-scoped hold passes (revision-control 3.3)', () => {
     const refusal = check('no-hold', { activeHolds: [{ id: 'h1', scope: 'plan', changes: [] }, { id: 'h2', scope: 'changes', changes: ['api'] }] })
     expect(refusal).toContain('The plan is on hold: h1')

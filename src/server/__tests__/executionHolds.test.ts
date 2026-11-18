@@ -236,6 +236,7 @@ const failCi = () => {
 }
 
 describe('the hold gate at the executor (revision-control 3.2)', () => {
+  // @covers: plan-holds › Results under a hold are kept › Release resumes the round
   test("a held change's review handoff waits while its CI runs; the release resumes the same round", async () => {
     const { executionId, planId } = await approvedExecution(['hold-a'])
     await implementStage(executionId, 'hold-a', 'export const a = 1\n')
@@ -264,6 +265,7 @@ describe('the hold gate at the executor (revision-control 3.2)', () => {
     expect(released.step).toBe('reviewing')
   })
 
+  // @covers: plan-holds › A held change gets no new work › A failed round under a hold
   test('a failed round under a hold records the fix transition and owes its dispatch; the release runs it once', async () => {
     const { executionId, planId } = await approvedExecution(['hold-b'])
     const { row } = await implementStage(executionId, 'hold-b', 'v1')
@@ -303,6 +305,7 @@ describe('the hold gate at the executor (revision-control 3.2)', () => {
     expect(tasks.store.assignmentsOf(row.taskId!).length).toBe(3)
   })
 
+  // @covers: plan-holds › A held change gets no new work › A running turn continues
   test('a hold placed while a dev’s turn runs sends that session no mail', async () => {
     const { executionId, planId } = await approvedExecution(['hold-c'])
     const { row } = await implementStage(executionId, 'hold-c', 'v1')
@@ -328,6 +331,7 @@ describe('the hold gate at the executor (revision-control 3.2)', () => {
     void hold
   })
 
+  // @covers: plan-holds › A whole-plan hold refuses Start › Start under a changes hold
   test('a hold covering one change leaves an unheld sibling advancing', async () => {
     const { executionId, planId } = await approvedExecution(['hold-d', 'free-d'])
     placeHold(planId, 'changes', ['hold-d'], 'hold-sibling-1')
@@ -398,6 +402,7 @@ describe('the hold gate at the executor (revision-control 3.2)', () => {
 // holder with no live landing effect gives the slot up, a sibling takes
 // it and lands, and the release lands the held change after it.
 describe('the hold gate at the landing slot (revision-control 3.3)', () => {
+  // @covers: plan-holds › A held change never lands or is promoted › The slot is given up
   test('a held slot holder gives the slot up and a sibling takes it and lands; the release lands the held change after it', async () => {
     // The execution starts from origin's head after its own push (the
     // approvedExecution default), so the branches contain the base and
@@ -453,6 +458,8 @@ describe('the hold gate at the landing slot (revision-control 3.3)', () => {
 // while the review handoff, the slot, and the merge wait; the release
 // resumes the same round.
 describe('the R10 result under a hold (revision-control 3.4)', () => {
+  // @covers: plan-holds › Results under a hold are kept › A result arrives under a hold
+  // @covers: plan-holds › Results under a hold are kept › Release resumes the round
   test('a result arriving under a hold is kept; its CI runs; no review or landing; the release resumes the same round', async () => {
     const { executionId, planId } = await approvedExecution(['hold-r'])
     // The change reaches implementing with no result yet: provision, task, dispatch.

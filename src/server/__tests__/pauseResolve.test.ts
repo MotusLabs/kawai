@@ -208,6 +208,19 @@ describe('the C-rows (A3, verbatim)', () => {
   })
 })
 
+// The spec scenario behind C11, under a literal title: Continue to a killed
+// holder refuses `holder-gone`, and Restart stays available on the same target.
+// @covers: plan-pause › The owner chooses how paused work goes on › Continue to a killed holder
+test('Continue to a killed holder is refused holder-gone, and Restart on the same target is still accepted', async () => {
+  const world = await wired.pausedAttempt({ holder: 'ghost' })
+  expect(refusal(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'continue' })).reason).toBe('holder-gone')
+  expect(wired.resolvedEvents(world.planId)).toHaveLength(0)
+  expect(targetOf(wired, world.pauseId, 'api').decision).toBeNull()
+  ok(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'restart' }))
+  expect(targetOf(wired, world.pauseId, 'api').decision).toBe('restart')
+  expect(wired.resolvedEvents(world.planId)).toHaveLength(1)
+})
+
 describe("C2's mail names the newest checkpoint's commit (B1)", () => {
   test('an attempt-stage checkpoint with a commitSha puts `Continue from checkpoint <sha>` in the resume (C2)', async () => {
     const world = await wired.pausedAttempt()

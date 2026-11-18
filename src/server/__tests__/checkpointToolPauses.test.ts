@@ -383,6 +383,7 @@ describe('a round push the restart inspection settles done (F4)', () => {
   })
   const tick = (b: Bench): void => runPauseTick(tickDeps(b), world.team.teamId, world.root)
 
+  // @covers: plan-pause › Paused is recorded only when work is safe and the holder has stopped › A result instead of a checkpoint
   test('a round push unknown at restart and on origin counts the result, and no second push runs', async () => {
     const b = benchWith(['api'])
     const pauseRow = openPause(b, 'hold-1', 'cmd-1', [{ change: 'api', holder: 'dev' }])

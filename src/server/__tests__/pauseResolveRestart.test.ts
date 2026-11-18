@@ -109,6 +109,7 @@ test('R2: with the gate open the new row dispatches inline with the may-predates
 // D5's containment read (F4): this pause target's own newest checkpoint with
 // a done push names the start commit and rides the manifest; the may-predates
 // note does not.
+// @covers: plan-pause › Restart starts fresh from the newest safe commit › Restart with a checkpoint
 test('R2: a checkpoint this pause pushed to origin names the start commit and rides the manifest', async () => {
   const world = await wired.pausing({ checkpoint: { kind: 'commit', effectState: 'done' } })
   wired.toPaused(world.pauseId, 'api')
@@ -328,6 +329,7 @@ test('a restart over an answered round pinning an older revision supersedes it',
 // commit — one releaseNow, no pending mark — and the decision says 'now'.
 // The recorders are suite-global, so every assertion here is a delta over a
 // before-snapshot.
+// @covers: plan-pause › Restart starts fresh from the newest safe commit › Restart with a checkpoint
 test('a restarted spawned ready holder releases now (after the commit)', async () => {
   const world = await wired.pausedAttempt({ mintAttempt: false })
   wired.spawnRecord('dev', world.taskId)
@@ -436,6 +438,8 @@ test('R15: a restart over a withdrawn-and-pausing target is accepted', async () 
 // R10/R11/R12's inline shape: a pausing target with the gate open restarts
 // from the head the pre-transaction read returned — the may-predates note,
 // no checkpoint fact (nothing of this pause is on origin).
+// @covers: plan-pause › The owner chooses how paused work goes on › The holder ignores the pause
+// @covers: plan-pause › Restart starts fresh from the newest safe commit › Restart without a checkpoint
 test('R10-R12: a pausing target restarts from the read head with the may-predates note', async () => {
   const world = await wired.pausing({})
   openGate(world.planId, world.executionId)
@@ -450,6 +454,7 @@ test('R10-R12: a pausing target restarts from the read head with the may-predate
 
 // R13's shape: a killed holder's pausing target restarts the same way — the
 // holder is never released and the instruction goes to the group.
+// @covers: plan-pause › Restart starts fresh from the newest safe commit › Restart without a checkpoint
 test("R13: a killed holder's pausing target restarts from the read head", async () => {
   const world = await wired.pausing({ holder: 'ghost' })
   openGate(world.planId, world.executionId)

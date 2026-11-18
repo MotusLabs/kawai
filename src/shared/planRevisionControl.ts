@@ -231,7 +231,10 @@ export interface HoldView {
   createdAt: string
   releasedAt: string | null
   releaseReason: string | null
+  /** The change names still held (scope `changes`). */
   changes: string[]
+  /** Scope `changes`: the change rows already released, by a partial release or with the whole hold. */
+  releasedChanges: string[]
 }
 
 export interface CheckpointView {
@@ -240,6 +243,8 @@ export interface CheckpointView {
   commitSha: string | null
   summary: string
   nextSteps: string
+  unfinished: string | null
+  errorsTests: string | null
   createdAt: string
   supersededBy: string | null
 }
@@ -253,6 +258,8 @@ export interface PauseTargetView {
   pausedAt: string | null
   /** The newest checkpoint, superseded ones behind it. */
   checkpoint: CheckpointView | null
+  /** Every checkpoint of the target, oldest first. */
+  checkpoints: CheckpointView[]
   decision: PauseDecision | null
   decidedAt: string | null
 }
@@ -260,7 +267,10 @@ export interface PauseTargetView {
 export interface PauseView {
   id: string
   holdId: string
+  executionId: string
   deadline: string
+  /** The pause deadline has passed (read when the view was built). */
+  deadlinePassed: boolean
   note: string | null
   createdAt: string
   closedAt: string | null

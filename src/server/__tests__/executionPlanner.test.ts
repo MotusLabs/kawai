@@ -294,6 +294,7 @@ describe('planSteps under holds (revision-control 3.2)', () => {
     expect(result.stages).toEqual([])
   })
 
+  // @covers: plan-holds › A held change never lands or is promoted › A merge in flight settles
   test("a held settling change still applies its merge verdict: the landing-outcome stage is emitted", () => {
     const held = change('api', 'landing', {
       step: 'merging', passedAt: 't', branch: 'api',
