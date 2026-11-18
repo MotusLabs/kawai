@@ -104,7 +104,7 @@ A change of plan-wide rules with nothing landed, or of roles at any time, marks 
 - **metadata:** the row, with the landed change's `dependsOn` and `fixes` read from the new revision;
 - **changed, `continue`:** the row; the running attempt keeps its manifest, and later attempts and handoffs read the execution's new revision;
 - **changed, `adapt`:** the human publishes the task's next revision with notify through the `within` publication (request key `apply:<commandId>:<change>`), recording the task revision. The shipped notice goes to the outstanding claimant, and plan-execution D9 follows after commit;
-- **changed, `restart`:** the row. The executor supersedes the assignment and dispatches a new attempt of the stage's kind under the new revision, as in D9 here;
+- **changed, `restart`:** the row, no task revision. The standing assignment is superseded, an open or passed round is superseded, the change returns to `implementing`, and one owed attempt row of the newest attempt's kind (an update restarts as `fix`) is minted with a manifest naming the new revision; the executor's owed step dispatches it after commit (resolved in the blind reading, CH5);
 - **added:** a change row in `waiting` at its content position (or `landed` with `owns = 0` when a landing fact exists), scheduled by the executor;
 - **removed, unlanded:** state `cancelled`, `owns = 0`. Pending effects are cancelled, the slot is given up, and Kawai cancels its task with the `PreparedTaskStatus` the prepare phase made, calling its synchronous `commit` here, exactly as Stop does (`ExecutionService.ts:419-445`). The old text named `TaskService.setStatus(system, …, 'cancelled')` with `alsoWithin`; that is async and cannot run inside a synchronous SQLite transaction, so it is obsolete: an async call started inside a synchronous `db.transaction` finishes after the transaction commits, outside it.
 
@@ -164,12 +164,12 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | AP6 | `validation-current` | the target's report is out of date (V5's message) |
 | AP7 | `start-conditions-resolved` | the target report carries an unresolved `start` condition |
 | AP8 | `strategy-impact` | the impact gate refuses the target |
-| AP9 | `landing-unchanged` | the landing mode or integration branch differs |
+| AP9 | `landing-unchanged` | the landing mode or integration branch differs (names the old and new landing, points to a forward fix change) |
 | AP10 | `landed-unchanged` | a landed change's acceptance differs (names it, suggests a forward fix) |
 | AP11 | `merge-quiet` | a changed or removed change has a merge or fast-forward running |
-| AP12 | `choices-complete` | a changed change with a task has no choice, or an Adapt text is empty |
+| AP12 | `choices-complete` | a changed change with a task has no choice, or an Adapt text is empty (an omitted text takes the generated one, D5; an explicitly empty one fails), names the change |
 | AP13 | `changes-unclaimed` | an added change's task id is claimed elsewhere |
-| AP14 | `changes-on-base` | an added or adapted change's artifacts are not on the base |
+| AP14 | `changes-on-base` | an added, adapted, or restarted change's artifacts are not on the base |
 | AP15 | `roles-routable` | an unlanded change's group under the target's roles has no routable worker |
 | AP16 | several entries | refused naming every failing entry in list order |
 | AP17 | none | accepted |
@@ -182,8 +182,8 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | AK2 | the same command id and payload after a success | the prior result; no second row, task revision, or notice |
 | AK3 | the same command id, a different payload | refused naming the first differing field |
 | AK4 | two different command ids on the same execution revision, concurrently | one commits; the other is refused `execution-revision-unchanged` naming the new revision |
-| AK5 | the same command id sent twice concurrently | one commits; the other resolves as its replay |
-| AK6 | a prepared cancel goes stale three times | refused `state` naming the task; nothing written |
+| AK5 | the same command id and the same payload sent twice concurrently (a different payload is AK3) | one commits; the other resolves as its replay |
+| AK6 | a prepared cancel goes stale three times (D3 "Stale preparation": at most 3 prepares, as Stop) | refused `state` naming the task; nothing written |
 
 ### Classification (DL), through `revisionDelta`
 
@@ -191,15 +191,15 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | --- | --- | --- |
 | DL1 | only in the target | added |
 | DL2 | only in the running revision, unlanded | removed |
-| DL3 | only in the running revision, landed | finding `landed-changed` (refusal) |
+| DL3 | only in the running revision, landed | removed, with finding `landed-changed` naming it (refusal) |
 | DL4 | in both, unlanded, a compared field differs, has a task | changed, needs a choice |
 | DL5 | as DL4 but still waiting with no task | changed, choice `none` |
 | DL6 | landed, differs only in `dependsOn` or `fixes` | metadata, no choice |
-| DL7 | landed, differs in any other compared field | finding `landed-changed` |
+| DL7 | landed, differs in any other compared field | changed, with finding `landed-changed` naming it (refusal) |
 | DL8 | landing mode or integration branch differs | finding `landing-changed` |
 | DL9 | plan-wide rules or extra checks differ, something landed | finding `plan-rules-changed` |
-| DL10 | plan-wide rules differ, nothing landed | every unlanded change changed |
-| DL11 | a role's profiles differ | unlanded changes of that group changed; never `landed-changed` |
+| DL10 | plan-wide rules differ, nothing landed | every unlanded change changed, fields `planAcceptanceRules` / `planExtraChecks` (D2's effective fields) |
+| DL11 | a role's profiles differ | unlanded changes whose implementing or effective review group is that role's changed, field `roles` (D2); never `landed-changed` |
 | DL12 | only `leadGroup` differs | every change unchanged; informational `lead-changed` |
 | DL13 | identical | unchanged |
 
@@ -210,13 +210,13 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | CH1 | unchanged | publication row | nothing |
 | CH2 | metadata | publication row; the change reads the target's `dependsOn` and `fixes` | nothing |
 | CH3 | changed, continue | publication row; the running attempt's manifest unchanged | later attempts and handoffs read the new revision |
-| CH4 | changed, adapt | publication row with the task revision; one task revision with notify under `apply:<commandId>:<change>`; its notice to the outstanding claimant | plan-execution D9's fix attempt names that revision (waits under a hold or an undecided pause, D8) |
-| CH5 | changed, restart | publication row | the executor supersedes the assignment and dispatches a new attempt under the new revision |
+| CH4 | changed, adapt | publication row with the task revision; one task revision with notify under `apply:<commandId>:<change>`; its notice to the outstanding claimant | plan-execution D9: with a round gating or landing, the round is superseded and a fix attempt names that revision; while implementing with no round, no attempt, the notice carries it (main spec "Direction changed while implementing"); waits under a hold or an undecided pause, D8 |
+| CH5 | changed, restart | publication row; no task revision; the standing assignment superseded, an open or passed round superseded, the change back to `implementing`, and one owed attempt row of the newest attempt's kind (an update restarts as `fix`) whose manifest names the new revision | the executor's owed step dispatches that attempt once |
 | CH6 | changed, choice `none` (no task) | publication row | the new definition applies at provisioning |
 | CH7 | added, no landing fact | change row `waiting` at its content position | scheduled by its dependencies |
 | CH8 | added, landing fact exists | change row `landed`, `owns = 0` | nothing |
 | CH9 | removed, unlanded, task open | state `cancelled`, `owns = 0`; effects cancelled; slot given up; the prepared cancel committed | nothing |
-| CH10 | removed, unlanded, task already closed | as CH9 without a task write | nothing |
+| CH10 | removed, unlanded, task already closed or no task | as CH9 without a task write (a closed task keeps its status) | nothing |
 
 Every success also writes the next `plan_execution_revisions` row, updates the execution's revision columns to equal it, and writes the `revision-applied` event, all in the same transaction.
 
@@ -226,12 +226,12 @@ Boundaries: B0 before the prepare phase; B1 after it, before the transaction; B2
 
 | id | Crash at | State after restart | Retry |
 | --- | --- | --- | --- |
-| CR1 | B0 or B1 | no revision row, publication row, task revision, notice, cancellation, or event from this Apply | runs as a first Apply |
-| CR2 | B2 | as CR1 (the transaction rolled back) | runs as a first Apply |
-| CR3 | B3 | the whole Apply committed; nothing dispatched yet | replays; the executor's startup tick dispatches from stored state once |
+| CR1 | B0 or B1 | no revision row, publication row, task revision, notice, cancellation, or event from this Apply | runs as a first Apply against the current state (refused if a precondition now fails) |
+| CR2 | B2 | as CR1 (the transaction rolled back) | as CR1 |
+| CR3 | B3 | the whole Apply committed; nothing dispatched yet; notices delivered under shipped receipt recovery | replays; the executor's startup tick dispatches from stored state once |
 | CR4 | B4 | committed and dispatched | replays; nothing new |
 
-Completeness: the boundaries B0–B4 cover every point of the command's path, and each maps to one row. Unreachable: a partial transaction (SQLite atomicity); a notice without its task revision (both in one `TaskStore.publish` inside the transaction).
+Completeness: the boundaries B0–B4 cover every point of the command's path, and each maps to one row. Across the other tables, AP1–AP15 are single-failure rows and AP16 their combination; DL1–DL7 and DL13 classify each change name (presence × landed × differing fields × task), while DL8–DL12 are execution-wide findings layered over them, so the completeness test expands the per-change axes and the execution-wide axes separately; CH1–CH10 partition the per-change classes and choices of an accepted Apply. Unreachable: a partial transaction (SQLite atomicity); a notice without its task revision (both in one `TaskStore.publish` inside the transaction).
 
 ### Properties
 
