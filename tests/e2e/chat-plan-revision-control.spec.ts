@@ -28,8 +28,10 @@ const isolatedDb = (): string => {
 /**
  * The spawned dev holding the walk-api task, once it has claimed the
  * instruction — a pause withdraws an unclaimed one instead of asking its
- * holder (D6). Scoped to this spec's own team: CI's one-server run shares
- * the database across walkthrough teams.
+ * holder (D6). The fixture writes no CLI transcript, so a pushed instruction
+ * settles `uncertain` rather than `delivered`; either is claimed. Scoped to
+ * this spec's own team: CI's one-server run shares the database across
+ * walkthrough teams.
  */
 async function claimedHolder(root: string, deadline: number): Promise<{ holder: string; taskId: string }> {
   const script = `
@@ -47,15 +49,56 @@ async function claimedHolder(root: string, deadline: number): Promise<{ holder: 
   `
   let observed: unknown = null
   for (;;) {
-    const stdout = execFileSync('bun', ['-e', script], { cwd: process.cwd(), encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()) })
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for the claimed walk-api holder: ${JSON.stringify(observed)}`)
+    let stdout: string
+    try {
+      stdout = execFileSync('bun', ['-e', script], { cwd: process.cwd(), encoding: 'utf8', timeout: 30_000 })
+    } catch (error) {
+      throw new Error(`claimedHolder failed; last isolated state: ${JSON.stringify(observed)}`, { cause: error })
+    }
     const line = stdout.split('\n').find(entry => entry.startsWith('HOLDER:'))
     if (!line) throw new Error(`claimedHolder printed no result: ${stdout}`)
     const state = JSON.parse(line.slice('HOLDER:'.length)) as { taskId: string | null; holder: string | null; state: string | null }
     observed = state
-    if (state.taskId && state.holder && state.state === 'delivered') return { holder: state.holder, taskId: state.taskId }
-    if (Date.now() >= deadline) throw new Error(`Timed out waiting for the claimed walk-api holder: ${JSON.stringify(observed)}`)
+    if (state.taskId && state.holder && (state.state === 'delivered' || state.state === 'uncertain')) return { holder: state.holder, taskId: state.taskId }
     await pollDelay(200)
   }
+}
+
+/**
+ * The pause mail's receipt, standing in for the CLI transcript the fixture
+ * never writes: once the mail was pushed and settled `uncertain` (receipt
+ * unconfirmed), mark it delivered — the same late-receipt transition the
+ * server makes when the transcript shows the message (`markDelivered` takes
+ * `claimed` or `uncertain`). Without it the target stays Pausing on
+ * `awaiting-delivery`, as it would for a holder that never received the mail.
+ */
+function settlePauseReceipt(root: string): string {
+  const script = `
+    import { initDatabase } from './src/server/db';
+    import { resolveTeam } from './src/server/team/teamIdentity';
+    import { MailboxStore } from './src/server/team/mailboxStore';
+    const sessions = initDatabase({ path: ${JSON.stringify(isolatedDb())} });
+    sessions.db.exec('PRAGMA busy_timeout = 5000');
+    const teamId = (await resolveTeam(${JSON.stringify(root)})).teamId;
+    const mail = new MailboxStore(sessions.db);
+    const deadline = Date.now() + 30_000;
+    let state = null;
+    for (;;) {
+      const row = sessions.db.prepare("SELECT t.message_id AS id, m.state FROM plan_pause_targets t JOIN plan_pauses p ON p.id = t.pause_id JOIN team_messages m ON m.id = t.message_id WHERE p.team_id = ? AND t.change = 'walk-api' ORDER BY p.rowid DESC LIMIT 1").get(teamId);
+      state = row?.state ?? null;
+      if (state === 'delivered') break;
+      if (state === 'uncertain') { mail.markDelivered(row.id); state = 'delivered'; break; }
+      if (Date.now() >= deadline) break;
+      await Bun.sleep(200);
+    }
+    console.log('RECEIPT:' + JSON.stringify(state));
+    sessions.close();
+  `
+  const stdout = execFileSync('bun', ['-e', script], { cwd: process.cwd(), encoding: 'utf8', timeout: 60_000 })
+  const line = stdout.split('\n').find(entry => entry.startsWith('RECEIPT:'))
+  if (!line) throw new Error(`settlePauseReceipt printed no result: ${stdout}`)
+  return JSON.parse(line.slice('RECEIPT:'.length)) as string
 }
 
 /** `task_checkpoint` as the holder: the tool's handler over the stores of the server's database. */
@@ -143,6 +186,7 @@ test('revision-control walkthrough: hold, pause, checkpoint, Pausing to Paused, 
     const state = section.getByTestId('plan-pause-state-walk-api')
     await expect(state).toContainText('Pausing', { timeout: 20_000 })
     await expect(state).not.toContainText('Paused')
+    expect(settlePauseReceipt(root)).toBe('delivered')
 
     // The holder commits its work (never pushing it) and records the checkpoint.
     mkdirSync(join(worktree, 'src'), { recursive: true })
