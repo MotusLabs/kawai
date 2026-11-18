@@ -59,7 +59,7 @@ import { CodexSkillDiscovery, type CodexSkillInput } from './skills.js'
 import { CodexActivity } from './activity.js'
 import { CapacityRecovery } from './capacityRecovery.js'
 import { dispatchCodexToolCall, type CodexDynamicToolCall } from './tools.js'
-import { completionOutcome, decideTurn, INTERRUPTED, newCodexTurn, type CodexTurnState } from './turns.js'
+import { completionOutcome, decideTurn, INTERRUPTED, namesRetired, newCodexTurn, type CodexTurnState } from './turns.js'
 export type { CodexSessionOptions } from './sessionOptions.js'
 
 interface Prepared {
@@ -329,7 +329,7 @@ export class CodexSession {
 
   private notification(generation: CodexGeneration, method: string, params: JsonObject): void {
     if (generation.retired || generation !== this.current() || this.stopBegun()) return
-    if (typeof params.threadId === 'string' && params.threadId !== generation.threadId) return
+    if ((typeof params.threadId === 'string' && params.threadId !== generation.threadId) || namesRetired(this.native, params)) return
     if (method === 'turn/started') return this.turnStarted(params)
     if (method === 'skills/changed') return this.skills.changed(generation)
     if (method === 'turn/completed') {
@@ -412,7 +412,7 @@ export class CodexSession {
     const disposition = this.permissions.disposition(method)
     if (disposition.kind === 'respond') return disposition.result
     if (disposition.kind === 'error') throw new ServerRequestRefusal(-32601, disposition.message)
-    const live = !generation.retired && generation === this.current()
+    const live = !generation.retired && generation === this.current() && !namesRetired(this.native, params)
     if (disposition.kind === 'tool') {
       const job = live ? this.runOwned(`tool:${String(params.callId ?? '')}`, () => dispatchCodexToolCall(this.tools, generation.threadId, params as CodexDynamicToolCall)) : null
       return job ?? dispatchCodexToolCall(null, null, params as CodexDynamicToolCall)
@@ -477,7 +477,8 @@ export class CodexSession {
         if (typeof id === 'string') this.bindNative(turn, id)
       } catch (error) {
         if (this.stopBegun() && error instanceof AgentRuntimeError && error.category === 'stopped') return
-        this.settle(turn, 'failed', rpcError(error, 'Codex refused the turn'), 'error_during_execution')
+        // A rejection after the attempt retired (capacityRecovery.ts) fails nothing: the recovery owns the turn now.
+        if (!turn.retiredAttempts) this.settle(turn, 'failed', rpcError(error, 'Codex refused the turn'), 'error_during_execution')
       }
     })
     try {

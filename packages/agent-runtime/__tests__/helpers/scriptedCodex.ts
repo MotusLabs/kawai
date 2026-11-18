@@ -74,7 +74,8 @@ export interface Scripted {
   driver: CodexAgentDriver
   clock: FakeCapacityClock
   events: AgentEvent[]
-  activities: Array<Activity | null>
+  /** Every onActivity publication as a plain record (the shape's own fields, typed or not). */
+  activities: Array<Record<string, unknown> | null>
   limits: LimitEvent[]
   results: TurnResult[]
   /** Every request the session wrote, in order (boot included). */
@@ -84,6 +85,8 @@ export interface Scripted {
   reply(id: number, result: unknown): void
   fail(id: number, message: string, info?: unknown): void
   notify(method: string, params: Record<string, unknown>): void
+  /** A server request to the session; resolves with the session's whole response message. */
+  ask(method: string, params: Record<string, unknown>): Promise<Record<string, any>>
   /** The process ends (an unexpected exit unless the driver is stopping). */
   exit(code?: number): void
   flush(): Promise<void>
@@ -108,7 +111,7 @@ let nextPid = (1 << 30) + 500_000
 /** One scripted driver; `capacityRecovery` as given (omit it for the default). */
 export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: FakeCapacityClock } = {}): Scripted {
   const clock = options.clock ?? new FakeCapacityClock()
-  const recorded = { events: [] as AgentEvent[], activities: [] as Array<Activity | null>, limits: [] as LimitEvent[], results: [] as TurnResult[], requests: [] as ClientRequest[] }
+  const recorded = { events: [] as AgentEvent[], activities: [] as Array<Record<string, unknown> | null>, limits: [] as LimitEvent[], results: [] as TurnResult[], requests: [] as ClientRequest[] }
   let server: { write(message: unknown): void; exit(code: number): void } | null = null
   const send = (message: unknown) => server?.write(message)
   const spawn = (request: OwnedSpawnRequest): OwnedProcess => {
@@ -157,11 +160,13 @@ export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: Fak
     }))
     return owned
   }
+  const answers = new Map<number, (message: Record<string, any>) => void>()
+  let nextAsk = 9000
   const reply = (id: number, result: unknown) => send({ jsonrpc: '2.0', id, result })
   const fail = (id: number, message: string, info?: unknown) => send({ jsonrpc: '2.0', id, error: { code: -32000, message, ...(info !== undefined ? { data: { codexErrorInfo: info } } : {}) } })
   function handle(message: Record<string, any>): void {
     const { id, method, params = {} } = message
-    if (method === undefined) return
+    if (method === undefined) return void answers.get(id)?.(message)
     recorded.requests.push({ id, method, params })
     if (method === 'initialize') return reply(id, { userAgent: 'scripted-codex/0.163.0', codexHome: '/nonexistent', platformFamily: 'unix', platformOs: 'linux' })
     if (method === 'thread/start' || method === 'thread/resume') return reply(id, { thread: { id: THREAD, path: '' }, model: 'fake-model' })
@@ -175,7 +180,7 @@ export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: Fak
     ...(options.capacityRecovery !== undefined ? { capacityRecovery: options.capacityRecovery as 'bounded' } : {}),
     callbacks: {
       onEvent: (event: AgentEvent) => void recorded.events.push(event),
-      onActivity: (activity: Activity | null) => void recorded.activities.push(activity),
+      onActivity: (activity: Activity | null) => void recorded.activities.push(activity as Record<string, unknown> | null),
       onLimitEvent: (event: LimitEvent) => void recorded.limits.push(event),
       onTurnResult: (result: TurnResult) => void recorded.results.push(result),
     },
@@ -187,6 +192,13 @@ export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: Fak
     interrupts: () => recorded.requests.filter((r) => r.method === 'turn/interrupt'),
     reply, fail,
     notify: (method, params) => send({ jsonrpc: '2.0', method, params: { threadId: THREAD, ...params } }),
+    ask: (method, params) => {
+      const id = nextAsk++
+      return new Promise((resolve) => {
+        answers.set(id, resolve)
+        send({ jsonrpc: '2.0', id, method, params: { threadId: THREAD, ...params } })
+      })
+    },
     exit: (code = 7) => server?.exit(code),
     flush: async () => {
       for (let i = 0; i < 12; i++) await new Promise((resolve) => setImmediate(resolve))

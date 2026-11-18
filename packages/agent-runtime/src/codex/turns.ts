@@ -67,6 +67,11 @@ export function retiredAttempt(turn: CodexTurnState, native: Map<string, CodexTu
   ;(turn.retiredAttempts ??= []).push(id)
 }
 
+/** Whether a frame names a retired attempt's native id: it reaches no fact, request, tool or activity (L1). */
+export function namesRetired(native: Map<string, CodexTurnState>, params: Record<string, unknown>): boolean {
+  return typeof params.turnId === 'string' && native.get(params.turnId) === RETIRED
+}
+
 /** Open the turn for its next attempt's native id: a fresh binding and native wait, nothing owed. */
 export function rearmAttempt(turn: CodexTurnState): void {
   let bound!: (id: string) => void
