@@ -25,7 +25,7 @@ import leadTemplate from '../../../config/groups/lead.md' with { type: 'text' }
 import devsTemplate from '../../../config/groups/devs.md' with { type: 'text' }
 import reviewersTemplate from '../../../config/groups/reviewers.md' with { type: 'text' }
 import { parseGroupFile } from './groupFile'
-import { createExclusive, EEXIST, ELOOP, ENOENT, ENOTDIR, lastErrno, linkAt, listDir, mkdirAt, openDirAt, openNoFollow, PinnedFsError, unlinkAt } from './pinnedFs'
+import { AT_FDCWD, createExclusive, EEXIST, ELOOP, ENOENT, ENOTDIR, lastErrno, linkAt, listDir, mkdirAt, openDirAt, openNoFollow, PinnedFsError, unlinkAt } from './pinnedFs'
 import type { TeamSetupGroup, TeamSetupPreview, TeamSetupResult } from '../../shared/teamSetup'
 
 /** The starter groups, in the order they are written and previewed. */
@@ -104,7 +104,7 @@ const errnoName = (errno: number) => ERRNO_NAMES[errno] ?? `errno ${errno}`
  * ENOTDIR is probed once more without O_DIRECTORY).
  */
 function openPinned(parent: PinnedDir | null, name: string): PinOutcome {
-  const at = parent ? parent.fd : -100 // AT_FDCWD
+  const at = parent ? parent.fd : AT_FDCWD
   try {
     const fd = openDirAt(at, name)
     const stat = fs.fstatSync(fd)
