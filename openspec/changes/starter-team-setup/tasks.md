@@ -34,7 +34,7 @@
 
 ## 6. Integration
 
-- [ ] 6.1 Annotate every covering test with `// @covers:` for the delta scenarios, run `openspec validate starter-team-setup --strict`, and run `bun run check` on the clean committed tree. Verify: both pass, and the result maps each oracle id (S1–S9, O1–O4, E1–E11, F1–F6, P1–P3) to a test title and its killed mutant.
+- [x] 6.1 Annotate every covering test with `// @covers:` for the delta scenarios, run `openspec validate starter-team-setup --strict`, and run `bun run check` on the clean committed tree. Verify: both pass, and the result maps each oracle id (S1–S9, O1–O4, E1–E11, F1–F6, P1–P3) to a test title and its killed mutant.
 
 ## Workflow follow-up
 
