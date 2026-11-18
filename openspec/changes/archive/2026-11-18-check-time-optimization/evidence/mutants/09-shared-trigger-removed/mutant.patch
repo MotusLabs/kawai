@@ -1,0 +1,12 @@
+diff --git a/scripts/lib/realTmuxSelection.ts b/scripts/lib/realTmuxSelection.ts
+index df960b8e..07d62521 100644
+--- a/scripts/lib/realTmuxSelection.ts
++++ b/scripts/lib/realTmuxSelection.ts
+@@ -67,7 +67,6 @@ export function selectRealTmuxFiles(
+   return declarations.map(({ file, globs }): RealTmuxChoice => {
+     if (forced) return { file, run: true, reason: 'forced' }
+     if (mergeBase === null) return { file, run: true, reason: 'no-merge-base' }
+-    if (triggered) return { file, run: true, reason: 'shared-trigger' }
+     if (changed.includes(file) || matchesAny(globs, changed)) return { file, run: true, reason: 'declared-path' }
+     return { file, run: false, reason: 'unaffected' }
+   })

@@ -1,0 +1,15 @@
+diff --git a/scripts/lib/checkRun.ts b/scripts/lib/checkRun.ts
+index b9d77133..d9ad129a 100644
+--- a/scripts/lib/checkRun.ts
++++ b/scripts/lib/checkRun.ts
+@@ -118,7 +118,9 @@ export function caseProfileFor(fullProperties: boolean, env: NodeJS.ProcessEnv):
+  * is `full` or unknown, since every pass before profiles existed ran the
+  * declared counts. --force never reaches here. */
+ export function recordAnswers(record: CheckRecord, fullProperties: boolean): boolean {
+-  return !fullProperties || record.caseProfile !== 'reduced'
++  void fullProperties
++  void record
++  return true // MUTANT profile-check-removed
+ }
+ 
+ function defaultSpawn(request: SpawnRequest): Promise<number | null> {

@@ -1,0 +1,32 @@
+# mutant V1-size-dropped
+# target: src/server/workspace/openspecFingerprint.ts
+# before: push(`f\t${childRelative}\t${typeOf(entry)}\t${stats.size}\t${stats.mtimeMs}`)
+# after:  push(`f\t${childRelative}\t${typeOf(entry)}\t${stats.mtimeMs}`)
+# command: bun test src/server/__tests__/openspecFingerprint.test.ts -t FP3: --timeout 20000
+# required: the named row FP3 fails (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/openspecFingerprint.test.ts:
+223 |     expect(after).toBeNull()
+224 |   } else if (row.expected === 'equal') {
+225 |     expect(after).toBe(base)
+226 |   } else {
+227 |     expect(after).not.toBeNull()
+228 |     expect(after).not.toBe(base)
+                            ^
+error: expect(received).not.toBe(expected)
+
+Expected: not "ba26e8a0971ea95b792198da5d60558c5933501c4199009ae759e7dafbd8a183"
+
+      at runFpRow (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecFingerprint.test.ts:228:23)
+      at async <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecFingerprint.test.ts:249:11)
+(fail) fingerprintOpenSpecInputs FP table > FP3: tasks.md rewritten, different size, mtime restored -> differs [4.36ms]
+
+ 0 pass
+ 14 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [13.00ms]
+
+verdict: KILLED (named row failed, as required)

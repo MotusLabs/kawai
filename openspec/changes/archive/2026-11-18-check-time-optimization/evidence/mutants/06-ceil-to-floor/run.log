@@ -1,0 +1,37 @@
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/propertyCases.test.ts:
+30 |       const actual = propertyCases(n, env)
+31 |       if (actual !== expected) mismatches.push(`${name}, n=${n}: ${actual} != ${expected}`)
+32 |     }
+33 |   }
+34 |   expect(checked).toBe(8_000)
+35 |   expect(mismatches.slice(0, 10)).toEqual([])
+                                       ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "unset, n=50: 12 != 13",
++   "unset, n=51: 12 != 13",
++   "unset, n=53: 13 != 14",
++   "unset, n=54: 13 != 14",
++   "unset, n=55: 13 != 14",
++   "unset, n=57: 14 != 15",
++   "unset, n=58: 14 != 15",
++   "unset, n=59: 14 != 15",
++   "unset, n=61: 15 != 16",
++   "unset, n=62: 15 != 16",
++ ]
+
+- Expected  - 1
++ Received  + 12
+
+      at <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/src/server/__tests__/propertyCases.test.ts:35:35)
+(fail) PC1: propertyCases(n) is n below 50 or under CI or the full flag, else ceil(n/4), for n 1–2,000 in 4 environments [0.89ms]
+
+ 0 pass
+ 1 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [3.00ms]

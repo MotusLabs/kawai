@@ -44,11 +44,52 @@ describe('shouldRunOpenSpec RD table', () => {
     { id: 'RD5', previous: ENTRY, fingerprint: 'fp-a', age: OPENSPEC_REUSE_MAX_AGE_MS, run: true },
     { id: 'RD5', previous: ENTRY, fingerprint: 'fp-a', age: OPENSPEC_REUSE_MAX_AGE_MS * 3, run: true },
   ]
-  for (const row of rows) {
-    test(`${row.id}: previous ${row.previous ? 'entry' : 'none'}, fingerprint ${row.fingerprint ?? 'null'}, age ${row.age} ms -> ${row.run ? 'run' : 'reuse'}`, () => {
-      expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
-    })
-  }
+  // One literal test per row, in the rows' order, so every title resolves as
+  // a literal (closeout task 7.1); the assertion is the loop body verbatim.
+  test('RD1: previous none, fingerprint fp-a, age 0 ms -> run', () => {
+    const row = rows[0]
+    expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+  })
+
+  test('RD1: previous none, fingerprint null, age 0 ms -> run', () => {
+    const row = rows[1]
+    expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+  })
+
+  test('RD2: previous entry, fingerprint null, age 1000 ms -> run', () => {
+    const row = rows[2]
+    expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+  })
+
+  test('RD3: previous entry, fingerprint fp-b, age 1000 ms -> run', () => {
+    const row = rows[3]
+    expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+  })
+
+  test('RD3: previous entry, fingerprint fp-b, age 600000 ms -> run', () => {
+    const row = rows[4]
+    expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+  })
+
+  test('RD4: previous entry, fingerprint fp-a, age 0 ms -> reuse', () => {
+    const row = rows[5]
+    expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+  })
+
+  test('RD4: previous entry, fingerprint fp-a, age 599999 ms -> reuse', () => {
+    const row = rows[6]
+    expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+  })
+
+  test('RD5: previous entry, fingerprint fp-a, age 600000 ms -> run', () => {
+    const row = rows[7]
+    expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+  })
+
+  test('RD5: previous entry, fingerprint fp-a, age 1800000 ms -> run', () => {
+    const row = rows[8]
+    expect(shouldRunOpenSpec(row.previous, row.fingerprint, T0 + row.age)).toBe(row.run)
+  })
 
   // @covers: openspec-visibility › Reuse unchanged OpenSpec discovery results › The result is old
   test('RD5: a result exactly 10 minutes old is rediscovered even when the fingerprint matches', () => {

@@ -1,0 +1,43 @@
+# mutant V2-failed-result-kept
+# target: src/server/workspace/openspecDiscovery.ts
+# before: "  } else {\n    cache.delete(worktreePath)\n  }"
+# after:  "  } else {\n    // mutant: a failed result keeps its entry\n  }"
+# command: bun test src/server/__tests__/openspecDiscoveryReuse.test.ts --timeout 20000
+# required: the named row DO3 fails (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/openspecDiscoveryReuse.test.ts:
+198 |     const first = await refreshRepositoryOpenSpec(repository(['/repo']), undefined, h.options)
+199 |     h.fingerprints.set('/repo', 'fp-2')
+200 |     h.script(async () => ({ ok: false, exitCode: null, stdout: '', stderr: '' }))
+201 |     const second = await refreshRepositoryOpenSpec(repository(['/repo']), [first], h.options)
+202 |     expect(h.calls).toHaveLength(2)
+203 |     expect(h.cache.get('/repo')).toBeUndefined()
+                                       ^
+error: expect(received).toBeUndefined()
+
+Received: {
+  fingerprint: "fp-1",
+  discoveredAt: 1800000000000,
+  state: {
+    changes: [
+      {
+        name: "alpha",
+        completedTasks: 1,
+        totalTasks: 3,
+      }
+    ],
+    stale: false,
+  },
+}
+
+      at <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecDiscoveryReuse.test.ts:203:34)
+(fail) refreshRepositoryOpenSpec DO table > DO3: a failed run after a cached success removes the entry and publishes last-valid values marked stale [0.24ms]
+
+ 18 pass
+ 1 fail
+ 43 expect() calls
+Ran 19 tests across 1 file. [24.00ms]
+
+verdict: KILLED (DO3 failed, as required)
