@@ -14,6 +14,7 @@ const row = (overrides: Partial<TurnUsageRow> = {}): TurnUsageRow => ({
   taskId: 'task-1', startId: 'start-1', ok: true, usage, numTurns: 3, endedAt: '2026-10-16T00:00:00.000Z', ...overrides,
 })
 
+// @covers: chat-turn-usage › Usage rows are retained for 90 days › Restart
 test('a turn is recorded once; rows past 90 days are pruned at startup', () => {
   const db = schemaDb()
   const store = new ChatTurnUsageStore(db)

@@ -78,6 +78,8 @@ test('failed interval transaction leaves its live checkpoint retryable', () => {
   expect(h.db.prepare("SELECT count(*) n FROM process_observations WHERE kind='gap'").get()).toEqual({ n: 1 });
   h.db.close();
 });
+// @covers: process-observations › Context and compaction are structured observations › Boundary without post size
+// @covers: process-observations › Context and compaction are structured observations › Approximate threshold
 test('context deltas coalesce but thresholds, turn end and compaction boundaries remain exact', () => {
   const h = harness();
   h.emit({ type: 'turn_started' }, 0);

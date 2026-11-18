@@ -53,6 +53,8 @@ test('pruned usage rowids can be reused without losing or duplicating a later tu
   expect(service.store.forTeam('team').filter(r => r.kind === 'usage')).toHaveLength(2);
   db.close();
 });
+// @covers: chat-turn-usage › Usage rows are retained for 90 days › Extended history
+// @covers: chat-turn-usage › Usage rows are retained for 90 days › Older pruned history cannot be restored
 test('75-day usage survives retention while older rows prune in bounded batches and coverage stays partial', () => {
   const db = schemaDb(), now = Date.parse(at), store = new ChatTurnUsageStore(db, () => now);
   const row = { sessionId: 's', turnId: 'recent', teamId: 'team', groupId: null, profileId: null, model: null, taskId: null, startId: null, ok: true, usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 }, numTurns: 1, endedAt: new Date(now - 75 * 86400000).toISOString() };

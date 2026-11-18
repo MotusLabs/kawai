@@ -16,6 +16,7 @@ function harness() {
   const record = (key: string, value = 42) => service.store.record({ sourceKey: key, teamId: '/private/repo', groupId: 'dev', model: 'original', kind: 'usage', observedAt: new Date(now).toISOString(), data: { input: value, output: 2, cacheRead: 0, cacheCreation: 0, scope: 'completed-main-loop' } });
   return { db, service, record, time: (ms: number) => { now = origin + ms; } };
 }
+// @covers: prometheus-export › Cumulative exports survive restart and pruning › Crash and replay
 test('lifetime histogram and token totals survive restart, transaction rollback, replay and detail pruning', () => {
   const h = harness(), original = h.service.store.accumulate!;
   h.service.store.accumulate = row => { original(row); throw Error('rollback after aggregate writes'); };
@@ -37,6 +38,7 @@ test('lifetime histogram and token totals survive restart, transaction rollback,
   expect(h.record('usage:one', 999)).toBeNull();
   h.db.close();
 });
+// @covers: prometheus-export › Export uses bounded labels and shared definitions › Many tasks
 test('catalog churn and thousands of task/session identifiers cannot create unbounded labels', () => {
   const h = harness();
   for (let i = 0; i < 2000; i++)
@@ -74,6 +76,9 @@ test('renderer escapes labels and produces HELP, TYPE, cumulative buckets, count
   expect(text).toContain('# TYPE kawai_agent_tokens_total counter');
   expect(text).toContain('team="a\\"b\\\\c\\nd"');
 });
+// @covers: process-observations › Source availability is explicit during staged delivery › Independent foundation
+// @covers: prometheus-export › Export uses bounded labels and shared definitions › Unknown quota
+// @covers: prometheus-export › Supported metrics can be exported before dependent integrations › Quota adapter has not landed
 test('snapshot is cached for five seconds and unavailable adapters emit availability without fabricated samples', () => {
   const h = harness(), snapshot = new MetricsSnapshot(h.service);
   h.record('one');

@@ -36,6 +36,7 @@ test('a failed aggregate transaction records neither the fact nor the deduplicat
   expect(store.record(fact())).not.toBeNull();
   db.close();
 });
+// @covers: prometheus-export › Cumulative exports survive restart and pruning › Retention cleanup
 test('detail pruning retains source identity, checkpoints, live state and cumulative totals', () => {
   const db = schemaDb();
   let now = Date.parse(at);
@@ -86,6 +87,7 @@ for (const row of T3) {
     });
   }
 }
+// @covers: process-observations › History has bounded retention and visible coverage › Interval detail ages out first
 test('interval detail prunes after 14 days while facts and usage keep 90 days', () => {
   const db = schemaDb();
   let now = Date.parse(at);
