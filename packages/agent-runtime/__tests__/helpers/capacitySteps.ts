@@ -20,8 +20,8 @@ export async function stopScripted(): Promise<void> {
   await Promise.allSettled(LIVE.splice(0).map((s) => s.driver.kill()))
 }
 
-export function scripted(capacityRecovery?: unknown): Scripted {
-  const s = scriptedCodex(capacityRecovery === undefined ? {} : { capacityRecovery })
+export function scripted(capacityRecovery?: unknown, resume?: string): Scripted {
+  const s = scriptedCodex({ ...(capacityRecovery === undefined ? {} : { capacityRecovery }), ...(resume ? { resume } : {}) })
   LIVE.push(s)
   return s
 }

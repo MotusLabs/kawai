@@ -109,7 +109,7 @@ function launch(): CodexDriverOptions['launch'] {
 let nextPid = (1 << 30) + 500_000
 
 /** One scripted driver; `capacityRecovery` as given (omit it for the default). */
-export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: FakeCapacityClock } = {}): Scripted {
+export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: FakeCapacityClock; resume?: string } = {}): Scripted {
   const clock = options.clock ?? new FakeCapacityClock()
   const recorded = { events: [] as AgentEvent[], activities: [] as Array<Record<string, unknown> | null>, limits: [] as LimitEvent[], results: [] as TurnResult[], requests: [] as ClientRequest[] }
   let server: { write(message: unknown): void; exit(code: number): void } | null = null
@@ -178,6 +178,7 @@ export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: Fak
   const driverOptions = {
     logger, launch: launch(), permissions: PERMISSIONS,
     ...(options.capacityRecovery !== undefined ? { capacityRecovery: options.capacityRecovery as 'bounded' } : {}),
+    ...(options.resume ? { resume: { runtime: 'codex' as const, runtimeSessionId: options.resume } } : {}),
     callbacks: {
       onEvent: (event: AgentEvent) => void recorded.events.push(event),
       onActivity: (activity: Activity | null) => void recorded.activities.push(activity as Record<string, unknown> | null),
