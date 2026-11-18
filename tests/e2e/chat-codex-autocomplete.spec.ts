@@ -104,6 +104,26 @@ test('Codex autocomplete selects without sending, refreshes both browsers, and i
     await page.getByRole('option', { name: /review/ }).dispatchEvent('pointerover')
     await input.press('Enter')
     await expect(input).toHaveValue('first\n/explore ')
+    // F1 wrapping (findings-69740b38): ArrowUp at the first row wraps to the
+    // last and ArrowDown at the last wraps to the first; stationary boundary
+    // bursts at those wrapped transitions must not steal the keyboard choice,
+    // and Tab/Enter insert it without sending.
+    await input.fill('/')
+    await input.press('ArrowUp')
+    await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('option', { name: /explore/ }).dispatchEvent('pointerover')
+    await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'true')
+    await input.press('Tab')
+    await expect(input).toHaveValue('/review ')
+    await input.fill('/')
+    await input.press('ArrowDown')
+    await input.press('ArrowDown')
+    await expect(page.getByRole('option', { name: /explore/ })).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('option', { name: /review/ }).dispatchEvent('pointerover')
+    await expect(page.getByRole('option', { name: /explore/ })).toHaveAttribute('aria-selected', 'true')
+    await input.press('Enter')
+    await expect(input).toHaveValue('/explore ')
+    await expect(page.locator('[data-chat-role="user"]')).toHaveCount(0)
     await input.fill('/'); await page.getByRole('option', { name: /review/ }).hover()
     await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'true')
     await page.getByRole('option', { name: /review/ }).click()
