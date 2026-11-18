@@ -4,11 +4,13 @@
 // and nothing lands outside the groups directory), and the templates parsing
 // clean against the shipped catalogs — all over private /tmp roots.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { loadGroupCatalog } from '../team/groupCatalog'
 import { projectGroupFiles, runTeamSetup, setupAvailable, setupPreview, STARTER_TEMPLATES } from '../team/teamSetup'
+import { AT_FDCWD, EACCES, EEXIST, EINVAL, ELOOP, ENOENT, ENOTDIR } from '../team/pinnedFs'
 import { propertyCases } from './helpers/propertyCases'
 
 const CONFIG = path.resolve(import.meta.dir, '../../../config/groups')
@@ -105,7 +107,21 @@ describe('Table S — the setup write', () => {
     expect(result).toMatchObject({ ok: false, reason: 'error', created: [], skipped: [] })
     expect(result.error).toStartWith('Writing lead.md failed: ')
     expect(fs.readFileSync(outside, 'utf8')).toBe('keep')
+    expect(fs.lstatSync(path.join(groupsDir(), '.lead.md.fixed.tmp')).isSymbolicLink()).toBe(true)
     expect(listing(groupsDir()).filter(name => name.endsWith('.md'))).toEqual([])
+  })
+
+  // Cleanup only removes a temp this run created: a pre-existing entry at the
+  // temp name is refused on sight and left exactly as it was.
+  test('S6c: a colliding pre-existing temp file is refused and never deleted', () => {
+    fs.mkdirSync(groupsDir(), { recursive: true })
+    const planted = path.join(groupsDir(), '.lead.md.fixed.tmp')
+    fs.writeFileSync(planted, 'keep')
+    const result = runTeamSetup(repo(), { tempSuffix: () => 'fixed' })
+    expect(result).toMatchObject({ ok: false, reason: 'error', created: [], skipped: [] })
+    expect(result.error).toStartWith('Writing lead.md failed: ')
+    expect(fs.readFileSync(planted, 'utf8')).toBe('keep')
+    expect(listing(groupsDir())).toEqual(['.lead.md.fixed.tmp'])
   })
 
   // @covers: team-setup › Setup never overwrites a group file › An unwritable directory is reported
@@ -321,5 +337,37 @@ describe('root-swap races — the write stays inside the verified directory', ()
     fs.symlinkSync(path.join(root, 'home'), groupsDir())
     expect(runTeamSetup(repo()).ok).toBe(false)
     expect(openFds()).toBe(before)
+  })
+
+  // A FIFO at a chain position refuses on sight: classification reads the
+  // entry kind through the pinned parent (readlinkat) and never opens the
+  // entry, so nothing can block the run (R4 counterexample, note-8574d993).
+  test('a FIFO at .kawai or groups is refused immediately without opening it', () => {
+    if (process.platform !== 'linux') return // exercised natively on Linux; Darwin is typecheck-only (integration R5)
+    const mkfifo = (target: string) => {
+      try { execFileSync('mkfifo', [target], { stdio: 'ignore' }); return true } catch { return false }
+    }
+    const kawai = path.join(repo(), '.kawai')
+    if (!mkfifo(kawai)) return
+    try {
+      const refused = runTeamSetup(repo())
+      expect(refused).toMatchObject({ ok: false, reason: 'error', created: [], skipped: [] })
+      expect(refused.error).toContain('is not a directory')
+    } finally {
+      fs.rmSync(kawai)
+    }
+    fs.mkdirSync(kawai)
+    const groups = groupsDir()
+    if (!mkfifo(groups)) return
+    const refused = runTeamSetup(repo())
+    expect(refused).toMatchObject({ ok: false, reason: 'error', created: [], skipped: [] })
+    expect(refused.error).toContain('is not a directory')
+  })
+
+  test('the Linux backend runs with the pinned ABI constants', () => {
+    if (process.platform !== 'linux') return // the Darwin branch is typecheck-only (integration R5 limitation)
+    expect(AT_FDCWD).toBe(-100)
+    expect(ELOOP).toBe(40)
+    expect([ENOENT, EACCES, EEXIST, ENOTDIR, EINVAL]).toEqual([2, 13, 17, 20, 22])
   })
 })

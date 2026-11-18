@@ -27,6 +27,7 @@ interface Symbols {
   mkdirat: (dirfd: number, path: string, mode: number) => number
   linkat: (olddirfd: number, oldpath: string, newdirfd: number, newpath: string, flags: number) => number
   unlinkat: (dirfd: number, path: string, flags: number) => number
+  readlinkat: (dirfd: number, path: string, buf: Buffer, size: number) => number
   dup: (fd: number) => number
   fdopendir: (fd: number) => number
   readdir: (dir: number) => number
@@ -45,6 +46,9 @@ function load(): Symbols {
     mkdirat: { args: [FFIType.int, FFIType.cstring, FFIType.int], returns: FFIType.int },
     linkat: { args: [FFIType.int, FFIType.cstring, FFIType.int, FFIType.cstring, FFIType.int], returns: FFIType.int },
     unlinkat: { args: [FFIType.int, FFIType.cstring, FFIType.int], returns: FFIType.int },
+    // The size argument is a size_t (pointer-sized); the return is ssize_t,
+    // whose sign alone classifies (link lengths here are far below 2^31).
+    readlinkat: { args: [FFIType.int, FFIType.cstring, FFIType.ptr, FFIType.ptr], returns: FFIType.int },
     dup: { args: [FFIType.int], returns: FFIType.int },
     [DIR_SYMBOLS.fdopendir]: { args: [FFIType.int], returns: FFIType.ptr },
     [DIR_SYMBOLS.readdir]: { args: [FFIType.ptr], returns: FFIType.ptr },
@@ -57,6 +61,7 @@ function load(): Symbols {
     mkdirat: (dirfd, path, mode) => symbols.mkdirat(dirfd, path, mode) as number,
     linkat: (olddirfd, oldpath, newdirfd, newpath, flags) => symbols.linkat(olddirfd, oldpath, newdirfd, newpath, flags) as number,
     unlinkat: (dirfd, path, flags) => symbols.unlinkat(dirfd, path, flags) as number,
+    readlinkat: (dirfd, path, buf, size) => symbols.readlinkat(dirfd, path, buf, size) as number,
     dup: fd => symbols.dup(fd) as number,
     fdopendir: fd => symbols[DIR_SYMBOLS.fdopendir](fd) as number,
     readdir: dir => symbols[DIR_SYMBOLS.readdir](dir) as number,
@@ -85,6 +90,7 @@ const DIRECTORY_FLAGS = O_RDONLY | O_DIRECTORY | O_NOFOLLOW
 export const ENOENT = 2
 export const EACCES = 13
 export const EEXIST = 17
+export const EINVAL = 22
 export const ENOTDIR = 20
 /** ELOOP differs between ABIs: 40 on Linux, 62 on Darwin (32 is EPIPE on both). */
 export const ELOOP = DARWIN ? 62 : 40
@@ -116,6 +122,21 @@ export function createExclusive(dirfd: number, name: string): number {
   const fd = load().openat(dirfd, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644)
   if (fd === -1) fail(`create ${name}`)
   return fd
+}
+
+/**
+ * Whether `name` under `dirfd` is a symbolic link, decided without opening
+ * it: readlinkat succeeds exactly for a symlink and gives EINVAL for every
+ * other kind, so a FIFO or device can never block the run. Null when the
+ * entry cannot be classified (vanished, unreadable) — the caller maps that
+ * to an error outcome.
+ */
+export function isSymlinkAt(dirfd: number, name: string): boolean | null {
+  const len = load().readlinkat(dirfd, name, Buffer.alloc(4096), 4096)
+  if (len >= 0) return true
+  const errno = lastErrno()
+  if (errno === EINVAL) return false
+  return null
 }
 
 /** The raw errno of the most recent failing foreign call (0 after successes). */

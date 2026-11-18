@@ -25,7 +25,7 @@ import leadTemplate from '../../../config/groups/lead.md' with { type: 'text' }
 import devsTemplate from '../../../config/groups/devs.md' with { type: 'text' }
 import reviewersTemplate from '../../../config/groups/reviewers.md' with { type: 'text' }
 import { parseGroupFile } from './groupFile'
-import { AT_FDCWD, createExclusive, EEXIST, ELOOP, ENOENT, ENOTDIR, lastErrno, linkAt, listDir, mkdirAt, openDirAt, openNoFollow, PinnedFsError, unlinkAt } from './pinnedFs'
+import { AT_FDCWD, createExclusive, EEXIST, ELOOP, ENOENT, ENOTDIR, isSymlinkAt, linkAt, listDir, mkdirAt, openDirAt, PinnedFsError, unlinkAt } from './pinnedFs'
 import type { TeamSetupGroup, TeamSetupPreview, TeamSetupResult } from '../../shared/teamSetup'
 
 /** The starter groups, in the order they are written and previewed. */
@@ -100,8 +100,9 @@ const errnoName = (errno: number) => ERRNO_NAMES[errno] ?? `errno ${errno}`
  * top-level path) as the next link of the chain: directory only, never
  * through a symlink, created through the pinned parent when missing. A
  * symlink is refused with kind `symlink`; a non-directory with
- * `not-a-directory` (kernels disagree on which errno says which, so
- * ENOTDIR is probed once more without O_DIRECTORY).
+ * `not-a-directory` (kernels disagree on which errno says which, so the
+ * entry is classified through the pinned parent with readlinkat — never
+ * opened, so a FIFO or device cannot block the run).
  */
 function openPinned(parent: PinnedDir | null, name: string): PinOutcome {
   const at = parent ? parent.fd : AT_FDCWD
@@ -114,12 +115,7 @@ function openPinned(parent: PinnedDir | null, name: string): PinOutcome {
     if (errno === undefined) return { ok: false, kind: 'error' }
     if (errno === ELOOP) return { ok: false, kind: 'symlink', errno }
     if (errno === ENOTDIR) {
-      const probe = openNoFollow(at, name)
-      if (probe === -1) {
-        if (lastErrno() === ELOOP) return { ok: false, kind: 'symlink', errno }
-        return { ok: false, kind: 'not-a-directory', errno }
-      }
-      fs.closeSync(probe)
+      if (isSymlinkAt(at, name) === true) return { ok: false, kind: 'symlink', errno }
       return { ok: false, kind: 'not-a-directory', errno }
     }
     return { ok: false, kind: 'error', errno }
@@ -222,9 +218,11 @@ export function runTeamSetup(groupsRoot: string, hooks: SetupHooks = {}): TeamSe
     const name = `${id}.md`
     const temp = `.${name}.${hooks.tempSuffix?.() ?? crypto.randomUUID()}.tmp`
     let tempFd: number | null = null
+    let owned = false // set only once createExclusive handed this run the name
     let writeError: string | null = null
     try {
       tempFd = createExclusive(dir.fd, temp)
+      owned = true
       fs.writeSync(tempFd, text)
       fs.fsyncSync(tempFd)
       hooks.beforeLink?.(id, path.join(groupsPath, name))
@@ -240,7 +238,9 @@ export function runTeamSetup(groupsRoot: string, hooks: SetupHooks = {}): TeamSe
     } finally {
       if (tempFd !== null) { try { fs.closeSync(tempFd) } catch { /* already closed */ } }
     }
-    // Owned-temp cleanup, on every path; only ENOENT is swallowed.
+    // Owned-temp cleanup: only a name this run created is removed, so a
+    // colliding pre-existing entry is never deleted; only ENOENT is swallowed.
+    if (!owned) return writeError
     try {
       unlinkAt(dir.fd, temp)
     } catch (error) {
