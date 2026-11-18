@@ -150,7 +150,9 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
     if (group.profileAutoCompactWindow) {
       profileAutoCompactWindow = {}
       const listed = new Set(resolvedProfiles.length > 0 ? resolvedProfiles.map(entry => entry.profileId) : ['default'])
-      for (const [written, tokens] of Object.entries(group.profileAutoCompactWindow)) {
+      const windows = group.profileAutoCompactWindow
+      for (const written of group.profileAutoCompactWindowOrder ?? Object.keys(windows)) {
+        const tokens = windows[written]!
         const key = qualified.get(written) ?? written
         changed = true
         if (!known.has(key)) {
@@ -172,9 +174,10 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
     const max = changed && group.maxFromCaps
       ? Math.max(1, resolvedProfiles.reduce((sum, entry) => sum + (entry.cap ?? 0), 0))
       : group.max
+    const { profileAutoCompactWindowOrder: _order, ...unordered } = group
     const checked: GroupDefinition = changed || unknown.length > 0
       ? {
-        ...group,
+        ...unordered,
         profiles: resolvedProfiles.filter(entry => known.has(entry.profileId)),
         max,
         ...(profileEffort !== undefined ? { profileEffort } : {}),

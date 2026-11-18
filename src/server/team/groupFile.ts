@@ -100,6 +100,8 @@ export interface GroupDefinition {
   autoCompactWindow?: number
   /** Per-profile windows overriding `autoCompactWindow`, keyed like `profileEffort`; valid entries only. */
   profileAutoCompactWindow?: Record<string, number>
+  /** That map's keys in written order (a record lists integer keys first); groupCatalog resolves by it, then drops it. */
+  profileAutoCompactWindowOrder?: string[]
   /** Task-owner affinity (group-mail-task-affinity D2); unset = none. */
   affinity?: GroupAffinity
   /** Problems that fell back to defaults instead of rejecting the file. */
@@ -157,7 +159,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 type TaskSettings = Pick<GroupDefinition,
   'canCreateTasks' | 'canCreatePlans' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
   | 'canReportProcess' | 'max' | 'maxFromCaps' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'profileEffort'
-  | 'autoCompactWindow' | 'profileAutoCompactWindow' | 'affinity' | 'warnings'>
+  | 'autoCompactWindow' | 'profileAutoCompactWindow' | 'profileAutoCompactWindowOrder' | 'affinity' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -172,18 +174,14 @@ function parseTaskSettings(
   }
   const canCreate = fields.get('canCreateTasks')?.trim()
   if (canCreate !== undefined) {
-    if (canCreate !== 'true' && canCreate !== 'false') {
-      return { ok: false, error: `canCreateTasks must be true or false, got "${canCreate}"` }
-    }
+    if (canCreate !== 'true' && canCreate !== 'false') return { ok: false, error: `canCreateTasks must be true or false, got "${canCreate}"` }
     settings.canCreateTasks = canCreate === 'true'
   }
   settings.canManageMailbox = parseCanManageMailbox(fields.get('canManageMailbox'), warnings)
   for (const key of ['canCreatePlans', 'releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers', 'canReportProcess'] as const) {
     const raw = fields.get(key)?.trim()
     if (raw === undefined) continue
-    if (raw !== 'true' && raw !== 'false') {
-      return { ok: false, error: `${key} must be true or false, got "${raw}"` }
-    }
+    if (raw !== 'true' && raw !== 'false') return { ok: false, error: `${key} must be true or false, got "${raw}"` }
     settings[key] = raw === 'true'
   }
   const profile = fields.get('profile')?.trim()
@@ -264,8 +262,9 @@ function parseTaskSettings(
   const parsedWindow = window === undefined ? null : parseWindowToken(window)
   if (parsedWindow !== null) settings.autoCompactWindow = parsedWindow
   else if (window !== undefined) warnings.push(`autoCompactWindow must be ${WINDOW_VALUE.expected}, got "${window}"; ignored`)
-  const windows = parseProfileMap(fields.get('profileAutoCompactWindow'), settings.profiles, warnings, WINDOW_VALUE, 'profileAutoCompactWindow', true)
-  if (windows) settings.profileAutoCompactWindow = windows
+  const order: string[] = []
+  const windows = parseProfileMap(fields.get('profileAutoCompactWindow'), settings.profiles, warnings, WINDOW_VALUE, 'profileAutoCompactWindow', true, order)
+  if (windows) Object.assign(settings, { profileAutoCompactWindow: windows, profileAutoCompactWindowOrder: order })
   const affinity = parseAffinity(fields.get('affinity'), fields.get('affinityWait'), warnings)
   if (affinity) settings.affinity = affinity
   return { ok: true, settings }
@@ -307,7 +306,7 @@ const WINDOW_VALUE: ProfileValue<number> = { parse: parseWindowToken, expected: 
  */
 function parseProfileMap<T>(
   raw: string | undefined, listed: GroupProfile[], warnings: string[], value: ProfileValue<T>,
-  label: string, qualifiedKeys = false,
+  label: string, qualifiedKeys = false, order?: string[],
 ): Record<string, T> | undefined {
   if (raw === undefined) return undefined
   const flow = parseFlow(raw.trim(), true, qualifiedKeys)
@@ -333,6 +332,7 @@ function parseProfileMap<T>(
       warnings.push(`${label}.${profileId} must be ${value.expected}, got "${written}"; ignored`)
     } else {
       result[profileId] = parsed
+      order?.push(profileId)
       // A qualified key cannot be checked against the list until groupCatalog
       // resolves it; a bare key not among the group's profiles warns here.
       if (!profileId.includes('/') && !groupProfiles.has(profileId)) {

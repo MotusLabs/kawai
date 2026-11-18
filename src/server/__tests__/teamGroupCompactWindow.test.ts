@@ -91,6 +91,23 @@ describe('row G3: repeated and aliased keys', () => {
     expect(qualifiedFirst.group?.warnings).toContain('profileAutoCompactWindow: "mimo" is already listed; the later entry is ignored')
   })
 
+  // @covers: agent-teams › Invalid role compaction preferences are warned and ignored › Duplicate keys
+  test('G3 a numeric profile id keeps written order against its qualified alias (records list integer keys first)', async () => {
+    fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.kawai', 'providers.json'), JSON.stringify({ p: { models: { 1: { model: 'one' } } } }))
+    const qualifiedFirst = await resolveRole('workers: [1]\nprofileAutoCompactWindow: { p/1: 400000, 1: 300000 }', ['1'])
+    expect(qualifiedFirst.errors).toEqual([])
+    expect(qualifiedFirst.windows).toEqual({ 1: 400000 })
+    expect(qualifiedFirst.group?.profileAutoCompactWindow).toEqual({ 1: 400000 })
+    expect(qualifiedFirst.group?.warnings).toContain('profileAutoCompactWindow: "1" is already listed; the later entry is ignored')
+    expect(qualifiedFirst.group && 'profileAutoCompactWindowOrder' in qualifiedFirst.group).toBe(false)
+    const bareFirst = await resolveRole('workers: [1]\nprofileAutoCompactWindow: { 1: 300000, p/1: 400000 }', ['1'])
+    expect(bareFirst.windows).toEqual({ 1: 300000 })
+    expect(bareFirst.group?.warnings).toContain('profileAutoCompactWindow: "p/1" is already listed; the later entry is ignored')
+    const parsed = parseGroupFile('devs', '---\nprofileAutoCompactWindow: { p/1: 400000, 2: 350000, 1: 300000 }\n---\nBuild.')
+    expect(parsed.ok && parsed.group.profileAutoCompactWindowOrder).toEqual(['p/1', '2', '1'])
+  })
+
   // @covers: agent-teams › Invalid role compaction preferences are warned and ignored › Invalid written key before a valid alias
   test('G3 a repeated written key is consumed by its first occurrence even when invalid; a later valid alias supplies the value', async () => {
     const repeated = await resolveRole('autoCompactWindow: 250000\nprofileAutoCompactWindow: { mimo: 99999, mimo: 300000 }', ['mimo'])
