@@ -152,6 +152,24 @@ env. Generator: two isolated role/profile configurations and sizes uniform in
 `claudeSpawnLaunch`; snapshot `process.env` before/after; seed `0x4d494d4f`,
 128 cases; each result equals the W table's independent resolution.
 
+## Implementation notes (writer-owned local choices)
+
+- The spawn reads R from `resolveClaudeProfileDetail`, the same resolution
+  `resolveClaudeProfile` returns, so C is checked against the set the launch
+  was filtered by; the refusal's branch label is `auto-compaction`.
+- Flattening: a model's own window, else a re-homed key's inherited one,
+  else its provider's.
+- A file pairing `executable` with `autoCompactWindow` on one entry or
+  provider is refused; a pairing assembled across files is reported and the
+  window dropped (wrappers never compose either way).
+- D1's explicit declaration is the profile's startup model or a catalog
+  `ANTHROPIC_MODEL`/`ANTHROPIC_DEFAULT_*_MODEL` value ending in `[1m]`;
+  inherited global env never counts.
+- Role tokens match `^[1-9]\d*$` within range; unknown keys are dropped with
+  a warning in `groupCatalog.ts`, known unlisted keys (bare or qualified)
+  warn and stay.
+- R1 is recorded as UNVERIFIED in `r1-runtime-smoke.md`.
+
 ## Production composition checkpoint
 
 First path: a real manager start of a MiMo member with a role override,

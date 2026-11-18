@@ -105,6 +105,8 @@ export function memberRows(
         : { parkIfResetWithinMs: group.onLimit.parkIfResetWithinMs, otherwise: group.onLimit.otherwise },
       ...(group.effort !== undefined ? { effort: group.effort } : {}),
       ...(group.profileEffort !== undefined ? { profileEffort: { ...group.profileEffort } } : {}),
+      ...(group.autoCompactWindow !== undefined ? { autoCompactWindow: group.autoCompactWindow } : {}),
+      ...(group.profileAutoCompactWindow !== undefined ? { profileAutoCompactWindow: { ...group.profileAutoCompactWindow } } : {}),
       warnings: [...group.warnings],
       sources: sources.map(({ file, layer, inEffect }) => ({ file, layer, inEffect })),
       members,

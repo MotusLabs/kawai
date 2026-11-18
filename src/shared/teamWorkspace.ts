@@ -253,6 +253,10 @@ export interface TeamMemberRow {
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   /** Valid per-profile overrides of `effort` (group-profile-effort); absent when none. */
   profileEffort?: Record<string, 'low' | 'medium' | 'high' | 'xhigh' | 'max'>
+  /** The role's auto-compaction window in tokens (mimo-million-token-context D3); absent when unset. */
+  autoCompactWindow?: number
+  /** Resolved per-profile windows overriding `autoCompactWindow`; absent when none. */
+  profileAutoCompactWindow?: Record<string, number>
   /** Problems that fell back to defaults, naming what fell back. */
   warnings: string[]
   /** Every layer's file for this group; exactly one is in effect. */
