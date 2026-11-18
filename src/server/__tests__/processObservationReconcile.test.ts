@@ -27,12 +27,12 @@ test('post-commit acceptance and mailbox settlement survive recorder failure, re
   expect(mail.get(message.id)?.state).toBe('cancelled');
   expect(service.recorder.failures).toBeGreaterThan(0);
   // While the recorder failed, no acceptance row with a zero or fabricated
-  // duration exists, and the metrics read still reports the acceptance only
-  // as raw coverage: the measured observation is missing, never recorded zero.
+  // duration exists, and coverage indicates the missing measurement: the
+  // recorder's unresolved gap (rendered as observation_gap by the export
+  // snapshot) is visible in collection health until recovery records the
+  // real acceptance below.
   expect(service.store.forTeam('team').filter(row => row.kind === 'acceptance')).toEqual([]);
-  const gap = loadMetricsInputs(db, 'team', Date.parse(at), Date.parse(accepted) + 1000);
-  expect(gap.results.find(row => row.id === result.id)?.acceptedAt).toBe(accepted);
-  expect(gap.toolInputs!.observations).toEqual([]);
+  expect(service.health().gapSince).toBe(accepted);
   // Restoring collection (new service as on restart) reconciles committed sources.
   service.stop();
   const recovered = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted));
@@ -47,6 +47,7 @@ test('post-commit acceptance and mailbox settlement survive recorder failure, re
   expect(JSON.stringify(rows)).not.toContain('private');
   expect(recovered.store.forTeam('another-team')).toEqual([]);
   expect(recovered.recorder.failures).toBe(priorFailures);
+  expect(recovered.health().gapSince).toBeNull();
   db.close();
 });
 test('pruned usage rowids can be reused without losing or duplicating a later turn', () => {
