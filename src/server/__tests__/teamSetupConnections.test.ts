@@ -154,7 +154,7 @@ describe('Set up team over the workspace connection', () => {
 
 // I4 / S9: only the human's Team page reaches the write. The server modules
 // that import the setup are exactly the workspace connection (preview and
-// run) and the groups route (the offer flag only); no agent tool module
+// run), the groups route and the workspace read model (the offer flag only); no agent tool module
 // imports it, so no team tool can write group files.
 describe('Set up team is not agent-reachable', () => {
   const serverRoot = path.join(import.meta.dir, '..')
@@ -166,11 +166,13 @@ describe('Set up team is not agent-reachable', () => {
   const importsSetup = (file: string) => /from '(\.\.?\/)+(team\/)?teamSetup'/.test(fs.readFileSync(file, 'utf8'))
 
   // @covers: team-setup › The setup action is offered to a team without project groups › Agents cannot run the setup
-  test('only the workspace connection and the groups route import the setup, and only the connection runs it', () => {
+  test('only the workspace connection, the groups route, and the workspace read import the setup, and only the connection runs it', () => {
     const importers = sources(serverRoot).filter(importsSetup).map(file => path.relative(serverRoot, file)).sort()
-    expect(importers).toEqual(['routes/teamGroups.ts', 'team/workspaceConnections.ts'])
-    expect(fs.readFileSync(path.join(serverRoot, 'routes', 'teamGroups.ts'), 'utf8')).not.toContain('runTeamSetup')
-    const toolModules = sources(serverRoot).filter(file => /Tools\.ts$/.test(file))
+    expect(importers).toEqual(['routes/teamGroups.ts', 'team/workspaceConnections.ts', 'team/workspaceRead.ts'])
+    for (const reader of ['routes/teamGroups.ts', 'team/workspaceRead.ts']) {
+      expect(fs.readFileSync(path.join(serverRoot, reader), 'utf8')).not.toContain('runTeamSetup')
+    }
+    const toolModules = sources(serverRoot).filter(file => file.endsWith('Tools.ts'))
     expect(toolModules.length).toBeGreaterThan(5)
     for (const file of toolModules) expect(fs.readFileSync(file, 'utf8')).not.toMatch(/teamSetup|setup-run/)
   })
