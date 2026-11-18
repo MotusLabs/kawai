@@ -73,6 +73,8 @@ interface NewSessionModalProps {
       create-then-bind arm distinguishes a cancel from a create-close
       (plan-workspace §6.2, B5). */
   onDismiss?: (created: boolean) => void
+  /** The missing-groups notice's opener (starter-team-setup D2); absent = navigate only. */
+  onOpenTeamMembers?: (projectPath: string) => void
   onCreate: (
     projectPath: string,
     name?: string,
@@ -141,6 +143,7 @@ export function profilePickerGroups(profiles: ClaudeProfileMetadata[]): Array<{
 export default function NewSessionModal({
   isOpen,
   onClose,
+  onOpenTeamMembers,
   onDismiss,
   onCreate,
   defaultProjectDir,
@@ -582,7 +585,7 @@ export default function NewSessionModal({
               </select>
             </label>
             {teamGroups.warnings.map(warning => <p key={warning} role="status" className="mt-1 text-xs text-amber-400">{warning}</p>)}
-            {missingGroups && <MissingGroupsNotice projectPath={projectPath.trim()} onLeave={() => dismiss(false)} />}
+            {missingGroups && <MissingGroupsNotice projectPath={projectPath.trim()} onLeave={() => dismiss(false)} {...(onOpenTeamMembers ? { onOpen: onOpenTeamMembers } : {})} />}
             {(() => {
               const warning = capWarning(teamGroups.groups.find(group => group.id === groupId), claudeProfileId)
               return warning && <p role="status" data-testid="group-cap-warning" className="mt-1 text-xs text-amber-400">{warning}</p>

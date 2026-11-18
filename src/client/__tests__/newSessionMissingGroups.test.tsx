@@ -143,3 +143,20 @@ test('a failed lookup shows no notice', async () => {
   expect(renderer.root.findAllByProps({ 'data-testid': 'missing-groups-notice' })).toHaveLength(0)
   act(() => renderer.unmount())
 })
+
+test('App’s opener receives the shown path, so it can ask the server to discover it first', async () => {
+  globalThis.fetch = (async (url: string) => String(url).startsWith('/api/chat/groups')
+    ? Response.json({ groups: [], errors: [], warnings: [], approvalDefault: null, setupAvailable: true })
+    : Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })) as unknown as typeof fetch
+  const opened: string[] = []
+  let renderer!: TestRenderer.ReactTestRenderer
+  await act(async () => {
+    renderer = TestRenderer.create(<NewSessionModal isOpen onClose={() => {}} onCreate={() => {}} onOpenTeamMembers={path => opened.push(path)}
+      defaultProjectDir="/fresh" commandPresets={DEFAULT_PRESETS} defaultPresetId="claude" />)
+    await settle()
+  })
+  act(() => renderer.root.findByProps({ 'data-testid': 'missing-groups-link' }).props.onClick())
+  expect(opened).toEqual(['/fresh'])
+  expect(useTeamLocationStore.getState().location).toBeNull()
+  act(() => renderer.unmount())
+})

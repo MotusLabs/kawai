@@ -30,7 +30,7 @@
 
 - [x] 5.1 Members tab: Set up team above the group rows or in place of an empty list, disabled while disconnected, opening a preview dialog (groups, workers, flag, target directory, missing-worker warnings) with Confirm and Cancel, showing the result inline. Verify: client tests cover the `team-workspace` ADDED scenarios, the preview, cancel-writes-nothing, and inline refusal.
 - [x] 5.2 New Session dialog: the missing-groups notice for chat sessions whose project has `setupAvailable`, with a link that closes the dialog and navigates to `{ teamKey, tab: 'members' }`, following project-path changes. Verify: `newSessionMissingGroups.test.tsx` (beside `newSessionModal.test.tsx`) covers the five New Session scenarios (V6).
-- [ ] 5.3 Playwright walkthrough: from the New Session notice to the Members tab, Set up team, confirm, and the three listed groups naming their files. Verify: `bun run build` then the e2e spec passes (V6).
+- [x] 5.3 Playwright walkthrough: from the New Session notice to the Members tab, Set up team, confirm, and the three listed groups naming their files. Verify: `bun run build` then the e2e spec passes (V6).
 
 ## 6. Integration
 
