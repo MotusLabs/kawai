@@ -33,7 +33,7 @@ When a setting's value comes from a legacy `AGENTBOARD_<NAME>`, the server SHALL
 - **THEN** the deprecation warning does not contain the token
 
 ### Requirement: Default data lives in the Kawai home directory
-With no database-path or log-file override, the server SHALL keep its database at `~/.kawai/kawai.db`, its log at `~/.kawai/kawai.log`, and its sibling data (chat wire logs, chat worker and background-task state, database backups, the tmux server PID file) in `~/.kawai/`. That directory also holds the existing `groups/`, `routing/`, `teams.json`, `outbound.json`, and `profiles.json` files. An explicit path override SHALL be used as given.
+With no database-path or log-file override, the server SHALL keep its database at `~/.kawai/kawai.db`, its log at `~/.kawai/kawai.log`, and its sibling data (chat wire logs, chat worker and background-task state, database backups, the tmux server PID file) in `~/.kawai/`. That directory also holds the existing `groups/`, `routing/`, `teams.json`, `outbound.json`, and `profiles.json` files. An explicit database path SHALL be used as given, with no data migration or migration-record change.
 
 #### Scenario: Fresh install uses the Kawai home
 - **WHEN** the server starts for the first time with neither `~/.kawai/kawai.db` nor `~/.agentboard/` present
@@ -42,6 +42,14 @@ With no database-path or log-file override, the server SHALL keep its database a
 #### Scenario: Explicit database path is honored
 - **WHEN** the server starts with `KAWAI_DB_PATH=/tmp/x/k.db`
 - **THEN** it opens `/tmp/x/k.db` and migrates no data
+
+#### Scenario: A new explicit database path is created
+- **WHEN** the server starts with `KAWAI_DB_PATH` naming a file that does not exist, even while a damaged migration record exists under `~/.kawai/`
+- **THEN** it creates and opens that file, moves no data-home entry, and leaves the migration record unchanged
+
+#### Scenario: An explicit path inside the Kawai home is honored
+- **WHEN** the server starts with `KAWAI_DB_PATH=~/.kawai/kawai.db`, that file absent, a damaged migration record under `~/.kawai/`, and `~/.agentboard/agentboard.db` present
+- **THEN** it creates and opens `~/.kawai/kawai.db`, reports the record and the overlap, leaves the record unchanged, and moves no legacy entry
 
 ### Requirement: Legacy data directory is migrated on first start
 When default paths apply, `~/.kawai/kawai.db` is missing, and `~/.agentboard/agentboard.db` exists, the server SHALL, before opening the database, move the legacy database with its journal, log, chat wire logs, chat worker and background-task state, backups, tmux PID file, and dev TLS files into `~/.kawai/`, renaming `agentboard.db` and `agentboard.log` to their Kawai names. It SHALL NOT move `~/.agentboard/app`, `~/.agentboard/bin`, or files it does not recognize.
@@ -96,7 +104,7 @@ Before backing up or moving anything, the server SHALL check whether another pro
 - **THEN** nothing is moved, the renamed build serves from the legacy paths, and the log names the reason
 
 ### Requirement: A data migration that cannot complete leaves the legacy data usable
-If any legacy entry cannot be moved, the server SHALL put back every entry it already moved, log an error naming the entry and the cause, and run this process with the legacy `~/.agentboard/` paths. A partly migrated state SHALL NOT be left behind. If putting an entry back fails, the server SHALL log both its paths, run on the legacy paths only if the legacy database is back in place, and otherwise exit naming the pre-rename backup. It SHALL NOT delete any entry.
+If any legacy entry cannot be moved, the server SHALL put back every moved entry, log the entry and cause, and run on the legacy `~/.agentboard/` paths; a migration interrupted by a crash SHALL be completed or rolled back at the next start. No partly migrated state SHALL remain. If putting an entry back fails, the server SHALL log both its paths, run on the legacy paths only if the legacy database is back, and otherwise exit naming the pre-rename backup. It SHALL NOT delete any entry.
 
 #### Scenario: Cross-device move fails
 - **WHEN** `~/.kawai` is on a different filesystem and moving `agentboard.db` fails
@@ -106,8 +114,23 @@ If any legacy entry cannot be moved, the server SHALL put back every entry it al
 - **WHEN** moving a later entry fails and moving `kawai.db` back to `agentboard.db` also fails
 - **THEN** the server logs both paths of each entry not put back, exits with an error naming the pre-rename backup, and both the database and the backup still exist
 
+#### Scenario: A crash mid-migration recovers at the next start
+- **WHEN** the server process dies after moving some legacy entries and before the migration finished
+- **THEN** the next start either completes the move when the database already reached `~/.kawai/kawai.db` or puts the moved entries back and migrates again, and afterwards every entry exists at exactly one of its two paths
+
+### Requirement: A damaged migration record stops startup
+With no database-path override, if the record of an interrupted data migration cannot be read, or it exists while neither `~/.kawai/kawai.db` nor `~/.agentboard/agentboard.db` exists, the server SHALL exit with an error before opening a database. The error SHALL name the record, both database paths with whether each exists, and the newest pre-rename backup found. The server SHALL NOT move any entry, and SHALL NOT open or create a database.
+
+#### Scenario: Unreadable record with the migrated database present
+- **WHEN** `~/.kawai/kawai.db` exists, `~/.agentboard/agentboard.db` does not, and the migration record cannot be parsed
+- **THEN** the server exits naming the record and both paths, nothing moves, and no `agentboard.db` is created
+
+#### Scenario: Record with neither database present
+- **WHEN** a readable migration record exists and neither database file exists
+- **THEN** the server exits naming the record and its pre-rename backup, and no database is created
+
 ### Requirement: The managed tmux session is named kawai
-With no `TMUX_SESSION` override, the managed tmux session SHALL be `kawai`, and per-connection sessions SHALL be `kawai-ws-<connection>`. At startup, if a session named exactly `agentboard` exists and none named `kawai` does, the server SHALL rename `agentboard` to `kawai`. Before the first session refresh, it SHALL rewrite stored window targets from `agentboard:` to `kawai:`, so tracked sessions stay attached to their windows.
+With no `TMUX_SESSION` override, the managed tmux session SHALL be `kawai`, and per-connection sessions SHALL be `kawai-ws-<connection>`. At startup, if a session named exactly `agentboard` exists and none named `kawai` does, the server SHALL rename `agentboard` to `kawai`. Before the first session refresh, it SHALL rewrite stored window targets from `agentboard:` to `kawai:` whenever no `agentboard` session remains, so tracked sessions stay attached.
 
 #### Scenario: Running windows carry over
 - **WHEN** the renamed build starts while tmux has an `agentboard` session with three windows and no `kawai` session
@@ -120,6 +143,10 @@ With no `TMUX_SESSION` override, the managed tmux session SHALL be `kawai`, and 
 #### Scenario: Override is respected
 - **WHEN** the server starts with `TMUX_SESSION=work`
 - **THEN** it manages `work` and renames no session
+
+#### Scenario: Stored targets are rewritten after an interrupted rename
+- **WHEN** the server starts with a `kawai` session, no `agentboard` session, no `TMUX_SESSION` override, and stored sessions still pointing at `agentboard:` windows
+- **THEN** those stored targets are rewritten to `kawai:` before the first session refresh, so tracked sessions stay attached
 
 ### Requirement: Legacy per-connection tmux sessions are pruned
 When startup pruning of orphaned per-connection sessions is enabled, it SHALL remove orphaned `agentboard-ws-*` sessions as well as `kawai-ws-*` sessions. Per-connection sessions in either form SHALL NOT appear as discovered external sessions.
@@ -136,7 +163,7 @@ When it discovers sessions on remote hosts, the server SHALL treat a remote sess
 - **THEN** its windows are listed as managed remote sessions, and the `agentboard-ws-*` sessions there are not listed
 
 ### Requirement: Browser settings carry over to the Kawai storage keys
-The client SHALL persist its settings, theme, workspace, and session selection under `kawai-settings`, `kawai-theme`, `kawai-workspace`, and `kawai-session`. Before reading a store, if the new key is missing and the legacy `agentboard-*` key exists, the client SHALL copy the value to the new key and then remove the legacy key.
+The client SHALL persist its settings, theme, workspace, and session selection under `kawai-settings`, `kawai-theme`, `kawai-workspace`, and `kawai-session`. Before reading a store, if the new key is missing and the legacy `agentboard-*` key exists, the client SHALL copy the value to the new key and remove the legacy key only after the copy reads back from persistent storage. If the copy cannot be confirmed, the client SHALL keep the legacy key and use its value.
 
 #### Scenario: Settings survive the upgrade
 - **WHEN** a browser with saved settings under `agentboard-settings` loads the renamed client
@@ -145,6 +172,10 @@ The client SHALL persist its settings, theme, workspace, and session selection u
 #### Scenario: New key is never overwritten
 - **WHEN** both `kawai-theme` and `agentboard-theme` exist
 - **THEN** `kawai-theme` is used unchanged
+
+#### Scenario: A failed copy keeps the legacy settings
+- **WHEN** `agentboard-settings` exists, `kawai-settings` does not, and writing to browser storage fails while reading and removing still work
+- **THEN** the saved settings are in effect, `agentboard-settings` is still in persistent storage after a reload, and the copy is tried again on the next load
 
 ### Requirement: Service installers use Kawai service names
 The systemd installer SHALL install and enable the user unit `kawai.service`. The launchd installer SHALL load the agents `com.kawai` and `com.kawai.logrotate`. Each SHALL install the release under `~/.kawai/app` with `bin/kawai`. When a legacy `agentboard.service` or `com.agentboard` agent exists, the installer SHALL stop it and remove its definition before starting the Kawai one.
