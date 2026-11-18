@@ -51,7 +51,7 @@ for (const runtime of ['codex', 'claude'] as const) {
     expect(h.options()[1]!.props.className).toContain('bg-hover')
     h.key('ArrowUp'); h.key('Enter')
     expect(h.textarea().props.value).toBe('please /explore on this')
-    h.type('/'); act(() => h.options()[1]!.props.onPointerEnter())
+    h.type('/'); act(() => h.options()[1]!.props.onPointerMove())
     expect(h.options()[1]!.props['aria-selected']).toBe(true)
     act(() => h.options()[1]!.props.onClick())
     expect(h.textarea().props.value).toBe('/review ')
@@ -74,6 +74,55 @@ for (const runtime of ['codex', 'claude'] as const) {
     h.renderer.unmount()
   })
 }
+
+// A1 (r1#ecfe1b7633b3): stationary-pointer hijack regression. Chromium re-emits
+// pointerenter boundary events, without movement, on the row under a parked
+// cursor when the menu mounts or re-renders (diagnosis task-acaf9d73); the
+// highlight must follow only actual pointer movement, so injecting the bare
+// boundary event at a keyboard transition must not flip the keyboard choice.
+test('A1: stationary pointer boundary events do not flip the keyboard highlight', () => {
+  const h = composer('codex')
+  h.type('first\n/')
+  expect(h.options().map(option => option.props['data-command-name'])).toEqual(['explore', 'review'])
+  h.key('ArrowDown')
+  expect(h.options()[1]!.props['aria-selected']).toBe(true)
+  // The boundary event Chromium emits without movement: highlighting ignores it.
+  act(() => h.options()[0]!.props.onPointerEnter?.())
+  expect(h.options()[1]!.props['aria-selected']).toBe(true)
+  h.key('ArrowUp'); h.key('Enter')
+  expect(h.textarea().props.value).toBe('first\n/explore ')
+  expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+  h.renderer.unmount()
+})
+
+// F1 (findings-69740b38, r1#ecfe1b7633b3 › I1): the keyboard wraps at both
+// list ends — ArrowDown past the last row lands on the first, ArrowUp before
+// the first lands on the last (the modulo branches in ChatComposer) — and a
+// stationary boundary burst at those wrapped transitions must not steal the
+// choice; Enter/Tab insert the wrapped command without sending.
+test('I1: keyboard wraps past both list ends and stationary boundary events do not steal the wrapped choice', () => {
+  const h = composer('codex')
+  h.type('/')
+  expect(h.options().map(option => option.props['data-command-name'])).toEqual(['explore', 'review'])
+  h.key('ArrowDown')
+  expect(h.options()[1]!.props['aria-selected']).toBe(true)
+  h.key('ArrowDown')
+  expect(h.options()[0]!.props['aria-selected']).toBe(true)
+  act(() => h.options()[1]!.props.onPointerEnter?.())
+  expect(h.options()[0]!.props['aria-selected']).toBe(true)
+  h.key('Enter')
+  expect(h.textarea().props.value).toBe('/explore ')
+  expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+  h.type('/')
+  h.key('ArrowUp')
+  expect(h.options()[1]!.props['aria-selected']).toBe(true)
+  act(() => h.options()[0]!.props.onPointerEnter?.())
+  expect(h.options()[1]!.props['aria-selected']).toBe(true)
+  h.key('Tab')
+  expect(h.textarea().props.value).toBe('/review ')
+  expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+  h.renderer.unmount()
+})
 
 for (const command of ['/clear', '/reset', '/new']) {
   test(`W4: Codex ${command} keeps the profile and policy, archives after creation, and middle /clear stays text`, () => {

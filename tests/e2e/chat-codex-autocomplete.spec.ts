@@ -90,13 +90,55 @@ test('Codex autocomplete selects without sending, refreshes both browsers, and i
     await expect(page.locator('[data-chat-role="user"]')).toHaveCount(0)
     await input.fill('first\n/')
     await input.press('ArrowDown')
+    // Stationary-pointer regression (r1#ecfe1b7633b3, diagnosis task-acaf9d73):
+    // Chromium re-emits pointer boundary events, without movement, on the row
+    // under a parked cursor when the menu mounts or re-renders, and React
+    // synthesizes enter from over/out pairs — so dispatching the bare over
+    // event at each keyboard transition reproduces that burst
+    // deterministically. The keyboard choice must survive it: pre-fix this
+    // flipped to /explore at the assert below and the Enter then inserted
+    // /review, exactly like the recurring CI fixture failure.
+    await page.getByRole('option', { name: /explore/ }).dispatchEvent('pointerover')
     await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'true')
-    await input.press('ArrowUp'); await input.press('Enter')
+    await input.press('ArrowUp')
+    await page.getByRole('option', { name: /review/ }).dispatchEvent('pointerover')
+    await input.press('Enter')
     await expect(input).toHaveValue('first\n/explore ')
+    // F1 wrapping (findings-69740b38): ArrowUp at the first row wraps to the
+    // last and ArrowDown at the last wraps to the first; stationary boundary
+    // bursts at those wrapped transitions must not steal the keyboard choice,
+    // and Tab/Enter insert it without sending.
+    await input.fill('/')
+    await input.press('ArrowUp')
+    await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('option', { name: /explore/ }).dispatchEvent('pointerover')
+    await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'true')
+    await input.press('Tab')
+    await expect(input).toHaveValue('/review ')
+    await input.fill('/')
+    await input.press('ArrowDown')
+    await input.press('ArrowDown')
+    await expect(page.getByRole('option', { name: /explore/ })).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('option', { name: /review/ }).dispatchEvent('pointerover')
+    await expect(page.getByRole('option', { name: /explore/ })).toHaveAttribute('aria-selected', 'true')
+    await input.press('Enter')
+    await expect(input).toHaveValue('/explore ')
+    await expect(page.locator('[data-chat-role="user"]')).toHaveCount(0)
     await input.fill('/'); await page.getByRole('option', { name: /review/ }).hover()
     await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'true')
     await page.getByRole('option', { name: /review/ }).click()
     await expect(input).toHaveValue('/review ')
+    // Touch activation still chooses directly: the tap's synthesized click is
+    // untouched by the pointer-highlight wiring. A fresh hasTouch context has
+    // no stored session selection, so the chat opens from the navigator row.
+    const touchContext = await page.context().browser()!.newContext({ hasTouch: true })
+    const touchPage = await touchContext.newPage()
+    await touchPage.goto(page.url())
+    await touchPage.getByRole('button', { name: /Codex autocomplete/ }).first().click()
+    await touchPage.getByLabel('Message Claude').fill('/')
+    await touchPage.getByRole('option', { name: /review/ }).tap()
+    await expect(touchPage.getByLabel('Message Claude')).toHaveValue('/review ')
+    await touchContext.close()
     for (const value of ['https://example', '/usr/bin']) { await input.fill(value); await expect(page.getByRole('listbox', { name: 'Slash commands' })).toHaveCount(0) }
     await input.fill('/expl'); await input.press('Escape'); await expect(input).toHaveValue('/expl')
     const other = await context.newPage(); await other.goto(page.url())

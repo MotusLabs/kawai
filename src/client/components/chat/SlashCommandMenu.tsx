@@ -27,9 +27,13 @@ export default function SlashCommandMenu({ matches, loading, highlightedIndex, o
           className={`flex w-full items-baseline gap-2 rounded px-2 py-1.5 text-left ${
             index === highlightedIndex ? 'bg-hover text-accent' : 'hover:bg-hover'
           }`}
-          // Pointer movement highlights without scrolling the list (hover);
-          // a click chooses immediately.
-          onPointerEnter={() => onHighlight(index)}
+          // Actual pointer movement highlights without scrolling the list
+          // (hover); a click or touch chooses immediately. Movement, not
+          // enter: Chromium re-emits enter/over boundary events without any
+          // movement when the menu mounts or re-renders under a stationary
+          // cursor, and those must not steal the keyboard highlight
+          // (task-c844b936 / diagnosis task-acaf9d73).
+          onPointerMove={() => onHighlight(index)}
           onClick={() => onChoose(command)}>
           <span className="font-mono text-xs whitespace-nowrap">/{command.name}</span>
           {command.argumentHint && <span className="font-mono text-xs text-muted whitespace-nowrap">{command.argumentHint}</span>}
