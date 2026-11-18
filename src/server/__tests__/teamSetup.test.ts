@@ -9,8 +9,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { loadGroupCatalog } from '../team/groupCatalog'
+import { parseGroupFile } from '../team/groupFile'
 import { projectGroupFiles, runTeamSetup, setupAvailable, setupPreview, STARTER_TEMPLATES } from '../team/teamSetup'
-import { AT_FDCWD, EACCES, EEXIST, EINVAL, ELOOP, ENOENT, ENOTDIR } from '../team/pinnedFs'
+import { AT_FDCWD, dirEntrySymbols, EACCES, EEXIST, EINVAL, ELOOP, ENOENT, ENOTDIR } from '../team/pinnedFs'
 import { propertyCases } from './helpers/propertyCases'
 
 const CONFIG = path.resolve(import.meta.dir, '../../../config/groups')
@@ -169,6 +170,26 @@ describe('Table O — when setup is offered', () => {
     fs.writeFileSync(path.join(home, '.kawai', 'groups', 'reviewers-sol.md'), 'Review.')
     expect(setupAvailable(repo())).toBe(true)
   })
+
+  // A directory that cannot be read is not provably empty, so it is not
+  // offered — and no availability error may escape into the snapshot, the
+  // groups route, or the preview (review F2, findings ff0fa041).
+  test('O5: a looping or unreadable groups directory is not offered and never throws', () => {
+    fs.mkdirSync(path.join(repo(), '.kawai'))
+    fs.symlinkSync('groups', groupsDir()) // self-loop: readdir gives ELOOP
+    expect(setupAvailable(repo())).toBe(false)
+    expect(projectGroupFiles(repo())).toEqual([])
+    fs.rmSync(groupsDir())
+    if (process.getuid?.() === 0) return
+    fs.mkdirSync(groupsDir())
+    fs.chmodSync(path.join(repo(), '.kawai'), 0o000)
+    try {
+      expect(setupAvailable(repo())).toBe(false)
+      expect(projectGroupFiles(repo())).toEqual([])
+    } finally {
+      fs.chmodSync(path.join(repo(), '.kawai'), 0o755)
+    }
+  })
 })
 
 describe('the preview and the templates', () => {
@@ -216,6 +237,59 @@ describe('the preview and the templates', () => {
 
   test('the embedded templates are the config/groups files', () => {
     for (const { id, text } of STARTER_TEMPLATES) expect(text).toBe(fs.readFileSync(path.join(CONFIG, `${id}.md`), 'utf8'))
+  })
+
+  // The complete parsed D1 table: removing any of these lines from a shipped
+  // template must fail this assertion (review F5 — the flags were asserted
+  // nowhere before).
+  test('the parsed D1 table: labels, workers, caps, max, and every flag per template', () => {
+    const rows = Object.fromEntries(STARTER_TEMPLATES.map(({ id, text }) => {
+      const parsed = parseGroupFile(id, text)
+      expect(parsed.ok).toBe(true)
+      return [id, parsed.ok ? parsed.group : null]
+    }))
+    type ParsedGroup = {
+      label: string | undefined; max: number; profiles: ReadonlyArray<{ profileId: string; cap?: number }>
+      canCreateTasks: boolean; canCreatePlans: boolean; canManageMailbox: boolean
+      crossModelReview: boolean | undefined; worktreeScoped: boolean; releaseOnTaskClose: boolean; canReleaseMembers: boolean
+    }
+    const flags = (group: ParsedGroup) => ({
+      label: group.label, max: group.max,
+      workers: group.profiles.map(profile => [profile.profileId, profile.cap]),
+      canCreateTasks: group.canCreateTasks, canCreatePlans: group.canCreatePlans, canManageMailbox: group.canManageMailbox,
+      // The raw parse leaves the flag unset unless the template turns it on;
+      // normalize exactly as the preview does.
+      crossModelReview: group.crossModelReview === true, worktreeScoped: group.worktreeScoped,
+      releaseOnTaskClose: group.releaseOnTaskClose, canReleaseMembers: group.canReleaseMembers,
+    })
+    const table = (id: string) => flags(rows[id] as ParsedGroup)
+    expect({ lead: table('lead'), devs: table('devs'), reviewers: table('reviewers') }).toEqual({
+      lead: {
+        label: 'Team Lead', max: 1, workers: [['codex-sol', 1]],
+        canCreateTasks: true, canCreatePlans: true, canManageMailbox: false,
+        crossModelReview: false, worktreeScoped: false, releaseOnTaskClose: true, canReleaseMembers: true,
+      },
+      devs: {
+        label: 'Dev', max: 2, workers: [['opus', 1], ['codex-sol', 1]],
+        canCreateTasks: false, canCreatePlans: false, canManageMailbox: false,
+        crossModelReview: false, worktreeScoped: true, releaseOnTaskClose: true, canReleaseMembers: false,
+      },
+      reviewers: {
+        label: 'Reviewers', max: 2, workers: [['codex-sol', 1], ['opus', 1]],
+        canCreateTasks: false, canCreatePlans: false, canManageMailbox: false,
+        crossModelReview: true, worktreeScoped: true, releaseOnTaskClose: true, canReleaseMembers: false,
+      },
+    })
+    // The templates must literally carry the D1 lines the parser would
+    // otherwise default: removing one changes no parsed value, so the table
+    // above cannot see it (review F5).
+    const frontmatter = (id: string) => fs.readFileSync(path.join(CONFIG, `${id}.md`), 'utf8').split('---')[1] ?? ''
+    expect(frontmatter('lead')).toContain('worktreeScoped: false')
+    expect(frontmatter('lead')).toContain('canReleaseMembers: true')
+    expect(frontmatter('devs')).toContain('canReleaseMembers: false')
+    expect(frontmatter('reviewers')).toContain('worktreeScoped: true')
+    expect(frontmatter('reviewers')).toContain('releaseOnTaskClose: true')
+    expect(frontmatter('reviewers')).toContain('crossModelReview: true')
   })
 })
 
@@ -327,6 +401,28 @@ describe('root-swap races — the write stays inside the verified directory', ()
     expect(fs.readdirSync(displaced).filter(name => name.endsWith('.md')).sort()).toEqual(STARTER)
   })
 
+  // The groups pin must resolve through the pinned .kawai fd, not the path
+  // (review F3, mutant M5): a .kawai swap planted between the .kawai pin and
+  // the groups pin — where the earlier swap tests never reach — cannot
+  // redirect the open through the swapped intermediate component.
+  test('a .kawai swap between the pins cannot redirect the groups pin', () => {
+    const outside = path.join(root, 'outside')
+    fs.mkdirSync(outside)
+    fs.mkdirSync(groupsDir(), { recursive: true })
+    const result = runTeamSetup(repo(), {
+      afterPin: level => {
+        if (level !== 'kawai') return
+        fs.renameSync(path.join(repo(), '.kawai'), path.join(repo(), '.kawai.original'))
+        fs.symlinkSync(outside, path.join(repo(), '.kawai'), 'dir')
+      },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('error')
+    expect(fs.readdirSync(outside)).toEqual([])
+    const displaced = path.join(repo(), '.kawai.original', 'groups')
+    expect(fs.readdirSync(displaced).filter(name => name.endsWith('.md')).sort()).toEqual(STARTER)
+  })
+
   test('the pinned run closes every descriptor it opened (success and refusal)', () => {
     if (process.platform !== 'linux') return // descriptor pinning runs natively on Linux; Darwin is typecheck-only (integration R5)
     const openFds = () => fs.readdirSync('/proc/self/fd').length
@@ -369,5 +465,15 @@ describe('root-swap races — the write stays inside the verified directory', ()
     expect(AT_FDCWD).toBe(-100)
     expect(ELOOP).toBe(40)
     expect([ENOENT, EACCES, EEXIST, ENOTDIR, EINVAL]).toEqual([2, 13, 17, 20, 22])
+  })
+
+  // The dirent-reader symbol table is a pure function of platform AND arch:
+  // $INODE64 exists on darwin-x64 only, so binding it for arm64 would fail
+  // every setup there (review F1). darwin-arm64 and linux use plain names.
+  test('the dirent symbol table selects per platform and architecture', () => {
+    expect(dirEntrySymbols('linux', 'x64')).toEqual({ fdopendir: 'fdopendir', readdir: 'readdir' })
+    expect(dirEntrySymbols('linux', 'arm64')).toEqual({ fdopendir: 'fdopendir', readdir: 'readdir' })
+    expect(dirEntrySymbols('darwin', 'x64')).toEqual({ fdopendir: 'fdopendir$INODE64', readdir: 'readdir$INODE64' })
+    expect(dirEntrySymbols('darwin', 'arm64')).toEqual({ fdopendir: 'fdopendir', readdir: 'readdir' })
   })
 })

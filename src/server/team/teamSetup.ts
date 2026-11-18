@@ -37,20 +37,35 @@ export const STARTER_TEMPLATES: ReadonlyArray<{ id: string; text: string }> = [
 
 const groupsDirOf = (groupsRoot: string) => path.join(groupsRoot, '.kawai', 'groups')
 
-/** The project group files present now (`*.md` names, sorted); a missing directory has none. */
+/**
+ * The project group files present now (`*.md` names, sorted). A directory
+ * that cannot be read — missing, unreadable, a loop — has none: an
+ * availability error must never escape into the team snapshot, the groups
+ * route, or the setup preview (a repo-writing agent can create such an
+ * entry, and one EACCES/ELOOP must not take those readers down).
+ */
 export function projectGroupFiles(groupsRoot: string): string[] {
   try {
     return fs.readdirSync(groupsDirOf(groupsRoot)).filter(name => name.endsWith('.md')).sort()
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    if (code === 'ENOENT' || code === 'ENOTDIR') return []
-    throw error
+  } catch {
+    return []
   }
 }
 
-/** D2: setup is offered exactly while the project groups directory holds no `*.md`. */
+/**
+ * D2: setup is offered exactly while the project groups directory provably
+ * holds no `*.md` (the user-level groups never count). A directory that
+ * cannot be read is not provably empty, so it is not offered; the write run
+ * reports its own read/write errors in the existing result envelope.
+ */
 export function setupAvailable(groupsRoot: string): boolean {
-  return projectGroupFiles(groupsRoot).length === 0
+  try {
+    return !fs.readdirSync(groupsDirOf(groupsRoot)).some(name => name.endsWith('.md'))
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return true // absent: nothing there can hold a group file
+    return false // unreadable (EACCES, ELOOP, ...): not provably empty
+  }
 }
 
 /** Each template as the preview shows it, parsed by the same group parser routing uses. */
@@ -81,10 +96,11 @@ export function setupPreview(groupsRoot: string, catalogProfiles: ReadonlySet<st
   }
 }
 
-/** Test seams: the temp-name suffix, and a hook that runs before each link. */
+/** Test seams: the temp-name suffix, a hook before each link, and a hook after each chain pin. */
 export interface SetupHooks {
   tempSuffix?: () => string
   beforeLink?: (id: string, target: string) => void
+  afterPin?: (level: 'root' | 'kawai' | 'groups') => void
 }
 
 /** An opened, kernel-pinned directory: the fd is the write boundary. */
@@ -165,6 +181,7 @@ export function runTeamSetup(groupsRoot: string, hooks: SetupHooks = {}): TeamSe
     }
     const rootDir = opened.dir
     root = rootDir
+    hooks.afterPin?.('root')
     const pin = (parentDir: PinnedDir, name: string, livePath: string): { ok: true; dir: PinnedDir } | { ok: false; result: TeamSetupResult } => {
       let outcome = openPinned(parentDir, name)
       if (!outcome.ok && outcome.kind === 'error' && outcome.errno === ENOENT) outcome = createPinned(parentDir, name)
@@ -177,10 +194,12 @@ export function runTeamSetup(groupsRoot: string, hooks: SetupHooks = {}): TeamSe
     if (!kawaiPin.ok) return kawaiPin.result
     const kawaiDir: PinnedDir = kawaiPin.dir
     kawai = kawaiDir
+    hooks.afterPin?.('kawai')
     const groupsPin = pin(kawaiDir, 'groups', groupsPath)
     if (!groupsPin.ok) return groupsPin.result
     const groupsDir: PinnedDir = groupsPin.dir
     groups = groupsDir
+    hooks.afterPin?.('groups')
 
     // D2, read through the pin: the directory this run writes into holds no group file.
     let existing: string[]

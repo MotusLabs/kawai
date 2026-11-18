@@ -107,4 +107,16 @@ describe('team group routes', () => {
     expect(await get('')).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null, setupAvailable: false })
     expect(await get(`?projectPath=${encodeURIComponent(path.join(root, 'nope'))}`)).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null, setupAvailable: false })
   })
+
+  // Review F2 (findings ff0fa041): a looping groups entry — which any
+  // repo-writing agent can create — must degrade the route's flag, not 500.
+  test('a looping groups entry reports unavailable instead of failing the route', async () => {
+    fs.rmdirSync(path.join(project, '.kawai', 'groups')) // the harness seeds a real dir; replace it with the loop
+    fs.symlinkSync('groups', path.join(project, '.kawai', 'groups'))
+    const response = await createTeamGroupRoutes({ homeDir: home }).request(`/?projectPath=${encodeURIComponent(project)}`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { setupAvailable: boolean; errors: string[] }
+    expect(body.setupAvailable).toBe(false)
+    expect(body.errors.join()).toContain('groups')
+  })
 })

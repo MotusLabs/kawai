@@ -11,16 +11,26 @@
 import { dlopen, FFIType, read, toArrayBuffer } from 'bun:ffi'
 import fs from 'node:fs'
 
-/** The libc name, errno-location symbol, and dirent reader ABI per platform. */
-const PLATFORMS: Record<string, { library: string; errnoSymbol: string; dirSymbols: { fdopendir: string; readdir: string } } | undefined> = {
-  linux: { library: 'libc.so.6', errnoSymbol: '__errno_location', dirSymbols: { fdopendir: 'fdopendir', readdir: 'readdir' } },
-  // Apple xnu bsd/sys/fcntl.h:190/195: AT_FDCWD is -2 on Darwin (-100 on
-  // Linux). darwin-x64 keeps the legacy inode ABI for dirent readers unless
-  // the $INODE64-suffixed symbols are named; arm64 defaults are 64-bit.
-  darwin: { library: '/usr/lib/libSystem.B.dylib', errnoSymbol: '__error', dirSymbols: { fdopendir: 'fdopendir$INODE64', readdir: 'readdir$INODE64' } },
+/**
+ * The dirent-reader ABI per platform and architecture. darwin-x64 keeps the
+ * legacy 32-bit-inode ABI for the dirent readers unless the $INODE64-suffixed
+ * symbols are named (rust libc links them only for x86/x86_64); darwin-arm64
+ * and every linux architecture use the plain names. dlopen throws on an
+ * absent symbol, so the wrong choice fails every setup on that platform.
+ */
+export function dirEntrySymbols(platform: string, arch: string): { fdopendir: string; readdir: string } {
+  if (platform === 'darwin' && arch === 'x64') return { fdopendir: 'fdopendir$INODE64', readdir: 'readdir$INODE64' }
+  return { fdopendir: 'fdopendir', readdir: 'readdir' }
+}
+
+/** The libc name and errno-location symbol per platform. */
+const PLATFORMS: Record<string, { library: string; errnoSymbol: string } | undefined> = {
+  linux: { library: 'libc.so.6', errnoSymbol: '__errno_location' },
+  // Apple xnu bsd/sys/fcntl.h:190: AT_FDCWD is -2 on Darwin (-100 on Linux).
+  darwin: { library: '/usr/lib/libSystem.B.dylib', errnoSymbol: '__error' },
 }
 const DARWIN = process.platform === 'darwin'
-const DIR_SYMBOLS = DARWIN ? PLATFORMS.darwin!.dirSymbols : PLATFORMS.linux!.dirSymbols
+const DIR_SYMBOLS = dirEntrySymbols(process.platform, process.arch)
 
 interface Symbols {
   openat: (dirfd: number, path: string, flags: number, mode: number) => number

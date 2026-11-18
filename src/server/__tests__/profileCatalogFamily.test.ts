@@ -2,6 +2,7 @@
 // `family` wins over its provider's, a profile with neither is its own
 // family, `family` is a trusted-tier field, and every shipped model names
 // one explicitly.
+// @reads: config/profiles.default.json config/providers.default.json
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -126,5 +127,33 @@ describe('Table F — shipped catalogs', () => {
       'codex-sol': 'gpt', 'codex-luna': 'gpt',
     }
     expect(Object.fromEntries(catalog.families)).toEqual(expected)
+  })
+
+  // Raw shipped labels, not resolved families: for entries whose family
+  // equals their profile id the id fallback masks a removed label, so the
+  // resolved assertion above is insensitive for mimo/kimi/minimax (review
+  // F4). This one reads the shipped JSON and is checked to fail when any
+  // single label — or the provider family an inheritance relies on — is
+  // dropped.
+  test('F6b: the raw shipped catalogs label every profile via itself or its provider', () => {
+    const config = path.resolve(import.meta.dir, '../../../config')
+    const profiles = JSON.parse(fs.readFileSync(path.join(config, 'profiles.default.json'), 'utf8')) as Record<string, { family?: string; provider?: string }>
+    const providers = JSON.parse(fs.readFileSync(path.join(config, 'providers.default.json'), 'utf8')) as Record<string, { family?: string }>
+    const unlabeled = (catalog: Record<string, { family?: string; provider?: string }>, providerTable: Record<string, { family?: string }>) =>
+      Object.keys(catalog).filter(id => catalog[id]!.family === undefined && !(catalog[id]!.provider && providerTable[catalog[id]!.provider!]?.family !== undefined))
+    expect(unlabeled(profiles, providers)).toEqual([])
+    // Provider inheritance sources the openrouter-* rows rely on stay labeled.
+    expect(providers.zai?.family).toBe('glm')
+    expect(providers.claude?.family).toBe('claude')
+    // Sensitivity: dropping any single shipped label fails the assertion.
+    for (const id of ['mimo', 'kimi', 'minimax', 'codex-sol']) {
+      const copy = structuredClone(profiles)
+      delete copy[id]!.family
+      expect(unlabeled(copy, providers)).toEqual([id])
+    }
+    const copy = structuredClone(profiles)
+    copy['glm'] = { provider: 'zai' }
+    expect(unlabeled(copy, providers)).toEqual([])
+    expect(unlabeled(copy, {})).toEqual(['glm'])
   })
 })

@@ -159,6 +159,19 @@ describe('Set up team over the workspace connection', () => {
     })
   })
 
+  // Review F2 (findings ff0fa041): one looping groups entry — creatable by
+  // any repo-writing agent — must not break the team snapshot; the offer
+  // just reads as withdrawn.
+  test('a looping groups entry leaves the snapshot readable with the offer withdrawn', async () => {
+    fs.mkdirSync(path.join(dir, '.kawai'), { recursive: true })
+    fs.symlinkSync('groups', path.join(dir, '.kawai', 'groups'))
+    const watched: ServerMessage[] = []
+    await connections.handle({ send: message => watched.push(message) }, { type: 'team-workspace-open', teamPath: '/repo' })
+    const snapshot = watched.find(message => message.type === 'team-workspace-snapshot') as Extract<ServerMessage, { type: 'team-workspace-snapshot' }>
+    expect(snapshot.setupAvailable).toBe(false)
+    expect(snapshot.members).toEqual([])
+  })
+
   test('S8: an unknown team is refused with the same envelope', async () => {
     await send({ type: 'team-workspace-setup-run', teamPath: '/nope' })
     expect(all('team-workspace-setup-result').at(-1)).toMatchObject({ teamPath: '/nope', ok: false, reason: 'unknown-team', created: [], skipped: [] })
