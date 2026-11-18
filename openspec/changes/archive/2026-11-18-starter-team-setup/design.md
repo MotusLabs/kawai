@@ -280,11 +280,10 @@ build. The rollback note in `docs/claude-session-profiles.md` says to remove
 - `src/server/team/**`
 - `src/server/chat/profileCatalog.ts`
 - `src/server/chat/catalogParse.ts`
-- `src/server/chat/catalogMerge.ts`
 - `src/server/chat/catalogMemo.ts`
 - `src/server/routes/teamGroups.ts`
-- `src/server/plans/execution/executionRounds.ts`
-- `src/server/**/__tests__/**`
+- `src/server/dbSafety/migrations.ts`
+- `src/server/__tests__/**`
 - `src/shared/team.ts`
 - `src/shared/types.ts`
 - `src/client/components/team/**`
@@ -299,8 +298,8 @@ build. The rollback note in `docs/claude-session-profiles.md` says to remove
 - `docs/routing/README.md`
 
 ### Verification
-- V1: Table S and Table O committed verbatim as table-driven tests in `src/server/team/__tests__/teamSetup.test.ts` over private `/tmp` roots, killing a mutant that drops the `lstat` symlink check and one that writes with `flag: 'w'`.
-- V2: Table E committed verbatim in `src/server/team/routing/__tests__/crossModelEligibility.test.ts`, killing a mutant that compares profile ids instead of families and one that omits earlier rounds' authors.
+- V1: Table S and Table O committed verbatim as table-driven tests in `src/server/__tests__/teamSetup.test.ts` over private `/tmp` roots, killing a mutant that drops the `lstat` symlink check and one that writes with `flag: 'w'`.
+- V2: Table E committed verbatim in `src/server/__tests__/crossModelEligibility.test.ts`, killing a mutant that compares profile ids instead of families and one that omits earlier rounds' authors.
 - V3: Table F committed verbatim in the catalog tests, killing a mutant that accepts `family` from a project-level file.
 - V4: P1–P3 as seeded property tests with the seeds and case counts above, through `propertyCases`.
 - V5: One production-composition test sends `team-workspace-setup-run` through the real workspace WS handler and asserts files plus a `team-workspace` push; one routes a real review handoff through `ProfileRouter` with a flagged group (kills a mutant that removes the `crossModelState` wiring from the router).
