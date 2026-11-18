@@ -93,6 +93,7 @@ describe('codex-capacity-retry through the Kawai manager', () => {
   })
 
   // @covers: codex-chat-sessions › Capacity recovery preserves conversation and work › Mail recovery
+  // @covers: profile-limit-handling › Codex model capacity does not cool a shared login › Sibling profile remains eligible
   test('W1: delivered mail through a capacity failure then success keeps its claim and receipt, completes once and cools nothing', async () => {
     h = await capacityManager()
     const s = h

@@ -138,6 +138,8 @@ describe("codex-capacity-retry classification table C ('bounded')", () => {
     expect(CLASSIFICATION_TABLE.map((row) => row[0])).toEqual(['C1', 'C2', 'C3', 'C4', 'C5'])
   })
 
+  // @covers: profile-limit-handling › Limit events are recorded per profile › Codex model capacity
+  // @covers: profile-limit-handling › Codex model capacity does not cool a shared login › Exhausted quota snapshot alongside capacity
   test('C1: serverOverloaded upstream retry dispatches no attempt and records no quota event, with or without an exhausted snapshot', async () => {
     for (const rateLimits of [EXHAUSTED_SNAPSHOT, OPEN_SNAPSHOT, null]) {
       const s = scripted('bounded')
@@ -150,6 +152,8 @@ describe("codex-capacity-retry classification table C ('bounded')", () => {
     }
   })
 
+  // @covers: profile-limit-handling › Limit events are recorded per profile › Codex model capacity
+  // @covers: profile-limit-handling › Codex model capacity does not cool a shared login › Exhausted quota snapshot alongside capacity
   test('C2: terminal serverOverloaded considers capacity recovery and records no quota event, with or without an exhausted snapshot', async () => {
     for (const rateLimits of [EXHAUSTED_SNAPSHOT, OPEN_SNAPSHOT, null]) {
       const s = scripted('bounded')

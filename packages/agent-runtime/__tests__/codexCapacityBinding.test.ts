@@ -29,7 +29,9 @@ async function cancelledThenNewer() {
 const humanStarts = (s: Scripted) => s.turnStarts().filter((r) => r.params.input?.[0]?.text === 'new human request')
 
 /** B's own reply and turn/started in the given order, then its success. */
-async function bindNewer(s: Scripted, order: 'reply-first' | 'started-first') {
+type Order = 'reply-first' | 'started-first'
+
+async function bindNewer(s: Scripted, order: Order) {
   const start = humanStarts(s).at(-1)!
   if (order === 'started-first') s.notify(...frames.started('b1'))
   s.reply(start.id, { turn: { id: 'b1' } })
@@ -37,6 +39,22 @@ async function bindNewer(s: Scripted, order: 'reply-first' | 'started-first') {
   await s.flush()
   s.notify(...frames.completed('b1', [{ type: 'agentMessage', id: 'm-b1', text: 'b done' }]))
   await s.flush()
+}
+
+/** The cancelled continuation's reply and turn/started in one order, then B's in another. */
+async function bothOrders(cancelledOrder: Order, newerOrder: Order) {
+  const { s, cancelled, next } = await cancelledThenNewer()
+  // No successor turn/start is written while the cancelled continuation's reply is outstanding.
+  expect(humanStarts(s)).toHaveLength(0)
+  if (cancelledOrder === 'started-first') s.notify(...frames.started('a2'))
+  s.reply(cancelled.id, { turn: { id: 'a2' } })
+  if (cancelledOrder === 'reply-first') s.notify(...frames.started('a2'))
+  await s.flush()
+  expect(humanStarts(s)).toHaveLength(1)
+  await bindNewer(s, newerOrder)
+  expect(s.interrupts().map((r) => r.params.turnId)).toEqual(['a2'])
+  expect(await next.result).toMatchObject({ outcome: 'success', finalText: 'b done', turnId: next.turnId })
+  expect(s.driver.state).toBe('idle')
 }
 
 describe('codex-capacity-retry start ownership', () => {
@@ -77,24 +95,21 @@ describe('codex-capacity-retry start ownership', () => {
     expect(await next.result).toMatchObject({ outcome: 'success', finalText: 'b done' })
   })
 
-  for (const cancelledOrder of ['reply-first', 'started-first'] as const) {
-    for (const newerOrder of ['reply-first', 'started-first'] as const) {
-      test(`L1: cancelled continuation ${cancelledOrder} then newer turn ${newerOrder}: one cleanup interrupt of a2, the newer turn binds b1`, async () => {
-        const { s, cancelled, next } = await cancelledThenNewer()
-        // No successor turn/start is written while the cancelled continuation's reply is outstanding.
-        expect(humanStarts(s)).toHaveLength(0)
-        if (cancelledOrder === 'started-first') s.notify(...frames.started('a2'))
-        s.reply(cancelled.id, { turn: { id: 'a2' } })
-        if (cancelledOrder === 'reply-first') s.notify(...frames.started('a2'))
-        await s.flush()
-        expect(humanStarts(s)).toHaveLength(1)
-        await bindNewer(s, newerOrder)
-        expect(s.interrupts().map((r) => r.params.turnId)).toEqual(['a2'])
-        expect(await next.result).toMatchObject({ outcome: 'success', finalText: 'b done', turnId: next.turnId })
-        expect(s.driver.state).toBe('idle')
-      })
-    }
-  }
+  test('L1: cancelled continuation reply-first then newer turn reply-first: one cleanup interrupt of a2, the newer turn binds b1', async () => {
+    await bothOrders('reply-first', 'reply-first')
+  })
+
+  test('L1: cancelled continuation reply-first then newer turn started-first: one cleanup interrupt of a2, the newer turn binds b1', async () => {
+    await bothOrders('reply-first', 'started-first')
+  })
+
+  test('L1: cancelled continuation started-first then newer turn reply-first: one cleanup interrupt of a2, the newer turn binds b1', async () => {
+    await bothOrders('started-first', 'reply-first')
+  })
+
+  test('L1: cancelled continuation started-first then newer turn started-first: one cleanup interrupt of a2, the newer turn binds b1', async () => {
+    await bothOrders('started-first', 'started-first')
+  })
 
   test('L1: a rejected cancelled continuation releases the waiting newer turn, which binds its own id', async () => {
     const { s, cancelled, next } = await cancelledThenNewer()

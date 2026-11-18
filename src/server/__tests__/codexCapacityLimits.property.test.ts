@@ -103,6 +103,8 @@ async function chain(random: () => number): Promise<void> {
   s.clock.advance(700_000)
 }
 
+// @covers: profile-limit-handling › Codex model capacity does not cool a shared login › Sibling profile remains eligible
+// @covers: profile-limit-handling › Codex model capacity does not cool a shared login › Exhausted quota snapshot alongside capacity
 test('P4: capacity alone produces zero quota limit events (seed 0xCA9AC20, 1,000 cases)', async () => {
   for (let index = 0; index < propertyCases(CASES); index++) {
     const random = mulberry32(0xca9ac20 + index * 0x9e3779b1)
