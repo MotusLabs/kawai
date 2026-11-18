@@ -250,3 +250,66 @@ describe('P2 — the write never changes what exists and stays inside the groups
     }
   })
 })
+
+// Root-swap races (integration R4/R5): once runTeamSetup has verified the
+// directory chain, a concurrent rename + outside symlink at any level — the
+// Lead probe class (/tmp/pr437-root-swap-probe.ts) — must never redirect a
+// write: every byte stays inside the project and the run refuses to report
+// success through a path it no longer occupies. The swap is planted at the
+// first beforeLink, exactly where the old one-shot lstat checks had expired.
+describe('root-swap races — the write stays inside the verified directory', () => {
+  let swapped = false
+  const swapAt = (live: string, outside: string) => () => {
+    if (swapped) return
+    swapped = true
+    fs.renameSync(live, `${live}.original`)
+    fs.symlinkSync(outside, live, 'dir')
+  }
+  beforeEach(() => { swapped = false })
+
+  test('a groups-directory swap mid-run keeps every byte in the project and refuses', () => {
+    const outside = path.join(root, 'outside')
+    fs.mkdirSync(outside)
+    const result = runTeamSetup(repo(), { beforeLink: swapAt(groupsDir(), outside) })
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('error')
+    expect(fs.readdirSync(outside)).toEqual([])
+    // Whatever the pinned run wrote stayed in the renamed in-project directory.
+    const displaced = path.join(repo(), '.kawai', 'groups.original')
+    expect(fs.readdirSync(displaced).filter(name => name.endsWith('.md')).sort()).toEqual(STARTER)
+  })
+
+  test('a .kawai swap mid-run keeps every byte in the project and refuses', () => {
+    const outside = path.join(root, 'outside')
+    fs.mkdirSync(outside)
+    const result = runTeamSetup(repo(), { beforeLink: swapAt(path.join(repo(), '.kawai'), outside) })
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('error')
+    expect(fs.readdirSync(outside)).toEqual([])
+    const displaced = path.join(repo(), '.kawai.original', 'groups')
+    expect(fs.readdirSync(displaced).filter(name => name.endsWith('.md')).sort()).toEqual(STARTER)
+  })
+
+  test('a project-root swap mid-run keeps every byte in the project and refuses', () => {
+    const outside = path.join(root, 'outside')
+    fs.mkdirSync(outside)
+    const result = runTeamSetup(repo(), { beforeLink: swapAt(repo(), outside) })
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('error')
+    expect(fs.readdirSync(outside)).toEqual([])
+    const displaced = path.join(root, 'repo.original', '.kawai', 'groups')
+    expect(fs.readdirSync(displaced).filter(name => name.endsWith('.md')).sort()).toEqual(STARTER)
+  })
+
+  test('the pinned run closes every descriptor it opened (success and refusal)', () => {
+    if (process.platform !== 'linux') return // descriptor pinning runs natively on Linux; Darwin is typecheck-only (integration R5)
+    const openFds = () => fs.readdirSync('/proc/self/fd').length
+    const before = openFds()
+    expect(runTeamSetup(repo()).ok).toBe(true)
+    expect(openFds()).toBe(before)
+    fs.rmSync(groupsDir(), { recursive: true })
+    fs.symlinkSync(path.join(root, 'home'), groupsDir())
+    expect(runTeamSetup(repo()).ok).toBe(false)
+    expect(openFds()).toBe(before)
+  })
+})
