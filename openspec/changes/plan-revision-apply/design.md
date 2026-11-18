@@ -185,7 +185,7 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | id | Input | Result |
 | --- | --- | --- |
 | AK1 | an agent caller, or a direct service call with an agent caller | refused `forbidden` before any read; nothing written |
-| AK2 | the same command id and payload after a success | the prior result; no second row, task revision, or notice |
+| AK2 | the same command id and payload after a success, even after a later Apply moved the execution on | the prior result, reconstructed from the history row recorded under this command id before any preparation (DC3); no second row, task revision, or notice |
 | AK3 | the same command id, a different payload | refused naming the first differing field |
 | AK4 | two different command ids on the same execution revision, concurrently | one commits; the other is refused `execution-revision-unchanged` naming the new revision |
 | AK5 | the same command id and the same payload sent twice concurrently (a different payload is AK3) | one commits; the other resolves as its replay |
@@ -217,7 +217,7 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | CH2 | metadata | publication row; the change reads the target's `dependsOn` and `fixes` | nothing |
 | CH3 | changed, continue | publication row; the running attempt's manifest unchanged | later attempts and handoffs read the new revision |
 | CH4 | changed, adapt | publication row with the task revision; one task revision with notify under `apply:<commandId>:<change>`; its notice to the outstanding claimant | a fix attempt naming that revision follows in every state (the plan-pause "Adapt" precedent): with a round gating or landing, plan-execution D9 supersedes the round and dispatches it; while implementing with no round, the transaction (after the notice) supersedes the held assignment through the stop branch and mints one owed `fix` row, which the owed step dispatches; an owed newest row is re-minted by DC1 instead; waits under a hold or an undecided pause, D8 |
-| CH5 | changed, restart | publication row; no task revision; the standing assignment superseded, an open or passed round superseded, the change back to `implementing`, and one owed attempt row of the newest attempt's kind (an update restarts as `fix`) whose manifest names the new revision | the executor's owed step dispatches that attempt once |
+| CH5 | changed, restart | publication row; no task revision; the standing assignment superseded, an open or passed round superseded, the change back to `implementing`, and one owed attempt row of the newest attempt's kind (an update restarts as `fix`) whose manifest names the new revision | the executor's owed step dispatches that attempt once; if a later Apply moved the execution on before dispatch (e.g. under a hold), the owed step mints one successor row at the current revision and dispatches it instead, the stale row unchanged and never sent (DC1) |
 | CH6 | changed, choice `none` (no task) | publication row | the new definition applies at provisioning |
 | CH7 | added, no landing fact | change row `waiting` at its content position | scheduled by its dependencies |
 | CH8 | added, landing fact exists | change row `landed`, `owns = 0` | nothing |
@@ -234,7 +234,7 @@ Boundaries: B0 before the prepare phase; B1 after it, before the transaction; B2
 | --- | --- | --- | --- |
 | CR1 | B0 or B1 | no revision row, publication row, task revision, notice, cancellation, or event from this Apply | runs as a first Apply against the current state (refused if a precondition now fails) |
 | CR2 | B2 | as CR1 (the transaction rolled back) | as CR1 |
-| CR3 | B3 | the whole Apply committed; nothing dispatched yet; notices delivered under shipped receipt recovery | replays; the executor's startup tick dispatches from stored state once |
+| CR3 | B3 | the whole Apply committed; nothing dispatched yet; notices delivered under shipped receipt recovery | replays with the original outcome (DC3), even after a later Apply; the executor's startup tick dispatches from stored state once |
 | CR4 | B4 | committed and dispatched | replays; nothing new |
 
 Completeness: the boundaries B0–B4 cover every point of the command's path, and each maps to one row. Across the other tables, AP1–AP15 are single-failure rows and AP16 their combination; DL1–DL7 and DL13 classify each change name (presence × landed × differing fields × task), while DL8–DL12 are execution-wide findings layered over them, so the completeness test expands the per-change axes and the execution-wide axes separately; CH1–CH10 partition the per-change classes and choices of an accepted Apply. Unreachable: a partial transaction (SQLite atomicity); a notice without its task revision (both in one `TaskStore.publish` inside the transaction).
@@ -244,7 +244,7 @@ Completeness: the boundaries B0–B4 cover every point of the command's path, an
 - **P1, one history.** For every execution, revision rows are contiguous from seq 1, at most one per seq, and the execution's revision columns equal the newest row. Generator: seeded sequences over one plan of approvals, Applies with fresh or replayed command ids, concurrent pairs on one base, Stops, and a crash at each of B0–B4 with restart. Seams: the real `ApplyService`, `PlanService`, stores, and `TaskStore` on a fresh test database; git reads through a stub that checks its arguments. Seed `0x4A99`, 200 cases through `propertyCases`.
 - **P2, publish once.** Across the same sequences, each adapted change has exactly one task revision and one notice per Apply command id, whatever retries and crashes occur.
 - **P3, landed work stays.** No accepted Apply changes a landed change other than its `dependsOn` and `fixes`, removes it, or changes plan-wide rules after a landing. Generator: random content edits over plans with random landed sets; seam: `revisionDelta` plus the real precondition list; seed `0x4A9A`, 500 cases through `propertyCases`.
-- **P4, manifests keep their revision.** Every attempt manifest names the revision current at its dispatch; an Apply never rewrites one. Same generator and seams as P1, with the real executor ticking between commands; seed `0x4A9B`, 200 cases through `propertyCases`.
+- **P4, manifests keep their revision.** Every dispatched attempt's manifest names the revision current at its dispatch; an Apply never rewrites one, and an owed row left across an Apply is superseded by a successor at dispatch, never sent (DC1). The generator includes holds placed and released between Applies. Same generator and seams as P1, with the real executor ticking between commands; seed `0x4A9B`, 200 cases through `propertyCases`.
 
 Model-based test: the CR table and the CH table run as the reference model over P1's sequences, comparing stored rows after every step.
 
