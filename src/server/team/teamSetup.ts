@@ -92,7 +92,7 @@ interface PinnedDir { fd: number; dev: number; ino: number }
 
 type PinOutcome = { ok: true; dir: PinnedDir } | { ok: false; kind: 'symlink' | 'not-a-directory' | 'error'; errno?: number }
 
-const ERRNO_NAMES: Record<number, string> = { 2: 'ENOENT', 13: 'EACCES', 17: 'EEXIST', 20: 'ENOTDIR', 32: 'ELOOP', 39: 'ENOTEMPTY', 40: 'ELOOP' }
+const ERRNO_NAMES: Record<number, string> = { 2: 'ENOENT', 13: 'EACCES', 17: 'EEXIST', 20: 'ENOTDIR', 39: 'ENOTEMPTY', 40: 'ELOOP', 62: 'ELOOP', 66: 'ENOTEMPTY' }
 const errnoName = (errno: number) => ERRNO_NAMES[errno] ?? `errno ${errno}`
 
 /**

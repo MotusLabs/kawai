@@ -17,7 +17,7 @@ const PLATFORMS: Record<string, { library: string; errnoSymbol: string; dirSymbo
   // Apple xnu bsd/sys/fcntl.h:190/195: AT_FDCWD is -2 on Darwin (-100 on
   // Linux). darwin-x64 keeps the legacy inode ABI for dirent readers unless
   // the $INODE64-suffixed symbols are named; arm64 defaults are 64-bit.
-  darwin: { library: 'libc.dylib', errnoSymbol: '__error', dirSymbols: { fdopendir: 'fdopendir$INODE64', readdir: 'readdir$INODE64' } },
+  darwin: { library: '/usr/lib/libSystem.B.dylib', errnoSymbol: '__error', dirSymbols: { fdopendir: 'fdopendir$INODE64', readdir: 'readdir$INODE64' } },
 }
 const DARWIN = process.platform === 'darwin'
 const DIR_SYMBOLS = DARWIN ? PLATFORMS.darwin!.dirSymbols : PLATFORMS.linux!.dirSymbols
@@ -86,8 +86,8 @@ export const ENOENT = 2
 export const EACCES = 13
 export const EEXIST = 17
 export const ENOTDIR = 20
-/** ELOOP differs between ABIs: 40 on Linux, 32 on Darwin. */
-export const ELOOP = DARWIN ? 32 : 40
+/** ELOOP differs between ABIs: 40 on Linux, 62 on Darwin (32 is EPIPE on both). */
+export const ELOOP = DARWIN ? 62 : 40
 
 /** Open `name` under `dirfd` (AT_FDCWD for a root path), directory only, never through a symlink. */
 export function openDirAt(dirfd: number, name: string): number {
@@ -134,8 +134,13 @@ export function listDir(dirfd: number): string[] {
   const dup = symbols.dup(dirfd)
   if (dup === -1) fail('dup')
   const dir = symbols.fdopendir(dup)
-  // fdopendir consumed the duplicate; closedir releases it below.
-  if (!dir || Number(dir) === 0) { try { fs.closeSync(dup) } catch { /* already gone */ } fail('fdopendir') }
+  // fdopendir consumed the duplicate; closedir releases it below. The errno
+  // is captured before any other call can overwrite it.
+  if (!dir || Number(dir) === 0) {
+    const errno = lastErrno()
+    try { fs.closeSync(dup) } catch { /* already gone */ }
+    throw new PinnedFsError(`fdopendir failed (errno ${errno})`, errno)
+  }
   const names: string[] = []
   try {
     for (;;) {
@@ -150,9 +155,8 @@ export function listDir(dirfd: number): string[] {
       const bytes = new Uint8Array(toArrayBuffer(entry, nameAt, reclen - nameAt))
       let end = 0
       while (end < bytes.length && bytes[end] !== 0) end++
-      const name = new TextDecoder().decode(bytes.subarray(0, end))
-      if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new PinnedFsError(`unparsable dirent name (${JSON.stringify(name)})`)
-      names.push(name)
+      if (end === 0) throw new PinnedFsError('unparsable dirent record (empty name)')
+      names.push(new TextDecoder().decode(bytes.subarray(0, end)))
     }
   } finally {
     symbols.closedir(dir)

@@ -46,6 +46,16 @@ describe('Table S — the setup write', () => {
     expect(fs.readFileSync(path.join(groupsDir(), 'README.txt'), 'utf8')).toBe('notes')
   })
 
+  // The pinned directory reader must not reject names the path-based reader
+  // accepts: only *.md entries matter (D2), whatever the other names look like.
+  test('S2c: non-.md files with spaces or non-ASCII names do not block the setup', () => {
+    fs.mkdirSync(groupsDir(), { recursive: true })
+    fs.writeFileSync(path.join(groupsDir(), 'notes old.txt'), 'notes')
+    fs.writeFileSync(path.join(groupsDir(), 'ünify.txt'), 'x')
+    expect(runTeamSetup(repo())).toEqual({ ok: true, created: ['lead.md', 'devs.md', 'reviewers.md'], skipped: [] })
+    expect(listing(groupsDir())).toEqual(['devs.md', 'lead.md', 'notes old.txt', 'reviewers.md', 'ünify.txt'])
+  })
+
   // @covers: team-setup › Setup never overwrites a group file › A file added after the preview refuses the setup
   test('S3: any .md group file, valid or not, refuses the whole setup and writes nothing', () => {
     fs.mkdirSync(groupsDir(), { recursive: true })
