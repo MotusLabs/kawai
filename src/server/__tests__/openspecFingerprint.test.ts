@@ -208,27 +208,94 @@ const ROWS: Row[] = [
   },
 ]
 
-describe('fingerprintOpenSpecInputs FP table', () => {
-  for (const row of ROWS) {
-    // FP6/FP7 and FP11 make the fingerprint differ, so RD3 runs the CLI.
-    // @covers: openspec-visibility › Reuse unchanged OpenSpec discovery results › A change is created or archived
-    // @covers: openspec-visibility › Reuse unchanged OpenSpec discovery results › The root moves
-    test(`${row.id}: ${row.variation} -> ${row.expected}`, async () => {
-      const fixture = baseFixture()
-      const base = await fingerprintOpenSpecInputs(fixture.wt)
-      expect(base).toMatch(/^[0-9a-f]{64}$/)
-      row.apply(fixture)
-      const after = await fingerprintOpenSpecInputs(fixture.wt)
-      if (row.expected === 'null') {
-        expect(after).toBeNull()
-      } else if (row.expected === 'equal') {
-        expect(after).toBe(base)
-      } else {
-        expect(after).not.toBeNull()
-        expect(after).not.toBe(base)
-      }
-    })
+/**
+ * The loop body the FP table was committed with: one row over a fresh base
+ * fixture. The rows stay in ROWS verbatim; each row gets its own literal
+ * `test` below so its title resolves as a literal (closeout task 7.1).
+ */
+async function runFpRow(row: Row): Promise<void> {
+  const fixture = baseFixture()
+  const base = await fingerprintOpenSpecInputs(fixture.wt)
+  expect(base).toMatch(/^[0-9a-f]{64}$/)
+  row.apply(fixture)
+  const after = await fingerprintOpenSpecInputs(fixture.wt)
+  if (row.expected === 'null') {
+    expect(after).toBeNull()
+  } else if (row.expected === 'equal') {
+    expect(after).toBe(base)
+  } else {
+    expect(after).not.toBeNull()
+    expect(after).not.toBe(base)
   }
+}
+
+/** The row of the FP table with this id, failing loudly when it is missing. */
+function rowById(id: string): Row {
+  const row = ROWS.find((entry) => entry.id === id)
+  if (!row) throw new Error(`no FP row ${id}`)
+  return row
+}
+
+describe('fingerprintOpenSpecInputs FP table', () => {
+  test('FP1: none (fingerprint taken twice) -> equal', async () => {
+    await runFpRow(rowById('FP1'))
+  })
+
+  test('FP2: tasks.md rewritten, same size, new mtime -> differs', async () => {
+    await runFpRow(rowById('FP2'))
+  })
+
+  test('FP3: tasks.md rewritten, different size, mtime restored -> differs', async () => {
+    await runFpRow(rowById('FP3'))
+  })
+
+  test("FP4: a file added under an active change's specs/ -> differs", async () => {
+    await runFpRow(rowById('FP4'))
+  })
+
+  test('FP5: a file removed from an active change -> differs', async () => {
+    await runFpRow(rowById('FP5'))
+  })
+
+  // FP6/FP7 and FP11 make the fingerprint differ, so RD3 runs the CLI.
+  // @covers: openspec-visibility › Reuse unchanged OpenSpec discovery results › A change is created or archived
+  test('FP6: a new change directory under changes/ -> differs', async () => {
+    await runFpRow(rowById('FP6'))
+  })
+
+  // @covers: openspec-visibility › Reuse unchanged OpenSpec discovery results › A change is created or archived
+  test('FP7: an active change moved into archive/ -> differs', async () => {
+    await runFpRow(rowById('FP7'))
+  })
+
+  test('FP8: a file under archive/ rewritten -> equal', async () => {
+    await runFpRow(rowById('FP8'))
+  })
+
+  test('FP9: config.yaml rewritten -> differs', async () => {
+    await runFpRow(rowById('FP9'))
+  })
+
+  test('FP10: a file outside openspec/ (src/x.ts) rewritten -> equal', async () => {
+    await runFpRow(rowById('FP10'))
+  })
+
+  // @covers: openspec-visibility › Reuse unchanged OpenSpec discovery results › The root moves
+  test("FP11: the worktree's openspec/ removed, so an ancestor's root resolves -> differs", async () => {
+    await runFpRow(rowById('FP11'))
+  })
+
+  test('FP13: a plain file named changes/notes.txt added -> differs', async () => {
+    await runFpRow(rowById('FP13'))
+  })
+
+  test('FP14: an active change holding 5,001 files -> null', async () => {
+    await runFpRow(rowById('FP14'))
+  })
+
+  test('FP15: the root unreadable (chmod 000 on openspec/changes) -> null', async () => {
+    await runFpRow(rowById('FP15'))
+  })
 
   test('FP12: no openspec/ anywhere up to the filesystem root, taken twice -> equal, and not null', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-fp-none-'))
