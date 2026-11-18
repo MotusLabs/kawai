@@ -19,6 +19,7 @@ import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { TeamWorktrees } from '../team/worktreeRoots'
 import { clearTeamCache, resolveTeam, type TeamIdentity } from '../team/teamIdentity'
+import { recordRecipient } from './helpers/recordRecipient'
 
 let root: string
 let home: string
@@ -28,6 +29,7 @@ let db: SessionDatabase
 let mail: MailboxStore
 let tasks: TaskService
 let results: TaskResultService
+let assignments: AssignmentService
 let records: Map<string, ChatSessionRecord>
 const human = (): TaskCaller => ({ kind: 'human', team })
 const agent = (sessionId: string): TaskCaller => ({ kind: 'agent', sessionId })
@@ -60,6 +62,7 @@ beforeEach(() => {
   records = new Map([
     ['lead', row('lead', 'lead', 'codex-sol')], ['opus-dev', row('opus-dev', 'devs', 'opus')],
     ['sol-dev', row('sol-dev', 'devs', 'codex-sol')], ['legacy-dev', row('legacy-dev', 'devs')],
+    ['opus-reviewer', row('opus-reviewer', 'reviewers', 'opus')],
   ])
   db?.close()
   db = initDatabase({ path: path.join(fs.mkdtempSync(path.join(root, 'db-')), 'tasks.db') })
@@ -72,8 +75,11 @@ beforeEach(() => {
     records: () => records.values(), teamOf: () => undefined, caps: new TeamCaps({}), worktrees,
     spawn: () => Promise.resolve({ ok: false, error: 'no spawn in tests' }),
   })
-  const assignments = new AssignmentService(db.db, assignmentStore, store, mail, {
-    getSession: id => records.get(id), records: () => records.values(), teamOf: () => undefined, staffing, caps: new TeamCaps({}), worktrees,
+  assignments = new AssignmentService(db.db, assignmentStore, store, mail, {
+    getSession: id => records.get(id), records: () => records.values(),
+    teamOf: id => records.has(id) ? team : undefined,
+    staffing, caps: new TeamCaps({}), worktrees,
+    recipient: id => recordRecipient(records.get(id), team.teamId, mail),
     homeDir: home,
   })
   results = new TaskResultService(tasks, { getSession: id => records.get(id), assignments, homeDir: home })
@@ -154,5 +160,27 @@ describe('handoff refusal inside the authors families (E8, E9)', () => {
     const { taskId, result } = await submittedBy('opus-dev')
     const handed = await results.handoff(human(), taskId, review(result.id, 'plain', { worker: 'claude/opus' }))
     expect(handed.assignment.workerChoice).toBe('claude/opus')
+  })
+})
+
+// The reader domains (starter-team-setup D6, as corrected at integration):
+// the task-dispatch preview previews a plain task assignment and never
+// receives the review filter — a flagged group with result authors still
+// previews its author-family member — while the actual review handoff of the
+// same result to the same group is refused for the same choice. Through the
+// real AssignmentService preview and TaskResultService handoff.
+describe('the plain-dispatch preview stays unfiltered where the review handoff filters', () => {
+  test('a flagged preview with an existing result author still names the author-family member; the real review handoff refuses', async () => {
+    const { taskId, result } = await submittedBy('opus-dev')
+    db.db.prepare('UPDATE team_tasks SET worktree = ? WHERE id = ?').run(repo, taskId)
+    const plain = await assignments.preview(human(), { taskId, target: { kind: 'group', id: 'reviewers' } })
+    // Unfiltered: `opus` runs the author's family `claude`, yet the plain
+    // preview names the member and the first allowed spawn profile as usual.
+    expect(plain.idleMembers).toContain('opus-reviewer')
+    expect(plain.profile).toBe('codex-sol')
+    // The same task's actual review handoff with the author-family choice is
+    // refused: the filter lives on the review path alone.
+    expect(await refusal(() => results.handoff(human(), taskId, review(result.id, 'reviewers', { worker: 'claude/opus' })))).toBe(
+      "The handoff is refused: worker choice is within the authors' model family claude; a cross-model review needs a worker of another family. Nothing was dispatched.")
   })
 })

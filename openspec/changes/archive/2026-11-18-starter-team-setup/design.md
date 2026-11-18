@@ -143,8 +143,15 @@ assignment is a review handoff. `filterReasons` adds `cross-model` after
 `excluded-profile`. When `unknownAuthors` is non-empty, every candidate is
 excluded. The mail-side state is built once per routing pass by
 `crossModelState(message)` (assignment → result → `reviewAuthors`), which the
-router, `groupDispatchPreview`, `candidates`, and waiting-reason computation
-all call. `WaitingConstraintKind` gains `cross-model` (order: after
+router consumes — the shipped derivation is `crossModelFilter`
+(`routing/crossModel.ts`), feeding the shared eligibility check's `crossModel`
+input that `candidates`/capacity forward from their callers; the waiting
+reasons read the router's diagnosis. The task-dispatch preview and raw
+staffing capacity never hold a review-handoff state — the preview accepts a
+plain task assignment, capacity counts staffing — so they stay unfiltered
+(integration correction: D6 as written named `groupDispatchPreview` as a
+consumer; the shipped preview API has no review-handoff input).
+`WaitingConstraintKind` gains `cross-model` (order: after
 `worker-choice`), with detail naming the families, the unknown authors, and,
 when other-family workers exist, their existing capacity constraints.
 
@@ -211,10 +218,13 @@ every model explicit (claude, gpt, glm, …).
   changes or removes a pre-existing file's bytes and never creates a path
   outside `<root>/.kawai/groups/`. Seam: the setup module over a `/tmp`
   root; seed `0x5eed02`; 200 cases.
-- **P3 (I3)**: for the same seeded states as P1, router, dispatch preview,
-  and `candidates` return the same eligible set and reasons (one
-  derivation, hazard "Several readers disagreeing"). Seed `0x5eed03`;
-  200 cases.
+- **P3 (I3)**: for the same seeded states as P1, the router and the shared
+  eligibility check (which `candidates` forwards) return the same eligible
+  set and reasons over the same filtered states (one derivation, hazard
+  "Several readers disagreeing"). Readers compare only over the same
+  operation and available inputs: the task-dispatch preview (plain task
+  dispatch) and raw staffing capacity never receive the filter and stay
+  unfiltered. Seed `0x5eed03`; 200 cases.
 
 Hazards consulted (`docs/oracle-hazards.md`): root swap (S4, S5, P2),
 refusals missing the envelope (S3–S8 assert the success envelope), several
@@ -269,7 +279,7 @@ build. The rollback note in `docs/claude-session-profiles.md` says to remove
 ### Invariants
 - I1: No candidate eligible for a flagged review shares a family with any of the task's result authors, and an unknown author leaves none eligible (P1).
 - I2: Setup never modifies or removes an existing file and never writes outside `<groupsRoot>/.kawai/groups/` (P2).
-- I3: Router, dispatch preview, capacity, and waiting reasons derive cross-model eligibility through one function and agree (P3).
+- I3: Every reader that can hold a review-handoff state — routing, the shared eligibility check that `candidates` forwards, and the waiting reasons — derives cross-model eligibility through one function and agrees (P3). The task-dispatch preview (a plain task assignment) and raw staffing capacity never receive the filter and stay unfiltered.
 - I4: No agent-reachable tool or route writes group files.
 - I5: Model family is never taken from a project-level catalog.
 
