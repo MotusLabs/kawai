@@ -136,7 +136,7 @@ The Members tab SHALL list each of the team's groups with its role description, 
 - **THEN** the group's row shows `glm-flash` under Z.AI and `haiku` under Claude, each with its cap and live count
 
 #### Scenario: Members cannot be edited
-- **WHEN** the human opens the Members tab
+- **WHEN** the human opens the Members tab of a team that has project group files
 - **THEN** it presents no control that writes a group file or changes a running agent's permissions
 
 #### Scenario: A warning names what fell back
@@ -158,6 +158,10 @@ The Members tab SHALL list each of the team's groups with its role description, 
 #### Scenario: A manual key is shown as the group's own policy
 - **WHEN** the team default is auto and a group sets `approval: manual`
 - **THEN** the group's row shows manual from the group file
+
+#### Scenario: The only write is the setup action
+- **WHEN** the human opens the Members tab of a team whose main checkout has no group files
+- **THEN** its only control that writes a group file is Set up team, and no control changes a running agent's permissions
 
 ### Requirement: Members names the source file of every setting
 Each group row SHALL name the file that defines it and, when both layers define it, both paths with the one in effect marked. The row SHALL state that prompt changes apply to future agent starts only.
@@ -418,3 +422,18 @@ The Members tab SHALL show the team's default approval policy (not set, manual, 
 #### Scenario: The notice clears once the default is auto
 - **WHEN** the human sets the team default to auto while groups set `approval: auto`
 - **THEN** the control no longer names any group as asking for auto
+
+### Requirement: Members offers Set up team as its only group-file write
+The Members tab SHALL present Set up team, as the `team-setup` capability defines it, as its only control that writes group files. It SHALL show the action above the group rows, or in place of an empty list, and SHALL disable it while disconnected. It SHALL never edit, rename, or delete an existing group file.
+
+#### Scenario: The empty state offers setup
+- **WHEN** the human opens the Members tab of a team with no group files anywhere
+- **THEN** the tab shows Set up team where the group rows would be
+
+#### Scenario: User-level groups show beneath the action
+- **WHEN** the team has no project group files and `~/.kawai/groups/` defines `reviewers-sol`
+- **THEN** the tab shows Set up team above the `reviewers-sol` row
+
+#### Scenario: Setup is disabled while disconnected
+- **WHEN** the Team page loses its server connection while Set up team is shown
+- **THEN** the action is disabled

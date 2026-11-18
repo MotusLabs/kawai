@@ -1,6 +1,7 @@
 {
   "minimax": {
     "label": "MiniMax",
+    "family": "minimax",
     "model": "MiniMax-M3",
     "env": {
       "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
@@ -13,6 +14,7 @@
   },
   "mimo": {
     "label": "MiMo",
+    "family": "mimo",
     "model": "mimo-v2.6-pro[1m]",
     "autoCompactWindow": 300000,
     "env": {
@@ -26,6 +28,7 @@
   },
   "kimi": {
     "label": "Kimi",
+    "family": "kimi",
     "model": "kimi-k3[1m]",
     "env": {
       "ANTHROPIC_BASE_URL": "https://api.moonshot.ai/anthropic",
@@ -39,11 +42,13 @@
   },
   "codex-sol": {
     "label": "Codex Sol",
+    "family": "gpt",
     "runtime": "codex",
     "model": "gpt-6.1-sol"
   },
   "codex-luna": {
     "label": "Codex Luna",
+    "family": "gpt",
     "runtime": "codex",
     "model": "gpt-6-luna"
   }

@@ -329,6 +329,11 @@ export interface TeamWorkspaceSnapshot {
    * not auto (unify-approval-defaults D4); empty once the default is auto.
    */
   autoRequestedBy: string[]
+  /**
+   * The main checkout's `.kawai/groups/` holds no group file, so the Members
+   * tab offers Set up team (starter-team-setup D2); absent = not offered.
+   */
+  setupAvailable?: boolean
   summary: MorningSummary
   /** Last known identity of killed sessions named by rows and items. */
   directory: SessionDirectoryEntry[]

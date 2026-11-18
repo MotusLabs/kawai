@@ -142,7 +142,7 @@ describe('the outbound window against the real store (findings-8134cc45 PC1)', (
       outboundAudit: audit,
       exhaustionEpisodes: () => [],
     }
-    return new WorkspaceRead(manager as never).snapshot({ teamId: OB_TEAM } as never)
+    return new WorkspaceRead(manager as never).snapshot({ teamId: OB_TEAM, groupsRoot: '/nonexistent-kawai-groups-root' } as never)
   }
 
   test('a 25 h-old send is out of the 24 h bucket; a fresh reader (restart) counts the same', () => {

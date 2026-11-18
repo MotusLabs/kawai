@@ -21,6 +21,8 @@ import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
 import { refuseSystem } from './systemCaller'
 import type { TeamIdentity } from './teamIdentity'
 import { worktreeRootOf } from './worktreeRoots'
+import { modelFamilyOf } from '../chat/catalogMemo'
+import { crossModelFilter, profileOfRecord } from './routing/crossModel'
 import type { SubmittedDisposition, SubmittedFinding } from '../../shared/findingsLedger'
 import { TaskFindingService, type StructuredOutcome } from './TaskFindingService'
 
@@ -195,6 +197,9 @@ export class TaskResultService {
         teamId: team.teamId, taskId, summary, commit, diff,
         worktree: task.worktree ?? (session ? worktreeRootOf(session.projectPath) : null),
         tests, limitations: blankToNull(input.limitations), coverage, taskRevision: task.revision, submittedBy: actor,
+        // starter-team-setup D5: the author's profile from the session record,
+        // never from tool input, so reviews know its family after release.
+        submittedByProfile: profileOfRecord(session),
       })
       this.store.appendJournal(taskId, actor, `Submitted result ${inserted.id}: ${summary}`)
       this.store.checks.insertPending({ teamId: team.teamId, taskId, resultId: inserted.id, trigger: 'submit', requestedBy: actor })
@@ -462,6 +467,16 @@ export class TaskResultService {
     const expectedResponse = request.expectedResponse?.trim() || null
     // Normalized before the equivalent check (D7): a retry naming another worker is another handoff.
     const workerChoice = this.options.assignments.workerChoice(caller, team, request.target, request.worker)
+    // starter-team-setup D7: a choice wholly within the authors' model
+    // families can never be routed to a flagged group; refuse it now.
+    const crossRefusal = this.options.assignments.crossModelChoiceRefusal(team, request.target, workerChoice, group => crossModelFilter({
+      groupFlag: group.crossModelReview === true,
+      handoff: { handoffKind: request.kind, resultId: result.id, taskId },
+      authors: id => this.store.results.authorsOf(id),
+      profileOfSession: id => profileOfRecord(this.options.getSession(id)),
+      familyOf: profileId => modelFamilyOf(profileId, this.options.homeDir ? { homeDir: this.options.homeDir } : {}),
+    }))
+    if (crossRefusal !== null) throw new Error(`The handoff is refused: ${crossRefusal}. Nothing was dispatched.`)
     if (caller.kind === 'agent') {
       const standing = this.tasks.store.assignmentsOf(taskId).find(row => row.handoffKind === request.kind &&
         row.resultId === result.id && (row.workerChoice ?? null) === workerChoice && row.supersededBy === null && row.state !== 'failed')

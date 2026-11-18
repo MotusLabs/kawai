@@ -11,12 +11,14 @@
 // `canCreatePlans` and `canReportProcess` (strict, default false); `affinity`
 // (`task-owner`) with `affinityWait` (minutes, default 30), one optional
 // object; `autoCompactWindow` and its per-profile `profileAutoCompactWindow`
-// (mimo-million-token-context D2). The maps and lists take one single-line
-// flow value (`[a, b]` or `{ k: v }`, scalars only — never nested). Defaults
-// are applied here so every reader sees the same effective values. Bad
-// `onLimit`, effort, affinity, and window values are warnings (the defaults
-// apply) rather than a rejected file, as the profile-routing spec asks.
-// `approval: auto` parses but is a warning (unify-approval-defaults D4).
+// (mimo-million-token-context D2); `crossModelReview` (strict, default false:
+// review handoffs skip the authors' model families). The maps and lists take
+// one single-line flow value (`[a, b]` or `{ k: v }`, scalars only — never
+// nested). Defaults are applied here so every reader sees the same effective
+// values. Bad `onLimit`, effort, affinity, and window values are warnings
+// (the defaults apply) rather than a rejected file, as the profile-routing
+// spec asks. `approval: auto` parses but is a warning
+// (unify-approval-defaults D4).
 import type { ChatApprovalPolicy } from '../../shared/chat'
 import { parseWindowToken } from '../chat/claudeCompaction'
 
@@ -104,6 +106,11 @@ export interface GroupDefinition {
   profileAutoCompactWindowOrder?: string[]
   /** Task-owner affinity (group-mail-task-affinity D2); unset = none. */
   affinity?: GroupAffinity
+  /**
+   * Review handoffs go only to workers outside their authors' model
+   * families (starter-team-setup D6); a strict boolean, unset = false.
+   */
+  crossModelReview?: boolean
   /** Problems that fell back to defaults instead of rejecting the file. */
   warnings: string[]
   /** The role prompt appended to members' system prompts. */
@@ -159,7 +166,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 type TaskSettings = Pick<GroupDefinition,
   'canCreateTasks' | 'canCreatePlans' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
   | 'canReportProcess' | 'max' | 'maxFromCaps' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'profileEffort'
-  | 'autoCompactWindow' | 'profileAutoCompactWindow' | 'profileAutoCompactWindowOrder' | 'affinity' | 'warnings'>
+  | 'autoCompactWindow' | 'profileAutoCompactWindow' | 'profileAutoCompactWindowOrder' | 'affinity' | 'crossModelReview' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -178,7 +185,7 @@ function parseTaskSettings(
     settings.canCreateTasks = canCreate === 'true'
   }
   settings.canManageMailbox = parseCanManageMailbox(fields.get('canManageMailbox'), warnings)
-  for (const key of ['canCreatePlans', 'releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers', 'canReportProcess'] as const) {
+  for (const key of ['canCreatePlans', 'releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers', 'canReportProcess', 'crossModelReview'] as const) {
     const raw = fields.get(key)?.trim()
     if (raw === undefined) continue
     if (raw !== 'true' && raw !== 'false') return { ok: false, error: `${key} must be true or false, got "${raw}"` }

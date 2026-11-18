@@ -29,6 +29,7 @@ import TeamMailboxView from './TeamMailboxView'
 import TeamMessagesView from './TeamMessagesView'
 import TeamMembersPanel from './TeamMembersPanel'
 import TeamApprovalDefaultControl from './TeamApprovalDefaultControl'
+import TeamSetupControl from './TeamSetupControl'
 import TeamPlansView from './TeamPlansView'
 import TeamAuditView from './TeamAuditView'
 import TeamTasksView from './TeamTasksView'
@@ -300,7 +301,10 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, subs
         onOpenSession={openParticipantChat}
         teamControl={workspaceData?.snapshot != null && <TeamApprovalDefaultControl
           teamPath={teamKey} value={workspaceData.snapshot.approvalDefault ?? null}
-          autoRequestedBy={workspaceData.snapshot.autoRequestedBy ?? []} connected={connected} sendMessage={sendMessage} />} />}
+          autoRequestedBy={workspaceData.snapshot.autoRequestedBy ?? []} connected={connected} sendMessage={sendMessage} />}
+        setupControl={workspaceData?.snapshot != null && <TeamSetupControl
+          teamPath={teamKey} available={workspaceData.snapshot.setupAvailable === true}
+          connected={connected} sendMessage={sendMessage} />} />}
       {tasksOpen && tasks && <TeamTasksView
         teamPath={teamKey} projectPath={teamKey} view={tasks} rows={workspaceData?.snapshot?.tasks} sendMessage={sendMessage} connected={connected}
         connectionEpoch={connectionEpoch}

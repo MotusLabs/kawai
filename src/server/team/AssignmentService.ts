@@ -42,6 +42,8 @@ import type { TeamCaps } from './teamCaps'
 import type { WorktreeStaffing } from './staffing'
 import type { MailRecipient } from './dispatcher'
 import { ambientProviderOf } from './cooldowns'
+import { workerChoiceState } from './routing/workerSelector'
+import { crossModelChoiceRefusal, type CrossModelFilter } from './routing/crossModel'
 import { previewGroupDispatch } from './groupDispatchPreview'
 import { resolveTaskOwner } from './taskOwnerResolver'
 import { liveGroupMembers } from './routing/router'
@@ -421,6 +423,24 @@ export class AssignmentService {
     const session = this.options.getSession(caller.sessionId)
     if (!session) throw new Error(`Unknown calling session: ${caller.sessionId}`)
     return resolveTeam(session.projectPath)
+  }
+
+  /**
+   * Whether a review handoff's worker choice lies wholly within its
+   * authors' model families (starter-team-setup D7): the refusal text, or
+   * null. `filterOf` derives the authors' filter for the target group — the
+   * same derivation routing applies — and is null when the group is
+   * unflagged or the handoff is not a review.
+   */
+  crossModelChoiceRefusal(team: TeamIdentity, target: AssignmentTarget, workerChoice: string | null,
+    filterOf: (group: GroupDefinition) => CrossModelFilter | null): string | null {
+    // No choice, nothing to refuse: routing alone applies the filter.
+    if (target.kind !== 'group' || workerChoice === null) return null
+    const group = this.groupOf(team, target.id)
+    const filter = filterOf(group)
+    if (filter === null) return null
+    const choice = workerChoiceState(workerChoice, group, ambientProviderOf(this.options.homeDir))
+    return crossModelChoiceRefusal(filter, choice ? choice.profiles : null)
   }
 
   private groupOf(team: TeamIdentity, id: string): GroupDefinition {

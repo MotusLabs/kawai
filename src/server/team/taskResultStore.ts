@@ -30,6 +30,15 @@ export interface ResultInsert {
   coverage?: CoverageMap | null
   taskRevision: number
   submittedBy: TaskActor & { kind: 'agent' }
+  /** The submitting session's profile id (starter-team-setup D5); null when unknown. */
+  submittedByProfile?: string | null
+}
+
+/** One distinct author of a task's results, with the profile recorded at submission. */
+export interface ResultAuthorRow {
+  sessionId: string
+  /** The profile snapshotted at submission; null for rows from before the snapshot. */
+  profileId: string | null
 }
 
 export interface FindingsInsert {
@@ -79,15 +88,29 @@ export class TaskResultStore {
       const previous = this.outstandingId(input.taskId)
       this.db.prepare(`INSERT INTO team_task_results
         (id, team_id, task_id, summary, commit_ref, diff_ref, worktree, tests, limitations, coverage, task_revision,
-         submitted_by_kind, submitted_by_session, supersedes_result_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+         submitted_by_kind, submitted_by_session, submitted_by_profile, supersedes_result_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, input.teamId, input.taskId, input.summary, input.commit, input.diff, input.worktree,
         JSON.stringify(input.tests), input.limitations,
         input.coverage === null || input.coverage === undefined ? null : JSON.stringify(input.coverage), input.taskRevision,
-        input.submittedBy.kind, input.submittedBy.sessionId, previous, now,
+        input.submittedBy.kind, input.submittedBy.sessionId, input.submittedByProfile ?? null, previous, now,
       )
     })()
     return this.get(id)!
+  }
+
+  /**
+   * Every agent that submitted a result on the task, once per session, with
+   * the newest recorded profile (starter-team-setup D5): all rounds count,
+   * since a fix round by another model leaves the first author's code.
+   */
+  authorsOf(taskId: string): ResultAuthorRow[] {
+    const rows = this.db.prepare(`SELECT submitted_by_session AS session, submitted_by_profile AS profile
+      FROM team_task_results WHERE task_id = ? AND submitted_by_kind = 'agent' ORDER BY created_at, rowid`)
+      .all(taskId) as Array<{ session: string; profile: string | null }>
+    const bySession = new Map<string, string | null>()
+    for (const row of rows) bySession.set(row.session, row.profile ?? bySession.get(row.session) ?? null)
+    return [...bySession].map(([sessionId, profileId]) => ({ sessionId, profileId }))
   }
 
   /** Findings bound to one result (D4). */

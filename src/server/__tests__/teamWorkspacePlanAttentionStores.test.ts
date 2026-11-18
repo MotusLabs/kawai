@@ -236,11 +236,11 @@ describe('WorkspaceRead.snapshot carries the plan facts (B3, 9.2/9.3 wiring)', (
       planAttentionFacts: (teamId: string) => (teamId === 'team' ? planFacts : []),
       planSummaryRows: (teamId: string) => (teamId === 'team' ? planRows : { landings: [], stops: [], stallAlerts: [], decisions: [], overrides: [] }),
     }
-    const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
+    const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team', groupsRoot: '/nonexistent-kawai-groups-root' } as never)
     expect(snapshot.attention.map(item => item.id)).toEqual(['plan-stop:exec-1:api:0'])
     expect(snapshot.summary.stops.items.map(item => item.id)).toEqual(['stop:plan-1:api:2026-10-20T10:00:00.000Z'])
     // Another team reads neither.
-    const other = new WorkspaceRead(manager as never).snapshot({ teamId: 'other' } as never)
+    const other = new WorkspaceRead(manager as never).snapshot({ teamId: 'other', groupsRoot: '/nonexistent-kawai-groups-root' } as never)
     expect(other.attention).toEqual([])
     expect(other.summary.stops.items).toEqual([])
   })

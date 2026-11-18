@@ -203,11 +203,12 @@ that has one, copy the entry there to offer OpenRouter:
       "ANTHROPIC_DEFAULT_FABLE_MODEL": "~anthropic/claude-opus-latest[1m]"
     },
     "models": {
-      "openrouter-opus": { "label": "OpenRouter Opus", "model": "opus" },
-      "openrouter-sonnet": { "label": "OpenRouter Sonnet", "model": "sonnet" },
-      "openrouter-haiku": { "label": "OpenRouter Haiku", "model": "haiku" },
+      "openrouter-opus": { "label": "OpenRouter Opus", "family": "claude", "model": "opus" },
+      "openrouter-sonnet": { "label": "OpenRouter Sonnet", "family": "claude", "model": "sonnet" },
+      "openrouter-haiku": { "label": "OpenRouter Haiku", "family": "claude", "model": "haiku" },
       "openrouter-deepseek-flash": {
         "label": "OpenRouter DeepSeek V4.1 Flash",
+        "family": "deepseek",
         "model": "deepseek/deepseek-v4.1-flash-1017",
         "env": {
           "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek/deepseek-v4.1-flash-1017",
@@ -218,6 +219,7 @@ that has one, copy the entry there to offer OpenRouter:
       },
       "openrouter-minimax-flash": {
         "label": "OpenRouter MiniMax M3.1 Flash",
+        "family": "minimax",
         "model": "minimax/minimax-m3.1-flash",
         "env": {
           "ANTHROPIC_DEFAULT_OPUS_MODEL": "minimax/minimax-m3.1-flash",
@@ -285,6 +287,28 @@ always wins; without the field the text is ignored.
 ```json
 { "glm": { "label": "GLM", "limitResetTimeZone": "Asia/Shanghai" } }
 ```
+
+## Model families
+
+A `family` names the model lineage a profile runs — `claude`, `gpt`, `glm`,
+`deepseek` — so a group with `crossModelReview: true` can send a review to a
+model other than its author's (`docs/routing/README.md`). It is accepted on a
+provider (the default for its models), on a provider's model, and on a
+`profiles.json` entry of either runtime; a model's own `family` wins over its
+provider's. A profile with neither is its own family, equal to its profile
+id, so two unlabelled aliases of one model count as different families: set
+`family` on every user-level entry that should match another.
+
+`family` is a trusted-tier field, like `codexHome` and `network`: only the
+shipped defaults and the user-level `~/.kawai/` files may set it. A project
+`.kawai/` file that sets it is rejected whole, because an agent that can
+write the project could otherwise relabel its own model to get around the
+review rule. The value must match `^[a-z0-9][a-z0-9-]*$`. The shipped
+catalogs name every model's family; OpenRouter's Claude aliases are
+`claude`, the Codex profiles `gpt`.
+
+Builds before `starter-team-setup` reject `family` as an unknown field:
+remove it from user-level files before downgrading.
 
 ## Provider usage
 
