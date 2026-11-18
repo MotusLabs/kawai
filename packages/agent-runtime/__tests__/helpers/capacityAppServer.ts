@@ -45,7 +45,7 @@ export class FakeCapacityClock implements CapacityClock {
   }
   /** Fire one armed timer now without moving the clock (an early or oversleeping callback is simulated by `now`). */
   fireAll(): void {
-    for (const [id, timer] of [...this.timers.entries()]) {
+    for (const [id, timer] of Array.from(this.timers.entries())) {
       this.timers.delete(id)
       timer.fire()
     }

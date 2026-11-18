@@ -213,7 +213,7 @@ export class CapacityRecovery {
     const written = new Promise<Promise<unknown>>((resolve) => (write = resolve))
     const job = this.host.runOwned(`capacity:${turn.turnId}:${ordinal}`, async () => {
       try {
-        const id = ((await (await written)) as { turn?: { id?: unknown } } | null)?.turn?.id
+        const id = ((await written) as { turn?: { id?: unknown } } | null)?.turn?.id
         // A reply after a Stop binds the cancelled attempt only: its owed cleanup interrupt (L1).
         if (typeof id === 'string') this.host.bindNative(turn, id)
       } catch (error) {
