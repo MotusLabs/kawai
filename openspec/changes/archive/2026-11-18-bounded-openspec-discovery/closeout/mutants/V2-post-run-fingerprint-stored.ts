@@ -7,7 +7,7 @@ import fs from 'node:fs'
 
 const repo = '/home/coder/kawai/.worktrees/bounded-openspec-discovery'
 const target = `${repo}/src/server/workspace/openspecDiscovery.ts`
-const logPath = `${repo}/openspec/changes/bounded-openspec-discovery/closeout/mutants/V2-post-run-fingerprint-stored.log`
+const logPath = `${repo}/openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V2-post-run-fingerprint-stored.log`
 const before = '    cache.set(worktreePath, { fingerprint, discoveredAt: startedAt, state: discovered })'
 const after =
   '    cache.set(worktreePath, { fingerprint: await (options.fingerprint ?? fingerprintOpenSpecInputs)(worktreePath), discoveredAt: startedAt, state: discovered })'

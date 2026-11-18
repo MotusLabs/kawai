@@ -9,12 +9,20 @@ exits nonzero; a surviving mutant exits nonzero from the script.
 Run all of them from the repository root:
 
 ```
-for script in openspec/changes/bounded-openspec-discovery/closeout/mutants/V*.ts; do bun "$script"; done
+for script in openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V*.ts; do bun "$script"; done
 ```
 
-The committed `.log` files are records of the runs performed at the closeout
-head. The scripts' absolute `repo` path names this worktree; after the change
-archives, the scripts live under `openspec/changes/archive/` but still target
+The committed `<name>.log` files are the records of the reruns performed at
+13dda4f8b4c309a208a13b85194f34a253978477; each ends in a `verdict: KILLED`
+line naming its row's failure. `src/` is byte-identical between that head and
+the archive-evidence fix head that first commits these records, so the runs
+hold for the closeout head. The logs are tracked through the local
+`.gitignore` exception in this directory (the repository's root `*.log` rule
+is for runtime logs). Verify a checkout carries them with
+`git ls-tree -r --name-only HEAD openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants`
+— 13 `.ts` scripts, 13 `.log` records, plus this README and the `.gitignore`.
+The scripts' absolute `repo` path names this worktree; after the change
+archives, the scripts live under `openspec/changes/archive/` and still target
 the same checkout.
 
 | Script | Named row(s) | File patched |

@@ -6,7 +6,7 @@ import fs from 'node:fs'
 
 const repo = '/home/coder/kawai/.worktrees/bounded-openspec-discovery'
 const target = `${repo}/src/server/workspace/openspecFingerprint.ts`
-const logPath = `${repo}/openspec/changes/bounded-openspec-discovery/closeout/mutants/V1-root-entries-skipped.log`
+const logPath = `${repo}/openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V1-root-entries-skipped.log`
 const before =
   '      for (const entry of await fs.readdir(openspecDir, { withFileTypes: true })) {\n' +
   '        const stats = await statForRecord(path.join(openspecDir, entry.name))\n' +

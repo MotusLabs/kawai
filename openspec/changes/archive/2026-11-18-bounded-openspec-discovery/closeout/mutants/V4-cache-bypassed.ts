@@ -8,7 +8,7 @@ import fs from 'node:fs'
 
 const repo = '/home/coder/kawai/.worktrees/bounded-openspec-discovery'
 const target = `${repo}/src/server/workspace/workspaceCoordinator.ts`
-const logPath = `${repo}/openspec/changes/bounded-openspec-discovery/closeout/mutants/V4-cache-bypassed.log`
+const logPath = `${repo}/openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V4-cache-bypassed.log`
 const before = '      ...(context ? { cache: context.cache, now: context.now } : {}),'
 const after = '      ...(context ? { now: context.now } : {}),'
 const command = ['bun', 'test', 'src/server/__tests__/workspaceOpenspecComposition.integration.test.ts', '--timeout', '60000']

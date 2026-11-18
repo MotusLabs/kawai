@@ -8,7 +8,7 @@ import fs from 'node:fs'
 
 const repo = '/home/coder/kawai/.worktrees/bounded-openspec-discovery'
 const target = `${repo}/src/server/workspace/openspecDiscovery.ts`
-const logPath = `${repo}/openspec/changes/bounded-openspec-discovery/closeout/mutants/V2-failed-result-kept.log`
+const logPath = `${repo}/openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V2-failed-result-kept.log`
 const before = '  } else {\n    cache.delete(worktreePath)\n  }'
 const after = '  } else {\n    // mutant: a failed result keeps its entry\n  }'
 const command = ['bun', 'test', 'src/server/__tests__/openspecDiscoveryReuse.test.ts', '--timeout', '20000']

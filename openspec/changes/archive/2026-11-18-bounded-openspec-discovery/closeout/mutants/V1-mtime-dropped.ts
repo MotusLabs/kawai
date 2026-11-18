@@ -6,7 +6,7 @@ import fs from 'node:fs'
 
 const repo = '/home/coder/kawai/.worktrees/bounded-openspec-discovery'
 const target = `${repo}/src/server/workspace/openspecFingerprint.ts`
-const logPath = `${repo}/openspec/changes/bounded-openspec-discovery/closeout/mutants/V1-mtime-dropped.log`
+const logPath = `${repo}/openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V1-mtime-dropped.log`
 const before = 'push(`f\\t${childRelative}\\t${typeOf(entry)}\\t${stats.size}\\t${stats.mtimeMs}`)'
 const after = 'push(`f\\t${childRelative}\\t${typeOf(entry)}\\t${stats.size}`)'
 const command = ['bun', 'test', 'src/server/__tests__/openspecFingerprint.test.ts', '-t', 'FP2:', '--timeout', '20000']

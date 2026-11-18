@@ -6,7 +6,7 @@ import fs from 'node:fs'
 
 const repo = '/home/coder/kawai/.worktrees/bounded-openspec-discovery'
 const target = `${repo}/src/server/workspace/openspecPool.ts`
-const logPath = `${repo}/openspec/changes/bounded-openspec-discovery/closeout/mutants/V3-pool-size-4.log`
+const logPath = `${repo}/openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V3-pool-size-4.log`
 const before = 'export const OPENSPEC_POOL_SIZE = 3'
 const after = 'export const OPENSPEC_POOL_SIZE = 4'
 const command = ['bun', 'test', 'src/server/__tests__/openspecPool.test.ts', '-t', 'PL1:', '--timeout', '20000']

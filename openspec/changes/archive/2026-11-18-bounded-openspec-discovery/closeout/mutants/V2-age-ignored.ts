@@ -8,7 +8,7 @@ import fs from 'node:fs'
 
 const repo = '/home/coder/kawai/.worktrees/bounded-openspec-discovery'
 const target = `${repo}/src/server/workspace/openspecDiscoveryCache.ts`
-const logPath = `${repo}/openspec/changes/bounded-openspec-discovery/closeout/mutants/V2-age-ignored.log`
+const logPath = `${repo}/openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V2-age-ignored.log`
 const before = '  return now - previous.discoveredAt >= OPENSPEC_REUSE_MAX_AGE_MS'
 const after = '  return false'
 const command = ['bun', 'test', 'src/server/__tests__/openspecDiscoveryReuse.test.ts', '-t', 'RD5', '--timeout', '20000']

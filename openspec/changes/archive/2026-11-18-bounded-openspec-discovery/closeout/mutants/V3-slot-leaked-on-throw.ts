@@ -8,7 +8,7 @@ import fs from 'node:fs'
 
 const repo = '/home/coder/kawai/.worktrees/bounded-openspec-discovery'
 const target = `${repo}/src/server/workspace/openspecPool.ts`
-const logPath = `${repo}/openspec/changes/bounded-openspec-discovery/closeout/mutants/V3-slot-leaked-on-throw.log`
+const logPath = `${repo}/openspec/changes/archive/2026-11-18-bounded-openspec-discovery/closeout/mutants/V3-slot-leaked-on-throw.log`
 const before = '    try {\n      return await task()\n    } finally {\n      this.release()\n    }'
 const after = '    const value = await task()\n    this.release()\n    return value'
 const command = ['bun', 'test', 'src/server/__tests__/openspecPool.test.ts', '-t', 'PL1:', '--timeout', '20000']
