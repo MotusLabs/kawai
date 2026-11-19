@@ -16,7 +16,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as pollDelay } from 'node:timers/promises'
-import { createChat, initOrigin, initPlanRepository, seedPlan, validateUntilReady } from './fixtures/planWalkthrough'
+import { createChat, git, initOrigin, initPlanRepository, seedPlan, validateUntilReady } from './fixtures/planWalkthrough'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -73,8 +73,9 @@ function approveRewordedRevision(planId: string): number {
       const current = plans.revision(planId, 1);
       const content = { ...current.content, changes: current.content.changes.map(entry => ({ ...entry, guidance: 'Serve the API under /v2.' })) };
       const revision = plans.insertRevision(planId, { content, contentHash: 'seed-hash-2-' + planId, pin: null, author: { kind: 'human', sessionId: null } });
-      plans.setRevisionStatus(planId, revision, 'approved');
+      // One approved row per plan (a unique index): supersede revision 1 first, as PlanService's approval does.
       plans.setRevisionStatus(planId, 1, 'superseded');
+      plans.setRevisionStatus(planId, revision, 'approved');
       plans.setCurrentApproved(planId, revision);
       console.log('REVISION:' + JSON.stringify(revision));
     }));
@@ -131,8 +132,11 @@ test('revision-apply walkthrough: start revision 1, approve revision 2, apply it
     await expect(section.getByTestId('plan-execution-start-ready')).toBeVisible({ timeout: 20_000 })
     await section.getByTestId('plan-execution-start-confirm').click()
     await expect(section.getByTestId('plan-execution-state')).toContainText('Running', { timeout: 20_000 })
-    await expect.poll(() => existsSync(join(root, '.worktrees', 'walk-api')), { timeout: 30_000 }).toBe(true)
+    const worktree = join(root, '.worktrees', 'walk-api')
+    await expect.poll(() => existsSync(worktree), { timeout: 30_000 }).toBe(true)
     const taskId = await claimedTask(root, Date.now() + 60_000)
+    // The developer pushes the change's branch, as plan-execution.spec.ts's does: Adapt starts the fix from its head on origin.
+    git(['push', '-q', 'origin', 'HEAD:refs/heads/walk-api'], worktree)
 
     // Revision 2 is approved outside this page: reload so the detail reads it, then validate it.
     expect(approveRewordedRevision(planId)).toBe(2)
