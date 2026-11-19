@@ -94,6 +94,7 @@ describe('Apply crash and replay (CR)', () => {
     expect(retry).toMatchObject({ ok: true, replayed: false })
   })
 
+  // @covers: plan-revision-apply › The publication commits atomically › Crash before commit
   test('CR2 a crash at B2 rolls the transaction back: nothing from the Apply; the retry runs as a first Apply', async () => {
     const world = await crashWorld()
     const before = wired.counts()
@@ -109,6 +110,7 @@ describe('Apply crash and replay (CR)', () => {
     committedOnce(world, 'cr2')
   })
 
+  // @covers: plan-revision-apply › The publication commits atomically › Retry after commit
   test('CR3 a crash at B3 leaves the whole Apply committed and nothing dispatched; the retry replays, even after a later Apply; the startup tick dispatches once', async () => {
     const world = await crashWorld()
     wired.useWake(() => { throw new Error('crash at B3') })

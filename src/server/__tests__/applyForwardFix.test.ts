@@ -58,6 +58,7 @@ function ok<T extends { ok: boolean }>(outcome: T): Extract<T, { ok: true }> {
 }
 
 describe('Apply and forward fixes (FX)', () => {
+  // @covers: plan-revision-apply › Landed work is never redefined › A forward fix is applied
   test('FX1 a change naming a fix task, added by Apply, lands: fixStatus reads running, then the fix task closes once no change of the current approved revision naming it is unlanded', async () => {
     const { planId, executionId } = await wired.running()
     const fix = fixTask(planId)
@@ -86,6 +87,7 @@ describe('Apply and forward fixes (FX)', () => {
     expect(statusOf(planId, fix).phase).not.toBe('landed')
   })
 
+  // @covers: plan-revision-apply › Landed work is never redefined › A landed change gains a fix reference
   test('FX3 a fixes-only difference on a landed change applies as metadata with no choice', async () => {
     const { planId, executionId } = await wired.running({ changes: [{ ...base, change: 'api', acceptance: ['API lands'] }, { ...base, change: 'ui', dependsOn: ['api'] }] })
     await wired.inFlight(executionId, 'api', 'dev2')

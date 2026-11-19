@@ -36,6 +36,7 @@ function attemptsOf(executionId: string): Seen {
 }
 
 describe('Apply properties: manifests keep their revision (P4)', () => {
+  // @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
   test('P4 every dispatched attempt names the revision current at its dispatch; no manifest is rewritten; an owed row left across an Apply is never sent (seed 0x4A9B, 200 cases)', async () => {
     const next = mulberry32(SEED)
     const stats = emptyStats()

@@ -46,6 +46,7 @@ type Applied = { applied: { changes: Array<{ change: string }> } }
 const publication = (outcome: Applied, change: string) => outcome.applied.changes.find(row => row.change === change)
 
 describe('Apply choices, the remaining rows (CH)', () => {
+  // @covers: plan-revision-apply › Landed work is never redefined › A landed change gains a fix reference
   test('CH2 metadata: a publication row; the landed change reads the target\'s dependsOn', async () => {
     // docs stays unlanded, so the execution keeps running for its readers.
     const { planId, executionId } = await wired.running(THREE)
@@ -135,6 +136,7 @@ describe('Apply choices, the remaining rows (CH)', () => {
     expect(wired.planFor().transitions.filter(step => step.change === 'cli')).toEqual([])
   })
 
+  // @covers: plan-revision-apply › Each choice publishes or dispatches as recorded › A removed change is cancelled
   test('CH9 removed, unlanded, task open: cancelled and disowned, its pending effects cancelled, the slot given up, and the prepared cancel committed', async () => {
     const { planId, executionId } = await wired.running(THREE)
     const docs = await wired.inFlightByKawai(executionId, 'docs', 'dev')

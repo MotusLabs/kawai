@@ -46,6 +46,7 @@ function land(executionId: string, planId: string, change: string): void {
 const completion = () => ({ executions: wired.executions, plans: wired.bench.plans, plansService: wired.bench.service })
 
 describe('completion reads the current revision (D4)', () => {
+  // @covers: plan-revision-apply › The execution keeps its revision history › Completion after Apply
   test('an Apply removing the last unlanded change completes the execution and asks the plan\'s system completion', async () => {
     const { planId, executionId } = await wired.running(THREE)
     land(executionId, planId, 'api')

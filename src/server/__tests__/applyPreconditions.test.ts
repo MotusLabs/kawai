@@ -290,6 +290,7 @@ describe('APPLY_PRECONDITIONS: the DL table, through revisionDelta', () => {
     expect(review.byName.a).toMatchObject({ class: 'changed', fields: ['roles'] })
   })
 
+  // @covers: plan-revision-apply › Kawai classifies every change against the running revision › Only the lead group changed
   test('DL12 only leadGroup differs: every change unchanged, informational lead-changed', () => {
     const out = classify(content([change('a'), change('b')], { leadGroup: 'lead' }), content([change('a'), change('b')], { leadGroup: 'change-leads' }), ['a'], ['b'])
     expect(out.delta.changes.map(entry => entry.class)).toEqual(['unchanged', 'unchanged'])

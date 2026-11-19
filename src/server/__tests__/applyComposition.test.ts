@@ -239,6 +239,7 @@ const applyFrame = (running: Awaited<ReturnType<typeof runningWorld>>, requestId
 
 describe('Apply through the composed server (PC)', () => {
   // @covers: plan-revision-apply › Each choice publishes or dispatches as recorded › Adapt notifies the developer
+  // @covers: plan-execution › A running execution keeps its revision › Apply moves the execution forward
   test('PC1: Apply with one change continued and one adapted while held: the new revision, one task revision and notice, the wake, the executor\'s fix attempt naming it, and the next detail listing both revision rows', async () => {
     const applied = await runningWorld()
     route({ type: 'team-plan-open', teamPath: world.repo, planId: applied.planId })
@@ -298,6 +299,7 @@ describe('Apply through the composed server (PC)', () => {
     expect(bench.tasks.get(applied.held.ui!.taskId)!.revision).toBe(1)
   })
   // plan-revision-apply D4 with B3: an Apply committed and the process stopped before its completion check; the executor's pass completes the run.
+  // @covers: plan-revision-apply › The execution keeps its revision history › Completion after Apply
   test('an execution whose current revision fully landed, left running by a stop after an Apply commit, completes on the executor\'s next pass with the plan', async () => {
     const applied = await runningWorld()
     const store = composed.executionStore
@@ -366,6 +368,7 @@ describe('Apply frames over the router (3.1)', () => {
     expect(counts()).toEqual(before)
   })
 
+  // @covers: plan-execution › A running execution keeps its revision › Apply moves the execution forward
   test('a committed Apply is followed by a detail push whose history carries each revision\'s publication rows, and plan_get lists the same revisions', async () => {
     const running = await runningWorld()
     route({ type: 'team-plan-open', teamPath: world.repo, planId: running.planId })
