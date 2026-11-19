@@ -443,6 +443,8 @@ details[open] > .chat-summary::before {
 }
 
 .chat-row-meta {
+  /* Keep hidden authors/timestamps inside the transcript's scroll area. */
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -478,6 +480,8 @@ details[open] > .chat-summary::before {
 }
 
 .chat-row-copy {
+  /* The live status span must not use the document as its containing block. */
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
