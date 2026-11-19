@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import type { ChatHandoffPackage, TeamMessage } from '../../shared/team'
 import type { AttemptManifest, FloorMap } from '../../shared/planExecution'
 import type { PlanHold } from '../../shared/planRevisionControl'
-import { sessionRow, createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
+import { sessionRow, createPlanBench, createPlanWorld, type PlanBench, type PlanBenchFixture, type PlanWorld } from './planHarness'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import { PauseService, PLAN_PAUSE_TAG, type PauseInput, type PauseOutcome, type PauseServiceDeps } from '../plans/revisionControl/pauseService'
 import { PauseStore } from '../plans/revisionControl/pauseStore'
@@ -65,9 +65,9 @@ export interface PauseTargetsBench {
   close: () => void
 }
 
-export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBench> {
+export async function pauseTargetsBench(prefix: string, fixture: PlanBenchFixture = {}): Promise<PauseTargetsBench> {
   const world = await createPlanWorld(prefix)
-  const bench = createPlanBench(world)
+  const bench = createPlanBench(world, {}, fixture)
   const teamId = world.team.teamId
   const now = (): Date => new Date(NOW)
   const inDays = (days: number): string => new Date(NOW + days * 24 * 60 * 60 * 1000).toISOString()

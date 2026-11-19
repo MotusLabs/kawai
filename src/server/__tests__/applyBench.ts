@@ -24,6 +24,7 @@ import { provisionAdapter } from '../plans/execution/executionProvision'
 import { TaskResultService } from '../team/TaskResultService'
 import { neutralExecutorSeams } from './executorTestSeams'
 import { pauseTargetsBench, type PauseTargetsBench } from './pauseTargetsBench'
+import type { PlanBenchFixture } from './planHarness'
 import { sessionRow } from './planHarness'
 
 export const APPLY_HEAD = 'apply-head-sha'
@@ -59,8 +60,8 @@ export type ApplyBench = PauseTargetsBench & {
   executor: () => ExecutionExecutor
 }
 
-export async function applyBench(prefix: string): Promise<ApplyBench> {
-  const wired = await pauseTargetsBench(prefix)
+export async function applyBench(prefix: string, fixture: PlanBenchFixture = {}): Promise<ApplyBench> {
+  const wired = await pauseTargetsBench(prefix, fixture)
   const { bench, executions } = wired
   bench.records.set('dev', sessionRow('dev', 'middle-devs', wired.world.feature))
   const revisions = new ExecutionRevisionStore(bench.db.db)
