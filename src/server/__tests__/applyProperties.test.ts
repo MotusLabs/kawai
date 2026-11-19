@@ -8,14 +8,16 @@
 // - P1, one history: revision rows contiguous from seq 1, one per seq, and the
 //   execution's revision columns equal to the newest row.
 // - P2, publish once: each adapted change has exactly one task revision and
-//   one notice per Apply command id, whatever retries and crashes occur.
+//   one notice per Apply command id, whatever retries and crashes occur — the
+//   notice to the outstanding claimant (CH4), so an adaptation after an
+//   earlier one superseded the held assignment has none, never two.
 // - The model-based test runs the CR and CH tables as the reference model and
 //   compares the stored rows after every step.
 // Seed 0x4A99, 200 declared cases through `propertyCases`; every run must
 // reach applied and refused Applies, replays, races, and every boundary.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { applyBench, type ApplyBench } from './applyBench'
-import { check, emptyStats, mulberry32, startCase, step } from './applySequence'
+import { check, emptyStats, mulberry32, publishedOnce, startCase, step } from './applySequence'
 import { propertyCases } from './helpers/propertyCases'
 
 const SEED = 0x4A99
@@ -63,15 +65,10 @@ describe('Apply properties over command sequences (P1, P2, CR/CH model)', () => 
       const model = await startCase(wired)
       const steps = 4 + Math.floor(next() * 6)
       for (let at = 0; at < steps; at++) await step(wired, model, next, stats)
-      const db = wired.bench.db.db
-      for (const pair of model.published) {
-        const n = (db.prepare('SELECT COUNT(*) AS n FROM team_task_revisions WHERE request_key = ?').get(`apply:${pair.commandId}:${pair.change}`) as { n: number }).n
-        expect({ case: index, ...pair, n }).toEqual({ case: index, ...pair, n: 1 })
-      }
+      for (const pair of model.published) expect({ case: index, ...publishedOnce(wired, pair) }).toEqual({ case: index, ...pair, revisions: 1, notices: pair.notified ? 1 : 0 })
       for (const [change, taskId] of model.tasks) {
-        const adapts = model.adapts.get(taskId) ?? 0
         expect({ case: index, change, revisions: wired.tasks.store.get(taskId)!.revision - 1, notices: wired.notices(taskId).length })
-          .toEqual({ case: index, change, revisions: adapts, notices: adapts })
+          .toEqual({ case: index, change, revisions: model.adapts.get(taskId) ?? 0, notices: model.notices.get(taskId) ?? 0 })
       }
       publications += model.published.length
     }

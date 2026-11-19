@@ -306,7 +306,7 @@ describe('Apply through the composed server (PC)', () => {
     }, [])
     expect(advanceExecutionRevision(bench.db.db, applied.executionId, 1, { revision: applied.target.revision, contentHash: applied.target.contentHash, reportId: 'rep-next', inputHash: 'ih-next' })).toBe(true)
     for (const change of ['api', 'ui']) {
-      store.insertLanding({ planId: applied.planId, change, executionId: applied.executionId, teamId: world.team.teamId, mechanism: 'direct', prNumber: null, prUrl: null, headSha: 'h', baseSha: 'b', mergeSha: 'm', treeVerified: true })
+      store.insertLanding({ planId: applied.planId, change, executionId: applied.executionId, teamId: world.team.teamId, mechanism: 'direct', prNumber: null, prUrl: null, headSha: 'h', baseSha: 'b', mergeSha: 'm', treeVerified: true, postCi: [] })
       const row = store.change(applied.executionId, change)!
       expect(store.transition(applied.executionId, change, row, { state: 'landed', step: null })).not.toBeNull()
     }

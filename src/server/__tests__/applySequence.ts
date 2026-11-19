@@ -5,7 +5,8 @@
 // - approve: the next revision from an edit of the current approved one (a
 //   reworded, added, or dropped unlanded change; landed changes stay — P3
 //   covers their refusal);
-// - apply: a fresh command id with a random choice per needed change and a
+// - apply: usually after a fresh approval, a fresh command id with a random
+//   choice per needed change and a
 //   crash at none or one of B0–B4, followed by the owner's retry under the
 //   same id after a crash;
 // - replay: a resend of an earlier command with its payload;
@@ -48,9 +49,12 @@ export interface SequenceModel {
   landed: Set<string>
   cancelled: Set<string>
   tasks: Map<string, string>
-  /** Adapt publications per task, and the (command, change) pairs that published. */
+  /** Adapt publications per task, the notices they sent, and each (command, change) publication with whether it notified. */
   adapts: Map<string, number>
-  published: Array<{ commandId: string; change: string }>
+  notices: Map<string, number>
+  published: Array<{ commandId: string; change: string; notified: boolean }>
+  /** The changes whose task still has its claimed, unsuperseded assignment (the notice's recipient). */
+  claimed: Set<string>
   commands: Map<string, { input: ApplyInput; seq: number }>
   holds: Map<string, string>
   serial: number
@@ -100,14 +104,27 @@ function commit(model: SequenceModel, input: ApplyInput, seq: number): void {
     if (kind === 'removed' && !model.landed.has(name)) model.cancelled.add(name)
     if (kind === 'changed' && input.choices[name] === 'adapt') {
       const taskId = model.tasks.get(name)!
+      const notified = model.claimed.has(name)
       model.adapts.set(taskId, (model.adapts.get(taskId) ?? 0) + 1)
-      model.published.push({ commandId: input.commandId, change: name })
+      if (notified) model.notices.set(taskId, (model.notices.get(taskId) ?? 0) + 1)
+      model.published.push({ commandId: input.commandId, change: name, notified })
     }
+    // Adapt (re-issued) and restart supersede the held assignment: no claimant is left for a later notice.
+    if (kind === 'changed' && (input.choices[name] === 'adapt' || input.choices[name] === 'restart')) model.claimed.delete(name)
   }
   model.history.push({ seq, revision: input.revision, commandId: input.commandId })
   model.commands.set(input.commandId, { input, seq })
   // D4: an Apply leaving every change of its revision landed completes the run.
   if (target.changes.every(entry => model.landed.has(entry.change))) model.running = false
+}
+
+/** One publication's stored rows: the task revisions and the notices recorded under its request key (P2). */
+export function publishedOnce(wired: ApplyBench, pair: { commandId: string; change: string; notified: boolean }) {
+  const key = `apply:${pair.commandId}:${pair.change}`
+  const db = wired.bench.db.db
+  const revisions = (db.prepare('SELECT COUNT(*) AS n FROM team_task_revisions WHERE request_key = ?').get(key) as { n: number }).n
+  const notices = (db.prepare('SELECT COUNT(*) AS n FROM team_task_notifications WHERE request_key = ?').get(key) as { n: number }).n
+  return { ...pair, revisions, notices }
 }
 
 /** The stored rows against the model (P1, P2, and the CH effects). */
@@ -118,14 +135,10 @@ export function check(wired: ApplyBench, model: SequenceModel, label: string): v
   const execution = wired.executions.execution(model.executionId)!
   expect({ label, revision: execution.revision, running: execution.state === 'running' }).toEqual({ label, revision: current(model).revision, running: model.running })
   for (const [change, taskId] of model.tasks) {
-    const adapts = model.adapts.get(taskId) ?? 0
     expect({ label, change, revision: wired.tasks.store.get(taskId)!.revision, notices: wired.notices(taskId).length })
-      .toEqual({ label, change, revision: 1 + adapts, notices: adapts })
+      .toEqual({ label, change, revision: 1 + (model.adapts.get(taskId) ?? 0), notices: model.notices.get(taskId) ?? 0 })
   }
-  for (const pair of model.published) {
-    const n = (db.prepare('SELECT COUNT(*) AS n FROM team_task_revisions WHERE request_key = ?').get(`apply:${pair.commandId}:${pair.change}`) as { n: number }).n
-    expect({ label, ...pair, n }).toEqual({ label, ...pair, n: 1 })
-  }
+  for (const pair of model.published) expect({ label, ...publishedOnce(wired, pair) }).toEqual({ label, ...pair, revisions: 1, notices: pair.notified ? 1 : 0 })
   for (const name of model.cancelled) expect({ label, name, state: wired.executions.change(model.executionId, name)?.state }).toEqual({ label, name, state: 'cancelled' })
   for (const name of model.landed) expect({ label, name, state: wired.executions.change(model.executionId, name)?.state }).toEqual({ label, name, state: 'landed' })
 }
@@ -139,7 +152,8 @@ export async function startCase(wired: ApplyBench): Promise<SequenceModel> {
   const model: SequenceModel = {
     planId, executionId, running: true, history: [{ seq: 1, revision: revision.revision, commandId: null }],
     contents: new Map([[revision.revision, revision.content]]), approved: { revision: revision.revision, hash: revision.contentHash },
-    landed: new Set(), cancelled: new Set(), tasks: new Map(), adapts: new Map(), published: [], commands: new Map(), holds: new Map(), serial: 0,
+    landed: new Set(), cancelled: new Set(), tasks: new Map(), adapts: new Map(), notices: new Map(), published: [], claimed: new Set(['api', 'ui', 'docs']),
+    commands: new Map(), holds: new Map(), serial: 0,
   }
   for (const change of ['api', 'ui', 'docs']) {
     const flight = await wired.inFlightByKawai(executionId, change, 'dev')
@@ -173,6 +187,8 @@ async function approve(wired: ApplyBench, model: SequenceModel, next: () => numb
 
 /** One Apply with a crash at `boundary` and, after a crash, the owner's retry under the same command id. */
 async function apply(wired: ApplyBench, model: SequenceModel, next: () => number, stats: SequenceStats): Promise<void> {
+  // Mostly against a fresh revision, so most Applies are accepted; the rest meet revision-newer.
+  if (model.approved.revision <= current(model).revision && next() < 0.7) await approve(wired, model, next)
   const boundary = BOUNDARIES[Math.floor(next() * BOUNDARIES.length)]!
   const choices = Object.fromEntries(needed(model).map(name => [name, ['continue', 'adapt', 'restart'][Math.floor(next() * 3)]!]))
   const input: ApplyInput = {
@@ -213,7 +229,7 @@ async function apply(wired: ApplyBench, model: SequenceModel, next: () => number
     stats.applied += 1
     return
   }
-  expect({ label, ok: outcome.ok }).toEqual({ label, ok: predicted })
+  expect({ label, ok: outcome.ok, why: outcome.ok === predicted ? null : JSON.stringify(outcome).slice(0, 600) }).toEqual({ label, ok: predicted, why: null })
   if (!outcome.ok) {
     stats.refused += 1
     expect({ label, counts: wired.counts() }).toEqual({ label, counts: before })
@@ -242,6 +258,7 @@ async function replay(wired: ApplyBench, model: SequenceModel, next: () => numbe
 }
 
 async function race(wired: ApplyBench, model: SequenceModel, next: () => number, stats: SequenceStats): Promise<void> {
+  if (model.approved.revision <= current(model).revision && next() < 0.7) await approve(wired, model, next)
   const choices = Object.fromEntries(needed(model).map(name => [name, ['continue', 'adapt'][Math.floor(next() * 2)]!]))
   const inputs = [1, 2].map(() => ({
     executionId: model.executionId, expectedRevision: current(model).revision, revision: model.approved.revision, contentHash: model.approved.hash,
@@ -263,10 +280,15 @@ function land(wired: ApplyBench, model: SequenceModel, next: () => number): void
   const name = candidates[Math.floor(next() * candidates.length)]!
   wired.executions.insertLanding({
     planId: model.planId, change: name, executionId: model.executionId, teamId: wired.teamId, mechanism: 'direct', prNumber: null, prUrl: null,
-    headSha: 'h', baseSha: 'b', mergeSha: `m-${name}`, treeVerified: true,
+    headSha: 'h', baseSha: 'b', mergeSha: `m-${name}`, treeVerified: true, postCi: [],
   })
   const row = wired.executions.change(model.executionId, name)!
   if (wired.executions.transition(model.executionId, name, row, { state: 'landed', step: null }) !== null) model.landed.add(name)
+}
+
+/** After an executor pass: D4's completion of a run whose current revision fully landed. */
+export function afterTick(model: SequenceModel): void {
+  if (model.running && execContent(model).changes.every(entry => model.landed.has(entry.change))) model.running = false
 }
 
 export type Step = 'approve' | 'apply' | 'replay' | 'concurrent' | 'land' | 'stop' | 'hold' | 'release'
@@ -275,7 +297,7 @@ export type Step = 'approve' | 'apply' | 'replay' | 'concurrent' | 'land' | 'sto
 export async function step(wired: ApplyBench, model: SequenceModel, next: () => number, stats: SequenceStats, withHolds = false): Promise<Step> {
   const roll = next()
   const kinds: Array<[Step, number]> = [['approve', 0.3], ['apply', 0.32], ['replay', 0.08], ['concurrent', 0.1], ['land', 0.12], ['stop', 0.02]]
-  if (withHolds) kinds.push(['hold', 0.04], ['release', 0.04])
+  if (withHolds) kinds.push(['hold', 0.15], ['release', 0.12])
   const total = kinds.reduce((sum, [, weight]) => sum + weight, 0)
   let cursor = roll * total
   const kind = kinds.find(([, weight]) => (cursor -= weight) < 0)?.[0] ?? 'apply'

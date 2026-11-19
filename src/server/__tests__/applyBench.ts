@@ -28,6 +28,7 @@ import type { PlanBenchFixture } from './planHarness'
 import { sessionRow } from './planHarness'
 
 export const APPLY_HEAD = 'apply-head-sha'
+const NO_GITHUB = { argv: ['gh'], exitCode: 1, httpStatus: null, message: 'no GitHub in the Apply bench' }
 
 export type ApplyBench = PauseTargetsBench & {
   apply: ApplyService
@@ -191,6 +192,16 @@ export async function applyBench(prefix: string, fixture: PlanBenchFixture = {})
       openTargets: () => [],
     },
     now: wired.now,
+    // No GitHub or remote git from the bench: every read fails closed.
+    roundAdapters: {
+      lsRemoteHead: async () => ({ ok: true, sha: null }),
+      push: async () => ({ ok: false, error: { argv: ['git', 'push'], exitCode: 1, stderr: 'no remote in the Apply bench' } }),
+      checkRuns: async () => ({ ok: false, error: NO_GITHUB }),
+      statuses: async () => ({ ok: false, error: NO_GITHUB }),
+      prList: async () => ({ ok: false, error: NO_GITHUB }),
+      prCreate: async () => ({ ok: false, error: NO_GITHUB }),
+      rerun: async () => ({ ok: false, error: NO_GITHUB }),
+    },
   })
 
   return {
