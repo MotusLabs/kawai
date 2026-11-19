@@ -6,6 +6,9 @@
 // revision from an edit of the current one. Git reads are doubles that
 // check their arguments: the probe has no base (so changes-on-base compares
 // nothing), and the branch-head read returns a fixed, distinguishable sha.
+// `useWake` puts a hook in the post-commit wake (a throw there is a crash at
+// B3), and `executor()` builds the production executor over the same stores,
+// as a restarted server does.
 import { expect } from 'bun:test'
 import type { PlanContent } from '../../shared/plans'
 import { ApplyService, type ApplyInput, type ApplyOutcome } from '../plans/revisionControl/applyService'
@@ -16,6 +19,10 @@ import { REVISION_NOTICE_TAG } from '../team/taskNotices'
 import { planSteps, type PlanSteps } from '../plans/execution/executionPlanner'
 import { executionSnapshot } from '../plans/execution/executionSnapshot'
 import { assignmentState } from '../team/assignmentStore'
+import { ExecutionExecutor } from '../plans/execution/executor'
+import { provisionAdapter } from '../plans/execution/executionProvision'
+import { TaskResultService } from '../team/TaskResultService'
+import { neutralExecutorSeams } from './executorTestSeams'
 import { pauseTargetsBench, type PauseTargetsBench } from './pauseTargetsBench'
 import { sessionRow } from './planHarness'
 
@@ -46,6 +53,10 @@ export type ApplyBench = PauseTargetsBench & {
   answerNewestRow: (executionId: string, change: string, taskRevision: number) => string
   /** The revision notices on a task. */
   notices: (taskId: string) => ReturnType<PauseTargetsBench['bench']['mail']['forTask']>
+  /** Run `hook` inside the post-commit wake (a throw there is a crash at B3); null removes it. */
+  useWake: (hook: ((teamId: string) => void) | null) => void
+  /** A fresh executor over the bench stores, as a restarted server builds one; holds read the bench's store, no git effects run. */
+  executor: () => ExecutionExecutor
 }
 
 export async function applyBench(prefix: string): Promise<ApplyBench> {
@@ -55,6 +66,7 @@ export async function applyBench(prefix: string): Promise<ApplyBench> {
   const revisions = new ExecutionRevisionStore(bench.db.db)
   const applyWakes: string[] = []
   const headReads: Array<{ executionId: string; change: string }> = []
+  let wakeHook: ((teamId: string) => void) | null = null
   let headRead = (_executionId: string, _change: string): AdaptHeadFacts | null => ({ ok: true, startCommit: APPLY_HEAD, artifacts: {} })
   const apply = new ApplyService({
     store: executions, plansStore: bench.plans, plans: bench.service, executionRevisions: revisions,
@@ -77,7 +89,10 @@ export async function applyBench(prefix: string): Promise<ApplyBench> {
       headReads.push({ executionId, change })
       return headRead(executionId, change)
     },
-    wake: teamId => applyWakes.push(teamId),
+    wake: teamId => {
+      applyWakes.push(teamId)
+      wakeHook?.(teamId)
+    },
   })
 
   let planCounter = 0
@@ -164,9 +179,23 @@ export async function applyBench(prefix: string): Promise<ApplyBench> {
     return flight
   }
 
+  const results = new TaskResultService(wired.tasks, { getSession: id => bench.records.get(id), assignments: wired.assignments })
+  const executor = (): ExecutionExecutor => new ExecutionExecutor({
+    ...neutralExecutorSeams, plansService: bench.service, store: executions, plans: bench.plans, tasks: wired.tasks,
+    assignments: wired.assignments, mailbox: bench.mail, results, records: () => bench.records.values(),
+    teamOf: id => (id === wired.teamId ? wired.world.team : undefined),
+    adapters: { provision: provisionAdapter(executions) },
+    holds: {
+      active: (teamId, planId) => wired.holds.active(teamId, planId).map(hold => ({ id: hold.id, scope: hold.scope, changes: hold.changes })),
+      openTargets: () => [],
+    },
+    now: wired.now,
+  })
+
   return {
-    ...wired, apply, revisions, applyWakes, headReads, planFor, answerNewestRow, inFlightByKawai,
+    ...wired, apply, revisions, applyWakes, headReads, planFor, answerNewestRow, inFlightByKawai, executor,
     useHead: read => { headRead = read },
+    useWake: hook => { wakeHook = hook },
     running, approveNext, applyAs, counts,
     notices: taskId => bench.mail.forTask(taskId).filter(message => message.tags.includes(REVISION_NOTICE_TAG)),
   }
