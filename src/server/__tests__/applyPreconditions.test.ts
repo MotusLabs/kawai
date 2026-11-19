@@ -15,9 +15,9 @@ import {
   type ApplyCheckContext,
 } from '../plans/revisionControl/applyPreconditions'
 
-/** A plan check, as plan-wide and per-change extra checks carry it. */
 /** A change's proposal path inside a fixture repository (built, so the @reads guard does not read it as a repository read). */
 const proposalOf = (change: string) => ['openspec', 'changes', change, 'proposal.md'].join('/')
+/** A plan check, as plan-wide and per-change extra checks carry it. */
 const BENCH = { name: 'bench', description: 'Runs the benchmark', command: null }
 
 const change = (name: string, over: Partial<PlanChange> = {}): PlanChange => ({
