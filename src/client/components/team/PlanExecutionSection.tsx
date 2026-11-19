@@ -7,6 +7,8 @@
 // integration plan's branches follow (`PlanIntegrationPanel`). The newest
 // execution's pauses, Pause…, and Hold… follow its rows (`PlanPauseSection`,
 // revision-control D14); a checkpoint decision's Stop link lands on Stop.
+// While the run holds an older revision than the plan's approved one, Apply
+// revision… opens `PlanApplyRevisionDialog` (plan-revision-apply D6).
 // Every control disables while disconnected.
 import { Fragment } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
@@ -18,6 +20,7 @@ import PlanExecutionStartDialog from './PlanExecutionStartDialog'
 import PlanExecutionStopDialog from './PlanExecutionStopDialog'
 import PlanDecisionCard from './PlanDecisionCard'
 import PlanPauseSection from './PlanPauseSection'
+import PlanApplyRevisionDialog from './PlanApplyRevisionDialog'
 
 export default function PlanExecutionSection({ teamPath, plan, detail, connected, onSend, onOpenTask, sessions = [], busy = false, revealAnchor = null }: {
   teamPath: string
@@ -71,6 +74,11 @@ export default function PlanExecutionSection({ teamPath, plan, detail, connected
           </Fragment>)}
         </ul>
         <PlanPauseSection teamPath={teamPath} planId={plan.id} execution={newest} connected={connected} busy={busy} onSend={onSend} />
+        {running && approved !== null && approved.revision > newest.revision && <div className="mt-2" data-testid="plan-execution-apply">
+          <p className="text-chat-meta text-secondary">Revision {approved.revision} is approved; this run holds revision {newest.revision}. Apply moves it forward in place.</p>
+          <PlanApplyRevisionDialog teamPath={teamPath} execution={newest} revision={approved.revision} contentHash={approved.contentHash}
+            connected={connected} busy={busy} onSend={onSend} />
+        </div>}
         {running && <div className="mt-2" id="plan-execution-stop"><PlanExecutionStopDialog teamPath={teamPath} execution={newest} connected={connected} onSend={onSend} /></div>}
         {!running && approved !== null && <div className="mt-2" data-testid="plan-execution-restart">
           <p className="text-chat-meta text-secondary">Start runs the approved revision again; changes an earlier execution of this plan provisioned keep their worktrees and branches.</p>

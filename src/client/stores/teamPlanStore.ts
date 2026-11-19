@@ -30,17 +30,19 @@
 // the Hold, Release, Extend, Pause, and checkpoint-decision dialogs arm
 // their own slots (`hold-place:<plan>[:execution]`, `hold-release:<hold>`,
 // `hold-extend:<hold>`, `pause:<plan>`, `pause-resolve:<pause>:<change>`),
-// and the re-pushed detail carries what each command changed.
+// and the re-pushed detail carries what each command changed. The Apply
+// dialog (plan-revision-apply D5, D6) asks its preview into `revisionPreviews`,
+// keyed `<executionId>:<revision>`, and arms `apply:<executionId>:<revision>`.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
 import type { ImpactGate, PlanImpact } from '@shared/strategyImpact'
 import type { PlanRevisionValidation } from '@shared/planValidation'
 import type { PlanIntegrationView, PromotionPreview } from '@shared/planIntegration'
-import type { HoldView, PauseView } from '@shared/planRevisionControl'
+import type { ApplyPreview, HoldView, PauseView } from '@shared/planRevisionControl'
 
 export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide' | 'override' | 'start' | 'stop' | 'retry' | 'preview' | 'promote' | 'cancel-promotion'
-  | 'hold-place' | 'hold-release' | 'hold-extend' | 'pause' | 'pause-resolve'
+  | 'hold-place' | 'hold-release' | 'hold-extend' | 'pause' | 'pause-resolve' | 'apply'
 
 /** The Start dialog's server standing for one plan revision (plan-execution D17). */
 export type PlanStanding =
@@ -52,6 +54,12 @@ export type PlanStanding =
 export type PromotionStanding =
   | { state: 'pending' }
   | { state: 'preview'; preview: PromotionPreview }
+  | { state: 'error'; error: string }
+
+/** The Apply dialog's server preview for one `<executionId>:<revision>` (plan-revision-apply D5). */
+export type ApplyPreviewStanding =
+  | { state: 'pending' }
+  | { state: 'preview'; preview: ApplyPreview }
   | { state: 'error'; error: string }
 
 /** One dialog's command id and the payload it was last sent with (null = not sent yet). */
@@ -114,13 +122,17 @@ export interface PlanView {
   promotionPreviews: Record<string, PromotionStanding>
   /** Which preview key each promotion preview request was sent for. */
   promotionPreviewRequests: Record<string, string>
+  /** The Apply dialog's previews, by `<executionId>:<revision>`. */
+  revisionPreviews: Record<string, ApplyPreviewStanding>
+  /** Which preview key each Apply preview request was sent for. */
+  revisionPreviewRequests: Record<string, string>
 }
 
 export const closedPlanView = (): PlanView => ({
   open: false, loading: false, plans: null, selected: null, detail: null, pending: {}, error: null, failures: [], commands: {}, commandRequests: {},
   refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null, detailExecutions: undefined,
   standings: {}, previewRequests: {}, detailIntegration: undefined, promotionPreviews: {}, promotionPreviewRequests: {},
-  detailHolds: undefined, detailPauses: undefined,
+  detailHolds: undefined, detailPauses: undefined, revisionPreviews: {}, revisionPreviewRequests: {},
 })
 
 interface PlanState {
@@ -145,6 +157,8 @@ interface PlanState {
   beginPreview: (teamKey: string, requestId: string, standingKey: string) => void
   /** The Promote dialog opened for `<planId>:<branch>`: its preview request is pending (D13). */
   beginPromotionPreview: (teamKey: string, requestId: string, previewKey: string) => void
+  /** The Apply dialog opened for `<executionId>:<revision>`: its preview request is pending (plan-revision-apply D5). */
+  beginApplyPreview: (teamKey: string, requestId: string, previewKey: string) => void
   /** The connection came back: results of pending requests are lost, so stop waiting for them. */
   reconnected: (teamKey: string) => void
   applySnapshot: (message: Extract<ServerMessage, { type: 'team-plans-snapshot' }>) => void
@@ -236,6 +250,11 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     promotionPreviewRequests: { ...state.views[teamKey]?.promotionPreviewRequests, [requestId]: previewKey },
     promotionPreviews: { ...state.views[teamKey]?.promotionPreviews, [previewKey]: { state: 'pending' } },
   })),
+  beginApplyPreview: (teamKey, requestId, previewKey) => set(state => update(state, teamKey, {
+    pending: { ...state.views[teamKey]?.pending, [requestId]: 'preview' },
+    revisionPreviewRequests: { ...state.views[teamKey]?.revisionPreviewRequests, [requestId]: previewKey },
+    revisionPreviews: { ...state.views[teamKey]?.revisionPreviews, [previewKey]: { state: 'pending' } },
+  })),
   reconnected: teamKey => set(state => {
     const view = state.views[teamKey]
     if (!view?.open || Object.keys(view.pending).length === 0) return state
@@ -243,7 +262,8 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     // open Start dialog asks again (N4); settled standings stay.
     const standings = Object.fromEntries(Object.entries(view.standings).filter(([, standing]) => standing.state !== 'pending'))
     const promotionPreviews = Object.fromEntries(Object.entries(view.promotionPreviews).filter(([, preview]) => preview.state !== 'pending'))
-    return update(state, teamKey, { pending: {}, commandRequests: {}, previewRequests: {}, standings, promotionPreviewRequests: {}, promotionPreviews })
+    const revisionPreviews = Object.fromEntries(Object.entries(view.revisionPreviews).filter(([, preview]) => preview.state !== 'pending'))
+    return update(state, teamKey, { pending: {}, commandRequests: {}, previewRequests: {}, standings, promotionPreviewRequests: {}, promotionPreviews, revisionPreviewRequests: {}, revisionPreviews })
   }),
   applySnapshot: message => set(state => update(state, message.teamPath, { loading: false, plans: message.plans, impact: message.impact ?? {} })),
   applyDetail: message => set(state => {
@@ -284,6 +304,16 @@ export const useTeamPlanStore = create<PlanState>(set => ({
         : { state: 'error', error: message.error ?? 'The preview failed.' } }
       // A preview answer settles the dialog's preview only; it never refuses or retires a command.
       return update(state, message.teamPath, { pending, commandRequests, promotionPreviewRequests, promotionPreviews })
+    }
+    const revisionPreviewRequests = { ...view.revisionPreviewRequests }
+    const applyKey = revisionPreviewRequests[message.requestId]
+    if (applyKey !== undefined) {
+      delete revisionPreviewRequests[message.requestId]
+      const revisionPreviews = { ...view.revisionPreviews, [applyKey]: message.applyPreview !== undefined
+        ? { state: 'preview' as const, preview: message.applyPreview }
+        : { state: 'error' as const, error: message.error ?? 'The preview failed.' } }
+      // Like the Promote preview: it settles the dialog's preview only, never a command.
+      return update(state, message.teamPath, { pending, commandRequests, revisionPreviewRequests, revisionPreviews })
     }
     if (message.error) {
       const armed = slot ? view.commands[slot] : undefined
