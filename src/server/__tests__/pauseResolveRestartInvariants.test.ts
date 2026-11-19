@@ -66,6 +66,7 @@ function planFor() {
 // startCommit, dispatches it once with the gate open, and the older owed
 // row never dispatches; the implement step does not duplicate the new row
 // and no D9 fix follows.
+// @covers: plan-pause › A paused change gets no new work until decided › A revision published during a pause
 test('T5: Restart over an owed row and over a pending revision makes exactly one attempt carrying checkpoint and startCommit; the owed row never dispatches, the implement step does not duplicate it, and no D9 fix follows', async () => {
   // (a) over an owed fix row (a failed round's D12 fix, pre-gate).
   const owedWorld = await wired.pausing({ checkpoint: { kind: 'commit', effectState: 'done' } })
@@ -127,6 +128,7 @@ test('T5: Restart over an owed row and over a pending revision makes exactly one
 // — the rows survive the decision: the execution row, the attempt rows, and
 // this pause's own checkpoint row all keep their identity through a
 // restart, and Continue mints no attempt of its own.
+// @covers: plan-pause › Pause state survives restart › Restart with a paused execution
 test('restart with a Paused target keeps execution, attempt, and checkpoint; continue creates no attempt', async () => {
   const restartWorld = await wired.pausing({ checkpoint: { kind: 'commit', effectState: 'done' } })
   wired.toPaused(restartWorld.pauseId, 'api')

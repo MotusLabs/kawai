@@ -12,6 +12,7 @@ import ChatView from './components/chat/ChatView'
 import TeamWorkspaceView from './components/team/TeamWorkspaceView'
 import { useUpdateStore } from './stores/updateStore'
 import NewSessionModal from './components/NewSessionModal'
+import { openTeamMembers } from './components/chat/MissingGroupsNotice'
 import BranchBrowserModal from './components/BranchBrowserModal'
 import CreateWorktreeModal from './components/CreateWorktreeModal'
 import SettingsModal from './components/SettingsModal'
@@ -1062,6 +1063,11 @@ export default function App() {
           newSessionDismissRef.current = null
         }}
         onClose={() => setIsModalOpen(false)}
+        onOpenTeamMembers={projectPath => {
+          // A project with no session yet is undiscovered: ask for it first.
+          sendMessage({ type: 'workspace-refresh', projectPath })
+          openTeamMembers(projectPath)
+        }}
         onCreate={handleCreateSession}
         defaultProjectDir={effectiveDefaultProjectDir}
         commandPresets={commandPresets}

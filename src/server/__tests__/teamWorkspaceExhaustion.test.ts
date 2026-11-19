@@ -112,7 +112,7 @@ describe('the read model gathers each episode\'s facts', () => {
       outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
       exhaustionEpisodes: () => [episode()],
     }
-    return new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
+    return new WorkspaceRead(manager as never).snapshot({ teamId: 'team', groupsRoot: '/nonexistent-kawai-groups-root' } as never)
       .attention.filter(item => item.kind === 'context-exhausted').map(item => item.id)
   }
   const open: State = { flagAt: FLAGGED, dropped: 'dead', status: 'active', dispatches: ['2026-10-18T08:00:00.000Z'] }

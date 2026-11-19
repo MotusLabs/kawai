@@ -26,6 +26,7 @@ import type { PlanStore } from '../planStore'
 import type { PlanRevision } from '../../../shared/plans'
 import { agentHeldStage, attemptStatus } from '../execution/attemptStatus'
 import { DiagnosisStore, type DiagnosisRow } from '../execution/diagnosisStore'
+import type { RevisionControlDetail } from '../revisionControl/revisionControlRead'
 
 /** The runtime facts the session and mailbox modules expose (D10). */
 export interface SupervisionRuntime {
@@ -47,6 +48,8 @@ export interface SupervisionReads {
   runtime: SupervisionRuntime
   /** The monitor's last sight of the change in a named wait (D11, in memory); null without a monitor. */
   waitEndedAt?: (executionId: string, change: string) => string | null
+  /** revision-control D13: the plan's holds and pauses, from the one revision-control reader; absent without it. */
+  revisionControl?: (teamId: string, planId: string) => RevisionControlDetail
 }
 
 export interface PlanSupervisionRead {
@@ -88,6 +91,26 @@ export function supervisedRevision(reads: Pick<SupervisionReads, 'executions' | 
   return { execution, revision: execution ? reads.plans.revision(planId, execution.revision) : reads.plans.approvedRevision(planId) }
 }
 
+/**
+ * revision-control D13: the active holds covering the change, and its
+ * undecided target of this execution's pauses — Paused only as the reader
+ * states it from `paused_at` (I2), Pausing with its D8 causes.
+ */
+function revisionControlWaits(control: RevisionControlDetail, executionId: string, change: string): Pick<SupervisionInput, 'holds' | 'pause'> {
+  const holds = control.holds
+    .filter(hold => hold.releasedAt === null && (hold.scope === 'plan' || hold.changes.includes(change)))
+    .map(hold => ({ id: hold.id, scope: hold.scope, deadline: hold.deadline }))
+  let pause: SupervisionInput['pause'] = null
+  for (const entry of control.pauses) {
+    if (entry.executionId !== executionId) continue
+    const target = entry.targets.find(candidate => candidate.change === change)
+    if (target?.state.state === 'paused') pause = { pauseId: entry.id, state: 'paused' }
+    else if (target?.state.state === 'pausing') pause = { pauseId: entry.id, state: 'pausing', causes: target.state.causes }
+    if (pause !== null) break
+  }
+  return { holds, pause }
+}
+
 /** Every change's input in the revision's order; dependency outcomes are filled by `readPlanSupervision`. */
 export function readSupervisionInputs(reads: SupervisionReads, teamId: string, planId: string): PlanSupervisionRead | null {
   // One read transaction (O1): a write committing between these reads can
@@ -119,6 +142,7 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
   const diagnoses = new DiagnosisStore(reads.db)
   const conditions = reads.conditionsOf(execution.id)
   const candidates = reads.integration?.candidates(teamId, execution.baseBranch).filter(row => row.executionId === execution.id) ?? []
+  const control = reads.revisionControl?.(teamId, planId) ?? { holds: [], pauses: [] }
   try {
     const inputs = revision.content.changes.map((entry): SupervisionInput => {
       const row = rows.get(entry.change)
@@ -189,6 +213,7 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
         results: row.taskId === null ? [] : results.listByTask(row.taskId).map(result => ({ createdAt: result.createdAt })),
         waitEndedAt: reads.waitEndedAt?.(execution.id, entry.change) ?? null,
         diagnosis: diagnosisOf(reads.db, diagnoses.open(execution.id, entry.change), row.taskId),
+        ...revisionControlWaits(control, execution.id, entry.change),
       }
     })
     return { executionId: execution.id, revision: revision.revision, inputs }

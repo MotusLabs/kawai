@@ -590,7 +590,7 @@ describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
       teamApprovalDefault: () => null,
       turnEnds: { finishedForTeam: () => [] }, exhaustionEpisodes: () => [], outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     }
-    const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
+    const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team', groupsRoot: '/nonexistent-kawai-groups-root' } as never)
 
     const pending = snapshot.attention.find(item => item.id === 'pending-acceptance:r-human')
     expect(pending?.cause).toBe('Result submitted by Human awaits acceptance')
@@ -629,7 +629,7 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
       turnEnds: { finishedForTeam: () => [] }, exhaustionEpisodes: () => [], outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
       results: { ownedByExecution: () => owned },
     }
-    return new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
+    return new WorkspaceRead(manager as never).snapshot({ teamId: 'team', groupsRoot: '/nonexistent-kawai-groups-root' } as never)
   }
   const lead = { kind: 'agent', sessionId: 'chat-lead' } as const
   const dev = record({ sessionId: 'chat-dev', name: 'Dev' })

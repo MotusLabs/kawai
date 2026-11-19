@@ -128,6 +128,7 @@ function cardOn(plan: string, key: string) {
 }
 
 describe('place', () => {
+  // @covers: plan-holds › Only the owner places a hold › A hold on two changes
   test('placing a hold on two changes records it with its event and canonical deadline', () => {
     const outcome = expectOk(place({ planId, changes: ['ui', 'api'], rationale: '  wrong direction  ', deadline: '2026-11-03T14:00:00+02:00', commandId: 'pl-1' }))
     expect(outcome.hold.scope).toBe('changes')
@@ -176,6 +177,7 @@ describe('place', () => {
     expect(bench.plans.eventByCommand(planId, 'pl-8')).toBeNull()
   })
 
+  // @covers: plan-holds › Only the owner places a hold › Unknown change names are refused
   test('unknown or repeated change names are refused and write nothing; a running execution change is holdable', () => {
     const unknown = refused(place({ planId, changes: ['api', 'nope'], commandId: 'pl-9' }))
     expect(unknown.message).toContain('unknown change: nope')
@@ -215,6 +217,7 @@ describe('place', () => {
     expect(withCard.hold.cites).toEqual({ kind: 'decision-card', id: card.id })
   })
 
+  // @covers: plan-holds › Only the owner places a hold › Agents cannot hold
   test('an agent caller is refused for place, release, and extend, and nothing is written', () => {
     const before = wakeCount
     const agent = bench.agent('dev')
@@ -296,6 +299,7 @@ describe('release', () => {
 })
 
 describe('narrowing (D4)', () => {
+  // @covers: plan-holds › Holds are released only by the owner › Narrowing a plan hold
   test('narrowing releases the plan hold and places the narrowed hold with the same rationale, cites, and deadline', async () => {
     const target = (await newApprovedPlan()).planId
     const card = cardOn(target, 'nr')
@@ -428,6 +432,7 @@ describe('lifecycle and clocks', () => {
     expect(extended.hold.deadline).toBe(inDays(9))
   })
 
+  // @covers: plan-holds › Holds are released only by the owner › The deadline passes
   test('a passed deadline releases nothing (D4)', async () => {
     let clock = NOW
     const local = new HoldService({

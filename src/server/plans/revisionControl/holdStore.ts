@@ -108,6 +108,12 @@ export class HoldStore {
       .run(input.deadline, input.holdId).changes === 1
   }
 
+  /** The change rows of a changes-scoped hold already released, sorted (the view's release, DV1). */
+  releasedChangesOf(holdId: string): string[] {
+    return (this.db.prepare('SELECT change FROM plan_hold_changes WHERE hold_id = ? AND released_at IS NOT NULL ORDER BY change').all(holdId) as Array<{ change: string }>)
+      .map(row => row.change)
+  }
+
   private changesOf(holdId: string): string[] {
     return (this.db.prepare('SELECT change FROM plan_hold_changes WHERE hold_id = ? AND released_at IS NULL ORDER BY change').all(holdId) as Array<{ change: string }>)
       .map(row => row.change)

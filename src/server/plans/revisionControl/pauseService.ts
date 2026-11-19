@@ -362,6 +362,8 @@ export class PauseService {
   private refuse(failures: Failure[], what: string): void {
     if (failures.length === 0) return
     const reason = failures.some(failure => failure.state) ? 'state' : 'invalid'
-    throw new PlanRefusal(reason, `${what}: ${failures.map(failure => failure.text).join('; ')}. Nothing was written.`)
+    // Every failing check rides `failures` too, so the dialog renders each one (revision-control 9.4, UI2).
+    throw new PlanRefusal(reason, `${what}: ${failures.map(failure => failure.text).join('; ')}. Nothing was written.`,
+      failures.map(failure => ({ name: failure.state ? 'state' : 'invalid', message: failure.text })))
   }
 }

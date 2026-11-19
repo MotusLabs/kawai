@@ -1,0 +1,38 @@
+bun test v1.4.3 (c6da4a4d3)
+
+scripts/__tests__/runPlanRetry.test.ts:
+[test-runner] real-tmux: src/server/__tests__/a.integration.test.ts failed: Error: Command failed (1): src/server/__tests__/a.integration.test.ts
+[test-runner] real-tmux: src/server/__tests__/b.integration.test.ts failed: Error: Command failed (1): src/server/__tests__/b.integration.test.ts
+[test-runner] real-tmux: src/server/__tests__/c.integration.test.ts failed: Error: Command failed (1): src/server/__tests__/c.integration.test.ts
+[test-runner] WARNING: rerunning src/server/__tests__/a.integration.test.ts once, alone, after its failure
+[test-runner] WARNING: rerunning src/server/__tests__/b.integration.test.ts once, alone, after its failure
+[test-runner] WARNING: rerunning src/server/__tests__/c.integration.test.ts once, alone, after its failure
+[test-runner] WARNING: passed after retrying src/server/__tests__/a.integration.test.ts, src/server/__tests__/b.integration.test.ts, src/server/__tests__/c.integration.test.ts
+121 |   // check-time-optimization closeout (task 7.1); each title is the row's
+122 |   // rendered text, and the assertions are the loop's unchanged. Each row
+123 |   // carries the scenario annotation its outcome exercises.
+124 |   const expectRow = async (row: Row) => {
+125 |     const { ran, reruns, outcome, thrown } = await runRow(row)
+126 |     expect(reruns).toEqual(row.reruns)
+                         ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "src/server/__tests__/a.integration.test.ts",
++   "src/server/__tests__/b.integration.test.ts",
++   "src/server/__tests__/c.integration.test.ts",
++ ]
+
+- Expected  - 1
++ Received  + 5
+
+      at <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/scripts/__tests__/runPlanRetry.test.ts:126:20)
+      at async <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/scripts/__tests__/runPlanRetry.test.ts:189:11)
+(fail) real-tmux retry decision table (check-time-optimization D2) > RT5: main pass, F=3, retries on, reruns pass → fail [0.83ms]
+
+ 0 pass
+ 13 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [4.00ms]

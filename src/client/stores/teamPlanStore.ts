@@ -24,15 +24,23 @@
 // refreshed card arrives in the re-pushed detail, so the result only
 // settles the request. An attention link that names a change or card sets
 // `reveal` (like the chat search's `pendingReveal`): the plan detail scrolls
-// to it once rendered and consumes it; the URL stays the plan's.
+// to it once rendered and consumes it; the URL stays the plan's. The
+// revision-control views (revision-control D14) — the selected plan's holds
+// and pauses — ride its detail message as `detailHolds` and `detailPauses`;
+// the Hold, Release, Extend, Pause, and checkpoint-decision dialogs arm
+// their own slots (`hold-place:<plan>[:execution]`, `hold-release:<hold>`,
+// `hold-extend:<hold>`, `pause:<plan>`, `pause-resolve:<pause>:<change>`),
+// and the re-pushed detail carries what each command changed.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
 import type { ImpactGate, PlanImpact } from '@shared/strategyImpact'
 import type { PlanRevisionValidation } from '@shared/planValidation'
 import type { PlanIntegrationView, PromotionPreview } from '@shared/planIntegration'
+import type { HoldView, PauseView } from '@shared/planRevisionControl'
 
 export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide' | 'override' | 'start' | 'stop' | 'retry' | 'preview' | 'promote' | 'cancel-promotion'
+  | 'hold-place' | 'hold-release' | 'hold-extend' | 'pause' | 'pause-resolve'
 
 /** The Start dialog's server standing for one plan revision (plan-execution D17). */
 export type PlanStanding =
@@ -91,6 +99,9 @@ export interface PlanView {
   detailExecutions: PlanDetail['executions']
   /** The selected plan's integration branches, riding its detail (integration-candidates D13). */
   detailIntegration: PlanIntegrationView[] | undefined
+  /** The selected plan's holds and pauses, riding its detail message (revision-control D14). */
+  detailHolds: HoldView[] | undefined
+  detailPauses: PauseView[] | undefined
   /** Armed dialog command ids, by dialog slot (e.g. `approve:<plan>:<revision>`). */
   commands: Record<string, ArmedPlanCommand>
   /** Which slot each pending request was sent from. */
@@ -109,6 +120,7 @@ export const closedPlanView = (): PlanView => ({
   open: false, loading: false, plans: null, selected: null, detail: null, pending: {}, error: null, failures: [], commands: {}, commandRequests: {},
   refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null, detailExecutions: undefined,
   standings: {}, previewRequests: {}, detailIntegration: undefined, promotionPreviews: {}, promotionPreviewRequests: {},
+  detailHolds: undefined, detailPauses: undefined,
 })
 
 interface PlanState {
@@ -158,6 +170,8 @@ export const useTeamPlanStore = create<PlanState>(set => ({
         detailImpact: view.detail?.plan.id === planId ? view.detailImpact : null,
         detailValidation: view.detail?.plan.id === planId ? view.detailValidation : null,
         detailIntegration: view.detail?.plan.id === planId ? view.detailIntegration : undefined,
+        detailHolds: view.detail?.plan.id === planId ? view.detailHolds : undefined,
+        detailPauses: view.detail?.plan.id === planId ? view.detailPauses : undefined,
       } : {}),
     } } }
   }),
@@ -186,6 +200,8 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     detailImpact: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailImpact : null,
     detailValidation: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailValidation : null,
     detailIntegration: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailIntegration : undefined,
+    detailHolds: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailHolds : undefined,
+    detailPauses: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailPauses : undefined,
     error: null, failures: [], refusalImpact: null,
   })),
   arm: (teamKey, slot) => set(state => {
@@ -236,6 +252,7 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     return update(state, message.teamPath, {
       detail: message.detail, detailImpact: message.impact ?? null, detailValidation: message.validation ?? null,
       detailExecutions: message.detail.executions, detailIntegration: message.detail.integration,
+      detailHolds: message.holds, detailPauses: message.pauses,
     })
   }),
   applyResult: message => set(state => {

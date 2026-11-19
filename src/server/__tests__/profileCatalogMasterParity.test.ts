@@ -31,14 +31,17 @@ const MINIMAX: Omit<CatalogProfile, 'providerId'> = {
   },
   model: 'MiniMax-M3',
 }
+// MiMo's shipped entry since mimo-million-token-context: `[1m]` on every
+// declaration and a 300000-token window (the one intended drift from master).
 const MIMO: Omit<CatalogProfile, 'providerId'> = {
   label: 'MiMo',
   env: {
-    ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro',
-    ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro',
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_FABLE_MODEL: 'mimo-v2.6-pro',
+    ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro[1m]',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro[1m]',
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.6-pro[1m]', ANTHROPIC_DEFAULT_FABLE_MODEL: 'mimo-v2.6-pro[1m]',
   },
-  model: 'mimo-v2.6-pro',
+  model: 'mimo-v2.6-pro[1m]',
+  autoCompactWindow: 300000,
 }
 const KIMI: Omit<CatalogProfile, 'providerId'> = {
   label: 'Kimi',

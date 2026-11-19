@@ -4,8 +4,10 @@
 // its row (plan-supervision D15) — Start (fetching the server's standing)
 // when nothing runs, and Stop while something does; a landed change carried
 // into the target by a merged promotion is marked promoted, and an
-// integration plan's branches follow (`PlanIntegrationPanel`). Every control
-// disables while disconnected.
+// integration plan's branches follow (`PlanIntegrationPanel`). The newest
+// execution's pauses, Pause…, and Hold… follow its rows (`PlanPauseSection`,
+// revision-control D14); a checkpoint decision's Stop link lands on Stop.
+// Every control disables while disconnected.
 import { Fragment } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
@@ -15,6 +17,7 @@ import PlanExecutionChangeRow from './PlanExecutionChangeRow'
 import PlanExecutionStartDialog from './PlanExecutionStartDialog'
 import PlanExecutionStopDialog from './PlanExecutionStopDialog'
 import PlanDecisionCard from './PlanDecisionCard'
+import PlanPauseSection from './PlanPauseSection'
 
 export default function PlanExecutionSection({ teamPath, plan, detail, connected, onSend, onOpenTask, sessions = [], busy = false, revealAnchor = null }: {
   teamPath: string
@@ -67,7 +70,8 @@ export default function PlanExecutionSection({ teamPath, plan, detail, connected
                 revealed={revealAnchor === `decision-card-${cardView.card.id}`} />)}
           </Fragment>)}
         </ul>
-        {running && <div className="mt-2"><PlanExecutionStopDialog teamPath={teamPath} execution={newest} connected={connected} onSend={onSend} /></div>}
+        <PlanPauseSection teamPath={teamPath} planId={plan.id} execution={newest} connected={connected} busy={busy} onSend={onSend} />
+        {running && <div className="mt-2" id="plan-execution-stop"><PlanExecutionStopDialog teamPath={teamPath} execution={newest} connected={connected} onSend={onSend} /></div>}
         {!running && approved !== null && <div className="mt-2" data-testid="plan-execution-restart">
           <p className="text-chat-meta text-secondary">Start runs the approved revision again; changes an earlier execution of this plan provisioned keep their worktrees and branches.</p>
           <PlanExecutionStartDialog teamPath={teamPath} planId={plan.id} revision={approved.revision} contentHash={approved.contentHash} connected={connected} onSend={onSend} />

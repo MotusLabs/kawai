@@ -1,11 +1,13 @@
 // Members (team-workspace D7/Q3/Q10): a read-only inspection of the team's
 // groups. Each row shows the role description (never the prompt body), live
 // membership, and the settings in effect, and names the file that defines the
-// group — both layers, the one in effect marked, when both define it. There is
-// no control that writes a group file or changes a running agent: the row
-// buttons only open a member's chat, and the one team-level control above the
-// rows (`teamControl`, team-approval-default D7) writes the team's default
-// approval for later spawns. Each row's approval names its source. Prompt
+// group — both layers, the one in effect marked, when both define it. No
+// control changes a running agent or edits an existing group file: the row
+// buttons only open a member's chat, the team-level control above the rows
+// (`teamControl`, team-approval-default D7) writes the team's default
+// approval for later spawns, and the only group-file write is Set up team
+// (`setupControl`, starter-team-setup D1), above the rows or in place of an
+// empty list, offered only while the project has no group file. Each row's approval names its source. Prompt
 // edits reach future agent starts only.
 import type { ReactNode } from 'react'
 import type { TeamMemberRow, TeamMemberSession, TeamMemberProfile } from '@shared/teamWorkspace'
@@ -93,16 +95,19 @@ function Group({ row, onOpenSession }: { row: TeamMemberRow; onOpenSession: (ses
   </article>
 }
 
-export default function TeamMembersPanel({ members, loaded, onOpenSession, teamControl }: {
+export default function TeamMembersPanel({ members, loaded, onOpenSession, teamControl, setupControl }: {
   members: readonly TeamMemberRow[]
   /** False until the first workspace snapshot arrives. */
   loaded: boolean
   onOpenSession: (sessionId: string) => void
   /** The team-level default approval control (team-approval-default D7); it edits no group. */
   teamControl?: ReactNode
+  /** Set up team (starter-team-setup); renders nothing once the project has group files. */
+  setupControl?: ReactNode
 }) {
   return <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3" data-testid="team-members">
     {teamControl}
+    {loaded && setupControl}
     <p className="text-chat-meta text-secondary" data-testid="members-note">
       Read-only. Edit a group by changing the file named on its row.
     </p>

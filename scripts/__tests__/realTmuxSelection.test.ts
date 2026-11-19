@@ -47,13 +47,54 @@ const SELECTION_TABLE: Array<{
 ]
 
 describe('real-tmux selection table SE1–SE5', () => {
-  for (const row of SELECTION_TABLE) {
-    test(`${row.id}: merge-base ${row.mergeBase === null ? 'none' : 'yes'}, forced ${row.forced}, changed [${row.changed.join(', ')}] → ${row.run ? 'run' : 'skip'} (${row.reason})`, () => {
-      expect(selectRealTmuxFiles(row.changed, [TERMINAL], row.mergeBase, row.forced)).toEqual([
-        { file: TERMINAL.file, run: row.run, reason: row.reason },
-      ])
-    })
+  // One literal call per table row, unrolled from the template loop by the
+  // check-time-optimization closeout (task 7.1); each title is the row's
+  // rendered text, and the body is the loop's unchanged.
+  const expectSelectionRow = (row: (typeof SELECTION_TABLE)[number]) => {
+    expect(selectRealTmuxFiles(row.changed, [TERMINAL], row.mergeBase, row.forced)).toEqual([
+      { file: TERMINAL.file, run: row.run, reason: row.reason },
+    ])
   }
+
+  test('SE1: merge-base yes, forced true, changed [] → run (forced)', () => {
+    expectSelectionRow(SELECTION_TABLE[0]!)
+  })
+
+  test('SE1: merge-base none, forced true, changed [bun.lock, src/server/terminal/a.ts] → run (forced)', () => {
+    expectSelectionRow(SELECTION_TABLE[1]!)
+  })
+
+  test('SE2: merge-base none, forced false, changed [] → run (no-merge-base)', () => {
+    expectSelectionRow(SELECTION_TABLE[2]!)
+  })
+
+  test('SE2: merge-base none, forced false, changed [src/server/plans/a.ts] → run (no-merge-base)', () => {
+    expectSelectionRow(SELECTION_TABLE[3]!)
+  })
+
+  test('SE3: merge-base yes, forced false, changed [bun.lock] → run (shared-trigger)', () => {
+    expectSelectionRow(SELECTION_TABLE[4]!)
+  })
+
+  test('SE3: merge-base yes, forced false, changed [.bun-version, src/server/terminal/a.ts] → run (shared-trigger)', () => {
+    expectSelectionRow(SELECTION_TABLE[5]!)
+  })
+
+  test('SE4: merge-base yes, forced false, changed [src/server/terminal/outputCoalescer.ts] → run (declared-path)', () => {
+    expectSelectionRow(SELECTION_TABLE[6]!)
+  })
+
+  test('SE4: merge-base yes, forced false, changed [src/server/__tests__/output-coalescing.integration.test.ts] → run (declared-path)', () => {
+    expectSelectionRow(SELECTION_TABLE[7]!)
+  })
+
+  test('SE5: merge-base yes, forced false, changed [] → skip (unaffected)', () => {
+    expectSelectionRow(SELECTION_TABLE[8]!)
+  })
+
+  test('SE5: merge-base yes, forced false, changed [src/server/plans/a.ts, notes/x.md] → skip (unaffected)', () => {
+    expectSelectionRow(SELECTION_TABLE[9]!)
+  })
 
   // @covers: dev-checks › Real-tmux files run only when affected › An unrelated change
   test('a change only under src/server/plans/ skips every real-tmux file', () => {

@@ -1,0 +1,32 @@
+# mutant V2-post-run-fingerprint-stored
+# target: src/server/workspace/openspecDiscovery.ts
+# before:     cache.set(worktreePath, { fingerprint, discoveredAt: startedAt, state: discovered })
+# after:      cache.set(worktreePath, { fingerprint: await (options.fingerprint ?? fingerprintOpenSpecInputs)(worktreePath), discoveredAt: startedAt, state: discovered })
+# command: bun test src/server/__tests__/openspecDiscoveryReuse.test.ts -t DO6 --timeout 20000
+# required: the named row DO6 fails (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/openspecDiscoveryReuse.test.ts:
+239 |       // The tree changes while the CLI is reading it.
+240 |       h.fingerprints.set('/repo', 'fp-during')
+241 |       return okPayload(1)
+242 |     })
+243 |     const first = await refreshRepositoryOpenSpec(repository(['/repo']), undefined, h.options)
+244 |     expect(h.cache.get('/repo')?.fingerprint).toBe('fp-1')
+                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "fp-1"
+Received: "fp-during"
+
+      at <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/openspecDiscoveryReuse.test.ts:244:47)
+(fail) refreshRepositoryOpenSpec DO table > DO6: a write during the run keeps the pre-run fingerprint, so the next pass reruns [0.68ms]
+
+ 1 pass
+ 17 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 2 tests across 1 file. [22.00ms]
+
+verdict: KILLED (named row failed, as required)

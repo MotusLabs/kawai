@@ -5,6 +5,9 @@
 // workspace owns no tables; every function here is a pure projection, so the
 // connection layer can recompute on the same triggers the mailbox and task
 // views already use and diff before pushing.
+// The snapshot's `setupAvailable` (starter-team-setup D2) reads the project
+// groups directory at snapshot time, so a run's publish withdraws the offer.
+import { setupAvailable } from './teamSetup'
 import type { ChatApprovalPolicy, ChatPendingRequest } from '../../shared/chat'
 import { resolveSpawnApproval } from '../../shared/spawnApproval'
 import type {
@@ -30,6 +33,10 @@ import {
   decisionQuestionItems, planConditionItems, planFixItems, planPromotionItems, planStallItems, planStopItems,
   type PlanAttentionFact, type PlanSummaryRows,
 } from './planAttention'
+import {
+  planCheckpointDecisionItems, planHoldOverdueItems, planPauseOverdueItems, revisionControlFactsOf, type RevisionControlAttentionFact,
+} from '../plans/planAttention'
+import { revisionControlOf } from '../plans/revisionControl/revisionControlServices'
 import type { GroupCatalog } from './groupCatalog'
 import { taskOwner } from './taskStatusRights'
 import type { TeamIdentity } from './teamIdentity'
@@ -105,6 +112,8 @@ export function memberRows(
         : { parkIfResetWithinMs: group.onLimit.parkIfResetWithinMs, otherwise: group.onLimit.otherwise },
       ...(group.effort !== undefined ? { effort: group.effort } : {}),
       ...(group.profileEffort !== undefined ? { profileEffort: { ...group.profileEffort } } : {}),
+      ...(group.autoCompactWindow !== undefined ? { autoCompactWindow: group.autoCompactWindow } : {}),
+      ...(group.profileAutoCompactWindow !== undefined ? { profileAutoCompactWindow: { ...group.profileAutoCompactWindow } } : {}),
       warnings: [...group.warnings],
       sources: sources.map(({ file, layer, inEffect }) => ({ file, layer, inEffect })),
       members,
@@ -209,6 +218,8 @@ export interface AttentionInput {
   exhaustion?: ExhaustionFact[]
   /** Each open plan's attention facts, gathered once per snapshot (plan-supervision D13). */
   plans?: PlanAttentionFact[]
+  /** Each open plan's holds and pauses, from the one revision-control reader (revision-control D13). */
+  revisionControl?: RevisionControlAttentionFact[]
 }
 
 /** One attention source: a pure function over the input (D5's registry). */
@@ -295,6 +306,8 @@ const exhaustionItems: AttentionSource = ({ exhaustion, taskTitle, nameOf }) =>
 export const ATTENTION_SOURCES: readonly AttentionSource[] = [
   requestItems, uncertainItems, staffingItems, acceptanceItems, outboundItems, exhaustionItems,
   planStopItems, planStallItems, decisionQuestionItems, planFixItems, planConditionItems, planPromotionItems,
+  // revision-control D13: the owner's overdue holds and pauses, and the checkpoint decisions.
+  planHoldOverdueItems, planPauseOverdueItems, planCheckpointDecisionItems,
 ]
 
 /** Every attention item the current state yields, in a stable order. */
@@ -303,6 +316,13 @@ export function attentionItems(
   sources: readonly AttentionSource[] = ATTENTION_SOURCES,
 ): AttentionItem[] {
   return sources.flatMap(source => source(input)).sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** Each open plan's holds and pauses (revision-control D13): closed plans' holds go quiet (D4). */
+export function revisionControlFacts(manager: Pick<ChatSessionManager, 'plans'>, teamId: string, now: Date = new Date()): RevisionControlAttentionFact[] {
+  const control = revisionControlOf(manager.plans)
+  if (control === null) return []
+  return revisionControlFactsOf(manager.plans.store.openPlans(teamId), (planId, at) => control.read(teamId, planId, at), now)
 }
 
 /**
@@ -360,6 +380,7 @@ export class WorkspaceRead {
       outboundViolations: manager.outboundAudit.violationGroups(teamId),
       // The plan sources' facts, gathered over the supervision reads (plan-supervision D13).
       plans: manager.planAttentionFacts?.(teamId) ?? [],
+      revisionControl: revisionControlFacts(manager, teamId),
       exhaustion: manager.exhaustionEpisodes(teamId).map(episode => {
         const record = records.find(row => row.sessionId === episode.sessionId)
         const task = episode.taskId ? store.get(episode.taskId) : null
@@ -387,6 +408,7 @@ export class WorkspaceRead {
         manager.groupProfileCounts(teamId, groupId), approvalDefault),
       approvalDefault,
       autoRequestedBy: autoRequestedBy(catalog, approvalDefault),
+      setupAvailable: setupAvailable(team.groupsRoot),
       summary: morningSummary({
         now,
         sessions,

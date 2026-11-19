@@ -18,6 +18,8 @@ import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 import type { PlanCommandOutcome } from './planCommands'
 import { handleDecisionCommand, isDecisionCommand } from './decisions/decisionConnections'
+import { handleRevisionControlCommand, isRevisionControlCommand } from './revisionControl/revisionControlConnections'
+import { revisionControlOf } from './revisionControl/revisionControlServices'
 
 type PlanClientMessage = Extract<ClientMessage, { type: `team-plan${string}` }>
 type PlanCommandMessage = Extract<PlanClientMessage, { type: (typeof PLAN_COMMAND_TYPES)[number] }>
@@ -84,9 +86,12 @@ export class PlanConnections {
         // plan-validation D11: the Validation section rides the detail, built
         // through the coalesced cache so bursts of task changes pay once.
         const validation = await this.manager.validationDetail.detail(planId)
+        // revision-control D14: the holds and pauses ride beside the detail, from the one reader.
+        const control = revisionControlOf(this.manager.plans)?.read(subscription.teamId, planId)
         connection.send({
           type: 'team-plan-detail', teamPath, teamId: subscription.teamId, detail,
           ...(impact ? { impact } : {}), ...(validation.length > 0 ? { validation } : {}),
+          ...(control ? { holds: control.holds, pauses: control.pauses } : {}),
         })
       }
     } catch {
@@ -98,6 +103,7 @@ export class PlanConnections {
     if (isCommand(message)) return this.act(connection, message)
     if (isValidationCommand(message)) return this.actValidation(connection, message)
     if (isDecisionCommand(message)) return handleDecisionCommand(this.manager, connection, message)
+    if (isRevisionControlCommand(message)) return handleRevisionControlCommand(this.manager, connection, message)
     const { teamPath } = message
     const planId = 'planId' in message ? message.planId : undefined
     const target = `${teamPath}\0${planId ?? ''}`

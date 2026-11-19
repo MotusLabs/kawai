@@ -7,8 +7,11 @@
 // so the dialog can warn before exceeding a cap (profile routing), and the
 // team's default approval policy (`approvalDefault`, null when never set or
 // with no project yet) that seeds the dialog's Auto-approve box
-// (unify-approval-defaults D2).
+// (unify-approval-defaults D2), and `setupAvailable` — true while the main
+// checkout's `.kawai/groups/` holds no group file, the New Session dialog's
+// cue to point at Set up team (starter-team-setup D2; false with no project).
 import { Hono } from 'hono'
+import { setupAvailable } from '../team/teamSetup'
 import type { ChatApprovalPolicy } from '../../shared/chat'
 import { resolveProjectDirectory } from '../paths'
 import { loadTeamGroups } from '../team/teamGroups'
@@ -32,7 +35,7 @@ export function createTeamGroupRoutes(options: {
   routes.get('/', async c => {
     const project = resolveProjectDirectory(c.req.query('projectPath') ?? '')
     // No (or no existing) project yet: the dialog is still being filled in.
-    if (!project.ok) return c.json({ groups: [], errors: [], warnings: [], approvalDefault: null })
+    if (!project.ok) return c.json({ groups: [], errors: [], warnings: [], approvalDefault: null, setupAvailable: false })
     const { team, catalog } = await loadTeamGroups(project.path, options.homeDir)
     const groups: TeamGroupSummary[] = [...catalog.groups.values()].map(({ group }) => {
       const live = options.groupProfileCounts?.(team.teamId, group.id) ?? {}
@@ -52,6 +55,9 @@ export function createTeamGroupRoutes(options: {
     return c.json({
       groups, errors: catalog.errors, warnings: catalog.warnings,
       approvalDefault: options.approvalDefault?.(team.teamId) ?? null,
+      // starter-team-setup D2: the project has no group files of its own, so
+      // the New Session dialog points to Set up team.
+      setupAvailable: setupAvailable(team.groupsRoot),
     })
   })
   return routes

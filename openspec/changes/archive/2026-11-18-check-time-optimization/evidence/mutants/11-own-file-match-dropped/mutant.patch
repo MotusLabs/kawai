@@ -1,0 +1,13 @@
+diff --git a/scripts/lib/realTmuxSelection.ts b/scripts/lib/realTmuxSelection.ts
+index df960b8e..3e50b857 100644
+--- a/scripts/lib/realTmuxSelection.ts
++++ b/scripts/lib/realTmuxSelection.ts
+@@ -68,7 +68,7 @@ export function selectRealTmuxFiles(
+     if (forced) return { file, run: true, reason: 'forced' }
+     if (mergeBase === null) return { file, run: true, reason: 'no-merge-base' }
+     if (triggered) return { file, run: true, reason: 'shared-trigger' }
+-    if (changed.includes(file) || matchesAny(globs, changed)) return { file, run: true, reason: 'declared-path' }
++    if (matchesAny(globs, changed)) return { file, run: true, reason: 'declared-path' } // MUTANT own-file-match-dropped
+     return { file, run: false, reason: 'unaffected' }
+   })
+ }

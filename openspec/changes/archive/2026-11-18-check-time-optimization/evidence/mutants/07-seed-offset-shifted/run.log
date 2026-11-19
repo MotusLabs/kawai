@@ -1,0 +1,104 @@
+bun test v1.4.3 (c6da4a4d3)
+bun test v1.4.3 (c6da4a4d3) 4x PARALLEL
+
+src/server/__tests__/caseCount.test.ts:
+(pass) records its executed seeds (seed 0x7e57, 300 cases) [0.17ms]
+
+ 1 pass
+ 0 fail
+Ran 1 test across 1 file. [4.00ms]
+[test-runner] timings: no file over 5 s sits outside the slow tier
+
+src/server/__tests__/caseProfileProbe.integration.test.ts:
+84 | const prefix = (count: number) => Array.from({ length: count }, (_, index) => SEED + index)
+85 | 
+86 | // @covers: dev-checks › Local runs execute a reduced case profile › Local run
+87 | test('default: a declared-300 probe executes the first 75 seeds and the record says reduced', async () => {
+88 |   const { seeds, profile } = await check({}, false)
+89 |   expect(seeds).toEqual(prefix(75))
+                     ^
+error: expect(received).toEqual(expected)
+
+@@ -1,3 +1,2 @@
+  [
+-   32343,
+    32344,
+@@ -76,2 +75,3 @@
+    32417,
++   32418,
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/src/server/__tests__/caseProfileProbe.integration.test.ts:89:17)
+(fail) default: a declared-300 probe executes the first 75 seeds and the record says reduced [1334.37ms]
+bun test v1.4.3 (c6da4a4d3) 4x PARALLEL
+
+src/server/__tests__/caseCount.test.ts:
+(pass) records its executed seeds (seed 0x7e57, 300 cases) [0.19ms]
+
+ 1 pass
+ 0 fail
+Ran 1 test across 1 file. [4.00ms]
+[test-runner] timings: no file over 5 s sits outside the slow tier
+91 | }, 120_000)
+92 | 
+93 | // @covers: dev-checks › Local runs execute a reduced case profile › CI run
+94 | test('CI=true: the probe executes all 300 seeds and the record says full', async () => {
+95 |   const { seeds, profile } = await check({ CI: 'true' }, false)
+96 |   expect(seeds).toEqual(prefix(300))
+                     ^
+error: expect(received).toEqual(expected)
+
+@@ -1,3 +1,2 @@
+  [
+-   32343,
+    32344,
+@@ -301,2 +300,3 @@
+    32642,
++   32643,
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/src/server/__tests__/caseProfileProbe.integration.test.ts:96:17)
+(fail) CI=true: the probe executes all 300 seeds and the record says full [1330.15ms]
+bun test v1.4.3 (c6da4a4d3) 4x PARALLEL
+
+src/server/__tests__/caseCount.test.ts:
+(pass) records its executed seeds (seed 0x7e57, 300 cases) [0.19ms]
+
+ 1 pass
+ 0 fail
+Ran 1 test across 1 file. [4.00ms]
+[test-runner] timings: no file over 5 s sits outside the slow tier
+ 98 | }, 120_000)
+ 99 | 
+100 | // @covers: dev-checks › Local runs execute a reduced case profile › Full properties on request
+101 | test('--full-properties: the probe executes all 300 seeds and the record says full', async () => {
+102 |   const { seeds, profile } = await check({}, true)
+103 |   expect(seeds).toEqual(prefix(300))
+                      ^
+error: expect(received).toEqual(expected)
+
+@@ -1,3 +1,2 @@
+  [
+-   32343,
+    32344,
+@@ -301,2 +300,3 @@
+    32642,
++   32643,
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/coder/kawai/.worktrees/check-time-optimization/src/server/__tests__/caseProfileProbe.integration.test.ts:103:17)
+(fail) --full-properties: the probe executes all 300 seeds and the record says full [1618.55ms]
+
+ 0 pass
+ 3 fail
+ 3 expect() calls
+Ran 3 tests across 1 file. [4.29s]

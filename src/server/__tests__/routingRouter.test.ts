@@ -501,6 +501,7 @@ describe('plan roles and author tags (plan-execution D15)', () => {
       .toMatchObject({ kind: 'none' })
   })
 
+  // @covers: team-routing-rules › Review mail names its authors' profiles › A rule routes the review away from the author
   test('a rule reads the author-profile tag and picks another family (§9.4)', async () => {
     rule = async ctx => {
       const authors = ctx.message.tags?.filter(tag => tag.startsWith('author-profile:')) ?? []
@@ -516,6 +517,7 @@ describe('plan roles and author tags (plan-execution D15)', () => {
     expect(ruleCalls[0]!.message.tags).toContain('author-profile:glm')
   })
 
+  // @covers: team-routing-rules › Review mail names its authors' profiles › Without a rule the tags are metadata
   test('without a rule the tags are metadata and the built-in strategy routes as usual', async () => {
     expect(await roleRouter().route(
       message({ tags: ['review', 'author-profile:glm'] }),
