@@ -14,7 +14,7 @@
 
 
 - [x] 2.1 Verify P1/P2, O1–O9, and G1/G2 with `bun run test src/server/__tests__/toolMetricInputs.test.ts src/server/__tests__/toolMetrics.test.ts src/server/__tests__/metricsQuery.test.ts src/server/__tests__/metricsConnections.test.ts src/server/__tests__/metricsTools.test.ts src/server/__tests__/toolDrillPaging.test.ts`; demonstrate the listed plan and semantic mutants are killed, and restore every mutant before the final checks.
-- [ ] 2.2 Run `openspec validate fix-tool-metrics-query-plan --strict` and `bun run check` on the clean committed isolated implementation tree. Verify all acceptance clauses, the restored passing versions of the P1/P2 and O1–O9/G1/G2 tests, and a diff limited to design Scope. Include an oracle-to-exact-test-title-to-killed-mutant map in the result; optional bounded read-only backup replay supplements these checks without a private fixture dependency.
+- [x] 2.2 Run `openspec validate fix-tool-metrics-query-plan --strict` and `bun run check` on the clean committed isolated implementation tree. Verify all acceptance clauses, the restored passing versions of the P1/P2 and O1–O9/G1/G2 tests, and a diff limited to design Scope. Include an oracle-to-exact-test-title-to-killed-mutant map in the result; optional bounded read-only backup replay supplements these checks without a private fixture dependency.
 
 ## Oracle and mutant map
 
