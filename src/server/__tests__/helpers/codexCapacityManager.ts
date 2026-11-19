@@ -14,7 +14,7 @@ import { mock } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ChatEvent } from '../../../shared/chat'
+import type { ChatActivity, ChatEvent } from '../../../shared/chat'
 import type { CodexDriverOptions } from '../../../../packages/agent-runtime/src/options'
 import { createCodexDriverWith } from '../../../../packages/agent-runtime/src/codex/driver'
 import { hasCodexLogin } from '../../../../packages/agent-runtime/src/codex/auth'
@@ -54,6 +54,8 @@ export interface CapacityManager {
   /** Every option set Kawai passed to the package factory. */
   options: CodexDriverOptions[]
   events: ChatEvent[]
+  /** Every activity the manager pushed (its onActivity sink), in order. */
+  activities: Array<ChatActivity | null>
   id: string
   teamId: string
   project: string
@@ -95,8 +97,9 @@ export async function capacityManager(): Promise<CapacityManager> {
   active = { server, clock, options: [] }
   const db = freshTestDatabase(path.join(tempDir, 'test.db'))
   const events: ChatEvent[] = []
+  const activities: Array<ChatActivity | null> = []
   const manager = new ChatSessionManager({
-    db, registry: new SessionRegistry(), onEvent: (_id, event) => events.push(event), isDirectory: () => true,
+    db, registry: new SessionRegistry(), onEvent: (_id, event) => events.push(event), onActivity: (_id, activity) => activities.push(activity), isDirectory: () => true,
     profileCatalogHome: home, availabilityProbe: async () => {},
     providerUsageFetch: (async () => { throw new Error('no provider pulls') }) as unknown as typeof fetch,
   })
@@ -122,7 +125,7 @@ export async function capacityManager(): Promise<CapacityManager> {
     await until(() => db.getChatSession(id)?.sdkSessionId === CAPACITY_THREAD)
     const ctx = { homeDir: home, projectPath: project }
     return {
-      manager, db, server, clock, options: active.options, events, id, teamId: manager.teams.teamOf(id)!.teamId, project, rollout,
+      manager, db, server, clock, options: active.options, events, activities, id, teamId: manager.teams.teamOf(id)!.teamId, project, rollout,
       homeProvider: providerOf('codex', ctx), otherProvider: providerOf('codex-2', ctx),
       writeUserRow: (text) => fs.appendFileSync(rollout, `${JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })}\n`),
       cleanup,
