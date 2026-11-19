@@ -8,6 +8,8 @@
 // pure gates live server-side: `holdGate` (D5), `pauseTargetState` (D8),
 // `revisionDelta` (D10); their input and result types are here.
 
+import type { PlanExecutionView } from './planExecution'
+
 // --- Holds (D2, D4) ---
 
 export type HoldScope = 'plan' | 'changes'
@@ -315,3 +317,10 @@ export interface ApplyPreview {
   /** Every precondition's standing, in list order, for the choices the preview was asked about. */
   standing: ApplyStandingEntry[]
 }
+
+/**
+ * An execution's view with its revision history (plan-revision-apply D4,
+ * D6): `team-plan-detail` and `plan_get` carry every revision the execution
+ * held, seq 1 first, each with its publication rows.
+ */
+export type PlanExecutionWithRevisions = PlanExecutionView & { revisions: ExecutionRevisionView[] }

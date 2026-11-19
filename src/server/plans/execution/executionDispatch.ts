@@ -281,12 +281,20 @@ export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, at
     continueFrom: input.continueFrom,
   })
   // A fix is a handoff (D7): it supersedes the outstanding review through
-  // the stop branch, so a delivered review never holds the change.
-  const outcome = await refusable('fix', () => deps.results.handoff(kawaiCaller(deps.team, input.executionId), taskId, {
-    kind: 'fix', resultId: round?.resultId ?? '', target: { kind: 'group', id: input.group },
-    instructions: instruction, requestKey,
-    ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-  }))
+  // the stop branch, so a delivered review never holds the change. A fix
+  // that answers no round — an adaptation's (plan-pause Adapt, Apply's
+  // adapt) — has no result to hand off from: it is a plain keyed dispatch,
+  // as the owed implement attempt's is.
+  const outcome = round === null
+    ? await refusable('fix', () => deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
+      taskId, target: { kind: 'group', id: input.group }, instruction, requestKey,
+      ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+    }))
+    : await refusable('fix', () => deps.results.handoff(kawaiCaller(deps.team, input.executionId), taskId, {
+      kind: 'fix', resultId: round.resultId, target: { kind: 'group', id: input.group },
+      instructions: instruction, requestKey,
+      ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+    }))
   deps.executions.setAttemptAssignment(attempt.id, outcome.assignment.id)
 }
 

@@ -108,6 +108,8 @@ export const CHAT_CONNECTION_TYPES = [
   'team-plan-hold-extend',
   'team-plan-pause',
   'team-plan-pause-resolve',
+  'team-plan-execution-apply-preview',
+  'team-plan-execution-apply',
   'team-plan-workspace-open',
   'team-plan-workspace-close',
   'team-plan-workspace-bindings-open',

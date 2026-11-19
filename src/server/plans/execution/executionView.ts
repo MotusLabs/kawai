@@ -3,8 +3,9 @@
 // store rows — per change the state, waiting reason, PR, counts, latest
 // round with its CI (flaky names marked) and verdict, the landing fact, and
 // the expandable effects, and the convergence counts by review (review-
-// convergence decision 9). Pure reads; no policy.
-import type { ExecutionChangeView, PlanExecutionView, RoundCiView, WaitingReason } from '../../../shared/planExecution'
+// convergence decision 9), and the revisions the execution held with their
+// publication rows (plan-revision-apply D4, D6). Pure reads; no policy.
+import type { ExecutionChangeView, RoundCiView, WaitingReason } from '../../../shared/planExecution'
 import { convergenceOf, SIGNAL_LABELS } from '../../../shared/reviewConvergence'
 import { FindingStore } from '../../team/findingStore'
 import { DiagnosisStore } from './diagnosisStore'
@@ -15,6 +16,8 @@ import { TaskResultStore } from '../../team/taskResultStore'
 import type { PlanStore } from '../planStore'
 import type { RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
+import type { ExecutionRevisionView, PlanExecutionWithRevisions } from '../../../shared/planRevisionControl'
+import { ExecutionRevisionStore } from '../revisionControl/executionRevisionStore'
 
 /** What the view reads beside the store: the executed revision's dependencies and a round's findings. */
 export interface ExecutionViewReads {
@@ -96,7 +99,16 @@ function verdictOf(reads: ExecutionViewReads, round: RoundRow): { findingsId: st
 }
 
 /** The full view of the plan's executions, newest first. */
-export function executionViews(store: ExecutionStore, planId: string, reads: ExecutionViewReads): PlanExecutionView[] {
+/** Every revision the execution held, oldest first (seq 1 is Start's), each with its publication rows. */
+export function executionRevisionViews(revisions: ExecutionRevisionStore, executionId: string): ExecutionRevisionView[] {
+  return revisions.history(executionId).map(row => ({
+    seq: row.seq, revision: row.revision, contentHash: row.contentHash, rationale: row.rationale, appliedAt: row.appliedAt,
+    changes: revisions.publications(executionId, row.seq),
+  }))
+}
+
+export function executionViews(store: ExecutionStore, planId: string, reads: ExecutionViewReads): PlanExecutionWithRevisions[] {
+  const revisions = new ExecutionRevisionStore(store.db)
   return store.executionsOf(planId).map(execution => ({
     id: execution.id,
     planId: execution.planId,
@@ -166,5 +178,6 @@ export function executionViews(store: ExecutionStore, planId: string, reads: Exe
         convergence: reads.convergence?.(execution.id, row.change, row.taskId) ?? null,
       }
     }),
+    revisions: executionRevisionViews(revisions, execution.id),
   }))
 }

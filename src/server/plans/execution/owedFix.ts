@@ -26,7 +26,13 @@ export async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: 
     const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
     const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
     notes = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
-  } else if (round !== null && round.outcome === 'fail') {
+  } else if (round === null) {
+    // A fix row that answers no round is an adaptation's (plan-pause Adapt,
+    // plan-revision-apply's Apply): it names the revisions its manifest pins.
+    const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
+    const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
+    notes = [`The work was re-issued under plan revision ${newest.manifest.plan.revision} and task revision ${newest.manifest.task.revision}${rationale ? ` (${rationale})` : ''}. Continue from your branch's head on top of the current direction.`]
+  } else if (round.outcome === 'fail') {
     failingChecks = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'failure')
       .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
     const all = changeRow.taskId === null ? [] : deps.tasks.store.results.findingsFor(round.resultId)
@@ -44,7 +50,7 @@ export async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: 
     executionId: input.executionId, change: input.change, group: input.group,
     failingChecks, findingsIds, findings,
     diagnosis: decision === null ? null : diagnosisRationale(decision),
-    continueFrom: round?.commitSha ?? changeRow.baselineCommit ?? '',
+    continueFrom: round?.commitSha ?? newest.manifest.startCommit ?? changeRow.baselineCommit ?? '',
     fixRounds: changeRow.fixRounds,
   }, { id: newest.id, number: newest.number, manifestHash: newest.manifestHash })
 }

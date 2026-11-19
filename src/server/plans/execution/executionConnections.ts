@@ -6,10 +6,12 @@
 // with no data. The commands run through ExecutionService as the human
 // caller — no agent tool can start, stop, or retry an execution — and the
 // changes they cause reach plan subscribers through the manager's publish.
+// Apply and its preview share the prefix and are handed to `applyConnections.ts`.
 import type { ClientMessage } from '../../../shared/types'
 import { unknownTeamError } from '../../../shared/team'
 import type { ChatSessionManager } from '../../chat/ChatSessionManager'
 import type { ChatConnection } from '../../chat/ChatConnections'
+import { handleApplyCommand, isApplyCommand } from '../revisionControl/applyConnections'
 
 type ExecutionClientMessage = Extract<ClientMessage, { type: `team-plan-execution-${string}` }>
 
@@ -17,6 +19,8 @@ export class ExecutionConnections {
   constructor(private readonly manager: ChatSessionManager) {}
 
   async handle(connection: ChatConnection, message: ExecutionClientMessage) {
+    // plan-revision-apply D6: Apply and its preview resolve the team themselves.
+    if (isApplyCommand(message)) return handleApplyCommand(this.manager, connection, message)
     const { teamPath, requestId } = message
     const answer = (payload: Record<string, unknown>) => connection.send({ type: 'team-plan-result', teamPath, requestId, ...payload })
     const team = await this.manager.teamScopes.resolve(teamPath)
