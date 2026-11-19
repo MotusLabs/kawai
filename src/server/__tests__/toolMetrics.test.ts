@@ -209,6 +209,7 @@ test('S3 result ordering never promotes a later success over the first actual fa
     expect(tools(h,'tool_first_attempt_success')).toMatchObject({value:0,n:1})
   }finally{h.close()}
 })
+// @covers: team-process-metrics › Tool metric reads avoid multiplicative history scans › Concurrent closure commit
 test('S3 detail and retained carrier share one real WAL read snapshot across a concurrent closure commit',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tool-cohort-read-')),file=path.join(dir,'test.db')
   const db=schemaDb(file);db.exec('PRAGMA journal_mode=WAL')
