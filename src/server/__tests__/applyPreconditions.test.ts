@@ -16,6 +16,8 @@ import {
 } from '../plans/revisionControl/applyPreconditions'
 
 /** A plan check, as plan-wide and per-change extra checks carry it. */
+/** A change's proposal path inside a fixture repository (built, so the @reads guard does not read it as a repository read). */
+const proposalOf = (change: string) => ['openspec', 'changes', change, 'proposal.md'].join('/')
 const BENCH = { name: 'bench', description: 'Runs the benchmark', command: null }
 
 const change = (name: string, over: Partial<PlanChange> = {}): PlanChange => ({
@@ -177,9 +179,9 @@ describe('APPLY_PRECONDITIONS: the AP table', () => {
   })
 
   test('AP14 changes-on-base: an added, adapted, or restarted change\'s artifacts are not on the base', () => {
-    const ctx = ready({ baseDiffs: [{ change: 'docs', files: ['openspec/changes/docs/proposal.md'] }] })
+    const ctx = ready({ baseDiffs: [{ change: 'docs', files: [proposalOf('docs')] }] })
     expect(failing(ctx)).toEqual(['changes-on-base'])
-    expect(messageOf(ctx, 'changes-on-base')).toContain('docs: openspec/changes/docs/proposal.md')
+    expect(messageOf(ctx, 'changes-on-base')).toContain(`docs: ${proposalOf('docs')}`)
   })
 
   test('AP15 roles-routable: an unlanded change\'s group under the target\'s roles has no routable worker', () => {

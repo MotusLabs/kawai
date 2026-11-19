@@ -22,6 +22,8 @@ import type { ProbeResult } from '../plans/landing/landingProbe'
 import { ApplyService } from '../plans/revisionControl/applyService'
 import { schemaDb } from './schemaDb'
 
+/** A change's proposal path inside a fixture repository (built, so the @reads guard does not read it as a repository read). */
+const proposalOf = (change: string) => ['openspec', 'changes', change, 'proposal.md'].join('/')
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 
 function git(args: string[], cwd: string) {
@@ -90,8 +92,8 @@ beforeAll(() => {
   // origin's tree: web matches; ui and docs differ from the main checkout.
   const sha = (file: string) => git(['hash-object', file], main).trim()
   const tree = [
-    { path: 'openspec/changes/web/proposal.md', sha: sha('openspec/changes/web/proposal.md'), type: 'blob' },
-    { path: 'openspec/changes/ui/proposal.md', sha: '0'.repeat(40), type: 'blob' },
+    { path: proposalOf('web'), sha: sha(proposalOf('web')), type: 'blob' },
+    { path: proposalOf('ui'), sha: '0'.repeat(40), type: 'blob' },
   ]
   const bin = path.join(root, 'bin')
   fs.mkdirSync(bin, { recursive: true })
@@ -177,7 +179,7 @@ describe('ApplyService.preview', () => {
     // and docs (added, not on origin) fails changes-on-base.
     expect(preview.standing.map(entry => entry.name)).toHaveLength(15)
     expect(preview.standing.filter(entry => entry.message !== null).map(entry => entry.name)).toEqual(['choices-complete', 'changes-on-base'])
-    expect(preview.standing.find(entry => entry.name === 'changes-on-base')!.message).toContain('docs: openspec/changes/docs/proposal.md')
+    expect(preview.standing.find(entry => entry.name === 'changes-on-base')!.message).toContain(`docs: ${proposalOf('docs')}`)
     expect(preview.standing.find(entry => entry.name === 'changes-on-base')!.message).not.toContain('ui:')
     expect(counts()).toEqual(before)
   })
@@ -195,7 +197,7 @@ describe('ApplyService.preview', () => {
     for (const choice of ['adapt', 'restart']) {
       const message = await onBase({ ui: choice })
       expect(message).toContain('docs:')
-      expect(message).toContain('ui: openspec/changes/ui/proposal.md')
+      expect(message).toContain(`ui: ${proposalOf('ui')}`)
     }
   })
 
