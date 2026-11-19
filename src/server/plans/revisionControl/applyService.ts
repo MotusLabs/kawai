@@ -13,9 +13,11 @@
 // 3. one synchronous transaction through `recordRevisionControlEvent`: the
 //    preconditions over fresh rows, the per-change writes, the history row,
 //    the advanced revision columns, and the event last;
-// 4. after a real commit, the executor wake (the plan's announce re-pushes
-//    its detail). A prepared cancel gone stale rolls everything back and
-//    prepares again, at most three times as Stop does (AK6).
+// 4. after a real commit, the completion check (an Apply that removed the
+//    last unlanded change completes the run, D4) and the executor wake (the
+//    plan's announce re-pushes its detail). A prepared cancel gone stale
+//    rolls everything back and prepares again, at most three times as Stop
+//    does (AK6).
 import type { TeamIdentity } from '../../team/teamIdentity'
 import type { PreparedTaskStatus } from '../../team/taskStatusPrepared'
 import { StaleTaskStatus } from '../../team/taskStatusPrepared'
@@ -25,6 +27,7 @@ import type { ExecutionCaller } from '../execution/ExecutionService'
 import type { ExecutionRow } from '../execution/executionRows'
 import { gatherStart, type StartGatherDeps } from '../execution/startGather'
 import { advanceExecutionRevision } from '../execution/executionApplyStore'
+import { completeIfLanded } from '../execution/executionCompletion'
 import type { ValidationStanding } from '../validation/validationStanding'
 import { PlanRefusal, payloadDifference, type PlanRefusalReason } from '../planCommands'
 import type { PreconditionFailure } from '../planPreconditions'
@@ -141,6 +144,8 @@ export class ApplyService {
         if (!outcome.ok) return { ok: false, reason: outcome.reason, message: outcome.message, ...(outcome.failures ? { failures: outcome.failures } : {}) }
         // AK5: a concurrent twin committed first; its row answers this one.
         if (outcome.replayed) return this.replay(execution, commandId, event) ?? { ok: false, reason: 'state', message: `The recorded Apply ${commandId} left no revision row.` }
+        // D4: removing the last unlanded change completes the run now; the executor's pass re-checks after a crash here.
+        completeIfLanded({ executions: this.deps.store, plans: this.deps.plansStore, plansService: this.deps.plans }, execution.id)
         this.deps.wake?.(caller.team.teamId)
         return { ok: true, replayed: false, executionId: execution.id, applied: this.view(execution.id, outcome.result!.seq) }
       } catch (error) {

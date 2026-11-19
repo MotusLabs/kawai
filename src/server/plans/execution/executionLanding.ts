@@ -22,6 +22,7 @@ import type { GhCommandOptions } from '../landing/ghCommand'
 import type { MergeMethod } from '../../../shared/planExecution'
 import { runGit } from '../../git/gitCommand'
 import { logger } from '../../logger'
+import { completeIfLanded } from './executionCompletion'
 import { ExecutionConflict } from './executionPatch'
 import { EffectPinConflict } from './executionEffectStore'
 import { cleanMergeCheck } from '../landing/cleanMerge'
@@ -441,13 +442,9 @@ export async function afterLanded(deps: LandingDeps, row: ChangeRow, executionId
       })
     }
   }
-  // Completion: when every change has landed, the execution completes and
-  // the plan completes as the system (D19). A stopped execution settling
-  // its one running merge (D12) stays stopped.
-  const changes = store.changes(executionId)
-  if (execution.state === 'running' && changes.length > 0 && changes.every(entry => entry.state === 'landed')) {
-    store.finishExecution(executionId, 'completed')
-    const completed = deps.plansService.completeBySystem(execution.planId, executionId)
-    if (!completed.ok) logger.info('plan_execution_plan_left_open', { executionId, reason: completed.reason, message: completed.message })
-  }
+  // Completion: when every change of the current revision has landed, the
+  // execution completes and the plan completes as the system (D19, read
+  // under plan-revision-apply D4). A stopped execution settling its one
+  // running merge (D12) stays stopped.
+  completeIfLanded({ executions: store, plans: deps.plans, plansService: deps.plansService }, executionId)
 }
