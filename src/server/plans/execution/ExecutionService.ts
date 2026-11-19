@@ -214,7 +214,11 @@ export class ExecutionService {
 
   /** The execution a replayed Start recorded (D4): the plan's newest at this revision and hash. */
   private priorExecution(planId: string, input: StartInput): ExecutionRow {
-    const prior = this.deps.store.executionsOf(planId).find(execution => execution.revision === input.revision && execution.contentHash === input.contentHash)
+    // plan-revision-apply D4: found through its seq-1 row (what Start recorded), since an Apply may have advanced the current columns.
+    const prior = this.deps.store.executionsOf(planId).find(execution => {
+      const started = this.deps.executionRevisions.history(execution.id)[0]
+      return started !== undefined && started.revision === input.revision && started.contentHash === input.contentHash
+    })
     if (!prior) throw new Error(`The recorded start of ${input.commandId} left no execution`)
     return prior
   }

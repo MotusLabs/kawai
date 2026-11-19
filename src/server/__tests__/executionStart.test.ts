@@ -20,6 +20,7 @@ import { ExecutionStore } from '../plans/execution/executionStore'
 import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
 import { schemaDb } from './schemaDb'
 import { ExecutionService } from '../plans/execution/ExecutionService'
+import { advanceExecutionRevision } from '../plans/execution/executionApplyStore'
 
 const GITHUB_URL = 'https://github.com/acme/app.git'
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
@@ -178,6 +179,21 @@ describe('ExecutionService.start', () => {
     expect(executions.executionsOf(target.planId)).toHaveLength(1)
     expect(plansStore.events(target.planId).filter(event => event.kind === 'execution-started')).toHaveLength(1)
     expect(wakes).toEqual([team.teamId])
+  })
+
+  // plan-revision-apply D4: the started-from record is the seq-1 row; an Apply moves only the current columns.
+  test('a replayed Start after an Apply returns its execution, found through the seq-1 row', async () => {
+    const target = approvedPlan(['moved1', 'moved2'])
+    const first = await start(target.planId, target.hash, 'cmd-moved')
+    if (!first.ok) throw new Error(first.message)
+    // The writes Apply's transaction makes: the history row at seq 2 and the advanced columns.
+    const revisions = new ExecutionRevisionStore(db)
+    revisions.recordAt(2, { executionId: first.execution.id, revision: 2, contentHash: 'h-applied', reportId: 'rep-2', inputHash: 'ih-2', appliedAt: first.execution.startedAt, rationale: 'apply', commandId: 'apply-moved', payload: null }, [])
+    expect(advanceExecutionRevision(db, first.execution.id, 1, { revision: 2, contentHash: 'h-applied', reportId: 'rep-2', inputHash: 'ih-2' })).toBe(true)
+    const again = await start(target.planId, target.hash, 'cmd-moved')
+    expect(again).toMatchObject({ ok: true, replayed: true })
+    if (again.ok) expect(again.execution).toMatchObject({ id: first.execution.id, revision: 2, contentHash: 'h-applied' })
+    expect(revisions.history(first.execution.id)).toHaveLength(2)
   })
 
   test('a different payload under the same command id is refused naming the field', async () => {

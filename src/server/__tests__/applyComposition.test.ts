@@ -39,6 +39,7 @@ import { REVISION_NOTICE_TAG } from '../team/taskNotices'
 import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
 import { pauseHolderFacts } from '../plans/revisionControl/pauseTick'
 import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
+import { advanceExecutionRevision } from '../plans/execution/executionApplyStore'
 import type { ExecutionRuntime } from '../plans/execution/executionRuntime'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
 import type { FloorMap } from '../../shared/planExecution'
@@ -293,5 +294,26 @@ describe('Apply through the composed server (PC)', () => {
     expect(counts()).toEqual(before)
     expect(composed.executionStore.execution(applied.executionId)!.revision).toBe(1)
     expect(bench.tasks.get(applied.held.ui!.taskId)!.revision).toBe(1)
+  })
+  // plan-revision-apply D4 with B3: an Apply committed and the process stopped before its completion check; the executor's pass completes the run.
+  test('an execution whose current revision fully landed, left running by a stop after an Apply commit, completes on the executor\'s next pass with the plan', async () => {
+    const applied = await runningWorld()
+    const store = composed.executionStore
+    // The committed Apply's writes: the seq-2 row and the advanced columns.
+    new ExecutionRevisionStore(bench.db.db).recordAt(2, {
+      executionId: applied.executionId, revision: applied.target.revision, contentHash: applied.target.contentHash, reportId: 'rep-next', inputHash: 'ih-next',
+      appliedAt: new Date().toISOString(), rationale: 'r', commandId: 'cmd-b3', payload: null,
+    }, [])
+    expect(advanceExecutionRevision(bench.db.db, applied.executionId, 1, { revision: applied.target.revision, contentHash: applied.target.contentHash, reportId: 'rep-next', inputHash: 'ih-next' })).toBe(true)
+    for (const change of ['api', 'ui']) {
+      store.insertLanding({ planId: applied.planId, change, executionId: applied.executionId, teamId: world.team.teamId, mechanism: 'direct', prNumber: null, prUrl: null, headSha: 'h', baseSha: 'b', mergeSha: 'm', treeVerified: true })
+      const row = store.change(applied.executionId, change)!
+      expect(store.transition(applied.executionId, change, row, { state: 'landed', step: null })).not.toBeNull()
+    }
+    expect(store.execution(applied.executionId)!.state).toBe('running')
+    runtime.command(world.team.teamId)
+    await until(() => store.execution(applied.executionId)!.state === 'finished')
+    expect(store.execution(applied.executionId)).toMatchObject({ state: 'finished', outcome: 'completed' })
+    expect(bench.plans.get(applied.planId)!.lifecycle).toBe('completed')
   })
 })

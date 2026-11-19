@@ -27,6 +27,7 @@ import { refusable } from './stepRefusal'
 import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 import { renderContract } from '../../../shared/implementationContract'
 import { gitShowFile, snapshotContract, type ShowFile } from './contractSnapshot'
+import { currentOwedRow } from './owedSuccessor'
 
 /** The system caller (D2): minted only inside this module. */
 function kawaiCaller(team: TeamIdentity, executionId: string): TaskCaller {
@@ -352,8 +353,11 @@ export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
  * key, so nothing is owed again.
  */
 export async function dispatchOwedAttempt(deps: DispatchDeps, input: { executionId: string; change: string; group: string }): Promise<void> {
-  const newest = deps.executions.attempts(input.executionId, input.change).at(-1)
-  if (newest === undefined) return
+  const owedRow = deps.executions.attempts(input.executionId, input.change).at(-1)
+  if (owedRow === undefined) return
+  // DC1: a row minted before an Apply moved the execution on is never sent; its successor at the current revision is.
+  const newest = currentOwedRow({ executions: deps.executions, plans: deps.plans, taskRevisionOf: taskId => deps.tasks.store.get(taskId)?.revision ?? null }, input, owedRow)
+  if (newest === null) return
   if (newest.kind === 'update') return dispatchOwedUpdate(deps, input, newest)
   if (newest.kind === 'fix') return dispatchOwedFix(deps, input, newest)
   return dispatchOwedImplement(deps, input, newest)
