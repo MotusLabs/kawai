@@ -1,19 +1,11 @@
-// The Plans view's decision cards (plan-supervision D15, §10.2): a card
-// asked from a change renders inline in that change's execution row and
-// cards without a change in the plan-level Decisions list; the decision
-// history and each override's fix status show; Override names the decision
-// it replaces and requires a rationale; Answer takes a chosen option or
-// written text with an optional rationale; every control disables while
-// disconnected; and a refusal keeps the dialog open with Confirm off until
-// it is reopened, which arms a new command. From the attention queue (§10.5),
-// a `plan` link with a change and a `card` link with a plan open the plan
-// scrolled to and focused on the change row or card, the one-shot reveal
-// consumed once, and an unknown target dropped silently. On every settle
-// path — the detail mounting loaded, the detail arriving, a reveal after
-// load, a plan switch — the rendered target keeps the focus and scroll over
-// the plan title, and a reveal for another team never touches this detail.
-// Renderers are created inside act() so later store updates re-render (the
-// bun act trap).
+// Plan decisions (plan-supervision D15): inline and plan-level cards,
+// history, fixes, Answer/Override choices and rationale, command replay,
+// refusal and disconnected controls. Attention links reveal only their
+// owning pane and focus the row/card without scrolling ancestors. The
+// one-shot target wins over the title on mount, load, plan switches, and
+// already-open plans; unknown targets fall back to the title once. Data
+// pushes never replay a consumed reveal or affect another team's focus.
+// Renderers are created inside act() so store updates re-render.
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, Session } from '@shared/types'
@@ -35,6 +27,38 @@ afterEach(() => {
   for (const renderer of renderers) act(() => renderer.unmount())
   renderers.length = 0
   useTeamPlanStore.setState({ views: {}, reveal: null })
+})
+
+test('P-I3: data-only updates never replay consumed present/missing reveals (seed 0x51c013, 32 cases)', () => {
+  let seed = 0x51c013
+  for (let i = 0; i < 32; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+    useTeamPlanStore.setState({ views: {}, reveal: null })
+    const isCard = !!(seed & 1)
+    const present = !!(seed & 2)
+    const anchor = isCard ? `decision-card-${present ? 'card-1' : 'later-card'}` : `plan-change-${present ? 'api' : 'later-change'}`
+    useTeamPlanStore.getState().requestReveal('/repo', 'plan-1', anchor)
+    const ui = mount(decisionsFixture())
+    expect(useTeamPlanStore.getState().reveal).toBeNull()
+    // The human moves focus after navigation has settled.
+    act(() => ui.renderer.root.findByProps({ id: 'plan-title' }).instance.focus({ preventScroll: true }))
+    const before = { focus: ui.focusedNodes.length, scroll: ui.scrolledNodes.length }
+    const updated = detail(decisionsFixture())
+    if (i % 3 === 0) {
+      updated.decisions = []
+      updated.executions = []
+    } else if (i % 3 === 1) {
+      updated.decisions!.push(cardView(card({ id: 'later-card', change: null }), []))
+      updated.executions![0]!.changes.push(changeRow('later-change', 'task-later'))
+    }
+    act(() => useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath: '/repo', teamId: 't', detail: updated }))
+    ui.rerender()
+    expect(ui.focusedNodes.length).toBe(before.focus)
+    expect(ui.scrolledNodes.length).toBe(before.scroll)
+    expect(ui.focusedNodes.at(-1)).toBe('plan-title')
+    act(() => ui.renderer.unmount())
+    renderers.pop()
+  }
 })
 
 // Concatenated text of the whole tree: JSX splits a sentence across text
@@ -147,8 +171,18 @@ const mount = (decisionViews: PlanDecisionCardView[], options: { connected?: boo
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
     renderer = TestRenderer.create(element(), { createNodeMock: node => ({
-      focus: () => focusedNodes.push(String(node.props.id ?? node.props['data-testid'] ?? '')),
-      scrollIntoView: (options: unknown) => scrolledNodes.push([String(node.props.id ?? ''), options]),
+      focus: (options: unknown) => {
+        expect(options).toEqual({ preventScroll: true })
+        focusedNodes.push(String(node.props.id ?? node.props['data-testid'] ?? ''))
+      },
+      // Record card/row writes to their owning pane. Real document and
+      // title geometry are checked independently in the browser suite.
+      closest: () => node.props.id === 'plan-title' ? null : ({
+        clientHeight: 400, clientTop: 0, scrollTop: 0, scrollHeight: 2000,
+        getBoundingClientRect: () => ({ top: 0 }),
+        scrollTo: () => scrolledNodes.push([String(node.props.id ?? ''), { block: 'center' }]),
+      }),
+      getBoundingClientRect: () => ({ top: 900, height: 100 }),
     }) })
   })
   renderers.push(renderer)
@@ -451,4 +485,15 @@ test('a reveal naming an unknown change is dropped silently: no scroll, the deta
   expect(ui.focusedNodes).toEqual(['plan-title'])
   expect(ui.text()).not.toContain('Unknown change')
   expect(useTeamPlanStore.getState().reveal).toBeNull()
+})
+
+test('O6: an unknown reveal on an already loaded plan returns focus to its title once', () => {
+  const ui = mount(decisionsFixture())
+  expect(ui.focusedNodes).toEqual(['plan-title'])
+  act(() => useTeamPlanStore.getState().requestReveal('/repo', 'plan-1', 'plan-change-missing'))
+  ui.rerender()
+  expect(ui.focusedNodes).toEqual(['plan-title', 'plan-title'])
+  expect(useTeamPlanStore.getState().reveal).toBeNull()
+  ui.rerender()
+  expect(ui.focusedNodes).toHaveLength(2)
 })

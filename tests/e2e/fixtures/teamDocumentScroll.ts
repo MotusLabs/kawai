@@ -34,6 +34,8 @@ export function documentScrollFixture() {
     import { DecisionStore } from './src/server/plans/decisions/decisionStore';
     import { ExecutionStore } from './src/server/plans/execution/executionStore';
     import { TaskStore } from './src/server/team/taskStore';
+    import { MailboxStore } from './src/server/team/mailboxStore';
+    import { AssignmentStore } from './src/server/team/assignmentStore';
     import { normalizePlanContent } from './src/shared/plans';
     import { resolveTeam } from './src/server/team/teamIdentity';
     const [root, file] = JSON.parse(await Bun.stdin.text());
@@ -53,6 +55,10 @@ export function documentScrollFixture() {
       question: 'Which scroll behavior?', options: ['Keep the viewport'], context: 'Fixture question',
       askedBy: { session: 'fixture-agent', group: null, profile: null },
       addressedTo: 'owner', addressedGroup: null, messageId: null });
+    for (let i = 0; i < 12; i++) new DecisionStore(db).insertCard({ teamId, planId, revision,
+      change: null, taskId: null, question: 'Additional question ' + i, options: [], context: null,
+      askedBy: { session: 'fixture-agent', group: null, profile: null },
+      addressedTo: 'owner', addressedGroup: null, messageId: null });
     const executions = new ExecutionStore(db);
     const execution = executions.insertExecution({ teamId, planId, revision, contentHash: 'fixture-hash',
       reportId: 'fixture-report', inputHash: 'fixture-input', landingMode: 'direct', baseBranch: 'master',
@@ -61,8 +67,16 @@ export function documentScrollFixture() {
     const row = executions.change(execution.id, 'scroll-change');
     executions.transition(execution.id, 'scroll-change', { state: row.state, generation: row.generation },
       { state: 'stopped', stopReason: 'ci-timeout' });
-    const task = new TaskStore(db).create({ teamId, title: 'Scroll regression task',
+    const mail = new MailboxStore(db);
+    const assignments = new AssignmentStore(db, mail);
+    const task = new TaskStore(db, mail, assignments).create({ teamId, title: 'Scroll regression task',
       direction: 'Task context. '.repeat(1000), creator: human });
+    const instruction = mail.enqueue({ teamId, toKind: 'session', toId: 'fixture-agent', fromSession: null,
+      fromGroup: null, originPath: root, body: 'Earlier instruction', taskId: task.id });
+    assignments.insert({ teamId, taskId: task.id, requestKey: 'fixture-assignment', targetKind: 'session',
+      targetId: 'fixture-agent', role: null, instruction: 'Earlier instruction', creator: human, messageId: instruction.id });
+    mail.claim(instruction.id, 'fixture-agent');
+    mail.markDelivered(instruction.id);
     console.log('SEED:' + JSON.stringify({ planId, cardId: card.id, taskId: task.id }));
     sessions.close();
   `], { cwd: process.cwd(), env, input: JSON.stringify([root, dbPath]), encoding: 'utf8' })
@@ -77,11 +91,14 @@ export function documentScrollFixture() {
   let push: ((message: ServerMessage) => void) | undefined
   let tall = false
   let missing = false
+  let goalWords = 1500
 
   const decorateDetail = (message: DetailMessage) => {
     const result = structuredClone(message)
-    if (missing) result.detail.decisions = []
-    else if (tall && result.detail.decisions?.[0]) result.detail.decisions[0].card.context = 'Tall card\n'.repeat(80)
+    result.detail.revisions[0]!.content.goal = 'Plan context. '.repeat(goalWords)
+    if (missing) result.detail.decisions = result.detail.decisions?.filter(entry => entry.card.id !== ids.cardId)
+    const target = result.detail.decisions?.find(entry => entry.card.id === ids.cardId)
+    if (tall && target) target.card.context = 'Tall card\n'.repeat(80)
     return result
   }
   return {
@@ -95,7 +112,7 @@ export function documentScrollFixture() {
       }, { timeout: 30_000, message: 'isolated scroll server starts' }).toBe(true)
     },
     async openChat(page: Page) {
-      tall = false; missing = false
+      tall = false; missing = false; goalWords = 1500; lastDetail = undefined
       await page.routeWebSocket(/\/ws$/, ws => {
         const remote = ws.connectToServer()
         push = message => ws.send(JSON.stringify(message))
@@ -138,8 +155,9 @@ export function documentScrollFixture() {
       }, { root, tab, id })
       await expect(page.getByTestId('team-workspace')).toBeVisible()
     },
-    update(options: { tall?: boolean; missing?: boolean } = {}) {
+    update(options: { tall?: boolean; missing?: boolean; goalWords?: number } = {}) {
       tall = options.tall ?? tall; missing = options.missing ?? missing
+      goalWords = options.goalWords ?? goalWords
       if (!lastDetail || !push) throw new Error('Plan detail not loaded')
       push(decorateDetail(lastDetail))
     },
@@ -149,6 +167,19 @@ export function documentScrollFixture() {
     },
   }
 }
+
+// Acceptance table copied verbatim from the design; each row is exercised
+// by the browser table below, through the actual application controls.
+export const scrollOracles = [
+  ['O1', 'Long actual navigator with hidden state labels, sidebar scrolled', 'Open Team', 'Labels retain accessible state text; document extent is within 1 px of viewport; app top 0 and bottom viewport', 'Remove local containment at the navigator label owner'],
+  ['O2', 'Long actual chat with hidden timestamps, repeated authors, and copy status, transcript scrolled', 'Open Team and return to chat', 'Hidden metadata/live regions retained; no label-created document extent or app displacement before or after navigation', 'Remove containment at transcript metadata/time/copy hosts'],
+  ['O3', 'Present decision card shorter than pane, initially outside it', 'Activate Answer the question by mouse and keyboard', 'Card fully inside pane and focused; document/app offsets 0; app fills viewport; sidebar and attention scroll unchanged', 'Remove the production card reveal wiring or replace bounded reveal with unrestricted scrolling in the hostile boundary fixture'],
+  ['O4', 'Present stopped change shorter than pane, initially outside it', 'Activate Retry or stop execution', 'Change fully inside pane and focused; document/app offsets 0; app fills viewport; sidebar and attention scroll unchanged', 'Remove the production change reveal wiring or replace bounded reveal with unrestricted scrolling in the hostile boundary fixture'],
+  ['O5', 'Present card or change taller than pane', 'Reveal target', 'Target beginning visible, target focused, remainder reachable by pane scroll; document/app offsets unchanged', 'Always center tall targets, clipping their beginning'],
+  ['O6', 'Absent requested card or change', 'Follow attention link, then push plan update', 'Plan title focused at pane start; reveal consumed; update causes no second focus or scroll', 'Keep reveal pending until a later target appears, or omit title fallback'],
+  ['O7', '* surrounding content, selected task/plan detail', 'Open and cancel inline task action, Answer form, and Retry confirmation', 'Document/app offsets unchanged; app fills viewport; form reachable through owning pane; control names and keyboard operation retained', 'Omit action-form mounting or make its controls unreachable in the detail pane'],
+  ['O8', 'Ordinary plan selection with no requested target', 'Open plan from list', 'Title visible at pane start and focused; document/app offsets unchanged', 'Omit title reveal/focus or restore unrestricted title scrolling in the hostile boundary fixture'],
+] as const
 
 export async function viewportFacts(page: Page) {
   return page.evaluate(() => {
