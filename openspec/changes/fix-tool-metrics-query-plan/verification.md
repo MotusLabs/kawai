@@ -29,6 +29,8 @@ Each failed title below is the exact test title without the runner timing suffix
 
 ## Full-tree check
 
-Pending the clean committed implementation-tree check required by task 2.2.
+The first clean committed-tree check passed lint/typecheck and 11,451 tests but failed one existing status-subscription test (11,452 tests across 1,039 files; 382,908 assertions). That test passed in isolation on both this branch and the unmodified release. Its initial snapshot count was timing-sensitive (three instead of two).
+
+The owner approved test-only setup synchronization: observe the startup publication before opening subscriptions. The unchanged budget-refusal, cache-identity, and exact snapshot-count assertions pass normally and with the first publication deliberately delayed by 500 ms. The two affected files pass together (15 tests, 354 assertions, all 256 seeded cases). The unused type import has also been removed. A fresh full check on the committed correction remains pending.
 
 No production service or database was modified.

@@ -10,6 +10,7 @@ A synchronous tool-metrics read can stall Kawai's HTTP and WebSocket handling be
 - Preserve metric values, team boundaries, window boundaries, closure eligibility, live-session semantics, ordering, and the shared read transaction.
 - Add production-query plan checks and synthetic-history correctness tests, including closures outside the tool-call window and concurrent closure commits.
 - Document the lookup/index dependency in the metrics architecture bullet.
+- Owner-approved verification adjustment: settle the existing subscription test's startup status publication before counting its initial snapshots, preserving its actual budget-refusal assertions.
 
 ## Capabilities
 

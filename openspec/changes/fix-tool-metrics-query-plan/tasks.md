@@ -8,7 +8,10 @@
 - [x] 1.4 Preserve and exercise O8 through the existing concurrent-WAL `readMetrics` test in `toolMetrics.test.ts`, adding the new scenario annotation or narrow assertions as needed. Verify O8 kills removal of the enclosing read transaction: the initial read stays pending, while a fresh read sees the committed closure.
 - [x] 1.5 Update the metrics architecture bullet with both index dependencies and the remaining session-history scaling limit. Verify A4 against the actual loader and migrated schema, rejecting documentation that claims constant-time reads or a captured incident-triggering request. Land the query correction, its tests, and this documentation together.
 
+- [x] 1.6 Apply the owner-approved test-only stabilization in `chatSessionManager.observations.test.ts`: wait for the observed startup status publication before opening subscriptions, preserving the budget-refusal and cache assertions. Verify the existing status-change scenario passes with the usual callback and with a delayed startup publication; the original initial count assertion must remain exact rather than being weakened.
+
 ## 2. Integration verification
+
 
 - [x] 2.1 Verify P1/P2, O1–O9, and G1/G2 with `bun run test src/server/__tests__/toolMetricInputs.test.ts src/server/__tests__/toolMetrics.test.ts src/server/__tests__/metricsQuery.test.ts src/server/__tests__/metricsConnections.test.ts src/server/__tests__/metricsTools.test.ts src/server/__tests__/toolDrillPaging.test.ts`; demonstrate the listed plan and semantic mutants are killed, and restore every mutant before the final checks.
 - [ ] 2.2 Run `openspec validate fix-tool-metrics-query-plan --strict` and `bun run check` on the clean committed isolated implementation tree. Verify all acceptance clauses, the restored passing versions of the P1/P2 and O1–O9/G1/G2 tests, and a diff limited to design Scope. Include an oracle-to-exact-test-title-to-killed-mutant map in the result; optional bounded read-only backup replay supplements these checks without a private fixture dependency.

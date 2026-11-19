@@ -12,7 +12,7 @@ import { SessionRegistry } from '../SessionRegistry'
 import type { ChatEvent } from '../../shared/chat'
 import type { ServerMessage } from '../../shared/types'
 import { initDatabase, type SessionDatabase } from '../db'
-import { managedManager, closeDispatchers, createHarness, flush, initMessage, installManagerCleanup, resultWithWindow, spawned } from './helpers/chatSessionManagerHarness'
+import { managedManager, closeDispatchers, createHarness, flush, initMessage, installManagerCleanup, resultWithWindow, spawned, waitForCondition } from './helpers/chatSessionManagerHarness'
 
 installManagerCleanup()
 
@@ -164,6 +164,9 @@ describe('ChatSessionManager observation rows', () => {
       onToolMeasurementStatusChange:()=>{publications++;connections?.publishMetricsAll()}})
     connections=new ChatConnections(manager)
     try {
+      // Startup verification publishes status too. Settle that notification
+      // before subscription opens, so it cannot add a third initial snapshot.
+      await waitForCondition(()=>publications>0)
       const first=manager.createSession({projectPath:a}),second=manager.createSession({projectPath:b})
       if(!first.ok||!second.ok)throw Error('real manager session setup failed')
       await manager.teams.track(first.session.id,a);await manager.teams.track(second.session.id,b)

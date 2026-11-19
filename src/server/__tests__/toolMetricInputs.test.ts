@@ -1,6 +1,5 @@
 // Production lookup plans and independent cohort oracles for the metrics loader.
 import { expect, test } from 'bun:test'
-import type { Database } from 'bun:sqlite'
 import { readMetrics } from '../metrics/computeMetrics'
 import { loadToolMetricInputs } from '../metrics/toolMetricInputs'
 import { schemaCopy, schemaDb } from './schemaDb'

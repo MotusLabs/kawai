@@ -73,6 +73,10 @@ G1 is closure-result equivalence: generate 128 small fixture cases with seed `0x
 
 No database migration or data repair. Ship the query-only correction through the normal release process after checks. Deployment/restart is a separate operational action, not part of proposal creation. If a rollback is required, reverting the code restores the old plan risk; avoid metrics reads until a corrected release is available. Never use the live database as a destructive test fixture.
 
+## Approved verification adjustment
+
+The first full check passed 11,451 tests and failed the existing observation-status subscription test: an initial snapshot count was three rather than two. That test passes in isolation on both this branch and the unmodified release. Its startup status notification can overlap the asynchronous subscription opens. The owner explicitly approved extending scope to stabilize this test only. Wait for an observed startup publication before opening subscriptions, using the existing `waitForCondition` helper; retain every budget-refusal, cache-identity, and two-team delivery assertion. No production notification behavior changes.
+
 ## Implementation contract
 
 ### Acceptance
@@ -92,6 +96,7 @@ No database migration or data repair. Ship the query-only correction through the
 - `src/server/metrics/toolMetricInputs.ts`
 - `src/server/__tests__/toolMetricInputs.test.ts`
 - `src/server/__tests__/toolMetrics.test.ts`
+- `src/server/__tests__/chatSessionManager.observations.test.ts`
 - `docs/architecture/metrics.md`
 - `openspec/changes/fix-tool-metrics-query-plan/**`
 
