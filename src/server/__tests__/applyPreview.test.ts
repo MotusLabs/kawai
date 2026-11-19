@@ -14,6 +14,9 @@ import type { Database } from 'bun:sqlite'
 import { cleanGitEnv } from '../git/gitCommand'
 import { normalizePlanContent, type PlanChange } from '../../shared/plans'
 import { PlanStore } from '../plans/planStore'
+import { PlanService } from '../plans/PlanService'
+import { StrategyStore } from '../strategy/strategyStore'
+import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import type { ProbeResult } from '../plans/landing/landingProbe'
 import { ApplyService } from '../plans/revisionControl/applyService'
@@ -109,6 +112,8 @@ esac
   service = new ApplyService({
     store: executions,
     plansStore,
+    plans: new PlanService(plansStore, { getSession: () => null, strategies: new StrategyStore(db) }),
+    executionRevisions: new ExecutionRevisionStore(db),
     validation: {
       prepareStanding: async () => ({}),
       standing: () => ({ state: 'current', report: { id: 'rep-2', inputHash: 'ih-2', readiness: { carriedConditions: [] } } }),

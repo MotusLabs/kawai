@@ -115,6 +115,12 @@ export class ExecutionRevisionStore {
     return row ? mapRevision(row) : null
   }
 
+  /** The row an Apply recorded under this command id (DC3's replay reconstruction), or null. */
+  byCommand(executionId: string, commandId: string): ExecutionRevisionRecord | null {
+    const row = this.db.prepare('SELECT * FROM plan_execution_revisions WHERE execution_id = ? AND command_id = ? ORDER BY seq LIMIT 1').get(executionId, commandId) as Row | null
+    return row ? mapRevision(row) : null
+  }
+
   publications(executionId: string, seq: number): PublicationChange[] {
     return (this.db.prepare('SELECT * FROM plan_execution_publication_changes WHERE execution_id = ? AND seq = ? ORDER BY change')
       .all(executionId, seq) as Row[]).map(mapPublication)
