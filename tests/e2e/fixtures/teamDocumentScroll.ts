@@ -10,7 +10,7 @@ import type { ServerMessage } from '../../../src/shared/types'
 import type { ChatEvent } from '../../../src/shared/chat'
 import { ServerProcess } from './serverProcess'
 
-export function documentScrollFixture() {
+export function documentScrollFixture(fixtureEnv: Record<string, string | undefined>) {
   const home = mkdtempSync(join(tmpdir(), 'kawai-scroll-'))
   const root = join(home, 'repo')
   mkdirSync(root)
@@ -21,7 +21,7 @@ export function documentScrollFixture() {
   git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture')
   const dbPath = join(home, 'fixture.db')
   const env = {
-    ...process.env, HOME: home, NODE_ENV: 'development', AGENTBOARD_CHAT_FIXTURE: '1',
+    ...fixtureEnv, HOME: home, NODE_ENV: 'development',
     AGENTBOARD_DB_PATH: dbPath, LOG_FILE: join(home, 'server.log'),
     CLAUDE_CONFIG_DIR: join(home, 'claude'), CODEX_HOME: join(home, 'codex'), PI_HOME: join(home, 'pi'),
     TMUX_TMPDIR: home, TMUX: '', TMUX_SESSION: 'scroll-fixture',

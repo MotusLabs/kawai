@@ -8,7 +8,7 @@ test.use({ viewport: { width: 1200, height: 758 } })
 test.setTimeout(120_000)
 let fixture: ReturnType<typeof documentScrollFixture>
 test.beforeAll(async ({ browser }) => {
-  fixture = documentScrollFixture()
+  fixture = documentScrollFixture({ ...process.env, AGENTBOARD_CHAT_FIXTURE: '1' })
   const page = await browser.newPage()
   try { await fixture.start(page) } finally { await page.close() }
 })
