@@ -79,6 +79,8 @@ describe('Apply choices (CH)', () => {
     expect(task.revision).toBe(2)
     const published = wired.tasks.store.revisions(task.id).at(-1)!
     expect(published).toMatchObject({ revision: 2, rationale: 'the owner rethought it' })
+    // Published under the Apply's request key (D7), so a replay inside the command publishes nothing twice (P2).
+    expect(wired.bench.db.db.prepare('SELECT request_key AS key FROM team_task_revisions WHERE task_id = ? AND revision = 2').get(task.id)).toEqual({ key: 'apply:adapt-held:ui' })
     expect(task.direction).toContain('The OpenSpec change "ui" is the authoritative direction')
     expect(task.direction).toContain('Use the new store')
     expect(outcome.applied.changes.find(row => row.change === 'ui')).toMatchObject({ class: 'changed', choice: 'adapt', taskId: task.id, taskRevision: 2 })
