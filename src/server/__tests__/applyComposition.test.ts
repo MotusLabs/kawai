@@ -45,6 +45,8 @@ import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
 import type { FloorMap } from '../../shared/planExecution'
 import { createPlanWorld, sessionRow, type PlanWorld } from './planHarness'
 import { createImpactBench, type ImpactBench } from './impactHarness'
+import { CHAT_CONNECTION_TYPES } from '../chat/chatConnectionTypes'
+import { planHandlers } from '../plans/planTools'
 
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
 
@@ -315,5 +317,72 @@ describe('Apply through the composed server (PC)', () => {
     await until(() => store.execution(applied.executionId)!.state === 'finished')
     expect(store.execution(applied.executionId)).toMatchObject({ state: 'finished', outcome: 'completed' })
     expect(bench.plans.get(applied.planId)!.lifecycle).toBe('completed')
+  })
+})
+
+// Task 3.1 (D6): the two Apply frames over the same composed router — the whitelist, team scope, each answer's record or error, the push, and the history in plan_get.
+describe('Apply frames over the router (3.1)', () => {
+  const previewFrame = (running: Awaited<ReturnType<typeof runningWorld>>, requestId: string, teamPath = world.repo) => ({
+    type: 'team-plan-execution-apply-preview' as const, teamPath, requestId, executionId: running.executionId, revision: running.target.revision,
+  }) as ClientMessage & { requestId: string }
+
+  test('both Apply frames are registered in CHAT_CONNECTION_TYPES', () => {
+    for (const type of ['team-plan-execution-apply-preview', 'team-plan-execution-apply']) expect(CHAT_CONNECTION_TYPES as readonly string[]).toContain(type)
+  })
+
+  test('an unknown teamPath is refused unknown-team with no record, for the preview and the Apply, and nothing is written', async () => {
+    const running = await runningWorld()
+    const before = counts()
+    const missing = path.join(world.root, 'no-such-team')
+    for (const frame of [previewFrame(running, 'unknown-preview', missing), applyFrame(running, 'unknown-apply', { teamPath: missing })]) {
+      const answer = await command(frame) as Record<string, unknown>
+      expect(answer).toMatchObject({ type: 'team-plan-result', teamPath: missing, reason: 'unknown-team' })
+      expect([answer.applyPreview, answer.applied]).toEqual([undefined, undefined])
+    }
+    expect(counts()).toEqual(before)
+  })
+
+  test('another team\'s execution id reads as not found, for the preview and the Apply, and nothing is written', async () => {
+    const running = await runningWorld()
+    const before = counts()
+    for (const frame of [previewFrame(running, 'other-preview', world.other), applyFrame(running, 'other-apply', { teamPath: world.other })]) {
+      const answer = await command(frame) as Record<string, unknown>
+      expect(answer).toMatchObject({ type: 'team-plan-result', reason: 'not-found', error: `Execution not found in this team: ${running.executionId}` })
+      expect([answer.applyPreview, answer.applied]).toEqual([undefined, undefined])
+    }
+    expect(counts()).toEqual(before)
+    expect(composed.executionStore.execution(running.executionId)!.revision).toBe(1)
+  })
+
+  test('the preview answers with its record: the delta, the needed choices, the generated Adapt texts, and the standing, writing nothing', async () => {
+    const running = await runningWorld()
+    const before = counts()
+    const answer = await command({ ...previewFrame(running, 'preview-record'), choices: { api: 'continue', ui: 'adapt' } } as ClientMessage & { requestId: string })
+    expect(answer).toMatchObject({ type: 'team-plan-result', applyPreview: { executionId: running.executionId, fromRevision: 1, revision: running.target.revision, contentHash: running.target.contentHash, needed: ['api', 'ui'] } })
+    const preview = (answer as { applyPreview: { delta: { changes: Array<{ change: string; class: string }> }; adaptations: Record<string, string>; standing: unknown[] } }).applyPreview
+    expect(preview.delta.changes.map(row => [row.change, row.class])).toEqual([['api', 'changed'], ['ui', 'changed']])
+    expect(Object.keys(preview.adaptations).sort()).toEqual(['api', 'ui'])
+    expect(preview.standing.length).toBeGreaterThan(0)
+    expect(counts()).toEqual(before)
+  })
+
+  test('a committed Apply is followed by a detail push whose history carries each revision\'s publication rows, and plan_get lists the same revisions', async () => {
+    const running = await runningWorld()
+    route({ type: 'team-plan-open', teamPath: world.repo, planId: running.planId })
+    await until(() => all('team-plan-detail').some(message => message.detail.plan.id === running.planId))
+    const pushedBefore = all('team-plan-detail').length
+    const answer = await command(applyFrame(running, 'push'))
+    expect(answer).toMatchObject({ type: 'team-plan-result', replayed: false, applied: { seq: 2 } })
+    const pushed = () => all('team-plan-detail').slice(pushedBefore)
+      .map(message => (message.detail.executions as PlanExecutionWithRevisions[] | undefined)?.find(execution => execution.id === running.executionId))
+      .find(execution => execution?.revisions.length === 2)
+    await until(() => pushed() !== undefined)
+    const rows = (history: PlanExecutionWithRevisions) => history.revisions.map(row => [row.seq, row.changes.map(entry => [entry.change, entry.class, entry.choice, entry.taskRevision])])
+    const expected = [[1, []], [2, [['api', 'changed', 'continue', null], ['ui', 'changed', 'adapt', 2]]]]
+    expect(rows(pushed()!)).toEqual(expected)
+    const tool = await planHandlers(composed.plans, 'lead').plan_get({ plan_id: running.planId })
+    const listed = (tool.executions as PlanExecutionWithRevisions[]).find(execution => execution.id === running.executionId)!
+    expect(rows(listed)).toEqual(expected)
+    expect(listed.revisions.map(row => [row.revision, row.contentHash, row.rationale])).toEqual([[1, listed.revisions[0]!.contentHash, null], [running.target.revision, running.target.contentHash, 'the owner rethought the store']])
   })
 })
