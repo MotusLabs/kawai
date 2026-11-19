@@ -1,14 +1,15 @@
 // Pure helpers of Kawai's Codex chat adapter (codexRuntime.ts; task 6.1):
 // the package's exit-cause text and the quiescence check over it, the
 // package logger, approval card inputs, the team tool table as a package
-// tool set, the per-spawn launch fields, the forwarded host callbacks,
+// tool set, the per-spawn launch fields, the forwarded host callbacks and
+// their activity projection,
 // the request-answer outcome texts, the pending-request view, and an
 // agentMessage's async questions as Kawai's question cards (moved verbatim
 // from codex/codexEvents.ts, task-ce05430a R2).
 import os from 'node:os'
-import type { AnswerOutcome, CodexDriverOptions, Logger, PendingRequest, ToolSet } from '@motuslabs/agent-runtime'
+import type { Activity, AnswerOutcome, CodexDriverOptions, Logger, PendingRequest, ToolSet } from '@motuslabs/agent-runtime'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
-import type { ChatPendingRequest, ChatQuestion } from '../../../shared/chat'
+import type { ChatActivity, ChatPendingRequest, ChatQuestion } from '../../../shared/chat'
 import { logger } from '../../logger'
 import type { CodexSessionDriverOptions } from './codexDriverTypes'
 import { TEAM_MCP_SERVER } from '../../team/teamPrompt'
@@ -110,11 +111,22 @@ export function launchFields(options: CodexSessionDriverOptions, cwd: string, en
   } satisfies Partial<CodexDriverOptions>
 }
 
+/**
+ * The package's activity as Kawai's (codex-capacity-retry D6): a capacity
+ * retry carries its owner, ordinal (as attempt), next attempt and window
+ * close; nothing else is renamed and no maximum is invented.
+ */
+export function chatActivity(activity: Activity | null): ChatActivity | null {
+  if (!activity) return null
+  const { owner, ordinal: _ordinal, deadline, ...rest } = activity
+  return { ...rest, ...(owner ? { retryOwner: owner } : {}), ...(deadline !== undefined ? { retryDeadline: deadline } : {}) }
+}
+
 /** Host callbacks forwarded as-is through `hosted`, which owns a returned promise (A10). */
 export function forwardedCallbacks(options: CodexSessionDriverOptions, hosted: (label: string, fn: () => unknown) => void) {
   return {
     onModel: (model) => hosted('onModel', () => options.onModel?.(model)),
-    onActivity: (activity) => hosted('onActivity', () => options.onActivity?.(activity)),
+    onActivity: (activity) => hosted('onActivity', () => options.onActivity?.(chatActivity(activity))),
     onContextUsage: (usage, meta) => hosted('onContextUsage', () => options.onContextUsage?.(usage, meta)),
     onCompactionObservation: (o) =>
       hosted('onCompaction', () => options.onCompaction?.({ trigger: o.trigger, startedAt: o.startedAt, endedAt: o.endedAt, preTokens: o.preTokens, postTokens: o.postTokens, durationSeconds: o.durationSeconds, outcome: o.outcome }, o.sourceId ?? undefined)),

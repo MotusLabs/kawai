@@ -346,6 +346,10 @@ export interface ChatActivity {
   attempt?: number
   maxRetries?: number
   errorStatus?: number
+  /** retrying, Codex capacity recovery (codex-capacity-retry D6): the retry ordinal, no maxRetries, epoch ms next attempt (absent once none fits) and window close. */
+  retryOwner?: 'provider' | 'capacity'
+  nextRetryAt?: number
+  retryDeadline?: number
 }
 
 /**

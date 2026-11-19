@@ -16,6 +16,14 @@ export interface Activity {
   attempt?: number
   maxRetries?: number
   errorStatus?: number
+  /** retrying, Codex `capacityRecovery: 'bounded'` only: `capacity` for the runtime's own capacity retry (no maxRetries). */
+  owner?: 'provider' | 'capacity'
+  /** Capacity retry: the runtime's retry ordinal (1-based). */
+  ordinal?: number
+  /** Capacity retry: epoch ms of the next attempt; absent when none fits before the deadline. */
+  nextRetryAt?: number
+  /** Capacity retry: epoch ms at which the retry window closes. */
+  deadline?: number
 }
 
 export type WorkerStatus = 'running' | 'completed' | 'failed' | 'stopped'
