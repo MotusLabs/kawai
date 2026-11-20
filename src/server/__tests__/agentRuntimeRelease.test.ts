@@ -71,6 +71,22 @@ test('release workflow has no PR trigger and credentials exist only after the tr
   expect(publish.steps.at(-1).run).toContain('npm publish ./packages/agent-runtime --ignore-scripts')
 })
 
+test('minimum-consumer keeps the explicit 1.3.0 consumer target and its declared expectation wired under the repository check pin', () => {
+  const workflow = Bun.YAML.parse(read('.github/workflows/agent-runtime-release.yml')) as any
+  const minimum = workflow.jobs['minimum-consumer']
+  const setups = minimum.steps.filter((step: any) => step.uses?.startsWith('oven-sh/setup-bun@'))
+  expect(setups.map((step: any) => step.with)).toEqual([
+    { 'bun-version-file': '.bun-version' },
+    { 'bun-version': '1.3.0' },
+  ])
+  expect(minimum.steps.some((step: any) => step.run?.includes('cp "$(command -v bun)" "$RUNNER_TEMP/check-pin/bun"'))).toBe(true)
+  const exercise = minimum.steps.filter((step: any) => step.run).at(-1)
+  expect(exercise.run).toContain('export CONSUMER_BUN="$(command -v bun)"')
+  expect(exercise.run).toContain("export CONSUMER_BUN_VERSION='1.3.0'")
+  expect(exercise.run).toContain('export PATH="$RUNNER_TEMP/check-pin:$PATH"')
+  expect(exercise.run).toContain('bun run test packages/agent-runtime/__tests__/consumerInstall.test.ts')
+})
+
 test('M-release: the actual workflow gate command exits nonzero for mismatches or bypassed acceptance', () => {
   const env = {
     GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/tags/agent-runtime-v0.1.1', GITHUB_SHA: sha,
