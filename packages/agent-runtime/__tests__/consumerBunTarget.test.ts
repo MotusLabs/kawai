@@ -5,6 +5,7 @@
 // minimum-1.3.0 evidence is the release workflow's minimum-consumer
 // invocation, which sets CONSUMER_BUN and CONSUMER_BUN_VERSION together.
 import { expect, test } from 'bun:test'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveConsumerBun, verifyConsumerBun } from './helpers/consumerBunTarget.js'
 
@@ -31,6 +32,8 @@ test('consumer Bun target: an override without a declared expected version is re
 })
 
 test('consumer Bun target: a selected executable that cannot report a version fails verification', () => {
-  const missing = join(import.meta.dir, 'missing-consumer-bun')
+  // The missing executable is a fixture path in the OS temp dir, never a
+  // repository file: the spawn fails closed with the same mismatch error.
+  const missing = join(tmpdir(), `missing-consumer-bun-${process.pid}`)
   expect(() => verifyConsumerBun({ executable: missing, expected: process.versions.bun })).toThrow('consumer Bun target mismatch')
 })
