@@ -4,7 +4,7 @@
 // observable recovery state.
 import type { TurnHandle } from '../../src/contract.js'
 import { CODEX_CAPACITY_CONTINUATION } from '../../src/codex/continuation.js'
-import { frames, scriptedCodex, type Scripted } from './scriptedCodex.js'
+import { frames, scriptedCodex, type Scripted, type ScriptedOptions } from './scriptedCodex.js'
 
 export const EXHAUSTED_SNAPSHOT = {
   primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1_795_100_000 },
@@ -20,8 +20,8 @@ export async function stopScripted(): Promise<void> {
   await Promise.allSettled(LIVE.splice(0).map((s) => s.driver.kill()))
 }
 
-export function scripted(capacityRecovery?: unknown, resume?: string): Scripted {
-  const s = scriptedCodex({ ...(capacityRecovery === undefined ? {} : { capacityRecovery }), ...(resume ? { resume } : {}) })
+export function scripted(capacityRecovery?: unknown, resume?: string, extra: Omit<ScriptedOptions, 'capacityRecovery' | 'resume'> = {}): Scripted {
+  const s = scriptedCodex({ ...extra, ...(capacityRecovery === undefined ? {} : { capacityRecovery }), ...(resume ? { resume } : {}) })
   LIVE.push(s)
   return s
 }

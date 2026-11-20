@@ -43,7 +43,17 @@ function launch(): CodexDriverOptions['launch'] {
 }
 
 /** One scripted driver; `capacityRecovery` as given (omit it for the default). */
-export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: FakeCapacityClock; resume?: string } = {}): Scripted {
+export interface ScriptedOptions {
+  capacityRecovery?: unknown
+  clock?: FakeCapacityClock
+  resume?: string
+  /** `wait` keeps a request pending for a later answer (as Kawai runs it); the package default denies it. */
+  unansweredRequests?: 'deny' | 'wait'
+  /** Runs after each event is recorded, inside the session's own onEvent callback (reentrant calls). */
+  onEvent?: (event: AgentEvent, driver: CodexAgentDriver) => void
+}
+
+export function scriptedCodex(options: ScriptedOptions = {}): Scripted {
   const clock = options.clock ?? new FakeCapacityClock()
   const recorded = { events: [] as AgentEvent[], activities: [] as Array<Record<string, unknown> | null>, limits: [] as LimitEvent[], results: [] as TurnResult[] }
   const server = capacityAppServer(clock)
@@ -52,8 +62,9 @@ export function scriptedCodex(options: { capacityRecovery?: unknown; clock?: Fak
     logger, launch: launch(), permissions: PERMISSIONS,
     ...(options.capacityRecovery !== undefined ? { capacityRecovery: options.capacityRecovery as 'bounded' } : {}),
     ...(options.resume ? { resume: { runtime: 'codex' as const, runtimeSessionId: options.resume } } : {}),
+    ...(options.unansweredRequests ? { unansweredRequests: options.unansweredRequests } : {}),
     callbacks: {
-      onEvent: (event: AgentEvent) => void recorded.events.push(event),
+      onEvent: (event: AgentEvent) => void (recorded.events.push(event), options.onEvent?.(event, driver)),
       onActivity: (activity: Activity | null) => void recorded.activities.push(activity as Record<string, unknown> | null),
       onLimitEvent: (event: LimitEvent) => void recorded.limits.push(event),
       onTurnResult: (result: TurnResult) => void recorded.results.push(result),

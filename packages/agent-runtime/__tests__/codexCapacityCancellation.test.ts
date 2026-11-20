@@ -92,6 +92,36 @@ describe('codex-capacity-retry cancellation rows', () => {
     }
   })
 
+  test('L11/L12: Stop or a lifecycle end reentered from request_resolved while a capacity failure cancels a pending approval arms no retry', async () => {
+    for (const end of ['interrupt', 'kill', 'shutdown'] as const) {
+      for (const attempt of ['a1', 'a2'] as const) {
+        let armed = false
+        const s = scripted('bounded', undefined, { unansweredRequests: 'wait', onEvent: (event, driver) => {
+          if (event.type === 'request_resolved' && armed) void (armed = false, driver[end]())
+        } })
+        const handle = await opened(s)
+        if (attempt === 'a2') {
+          await failAttempt(s, 'a1')
+          await bindAttempt(s, (await wake(s))!, 'a2')
+        }
+        const retries = attempt === 'a2' ? 1 : 0
+        const approval = s.ask('item/commandExecution/requestApproval', { turnId: attempt, itemId: 'cmd', command: 'touch f' })
+        await s.flush()
+        expect(s.driver.pendingRequests()).toHaveLength(1)
+        armed = true
+        await failAttempt(s, attempt)
+        // A kill or shutdown ends the process before the cancel reply reaches it; an interrupt leaves it to answer.
+        if (end === 'interrupt') expect((await approval).result).toEqual({ decision: 'cancel' })
+        expect(s.driver.pendingRequests()).toEqual([])
+        expect((await handle.result).outcome).toBe('interrupted')
+        const types = s.types()
+        expect(types.slice(types.indexOf('turn_interrupted')).filter((t) => t === 'capacity_retry')).toEqual([])
+        expect(recovery(s)).toMatchObject({ timers: 0, retries, continuations: retries, terminals: 1 })
+        await inert(s)
+      }
+    }
+  })
+
   // @covers: codex-chat-sessions › Capacity retries are visible and cancellable › Human input during backoff
   test('L13: human input during backoff interrupts the old turn and only the new input goes to the same thread', async () => {
     const { s, handle, stale } = await backoff()

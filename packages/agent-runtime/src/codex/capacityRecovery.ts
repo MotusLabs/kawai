@@ -142,6 +142,11 @@ export class CapacityRecovery {
     retiredAttempt(turn, this.host.native)
     rearmAttempt(turn)
     this.host.cancelRequests()
+    // F2: a request_resolved callback may have stopped, interrupted or replaced the turn reentrantly; nothing is armed then.
+    if (this.recovering !== recovering || turn.settled || turn !== this.host.open() || this.host.stopBegun()) {
+      if (this.recovering === recovering) this.cancel()
+      return turn.settled || turn !== this.host.open()
+    }
     const plan = capacitySchedule(now, recovering.deadline, recovering.ordinal + 1, clock.random())
     if (plan.kind === 'retry') recovering.ordinal += 1
     this.arm(recovering, plan.due)

@@ -343,6 +343,42 @@ describe('codex-capacity-retry lifecycle rows L1-L10, L17', () => {
     expect(result.toolCallCount).toBe(1)
     expect(s.types().filter((t) => t === 'tool_call' || t === 'tool_result')).toEqual(['tool_call', 'tool_result'])
   })
+
+  test("L17: approval and question requests of the current attempt are served after a retry, and the retired attempt's pending one is cancelled", async () => {
+    const s = scripted('bounded', undefined, { unansweredRequests: 'wait' })
+    const handle = await opened(s)
+    const question = { questions: [{ id: 'q1', question: 'Color?', header: 'Pick', options: [{ label: 'red' }, { label: 'blue' }], isOther: false }] }
+    // a1's approval is still pending when a1 fails for capacity: the retirement cancels it and Codex hears cancel.
+    const retired = s.ask('item/commandExecution/requestApproval', { turnId: 'a1', itemId: 'cmd-1', command: 'touch f' })
+    await s.flush()
+    const [stale] = s.driver.pendingRequests()
+    expect(stale).toMatchObject({ kind: 'approval' })
+    await failAttempt(s, 'a1')
+    expect((await retired).result).toEqual({ decision: 'cancel' })
+    expect(s.driver.pendingRequests()).toEqual([])
+    expect(s.driver.resolveApproval(stale!.requestId, 'allow')).toMatchObject({ ok: false, reason: 'not-pending' })
+    expect(s.events.filter((e) => e.type === 'request_resolved')).toEqual([expect.objectContaining({ requestId: stale!.requestId, outcome: 'cancelled' })])
+    await bindAttempt(s, (await wake(s))!, 'a2')
+    // a2's approval and question reach the caller and their answers reach Codex unchanged.
+    const approval = s.ask('item/commandExecution/requestApproval', { turnId: 'a2', itemId: 'cmd-2', command: 'touch g' })
+    await s.flush()
+    const [live] = s.driver.pendingRequests()
+    expect(live).toMatchObject({ kind: 'approval' })
+    expect(s.driver.resolveApproval(live!.requestId, 'allow')).toEqual({ ok: true })
+    expect((await approval).result).toEqual({ decision: 'accept' })
+    const asked = s.ask('item/tool/requestUserInput', { turnId: 'a2', itemId: 'q-2', ...question })
+    await s.flush()
+    const [pending] = s.driver.pendingRequests()
+    expect(pending).toMatchObject({ kind: 'question', questions: [{ question: 'Color?' }] })
+    expect(s.driver.answerQuestion(pending!.requestId, { 'Color?': { options: ['blue'] } })).toEqual({ ok: true })
+    expect((await asked).result).toEqual({ answers: { q1: { answers: ['blue'] } } })
+    const types = s.types()
+    expect(types.filter((t) => t === 'approval_request' || t === 'question_request')).toEqual(['approval_request', 'approval_request', 'question_request'])
+    expect(s.events.filter((e) => e.type === 'request_resolved').map((e) => (e as { outcome: string }).outcome)).toEqual(['cancelled', 'allowed', 'answered'])
+    expect(recovery(s)).toEqual({ timers: 0, retries: 1, continuations: 1, terminals: 0, state: 'active' })
+    await completeAttempt(s, 'a2')
+    expect((await handle.result).outcome).toBe('success')
+  })
 })
 
 describe('codex-capacity-retry timing table T', () => {
