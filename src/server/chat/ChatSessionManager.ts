@@ -25,6 +25,8 @@ import { TEAM_TOOL_PREFIX } from '../metrics/observations/toolCalls'
 // (async-transcript-parsing): whenRestored() resolves once every persisted
 // row is registered, and the team mailbox starts only after that.
 import os from 'node:os'
+import { parseChatImages, type ChatImageReference } from '../../shared/chatImages'
+import type { TrustedChatImage } from './images/ChatImageStore'
 import type {
   ChatActivity,
   ChatApprovalDecision,
@@ -262,6 +264,7 @@ export interface ChatSessionManagerOptions {
   onNotifications?: (sessionId: string, notifications: ChatNotification[]) => void
   /** Sidecar store for restart recovery of worker outcomes (design D6). */
   workerStore?: ChatWorkerStore
+  imageStore?: import('./images/ChatImageStore').ChatImageStore
   /** Sidecar store for restart recovery of background-task outcomes (D6). */
   taskStore?: ChatTaskStore
   /** Injected in tests; production resolves the SDK via dynamic import. */
@@ -1950,7 +1953,7 @@ export class ChatSessionManager {
    * refuses the turn rather than silently starting a fresh conversation
    * (design D5): the id is kept so a restored transcript can still resume.
    */
-  async send(sessionId: string, text: string, workspaceContext?: WorkspaceMessageEnvelope): Promise<ChatActionResult> {
+  async send(sessionId: string, text: string, workspaceContext?: WorkspaceMessageEnvelope, images?: ChatImageReference[]): Promise<ChatActionResult> {
     // Recovery can replace the record's path: finish it before checking the
     // directory or resolving the launch configuration. Awaited, never the
     // synchronous capture: a large history must not block the server
@@ -1963,6 +1966,16 @@ export class ChatSessionManager {
     const blocked = this.startBlocker(record)
     if (blocked) {
       return { ok: false, error: blocked }
+    }
+    let trustedImages: TrustedChatImage[] | undefined
+    if (images !== undefined) {
+      const parsed = parseChatImages(images)
+      if (!parsed) return { ok: false, error: 'Invalid image references (at most four images).' }
+      try {
+        if (parsed.length && !this.options.imageStore) throw Error('Image storage is unavailable.')
+        trustedImages = await Promise.all(parsed.map(image => this.options.imageStore!.read(sessionId, image.id)))
+      } catch { return { ok: false, error: 'An attached image is unavailable in this chat. Paste it again.' } }
+      if (!text.trim() && !trustedImages.length) return { ok: false, error: 'Write a message or paste an image.' }
     }
     // A contextual send validates whole before the driver mints anything
     // (plan-workspace §4 S1): a refusal stores no row, opens no turn, and
@@ -1982,16 +1995,20 @@ export class ChatSessionManager {
     if (!driver) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
+    if (images !== undefined) {
+      const current = this.records.get(sessionId)
+      if (!current) return { ok: false, error: 'This chat was killed; nothing was sent.' }
+      const nowBlocked = this.startBlocker(current)
+      if (nowBlocked) return { ok: false, error: nowBlocked }
+    }
     if (stored) {
       if (!driver.sendWorkspaceContext) {
         return { ok: false, error: "This chat's runtime does not carry plan-workspace contexts." }
       }
-      // Admission (task 6.1): the outcome settles when the runtime recorded
-      // the context and enqueued, or refused with nothing opened or emitted.
-      const sent = await this.sendDriverText(driver, text, stored)
+      const sent = await this.sendDriverText(driver, text, stored, trustedImages)
       if (!sent.ok) return { ok: false, error: sent.error }
     } else {
-      const sent = this.sendDriverText(driver, text)
+      const sent = await this.sendDriverText(driver, text, undefined, trustedImages)
       if (!sent.ok) return { ok: false, error: sent.error }
     }
     this.touch(sessionId)
@@ -2004,13 +2021,11 @@ export class ChatSessionManager {
    * no child composed or started, so the caller sees the refusal instead of
    * a rejection. Every other throw rejects exactly as before.
    */
-  private sendDriverText(driver: ChatAgentDriver, text: string, stored: WorkspaceMessageContext): Promise<ChatSendOutcome>
-  private sendDriverText(driver: ChatAgentDriver, text: string): { ok: true } | { ok: false; error: string }
-  private sendDriverText(driver: ChatAgentDriver, text: string, stored?: WorkspaceMessageContext): ChatSendOutcome | Promise<ChatSendOutcome> {
+  private async sendDriverText(driver: ChatAgentDriver, text: string, stored?: WorkspaceMessageContext, images?: TrustedChatImage[]): Promise<ChatSendOutcome> {
     try {
-      // The caller checked sendWorkspaceContext exists whenever stored is set.
-      if (stored) return Promise.resolve(driver.sendWorkspaceContext!(text, stored))
-      driver.send(text)
+      if (stored) return await (images === undefined ? driver.sendWorkspaceContext!(text, stored) : driver.sendWorkspaceContext!(text, stored, images))
+      const outcome = await (images === undefined ? driver.send(text) : driver.send(text, images))
+      if (outcome) return outcome
       return { ok: true }
     } catch (error) {
       if (error instanceof RegisteredNameRefusal) return { ok: false, error: error.message }
@@ -2332,6 +2347,7 @@ export class ChatSessionManager {
     void this.options.wireLogs?.delete(sessionId).catch(() => {})
     // The session is gone for good; its worker rows go with it (D6).
     void this.options.workerStore?.delete(sessionId).catch(() => {})
+    void this.options.imageStore?.delete(sessionId).catch(() => {})
     void this.options.taskStore?.delete(sessionId).catch(() => {})
     return true
   }

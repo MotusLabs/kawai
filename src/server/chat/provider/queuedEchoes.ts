@@ -20,6 +20,7 @@
 //   interrupted, stopped). Bindings are dropped after anything still held.
 // A host consumer's throw during the flush goes to the caller's owner, not
 // raised; a promise it returns is owned by the publish the caller supplies.
+import type { ChatImage } from '../../../shared/chatImages'
 import type { WorkspaceMessageContext } from '../../../shared/planWorkspace'
 import type { ChatEventDraft } from './runtimeEvents'
 
@@ -66,13 +67,13 @@ export class QueuedEchoes {
   }
 
   /** The send's admission is known: its package turn and text when committed, else null. */
-  settled(messageUuid: string, admitted: { turnId: string; text: string; context?: WorkspaceMessageContext } | null): void {
+  settled(messageUuid: string, admitted: { turnId: string; text: string; images?: ChatImage[]; context?: WorkspaceMessageContext } | null): void {
     const slot = this.inFlight.get(messageUuid)
     this.inFlight.delete(messageUuid)
     if (!slot) return
     if (admitted) {
-      const { turnId, text, context } = admitted
-      slot.draft = { type: 'user_message', turnId: slot.display, text, messageUuid, ...(context ? { workspaceContext: context } : {}) }
+      const { turnId, text, context, images } = admitted
+      slot.draft = { type: 'user_message', turnId: slot.display, text, messageUuid, ...(context ? { workspaceContext: context } : {}), ...(images?.length ? { images } : {}) }
       this.resumed.add(turnId)
     } else this.suppressed.delete(messageUuid)
     this.holds -= 1

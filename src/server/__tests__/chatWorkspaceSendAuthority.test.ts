@@ -15,6 +15,8 @@ import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { resolveTeam } from '../team/teamIdentity'
 import type { WorkspaceMessageEnvelope } from '../../shared/planWorkspace'
+import { ChatImageStore } from '../chat/images/ChatImageStore'
+import { CHAT_IMAGE_RED_BASE64 } from '../../../tests/fixtures/chatImage'
 
 describe('I6 a contextual send carries no authority', () => {
   let tempDir: string
@@ -52,6 +54,7 @@ describe('I6 a contextual send carries no authority', () => {
     const manager = new ChatSessionManager({
       db, registry, onEvent: () => {}, profileCatalogHome: tempDir, authCheck: () => true,
       queryFactory: fixtureQueryFactory,
+      imageStore: new ChatImageStore(path.join(tempDir, 'images')),
     })
     managers.push(manager)
     return manager
@@ -93,6 +96,7 @@ describe('I6 a contextual send carries no authority', () => {
     expect(manager.plans.list({ kind: 'human', team })).toEqual(plansBefore)
   })
 
+  // @covers: chat-image-attachments › Image attachments coexist with existing composer controls › Runtime cannot carry plan context
   test('LC-D4 a runtime without the contextual seam refuses the send explicitly', async () => {
     const manager = createManager()
     const team = await resolveTeam(project)
@@ -119,6 +123,8 @@ describe('I6 a contextual send carries no authority', () => {
       ok: false,
       error: "This chat's runtime does not carry plan-workspace contexts.",
     })
+    const image = await new ChatImageStore(path.join(tempDir, 'images')).put(sessionId, Buffer.from(CHAT_IMAGE_RED_BASE64, 'base64'), 'image/png')
+    expect(await manager.send(sessionId, '', envelope, [image])).toEqual(refused)
     // Never a silent drop or an unscoped send: no second turn ran, and the
     // store took no row.
     await new Promise(resolve => setTimeout(resolve, 50))

@@ -28,7 +28,13 @@ export type DriverState = 'unstarted' | 'starting' | 'idle' | 'active' | 'stoppi
  */
 export type ContinuationMode = 'new-turn' | 'queue' | 'steer'
 
+export type ImageInput =
+  | { type: 'base64'; mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; data: string }
+  | { type: 'localImage'; path: string }
+
 export interface SubmitOptions {
+  /** Ordered native image occurrences, captured at send(), including repeats. */
+  images?: readonly ImageInput[]
   /** Caller-minted message UUID; minted by the runtime when omitted. */
   messageUuid?: string
   continuation?: ContinuationMode
@@ -37,7 +43,7 @@ export interface SubmitOptions {
   /**
    * Codex only (task-7811b455 R9). `auto` (the default when omitted) appends
    * the native skill inputs the text names from the runtime's own catalog;
-   * `none` sends this submission's text alone. Read once when send() is
+   * `none` omits skills while retaining this submission's text and images. Read once when send() is
    * called. Any other value, or any value on Claude, refuses the send as
    * `unsupported` before anything is enqueued.
    */

@@ -46,6 +46,7 @@ import {
   type ChatTranscriptWorker,
 } from './chatTranscript'
 import { claimHistoryPage, foldHistoryPage, withoutHistoryLoading } from './chatHistoryPages'
+import { useChatImageDrafts } from './chatImageDrafts'
 
 export { accountCloseKey, anchorActivity, anchorWorkers, applyChatEvents, emptyTranscript, visibleNotifications }
 export type { ChatTranscript, ChatTranscriptActivity, ChatTranscriptWorker }
@@ -375,12 +376,14 @@ export const useChatStore = create<ChatStore>((set) => ({
     return { taskOutputs: { ...state.taskOutputs, [sessionId]: next } }
   }),
   setDraft: (sessionId, text) => set(state => {
+    if ((state.drafts[sessionId] ?? '') !== text) useChatImageDrafts.getState().touch(sessionId)
     const drafts = { ...state.drafts }
     if (text === '') delete drafts[sessionId]
     else drafts[sessionId] = text
     return { drafts }
   }),
   remove: sessionId => set(state => {
+    useChatImageDrafts.getState().removeSession(sessionId)
     const sessions = { ...state.sessions }
     delete sessions[sessionId]
     // Profile usage outlives one session: a sibling may still show the bar.

@@ -56,6 +56,7 @@ import { PROMOTION_MESSAGE_TYPES, PromotionConnections, type PromotionClientMess
 import { OutboundConnections } from '../outbound/outboundConnections'
 import { MetricsConnections } from '../metrics/metricsConnections'
 import type { TeamMessage } from '../../shared/team'
+import { chatImageSendError } from '../../shared/chatImages'
 
 /** Frames per debug page reply. */
 export const CHAT_DEBUG_PAGE_SIZE = 200
@@ -740,6 +741,11 @@ export class ChatConnections {
         // frame-less behavior.
         let accepted: { type: 'chat-send-result'; sessionId: string; requestId: string; accepted: true } | null = null
         try {
+          const inputError = chatImageSendError(message.text, message.images, message.requestId)
+          if (inputError) {
+            connection.send({ type: 'error', message: inputError, ...sendCorrelation })
+            return
+          }
           let envelope: WorkspaceMessageEnvelope | null | undefined
           if (message.workspaceContext !== undefined) {
             envelope = parseWorkspaceMessageEnvelope(message.workspaceContext)
@@ -748,7 +754,9 @@ export class ChatConnections {
               return
             }
           }
-          const result = await this.manager.send(sessionId, message.text, envelope ?? undefined)
+          const result = message.images !== undefined
+            ? await this.manager.send(sessionId, message.text, envelope ?? undefined, message.images)
+            : await this.manager.send(sessionId, message.text, envelope ?? undefined)
           if (!result.ok) {
             connection.send({ type: 'error', message: result.error, ...sendCorrelation })
             return

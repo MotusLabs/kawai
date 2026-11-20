@@ -31,6 +31,8 @@ import { ChatSessionManager } from './chat/ChatSessionManager'
 import { ChatConnections, type ChatConnection } from './chat/ChatConnections'
 import { ChatWireLogs } from './chat/ChatWireLogs'
 import { ChatWorkerStore } from './chat/chatWorkerStore'
+import { ChatImageStore } from './chat/images/ChatImageStore'
+import { createChatImageRoutes } from './routes/chatImages'
 import { ChatTaskStore } from './chat/chatTaskStore'
 import { chatFixtureEnabled, fixtureQueryFactory } from './chat/developmentFixture'
 import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
@@ -144,6 +146,7 @@ export function startServer(): void {
   // Worker-outcome sidecars for restart recovery (workers design D6), likewise
   // beside the DB; kill removes a session's file with its record.
   const chatWorkerStore = new ChatWorkerStore({ dir: path.join(resolveDataDir(), 'chat-workers') })
+  const chatImageStore = new ChatImageStore(path.join(resolveDataDir(), 'chat-images'))
   // Background-task-outcome sidecars (background tasks D6), same contract.
   const chatTaskStore = new ChatTaskStore({ dir: path.join(resolveDataDir(), 'chat-tasks') })
   // SDK-driven chat sessions own their transcripts; log discovery must not
@@ -184,6 +187,7 @@ export function startServer(): void {
     getProviderEnv: chatProviderEnv.current,
     wireLogs: chatWireLogs,
     workerStore: chatWorkerStore,
+    imageStore: chatImageStore,
     taskStore: chatTaskStore,
     // Scoped workspace discovery after the agent moves (worktree tracking D2);
     // the closure runs only once a live agent reports a new cwd, by which time
@@ -426,6 +430,7 @@ export function startServer(): void {
     approvalDefault: teamId => chatSessionManager.teamApprovalDefault(teamId),
   }))
   app.route('/api/chat/search', createChatSearchRoutes({ source: chatSessionManager }))
+  app.route('/api/chat', createChatImageRoutes(chatImageStore, chatSessionManager))
   app.route('/api/chat/sessions', createArchivedChatRoutes({ registry, whenRestored: () => chatSessionManager.whenRestored() }))
   // The plan workspace's scoped asset route (plan-workspace 2.3): membership
   // and containment before any read; mounted before the static fallback.

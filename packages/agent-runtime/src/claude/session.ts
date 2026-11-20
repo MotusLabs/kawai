@@ -42,6 +42,7 @@
 //   stop, nesting the token AbortErrors stored for it. Every other failure
 //   (init, read, control, callback, recorder, cleanup) fails it too, kept by
 //   identity.
+import { captureImages } from '../images.js'
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AnswerOptions, AnswerOutcome, InterruptReceipt, ProcessExitFact, ProcessExitReceipt, ResumeCheckpoint, SubmitOptions, TaskOutput, TurnHandle } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
@@ -396,6 +397,8 @@ export class ClaudeSession {
   send(text: string, submit: SubmitOptions = {}): Promise<TurnHandle> {
     // R9: the Codex-only skill mode is refused, not ignored, before anything is admitted.
     if (submit.codexSkills !== undefined) return Promise.reject(new AgentRuntimeError({ category: 'unsupported', message: 'codexSkills is not supported by the Claude runtime' }))
+    let images: ReturnType<typeof captureImages>
+    try { images = captureImages('claude', submit.images) } catch (error) { return Promise.reject(error) }
     if (this.resumeFailure) return Promise.reject(new AgentRuntimeError({ ...this.resumeFailure }))
     return this.checkpoints.admit(submit.continuation, {
       // P12/P13: the host decides before anything is enqueued or emitted, and
@@ -413,6 +416,7 @@ export class ClaudeSession {
         })
         const turn = newTurn(turnId, messageUuid, text)
         turn.envelope = envelope
+        turn.images = images
         return { turn, joining }
       },
       commit: (admission, { turn, joining }) => (joining ? this.join(turn, joining, admission) : this.accept(turn, admission)),
@@ -442,7 +446,7 @@ export class ClaudeSession {
       throw new AgentRuntimeError({ category: 'busy', message: 'the agent-started turn this send was joining ended or changed before it was sent' })
     }
     const messageUuid = prompt.messageUuid!
-    const pushed = generation.input.push(promptMessage(prompt.text, messageUuid, prompt.envelope))
+    const pushed = generation.input.push(promptMessage(prompt.text, messageUuid, prompt.envelope, prompt.images))
     if (!pushed) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
     this.lifecycle.withdraw('queue')
     this.frames.sent(messageUuid, prompt.text)
@@ -459,7 +463,7 @@ export class ClaudeSession {
    */
   private accept(turn: Turn, admission: Admission): TurnHandle {
     const messageUuid = turn.messageUuid!
-    const pushed = this.current()!.input.push(promptMessage(turn.text, messageUuid, turn.envelope))
+    const pushed = this.current()!.input.push(promptMessage(turn.text, messageUuid, turn.envelope, turn.images))
     if (!pushed) throw new AgentRuntimeError({ category: 'stopped', message: 'the driver is stopped' })
     this.open.push(turn)
     this.frames.sent(messageUuid, turn.text)

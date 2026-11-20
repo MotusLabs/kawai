@@ -22,6 +22,7 @@ import { planDetail, planSummary } from './planViewFixtures'
 import { createMessageRouter } from '../protocol/messageRouter'
 import type { MessageRouterDeps } from '../protocol/types'
 import { useChatStore } from '../stores/chatStore'
+import { useChatImageDrafts } from '../stores/chatImageDrafts'
 import { useSessionStore } from '../stores/sessionStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { DEFAULT_PRESETS } from '../stores/settingsStore'
@@ -73,6 +74,7 @@ afterEach(() => {
   useTeamPlanWorkspaceStore.setState({ views: {}, teamBindings: {} })
   usePlanWorkspaceScopeStore.setState({ scopes: {}, attempts: {} })
   pendingContextSends.clear()
+  for (const id of Object.keys(useChatImageDrafts.getState().drafts)) useChatImageDrafts.getState().removeSession(id)
 })
 
 // Contextual-send answers settle through the REAL router (the dispatcher App
@@ -443,6 +445,25 @@ describe('PlanWorkspaceConversation captured scope (§6.3)', () => {
     act(() => { panel.renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
   const sends = (panel: ReturnType<typeof boundPanel>) =>
     panel.sent.filter(message => message.type === 'chat-send')
+
+  // @covers: chat-image-attachments › Image attachments coexist with existing composer controls › Plan context with images
+  test('image-only drafts capture and retain plan context after the text is emptied', async () => {
+    const panel = boundPanel()
+    type(panel, 'look')
+    const scope = usePlanWorkspaceScopeStore.getState().scopes['s-a']
+    act(() => useChatImageDrafts.getState().add('s-a', [new File(['image'], 'image.png', { type: 'image/png' })]))
+    type(panel, '')
+    expect(usePlanWorkspaceScopeStore.getState().scopes['s-a']).toBe(scope)
+    expect(panel.has('composer-scope')).toBe(true)
+    const image = { id: `${'a'.repeat(64)}.png`, mediaType: 'image/png', byteSize: 5 }
+    globalThis.fetch = (async () => Response.json({ image })) as unknown as typeof fetch
+    await act(async () => {
+      panel.renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+      for (let i = 0; i < 15; i++) await Promise.resolve()
+    })
+    expect(sends(panel)[0]).toMatchObject({ type: 'chat-send', text: '', images: [{ id: image.id }], workspaceContext: scope?.envelope })
+    expect(useChatImageDrafts.getState().drafts['s-a']).toHaveLength(1)
+  })
 
   test('the empty state sends unscoped and says so; a scoped draft attaches its envelope to the send', () => {
     seedBindings('/repo', [binding('architect', 's-a', 1)])

@@ -8,6 +8,7 @@
 import type { ChatPeerTaskContext, RevisionNotice } from './teamTasks'
 import type { ChatHandoffPackage } from './team'
 import type { WorkspaceMessageContext } from './planWorkspace'
+import type { ChatImage } from './chatImages'
 import type {
   ChatQuestionAutoAnswer,
   ChatQuestionAutoAnswerHeldEvent,
@@ -198,6 +199,7 @@ export type ChatEvent =
   | (ChatTurnEventBase & {
       type: 'user_message'
       text: string
+      images?: ChatImage[]
       /**
        * The driver-minted client uuid of this message (plan-workspace §4):
        * the key replay joins on to re-attach the stored context. Every live
