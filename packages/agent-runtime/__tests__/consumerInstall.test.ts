@@ -1,13 +1,15 @@
 // @reads: packages/agent-runtime/**, packages/claude-agent-sdk-no-cli/**
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PACKAGE_DIR, boundaryViolations, run, tarballEntries, tsc } from './helpers/packArtifact.js'
 import { consumerFixture, installManifest, nativeContent, platformNames, runtimeContent, STUB_DIR, writeConsumer } from './helpers/consumerInstall.js'
 import { controlledLaunch, recordedPids } from './helpers/consumerControlled.js'
+import { resolveConsumerBun, verifyConsumerBun } from './helpers/consumerBunTarget.js'
 
 const fixture = consumerFixture()
-const bun = process.env.CONSUMER_BUN ?? process.execPath
+const target = resolveConsumerBun()
+const bun = target.executable
 let runtime: string
 let stub: string
 let claude: string
@@ -58,7 +60,7 @@ test('README recipes match the shipped examples and all eight published consumer
 
 // @covers: agent-runtime-distribution › CLI binaries are installed separately › Installation without native CLI packages
 test('D02 I9: clean Bun installs use eight empty aliases with no native package contents or install hooks', () => {
-  expect(run([bun, '--version'], fixture.root).out.trim()).toMatch(/^1\.(3\.0|4\.3)$/)
+  expect(verifyConsumerBun(target)).toBe(target.expected)
   expect(tarballEntries(stub)).toEqual(['package/LICENSE', 'package/README.md', 'package/package.json'])
   expect(nativeContent(claude)).toEqual([])
   expect(nativeContent(codex)).toEqual([])
@@ -123,6 +125,35 @@ test('M-pack: disguised runtime binaries, unresolved relative imports and worksp
   writeFileSync(join(project, 'dist/native.js'), Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
   writeFileSync(join(project, 'dist/index.js'), "export * from './missing.js'\n")
   expect(runtimeContent(project)).toEqual(['missing: dist/index.js: ./missing.js', 'native: dist/native.js', 'repository dependency: private'])
+})
+
+test('M-pack: the native-content oracle accepts exactly Bun install bookkeeping and rejects malformed or disguised .bun-tag files', () => {
+  const valid = `sha512-${Buffer.alloc(64, 7).toString('base64')}`
+  expect(valid.length).toBe(95)
+  const alias = 'node_modules/@anthropic-ai/claude-agent-sdk-linux-x64'
+  const project = fixture.fresh('marker-controls')
+  const directory = join(project, alias)
+  mkdirSync(directory, { recursive: true })
+  writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: '@motuslabs/claude-agent-sdk-no-cli', version: '0.1.1' }))
+  writeFileSync(join(directory, '.bun-tag'), valid)
+  expect(nativeContent(project)).toEqual([])
+  mkdirSync(join(directory, 'bin'))
+  writeFileSync(join(directory, 'bin/claude'), Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+  expect(nativeContent(project)).toEqual([`${alias}/bin/claude`])
+  rmSync(join(directory, 'bin'), { recursive: true, force: true })
+  writeFileSync(join(directory, '.bun-tag'), Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+  expect(nativeContent(project)).toEqual([`${alias}/.bun-tag`])
+  const malformed = ['sha512-short', `md5-${'A'.repeat(88)}`, `${valid.slice(0, -2)}=A`, `${valid}\n`, `${valid}x`, valid.slice(0, 94)]
+  for (const content of malformed) {
+    writeFileSync(join(directory, '.bun-tag'), content)
+    expect(nativeContent(project), JSON.stringify(content.slice(0, 20))).toEqual([`${alias}/.bun-tag`])
+  }
+  writeFileSync(join(directory, '.bun-tag'), valid)
+  for (const name of ['.bun-tag.bak', 'bun-tag', '.bun-tags']) {
+    writeFileSync(join(directory, name), valid)
+    expect(nativeContent(project)).toEqual([`${alias}/${name}`])
+    rmSync(join(directory, name), { force: true })
+  }
 })
 
 test('D02 negative control: removing the required native platform override installs forbidden CLI contents', () => {
