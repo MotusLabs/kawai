@@ -60,6 +60,7 @@ export function handleTeamMessage(message: TeamMessage, _deps: MessageRouterDeps
     case 'team-plan-workspace-checklist':
     case 'team-plan-workspace-document':
     case 'team-plan-workspace-artifacts':
+    case 'team-plan-workspace-bindings':
     case 'team-plan-workspace-result': handlePlanWorkspaceMessage(message); return
     // The Audit tab (execution-safety-recovery D9).
     case 'team-audit-page': audits.applyPage(routed(message, audits.views)); return

@@ -25,7 +25,7 @@
 // client's reply with that id; notifications emit in order. A client request
 // whose method does not match the run's recorded sequence fails loudly
 // (exit 2), so a replay drift is a test failure, not a silent mismatch.
-import { appendFileSync, existsSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 // The executable gate's probe (codexExecutable.ts): FAKE_VERSION overrides
@@ -143,8 +143,16 @@ const emit = (message: Message) => process.stdout.write(`${JSON.stringify(messag
 /** The latest turn/start params, for an `append` record without a line. */
 let lastTurnInput: unknown = null
 const rolloutUserRow = () => {
-  const input = (lastTurnInput as { input?: Array<{ type?: string; text?: string }> } | null)?.input ?? []
-  const content = input.filter(item => item.type === 'text').map(item => ({ type: 'input_text', text: item.text }))
+  const input = (lastTurnInput as { input?: Array<{ type?: string; text?: string; path?: string }> } | null)?.input ?? []
+  const content = input.flatMap((item): Array<Record<string, unknown>> => {
+    if (item.type === 'text') return [{ type: 'input_text', text: item.text }]
+    if (item.type === 'localImage' && item.path) return [
+      { type: 'input_text', text: `<image name=[Image #1] path="${item.path}">` },
+      { type: 'input_image', image_url: `data:image/png;base64,${readFileSync(item.path).toString('base64')}` },
+      { type: 'input_text', text: '</image>' },
+    ]
+    return []
+  })
   return JSON.stringify({ timestamp: new Date().toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content } })
 }
 

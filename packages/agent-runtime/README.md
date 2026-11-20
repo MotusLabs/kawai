@@ -470,3 +470,5 @@ export async function runHeadless(providers: readonly HeadlessProvider[], host: 
   return result
 }
 ```
+
+Image inputs are optional in `send(text, { images })`. Claude accepts ordered `{ type: 'base64', mediaType, data }` entries (PNG/JPEG/GIF/WebP); Codex accepts `{ type: 'localImage', path }` entries. The runtime copies them before asynchronous admission, preserves repeated occurrences, and allows empty text with images. Claude queue/join and Codex steer retain the same inputs. Images are transport values: public runtime events carry no image bytes or paths. Hosts own file validation, asset lifetimes and any safe display descriptors.

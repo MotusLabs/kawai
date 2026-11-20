@@ -23,7 +23,8 @@
 // - Quota. One optional rate-limit read per driver, or per ready generation its claim permits.
 // - Skills. The generation's skills/list catalog (skills.ts) publishes onCommandState; a new turn's input appends the
 //   typed skill inputs its text names unless codexSkills is 'none' (R9), taken at send() before any wait (task-752c9e4c
-//   C2); a steer carries text only. setSkillDirectory (R11) moves the live generation's catalog to another directory.
+//   C2); a steer carries the captured text and images, without skills. setSkillDirectory (R11) moves the live
+//   generation's catalog to another directory.
 // - Capacity (option 'bounded'). A failed serverOverloaded attempt goes to capacityRecovery.ts before the turn is
 //   decided; every decision goes through decide(), which ends that recovery; a steer during its backoff supersedes it.
 // - Activity. The in-tree driver's rules (activity.ts) publish onActivity
@@ -41,6 +42,7 @@ import { EventStream, type EventBody } from '../eventStream.js'
 import { OldFrameScope } from '../common/oldFrame.js'
 import type { PendingRequest, QuestionAnswers } from '../events.js'
 import type { JsonObject } from '../json.js'
+import { captureImages, codexImageInput } from '../images.js'
 import type { CodexThreadOpened, Effort } from '../options.js'
 import { CHECKPOINT_FAILED, CheckpointGate } from '../lifecycle/checkpoints.js'
 import { DriverLifecycle } from '../lifecycle/lifecycle.js'
@@ -63,6 +65,7 @@ import { completionOutcome, decideTurn, INTERRUPTED, namesRetired, newCodexTurn,
 export type { CodexSessionOptions } from './sessionOptions.js'
 
 interface Prepared {
+  images: ReturnType<typeof captureImages>
   messageUuid: string
   turnId: string
   text: string
@@ -431,6 +434,8 @@ export class CodexSession {
       return Promise.reject(new AgentRuntimeError({ category: 'unsupported', message: "codexSkills must be 'auto' or 'none'" }))
     }
     // C2: the catalog this send saw, before the admission wait lets a move or skills/changed clear it.
+    let images: ReturnType<typeof captureImages>
+    try { images = captureImages('codex', submit.images) } catch (error) { return Promise.reject(error) }
     const skills = mode === 'none' ? [] : this.skills.inputs(text)
     return this.checkpoints.admit(submit.continuation, {
       prepare: (): Prepared => {
@@ -438,7 +443,7 @@ export class CodexSession {
         const messageUuid = submit.messageUuid ?? crypto.randomUUID()
         const turnId = steers?.turnId ?? crypto.randomUUID()
         checkSubmission(this.options.beforeSubmit, { messageUuid, turnId, text, context: submit.context })
-        return { messageUuid, turnId, text, skills, steers }
+        return { messageUuid, turnId, text, skills, steers, images }
       },
       commit: (admission, prepared) => {
         if ((admission === 'steer') !== (prepared.steers !== null) || (prepared.steers && (prepared.steers !== this.turn || this.recovery.supersede(prepared.steers, INTERRUPTED)))) {
@@ -447,10 +452,6 @@ export class CodexSession {
         return admission === 'steer' ? this.steer(prepared, prepared.steers!) : this.begin(prepared, this.turnEffort())
       },
     })
-  }
-
-  private input(text: string): unknown[] {
-    return [{ type: 'text', text, text_elements: [] }]
   }
 
   /**
@@ -465,7 +466,7 @@ export class CodexSession {
     const turn = newCodexTurn(prepared.turnId, prepared.messageUuid, prepared.text, this.facts.model)
     // A numeric effort has no Codex equivalent and is omitted, as before.
     const effort = typeof chosen === 'string' ? { effort: chosen } : {}
-    const params = (turn.startParams = codexTurnStartParams({ threadId: generation.threadId, input: [...this.input(prepared.text), ...prepared.skills], clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions))
+    const params = (turn.startParams = codexTurnStartParams({ threadId: generation.threadId, input: [...codexImageInput(prepared.text, prepared.images), ...prepared.skills], clientUserMessageId: prepared.messageUuid, ...effort }, this.permissions))
     this.turn = turn
     this.unbound.push(turn)
     let write!: (reply: Promise<unknown>) => void
@@ -514,7 +515,7 @@ export class CodexSession {
       const id = await Promise.race([turn.native, generation.ended, turn.result.then(() => null)])
       if (id === null || turn.settled) return
       try {
-        await generation.transport.request('turn/steer', { threadId: generation.threadId, input: this.input(prepared.text), expectedTurnId: id, clientUserMessageId: prepared.messageUuid } as JsonObject)
+        await generation.transport.request('turn/steer', { threadId: generation.threadId, input: codexImageInput(prepared.text, prepared.images), expectedTurnId: id, clientUserMessageId: prepared.messageUuid } as JsonObject)
       } catch (error) {
         if (this.stopBegun() && error instanceof AgentRuntimeError && error.category === 'stopped') return
         if (!turn.settled) this.emit({ type: 'error', error: rpcError(error, 'Codex refused the steered message') })

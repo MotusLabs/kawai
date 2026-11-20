@@ -24,6 +24,7 @@ import type { ChatEvent } from '../../../shared/chat'
 import { parseEnvelope } from '../../team/envelope'
 import { historyUnavailable, type TranscriptReplay } from '../transcriptReplay'
 import { readLines } from '../lineReader'
+import { isNativeImageWrapper, nativeImages } from '../images/nativeImages'
 import type { ChatEventDraft } from '../provider/runtimeEvents'
 
 type Row = Record<string, unknown>
@@ -128,13 +129,15 @@ export function createRolloutParser(): RolloutParser {
     }
     if (row.type !== 'response_item') return
     if (kind === 'message' && payload.role === 'user') {
-      const text = blockTexts(payload.content, ['input_text', 'text']).join('\n')
-      if (!text.trim() || INJECTED_PREFIXES.some(prefix => text.trimStart().startsWith(prefix))) return
+      const images = nativeImages(payload.content)
+      const text = blockTexts(payload.content, ['input_text', 'text'])
+        .filter(text => !images.length || !isNativeImageWrapper(text)).join('\n')
+      if (!images.length && (!text.trim() || INJECTED_PREFIXES.some(prefix => text.trimStart().startsWith(prefix)))) return
       const turn = turnId ?? open()
-      // codex-capacity-retry W5: the runtime's continuation input is an internal notice, never human or peer input.
-      if (isCodexCapacityContinuation(text)) return push({ type: 'notice', kind: 'capacity_recovery', text: CONTINUATION_NOTICE })
-      const peer = parseEnvelope(text)
-      push(peer ? { type: 'peer_message', turnId: turn, ...peer } : { type: 'user_message', turnId: turn, text })
+      // codex-capacity-retry W5: the runtime's continuation input (text only) is an internal notice, never human or peer input.
+      if (!images.length && isCodexCapacityContinuation(text)) return push({ type: 'notice', kind: 'capacity_recovery', text: CONTINUATION_NOTICE })
+      const peer = images.length ? null : parseEnvelope(text)
+      push(peer ? { type: 'peer_message', turnId: turn, ...peer } : { type: 'user_message', turnId: turn, text, ...(images.length ? { images } : {}) })
     } else if (kind === 'message' && payload.role === 'assistant') {
       const text = blockTexts(payload.content, ['output_text', 'text']).join('\n')
       if (text && turnId) push({ type: 'assistant_text', turnId, messageId: str(payload.id) ?? rowId, text })

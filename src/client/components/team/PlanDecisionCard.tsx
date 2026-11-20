@@ -10,6 +10,7 @@
 // where a `card` attention link carrying its plan scrolls to and focuses.
 // Every control disables while disconnected.
 import { useEffect, useRef } from 'react'
+import { scrollWithinContainer } from '../../utils/scrollWithinContainer'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { PlanDecisionCardView } from '@shared/planDecisions'
 import { FIX_PHASE_LABELS } from '@shared/planDecisions'
@@ -34,8 +35,8 @@ export default function PlanDecisionCard({ teamPath, planId, cardView, sessions,
   const cardRef = useRef<HTMLLIElement | null>(null)
   useEffect(() => {
     if (!revealed) return
-    cardRef.current?.scrollIntoView({ block: 'center' })
-    cardRef.current?.focus()
+    scrollWithinContainer(cardRef.current)
+    cardRef.current?.focus({ preventScroll: true })
   }, [revealed])
   return <li ref={cardRef} className="border border-border p-2" id={`decision-card-${card.id}`} tabIndex={-1} data-testid="plan-decision-card">
     <p className="flex flex-wrap items-baseline justify-between gap-2 text-chat-body">

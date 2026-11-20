@@ -25,6 +25,7 @@ import type { TeamWorkspaceSnapshot } from './teamWorkspace'
 import type { TeamCapacityAnswer } from './teamCapacity'
 import type { PlanClientMessage, PlanServerMessage } from './planMessages'
 import type { WorkspaceMessageEnvelope } from './planWorkspace'
+import type { ChatImageReference } from './chatImages'
 import type { PlanWorkspaceClientMessage, PlanWorkspaceServerMessage } from './planWorkspaceMessages'
 import type { OutboundAuditClientMessage, OutboundAuditServerMessage } from './outbound'
 import type { MetricsClientMessage, MetricsServerMessage } from './metricsMessages'
@@ -713,7 +714,7 @@ export type ClientMessage =
   // oldest held event, widened back to throughId when a search reveal needs
   // an older entry (an event id or a tool:<callId> anchor).
   | { type: 'chat-history-page'; sessionId: string; beforeId: string; throughId?: string }
-  | { type: 'chat-send'; sessionId: string; text: string; /** Plan-workspace context (§4): validated server-side before anything is stored. */ workspaceContext?: WorkspaceMessageEnvelope; /** Client-minted correlation (§6.3, Q2): echoed on every refusal, absent on acceptance. */ requestId?: string }
+  | { type: 'chat-send'; sessionId: string; text: string; images?: ChatImageReference[]; /** Plan-workspace context (§4): validated server-side before anything is stored. */ workspaceContext?: WorkspaceMessageEnvelope; /** Client-minted send correlation, echoed on acceptance and refusal. */ requestId?: string }
   | { type: 'chat-interrupt'; sessionId: string }
   // Archive stops the agent process but keeps the record, conversation, and
   // protocol log; restore clears the archived state (chat-archive design D2).

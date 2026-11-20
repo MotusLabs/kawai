@@ -103,7 +103,7 @@ export function CollapseTrigger({
     <button
       type="button"
       onClick={() => onToggleCollapse(sectionKey)}
-      className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-xs font-medium text-secondary hover:text-primary"
+      className="relative flex min-w-0 flex-1 items-center gap-1.5 rounded text-xs font-medium text-secondary hover:text-primary"
       aria-expanded={!collapsed}
       aria-label={label}
       title={title}
