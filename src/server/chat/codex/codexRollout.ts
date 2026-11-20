@@ -10,7 +10,8 @@
 // markers (`task_started`, `task_complete`, `turn_aborted`, `error`). Every
 // turn emits turn_started … turn_completed (or turn_interrupted) — the
 // boundaries a live turn emits, `turn_completed` included. Unknown row kinds
-// are skipped.
+// are skipped. A capacity continuation's input row (codex-capacity-retry W5)
+// replays as a `capacity_recovery` notice, not as user or peer input.
 //
 // Ids are `codex-r<line index>-<first 8 hex of sha256(line)>`: stable while
 // the file only grows, and a row rewritten under the same path gets a new
@@ -18,6 +19,7 @@
 // wrong place.
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import { isCodexCapacityContinuation } from '@motuslabs/agent-runtime/codex'
 import type { ChatEvent } from '../../../shared/chat'
 import { parseEnvelope } from '../../team/envelope'
 import { historyUnavailable, type TranscriptReplay } from '../transcriptReplay'
@@ -26,6 +28,9 @@ import { isNativeImageWrapper, nativeImages } from '../images/nativeImages'
 import type { ChatEventDraft } from '../provider/runtimeEvents'
 
 type Row = Record<string, unknown>
+
+/** The replayed form of a capacity continuation's input row (its ordinal is not in the rollout). */
+export const CONTINUATION_NOTICE = 'Retried after temporary model capacity pressure'
 
 /** User rows Codex injects as context, never typed by anyone. */
 const INJECTED_PREFIXES = ['<environment_context>', '<user_instructions>', '# AGENTS.md instructions', '<skill>']
@@ -129,6 +134,8 @@ export function createRolloutParser(): RolloutParser {
         .filter(text => !images.length || !isNativeImageWrapper(text)).join('\n')
       if (!images.length && (!text.trim() || INJECTED_PREFIXES.some(prefix => text.trimStart().startsWith(prefix)))) return
       const turn = turnId ?? open()
+      // codex-capacity-retry W5: the runtime's continuation input (text only) is an internal notice, never human or peer input.
+      if (!images.length && isCodexCapacityContinuation(text)) return push({ type: 'notice', kind: 'capacity_recovery', text: CONTINUATION_NOTICE })
       const peer = images.length ? null : parseEnvelope(text)
       push(peer ? { type: 'peer_message', turnId: turn, ...peer } : { type: 'user_message', turnId: turn, text, ...(images.length ? { images } : {}) })
     } else if (kind === 'message' && payload.role === 'assistant') {

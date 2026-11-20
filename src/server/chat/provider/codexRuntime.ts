@@ -339,15 +339,15 @@ class CodexChatDriver implements ChatAgentDriver {
     const mode = { ...(codexSkills ? { codexSkills } : {}), ...(images?.length ? { images } : {}) }
     try {
       const handle = await inner.send(text, { messageUuid, ...mode, ...(steer ? { continuation: 'steer' as const } : {}) }).catch((error: unknown) => {
-        // A steer prepared for a turn that ended meanwhile goes as a new turn, with the same skill mode.
-        if (steer && (error as { code?: unknown } | null)?.code === 'turn-ended') return inner.send(text, { messageUuid, ...mode })
+        // A steer prepared for a turn that ended meanwhile goes as a new turn, same skill mode, unless an interrupt superseded it.
+        if (steer && epoch === this.interrupts && (error as { code?: unknown } | null)?.code === 'turn-ended') return inner.send(text, { messageUuid, ...mode })
         throw error
       })
       void this.owned.track('turn', handle.result)
       return true
     } catch (error) {
       // An interrupt the package found this send still waiting for withdraws it, as one waiting for its driver is.
-      if (epoch !== this.interrupts && (error as { code?: unknown } | null)?.code === 'interrupted') return false
+      if (epoch !== this.interrupts && ['interrupted', 'turn-ended'].includes(String((error as { code?: unknown } | null)?.code))) return false
       // The refusal our beforeSubmit gave a send whose preparation threw: the caller already has that error.
       if (this.refused.has(messageUuid) && error instanceof AgentRuntimeError && error.category === 'context') return false
       throw error
