@@ -5,9 +5,11 @@ import { join } from 'node:path'
 import { PACKAGE_DIR, boundaryViolations, run, tarballEntries, tsc } from './helpers/packArtifact.js'
 import { consumerFixture, installManifest, nativeContent, platformNames, runtimeContent, STUB_DIR, writeConsumer } from './helpers/consumerInstall.js'
 import { controlledLaunch, recordedPids } from './helpers/consumerControlled.js'
+import { resolveConsumerBun, verifyConsumerBun } from './helpers/consumerBunTarget.js'
 
 const fixture = consumerFixture()
-const bun = process.env.CONSUMER_BUN ?? process.execPath
+const target = resolveConsumerBun()
+const bun = target.executable
 let runtime: string
 let stub: string
 let claude: string
@@ -58,7 +60,7 @@ test('README recipes match the shipped examples and all eight published consumer
 
 // @covers: agent-runtime-distribution › CLI binaries are installed separately › Installation without native CLI packages
 test('D02 I9: clean Bun installs use eight empty aliases with no native package contents or install hooks', () => {
-  expect(run([bun, '--version'], fixture.root).out.trim()).toMatch(/^1\.(3\.0|4\.3)$/)
+  expect(verifyConsumerBun(target)).toBe(target.expected)
   expect(tarballEntries(stub)).toEqual(['package/LICENSE', 'package/README.md', 'package/package.json'])
   expect(nativeContent(claude)).toEqual([])
   expect(nativeContent(codex)).toEqual([])
