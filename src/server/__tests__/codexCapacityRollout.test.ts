@@ -84,6 +84,23 @@ describe('codex-capacity-retry rollout replay', () => {
       expect(of(events, 'user_message')).toHaveLength(1)
     }
   })
+
+  test('W5: an image turn and its continuation replay the images with the input once and recovery as a notice', () => {
+    const id = `${'c'.repeat(64)}.png`
+    const imageRow = row('response_item', { type: 'message', role: 'user', content: [
+      { type: 'input_text', text: 'what is on screen' },
+      { type: 'input_text', text: `<image name=[Image #1] path="/assets/${id}">` },
+      { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+      { type: 'input_text', text: '</image>' },
+    ] })
+    const lines = [taskStarted(), imageRow, ...capacityError(), taskStarted(), userRow(CODEX_CAPACITY_CONTINUATION), ...success('a login form')]
+    const events = parseCodexRollout(lines.join('\n'))
+    const users = of(events, 'user_message') as Array<Extract<ChatEvent, { type: 'user_message' }>>
+    expect(users).toHaveLength(1)
+    expect(users[0]!.text).toBe('what is on screen')
+    expect(users[0]!.images?.map((image) => image.id)).toEqual([id])
+    expect(of(events, 'notice')).toEqual([expect.objectContaining({ type: 'notice', kind: 'capacity_recovery', text: CONTINUATION_NOTICE })])
+  })
 })
 
 // ---- P5 -------------------------------------------------------------------

@@ -291,6 +291,22 @@ describe('codex-capacity-retry lifecycle rows L1-L10, L17', () => {
     expect(s.activities.at(-1)).toEqual({ phase: 'requesting', elapsedMs: 0 })
   })
 
+  test('L9: after a turn with native images the continuation sends only its text, never the images again', async () => {
+    const s = scripted('bounded')
+    await s.driver.start()
+    const image = { type: 'localImage' as const, path: '/assets/screen.png' }
+    await s.driver.send('what is on screen', { images: [image, image] })
+    await s.flush()
+    s.reply(s.turnStarts()[0]!.id, { turn: { id: 'a1' } })
+    s.notify(...frames.started('a1'))
+    await s.flush()
+    expect(s.turnStarts()[0]!.params.input).toEqual([{ type: 'text', text: 'what is on screen', text_elements: [] }, { type: 'localImage', path: image.path }, { type: 'localImage', path: image.path }])
+    await failAttempt(s, 'a1')
+    const request = (await wake(s))!
+    expect(request.params.input).toEqual([{ type: 'text', text: CODEX_CAPACITY_CONTINUATION, text_elements: [] }])
+    expect(recovery(s)).toEqual({ timers: 0, retries: 1, continuations: 1, terminals: 0, state: 'active' })
+  })
+
   // @covers: codex-chat-sessions › Codex capacity failures recover within a bounded window › Capacity persists
   // @covers: profile-limit-handling › Codex limit failures are recorded as limit events › Exhausted capacity recovery
   test('L10: a wakeup at or after the deadline ends the turn once with the exhausted capacity error and sends no continuation', async () => {
