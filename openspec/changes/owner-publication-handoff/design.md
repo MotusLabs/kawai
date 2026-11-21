@@ -110,40 +110,56 @@ matching payload, or both never prove fulfillment (findings-6e7d3c2c F1:
 `TaskStore.publish` resolves a matching key before the base check and
 before `within`, so a key alone cannot show the handoff transaction ran).
 
-`TaskPublishInput` gains a server-internal `handoffId`, never read from a
-client or agent payload. **Publish prepared revision** (human command
-`team-task-handoff-publish { handoffId, requestKey }`; owner `task_amend
-{ handoff_id }`) re-reads the handoff, refuses unless it is `open`, and
-calls `publish` with its prepared fields, `baseRevision` =
-`base_revision`, `notify` = its choice, `handoffId`, and the server-built
-key `handoff:<id>`. Inside `within` the handoff row is re-read and must
-still be `open`; the revision row gets `handoff_id`, the handoff moves to
-`published` with the new revision, and its event and wakeup rows are
-written. Revision, association, notices, findings re-map, transition and
-wakeup mail commit or roll back together.
+Command origin and draft association are separate facts
+(findings-0854c403 F1). The origin decides the key namespace; the
+association decides fulfillment; neither is inferred from the other.
 
-Key namespaces: the `handoff:` prefix is reserved for revision keys.
-`TaskService.publish` refuses a caller-supplied `requestKey` starting with
-`handoff:` unless the call is the handoff path's own (it carries
-`handoffId`), before any read (H33); today only `team-task-publish`
-supplies a key (`task_amend` sends none), so an ordinary publication can
-never occupy a handoff's key. A replay of the handoff's
-own command resolves through `resolveKey` to the revision whose
-`handoff_id` is this handoff (H14); if a revision holds the key but not
-the association — only possible from a pre-change row, since the prefix
-was not reserved before — the publish is refused naming that revision and
-the handoff is left as it is (H34). `task_amend` with `handoff_id`
-refuses any direction, acceptance or contract argument beside it.
+`TaskService` keeps one internal publication routine that takes a
+server-internal `handoffId` and key, and exposes two entries over it:
+
+- the **ordinary entry** `publish(input)` — `team-task-publish` (with or
+  without a linked draft) and `task_amend` without `handoff_id`. Its first
+  check refuses a caller-supplied `requestKey` starting with `handoff:`,
+  before it reads the task, the draft or any handoff (H33, H33d). There is
+  no exemption: a linked draft's association never widens what key the
+  caller may send. Only after that check does it read the draft's
+  `handoff_id` (never the client payload) and pass it as `handoffId`, with
+  the caller's ordinary key.
+- the **prepared entry** `publishHandoff(handoffId, actor)` — human
+  command `team-task-handoff-publish { handoffId }` and owner
+  `task_amend { handoff_id }`. It takes no caller key: it builds
+  `handoff:<id>` itself, re-reads the handoff, and calls the routine with
+  the prepared fields, `baseRevision` = `base_revision`, `notify` = its
+  choice and `handoffId`. `task_amend` with `handoff_id` refuses any
+  direction, acceptance or contract argument beside it (H35).
+
+Inside `within` the handoff row is re-read and must still be `open`; the
+revision row gets `handoff_id`, the handoff moves to `published` with the
+new revision, and its event and wakeup rows are written. Revision,
+association, notices, findings re-map, transition and wakeup mail commit
+or roll back together.
+
+Key namespaces are disjoint: every key the prepared entry writes starts
+with `handoff:`, and no key the ordinary entry accepts does, so neither
+command can replay the other's revision. A replay of the prepared command
+resolves through `resolveKey` to the revision whose `handoff_id` is this
+handoff (H14). A prepared publish after the handoff was published through
+its linked draft finds no revision under `handoff:<id>` and is refused by
+the state check naming the linked revision (H16b); a linked-draft publish
+after a prepared publish is refused by the existing stale-base check
+(H38s). A revision holding `handoff:<id>` without the association cannot
+arise (U6: the ordinary entry refuses the prefix, and before this change
+no handoff id existed to collide with); defensive fixture DF6 still
+proves the prepared entry refuses it instead of reading it as
+fulfillment.
 
 **Edit before publishing** copies the handoff into the draft
 (`team-task-handoff-load-draft`, requiring `replace: true` when a draft
 exists) and sets the draft's `handoff_id`. Publishing that draft goes
-through `team-task-publish` with the human's ordinary key; the server
-reads the draft's `handoff_id` (never the client payload), passes it as
-`handoffId`, and the association is written as above, with
-`published_payload_hash` shown as "published as edited" when it differs.
-A replay of that ordinary key returns its revision, which already carries
-the association.
+through the ordinary entry with the human's ordinary key; the association
+is written as above, with `published_payload_hash` shown as "published as
+edited" when it differs. A replay of that ordinary key returns its
+revision, which already carries the association (H17r).
 
 ### D4. Every publication path checks pending handoffs in its transaction
 
@@ -180,15 +196,26 @@ match wins:
    (a failed or uncertain notice followed by an acknowledgement through
    another path needs nothing more).
 3. `no-holder` — no live claimed assignment.
-4. `notice-uncertain` — the claimant's newest notice for that revision or
+4. `delivered-awaiting-ack` — task mail carrying that revision or a later
+   one is confirmed delivered to the claimant (its delivered revision is
+   at least the published one), not acknowledged: the holder's wait,
+   whatever any notice's state. A dead notice followed by ordinary task
+   mail that delivered the revision needs no human (findings-0854c403
+   F3).
+5. `notice-uncertain` — any notice to the claimant for that revision or
    later is `uncertain`: the human resolves it in the Mailbox (Retry or
    Discard), as `TaskPublications.tsx` already directs; **Notify** and
-   **Retry notification** stay suppressed, as `taskNotices.ts` `reached`
-   suppresses them.
-5. `notice-failed` — that notice is `failed` (dead, cancelled, discarded,
-   forwarded): **Retry notification**.
-6. `not-notified` — no notice, and nothing at that revision delivered.
-7. `awaiting-ack` — queued or delivered, not acknowledged.
+   **Retry notification** stay suppressed.
+6. `notice-queued` — any such notice is still queued: the holder's wait.
+7. `notice-failed` — a notice exists and every such notice is `failed`
+   (dead, cancelled, discarded, forwarded): **Retry notification**.
+8. `not-notified` — no such notice: **Notify**.
+
+Phases 4–6 are exactly the cases where `taskNotices.ts` `reached` skips
+the claimant, and 7–8 exactly the cases where it does not, so **Retry
+notification** and **Notify** are offered only when `notify` would write
+a notice to the claimant (P7). `reached` itself is unchanged: no resend
+force, and a human retry is never a silent no-op.
 
 Attention, the supervision loader and `task_get` all call it. Nothing new
 is stored for notice or acknowledgement, so restart has nothing to
@@ -214,14 +241,18 @@ already trusts for revision notices.
 ### D7. Startup reconciliation
 
 At startup, one idempotent sweep (`reconcileHandoffs` in
-`taskHandoffStore.ts`) reads pending handoffs and applies, in this order:
-a revision whose `handoff_id` is this handoff exists → `published`
-(defensive; D3 makes it unreachable, H31a); the task is `done`/`cancelled`
-→ `closed` (H31b); the task's revision exceeds the base and the handoff is
-`open` → `stale` (H31c). A revision that merely carries a `handoff:` key
-without the association is never fulfillment (H34). Each applies with its
-wakeup row, so the sweep sends a message only for a transition it
-performs.
+`taskHandoffStore.ts`) reads pending handoffs. In every state the system
+can produce (the healthy domain) it changes nothing (H29): D3, D4 and the
+status hooks already made each transition in the transaction that caused
+it, and a refused command (H33, H33d) wrote nothing. The sweep is
+defensive against states the U-claims call unreachable (an older build's
+rows, manual edits, a future bug) and applies, in this order: a revision
+whose `handoff_id` is this handoff exists → `published` (DF1, U1); the
+task is `done`/`cancelled` → `closed` (DF2, U5); the task's revision
+exceeds the base and the handoff is `open` → `stale` (DF3, U3). A revision
+that merely carries a `handoff:` key without the association is never
+fulfillment (DF4). Each applies with its wakeup row, so the sweep sends a
+message only for a transition it performs.
 
 Production hook: `SessionMailbox.start()` (`src/server/team/
 sessionMailbox.ts`) calls the sweep after `reconcileMailbox` and before
@@ -337,8 +368,10 @@ team/id, key, right, status, base, payload, pending.
 | H1 | none pending, accepted | handoff `open`; task unchanged; no notice, fact or mail |
 
 **H-PUB — Publish prepared revision** (human `team-task-handoff-publish`
-or owner `task_amend { handoff_id }`). Axes: the derived key's revision
-(none, carries this handoff's association, carries no association);
+or owner `task_amend { handoff_id }`, the prepared entry; it takes no
+caller key). Axes: the derived key's revision (none, carries this
+handoff's association; one carrying no association is U6, proved by
+DF6);
 publisher right (human or owner, other); extra fields beside `handoff_id`
 on `task_amend` (none, some); handoff state (open, stale, published,
 declined, withdrawn, superseded, closed). Order: team/id, key, extra
@@ -347,19 +380,19 @@ fields, right, state.
 | Id | First failing check, or the accepted case | Result |
 | --- | --- | --- |
 | H14 | key revision carries this handoff's association (replay, including concurrent duplicates) | that revision returned; no revision, notice, fact, event or mail written (snapshot of every handoff, revision, notice, wakeup and mailbox row identical before and after) |
-| H34 | key revision carries no association (pre-change row) | refused naming that revision; handoff unchanged; it is never marked published |
 | H35 | extra fields on `task_amend` | refused; nothing written |
 | H13 | right: other agent or Kawai | refused as their publication is; handoff unchanged |
 | H15 | state stale, declined, withdrawn, superseded or closed | refused naming the state |
-| H16b | state published (as edited, through its draft) | refused naming published and its revision |
+| H16b | state published (through its linked draft: the derived key names no revision) | refused naming published and the linked revision; no cross-command replay |
 | H12 | state open, accepted | revision N+1 with the prepared fields and `handoff_id`; handoff `published` with N+1; notices iff notify; one fact; one wakeup `published` |
 
 **H-DRAFT — load into draft and publish the linked draft** (human only).
 Load axes: caller (human, agent); handoff state; draft (none, exists);
 `replace` (false, true). Order: team/id, caller, state, draft/replace.
-Publish axes: the existing `team-task-publish` checks run first,
-unchanged (ordinary key replay, rationale, stale base); then the linked
-handoff's state.
+Publish (the ordinary entry) axes: the caller key (ordinary, reserved
+prefix); the existing `team-task-publish` checks (ordinary key replay,
+rationale, stale base); the linked handoff's state. Order: reserved
+prefix, then the existing checks unchanged, then the linked state.
 
 | Id | First failing check, or the accepted case | Result |
 | --- | --- | --- |
@@ -367,16 +400,20 @@ handoff's state.
 | H37 | load of a handoff not `open` (stale or ended) | refused naming the state; draft unchanged |
 | H18 | load with a draft and `replace` false | refused; draft and handoff unchanged |
 | H19 | load accepted | draft holds the prepared fields with `handoff_id`; handoff `open` |
+| H33d | publish linked draft with a `handoff:` key | refused before the draft or handoff is read; no revision; draft and handoff unchanged (H stays `open`) |
+| H17r | publish linked draft, ordinary key already names a revision | that revision returned as today; nothing written; handoff unchanged |
+| H38s | publish linked draft, draft base no longer current (including after a prepared publish of the same handoff) | refused by the existing stale-base check; no second revision; handoff unchanged |
 | H17 | publish linked draft, handoff `open` | revision N+1 with the edited fields and `handoff_id`; handoff `published` as edited with both hashes; one wakeup |
-| H38 | publish linked draft, handoff no longer `open` | published as an ordinary revision with no association; the ended handoff is unchanged |
+| H38 | publish linked draft, base current, handoff declined, withdrawn, superseded or closed | published as an ordinary revision with no association; the ended handoff is unchanged (a superseding `open` handoff turns `stale` by D4) |
 
-**H-OTHER — a publication not from this handoff** (any author, any path
-without this `handoffId`). Axes: the key (ordinary, reserved prefix);
-the task's pending handoff state.
+**H-OTHER — a publication not from this handoff** (any author, the
+ordinary entry with no linked draft, or another handoff's publication).
+Axes: the key (ordinary, reserved prefix); the task's pending handoff
+state.
 
 | Id | Case | Result |
 | --- | --- | --- |
-| H33 | caller-supplied key starts with `handoff:` | refused before any read; nothing written |
+| H33 | caller-supplied key starts with `handoff:` | refused before any read; nothing written; after a restart the handoff is as before (H29: an `open` one stays `open`) |
 | H20 | ordinary, pending handoff `open` | revision published as today; handoff `stale` naming it; one wakeup `stale` |
 | H21 | ordinary, pending handoff `stale` | revision published; handoff stays `stale`, newest revision shown; no second wakeup |
 | H39 | ordinary, no pending handoff | revision published as today; no handoff row changes |
@@ -413,20 +450,17 @@ the holder; a notice retry; an acknowledgement.
 | H28b | an override that also cancels the handoff's task | H27 applies through the close; the decision itself changes nothing else on the handoff |
 
 **H-RESTART — startup sweep.** Axes per pending handoff: association
-present; task status; base relation. Order: association, status, base.
+present; task status; base relation; state. Every tuple but H29's is
+U1, U3 or U5.
 
 | Id | Case | Result |
 | --- | --- | --- |
-| H31a | a revision carries this handoff's association | `published` with it (defensive, U1) and its wakeup if unsent |
-| H31b | task closed | `closed` with its wakeup |
-| H31c | `open`, task revision past the base | `stale` with its wakeup |
-| H29 | `open` with current base, or `stale` | unchanged; no mail |
-| H34r | a revision holds `handoff:<id>` with no association | not fulfillment: H31b/H31c/H29 decide as if it were any other revision |
+| H29 | no association, task open, `open` with current base or `stale` | unchanged; no mail |
 
 Unreachable, with reasons:
 
 - U1: `published` without an associated revision, or the reverse — D3
-  writes both in one transaction (H31a still has its own test).
+  writes both in one transaction.
 - U2: two pending handoffs on one task — the partial unique index refuses
   the second insert; H8 supersedes in the inserting transaction.
 - U3: an `open` handoff whose base is not current — D4 makes it `stale` in
@@ -435,16 +469,39 @@ Unreachable, with reasons:
   guarded by `state IN ('open','stale')`.
 - U5: a pending handoff on a closed task — D4 closes it in the status
   transaction.
-- U6: an ordinary publication occupying `handoff:<id>` after this change —
-  H33 refuses the reserved prefix.
+- U6: a revision holding `handoff:<id>` without that handoff's
+  association — the ordinary entry refuses the prefix (H33, H33d), the
+  prepared entry writes the association with its key, and before this
+  change no handoff id existed to collide with (ids are server-generated).
+- U7: a linked draft whose base is current while its handoff is `stale` or
+  `published` — each state is entered only by a revision past that base
+  (D4, D3), so H38s catches every such publish first.
 
-Completeness claim: within each partition, every combination of its axes
-matches exactly one row, because the rows follow the partition's check
-order and the last row is the accepted case; combinations a partition's
-axes allow but the system cannot produce are U1–U6. The completeness test
-enumerates every partition's axis product, applies the check order, and
-fails on a tuple that matches no row or unreachable claim, or two of
-them.
+Completeness claim (the healthy domain): within each partition, every
+combination of its axes matches exactly one row or exactly one U-claim,
+never both: the rows follow the partition's check order, the last row is
+the accepted case, and each row's tuples satisfy every U-claim's negation.
+The completeness test enumerates every partition's axis product, applies
+the check order, and fails on a tuple that matches no row and no claim,
+two rows, two claims, or a row and a claim.
+
+### Table DF — defensive fixtures
+
+A separate domain: states the U-claims say the system cannot produce,
+seeded directly into the database (as an older build, a manual edit or a
+future bug could leave them), each to prove the defensive code fails
+closed. They are outside the completeness enumeration; the DF test asserts
+that each fixture's seeded tuple falls in its U-claim and in no H row.
+
+| Id | Seeded state (claim violated) | Command | Result |
+| --- | --- | --- | --- |
+| DF1 | pending handoff with an associated revision (U1) | startup sweep | `published` with that revision; its wakeup if unsent |
+| DF2 | pending handoff on a closed task (U5) | startup sweep | `closed`; its wakeup |
+| DF3 | `open` handoff, task revision past its base (U3) | startup sweep | `stale` naming the newest revision; its wakeup |
+| DF4a | revision holding `handoff:<id>` with no association, at or before the base (U6) | startup sweep | never `published`; stays `open`; no mail |
+| DF4b | the same revision past the base (U6 and U3) | startup sweep | never `published`; `stale` by DF3's rule; its `stale` wakeup only |
+| DF5 | associated revision on a closed task, base behind (U1, U5, U3) | startup sweep | `published` (association first), one `published` wakeup, no `closed` or `stale` |
+| DF6 | revision holding `handoff:<id>` with no association (U6) | Publish prepared revision | refused naming that revision; handoff unchanged; never `published` |
 
 ### Table W — attention for a handoff
 
@@ -465,10 +522,11 @@ Published handoffs, by `handoffPhase` (D5, first match wins):
 | W6 | acknowledged (even after a failed or uncertain notice) | * | none | — | — | — |
 | W7 | no-holder | yes | publication-follow-up | Kawai | no | Wait for Kawai |
 | W8 | no-holder | no | publication-follow-up | human | yes | Hand off the task |
-| W9 | notice-uncertain | * | publication-follow-up | human | yes | Resolve in the Mailbox (Retry or Discard), linked to the message |
-| W10 | notice-failed | * | publication-follow-up | human | yes | Retry notification |
-| W11 | not-notified | * | publication-follow-up | human | yes | Notify |
-| W12 | awaiting-ack | * | publication-follow-up | holder session | no | Wait for acknowledgement |
+| W12d | delivered-awaiting-ack (even after a failed notice) | * | publication-follow-up | holder session | no | Wait for acknowledgement, naming the delivered and acknowledged revisions |
+| W9 | notice-uncertain (not delivered) | * | publication-follow-up | human | yes | Resolve in the Mailbox (Retry or Discard), linked to the message |
+| W12 | notice-queued | * | publication-follow-up | holder session | no | Wait for acknowledgement |
+| W10 | notice-failed (not delivered, none queued or uncertain) | * | publication-follow-up | human | yes | Retry notification |
+| W11 | not-notified (not delivered, no notice) | * | publication-follow-up | human | yes | Notify |
 
 Ended handoffs (declined, withdrawn, superseded, closed): W13, no item.
 Unreachable: W-U1, a pending handoff on a closed task (U5). Completeness:
@@ -519,8 +577,8 @@ generators use the existing `mulberry32` helper (`src/shared/__tests__/contractF
 - **P1 exactly once.** Seeded command sequences over request, re-request,
   publish-prepared (1–3 duplicates, some concurrent through
   `Promise.all`), edit-and-publish, other publication, decline, withdraw,
-  close, neutral events, ordinary publications (including ones that try
-  the reserved prefix), and restart. Invariant: per handoff at most one
+  close, neutral events, ordinary publications (including plain and
+  linked-draft ones that try the reserved prefix), and restart. Invariant: per handoff at most one
   revision whose `handoff_id` is it; `published` iff exactly one such
   revision; no revision outside the handoff path holds a `handoff:` key;
   at most one wakeup row and one mailbox row per (handoff, transition); at
@@ -539,10 +597,14 @@ generators use the existing `mulberry32` helper (`src/shared/__tests__/contractF
   sweep) by throwing inside the transaction (rollback) or immediately
   after commit (before post-commit announce and recipient restore), then
   reopening the database and running startup reconciliation through
-  `SessionMailbox.start()`. Sequences include an ordinary publication
+  `SessionMailbox.start()`. The generator draws only from the healthy
+  domain (DF states are seeded separately, never generated). Sequences
+  include ordinary publications, plain and from the linked draft,
   attempted with the handoff's derived key before the crash (the
-  reviewer's collision trace, which must end `stale`, never `published`).
-  Every stored
+  reviewers' collision traces): each is refused (H33, H33d) and writes
+  nothing, and after restart the handoff is exactly as the model holds it
+  — an `open` handoff with a current base stays `open` (H29), never
+  `published` and never `stale` from the refused attempt. Every stored
   state equals the model's, and P1's counts hold. Seed `0x0A11CE04`,
   200 cases.
 - **P5 limits unchanged.** Seeded plans with parallel limits, dependencies
@@ -554,6 +616,16 @@ generators use the existing `mulberry32` helper (`src/shared/__tests__/contractF
   attention, the supervision loader and `task_get` report the same phase
   and next actor (each reader gets its own row over `handoffPhase`).
   Seed `0x0A11CE06`, 200 cases.
+- **P7 offered notice actions send.** Random histories for one published
+  revision and its claimant: notices (none to three, each queued,
+  delivered, uncertain or failed, at that revision or a later one),
+  ordinary task mail carrying that revision or a later one delivered or
+  not, and acknowledgements. Invariant: `handoffPhase` offers **Retry
+  notification** or **Notify** exactly when the real `TaskNotices.notify`
+  on a copy of the database writes at least one notice to the claimant,
+  and reads `delivered-awaiting-ack` whenever the claimant's delivered
+  revision is at least the published one and it has not acknowledged.
+  Seed `0x0A11CE07`, 200 cases.
 
 ### Mutation controls
 
@@ -562,8 +634,15 @@ which.
 
 - MU1 the publish key is random instead of `handoff:<id>` (H14, P1).
 - MU1b fulfillment and the sweep read the request key instead of
-  `handoff_id` (H34, H34r, P4's collision trace).
-- MU1c the reserved-prefix check is removed (H33, U6).
+  `handoff_id` (DF4a, DF4b, DF6).
+- MU1c the reserved-prefix check is removed (H33, H33d, P4's collision
+  traces).
+- MU1d the ordinary entry exempts a call whose linked draft carries a
+  `handoffId` from the prefix check (H33d: the edited revision is stored
+  under `handoff:<id>`, and the later prepared publish then replays it
+  through H14 instead of reading H16b).
+- MU1e the linked-draft publish writes the derived `handoff:<id>` key
+  instead of the caller's ordinary key (H16b, H17r).
 - MU2 the stale transition is removed from `TaskStore.publish` (H20, P2).
 - MU3 the handoff transition runs after the publish commit (P4).
 - MU4 the publisher check accepts any agent of the team (H13).
@@ -582,6 +661,14 @@ which.
   omits `task-closed` (W5, W6).
 - MU16 an uncertain notice reads as failed (W9: the item offers Retry
   notification instead of the Mailbox).
+- MU15b `delivered-awaiting-ack` is placed after `notice-failed`
+  (W12d, P7: Retry notification is offered and `notify` writes nothing).
+- MU16b the notice phases read only the newest notice instead of every
+  notice at that revision or later (P7: an older uncertain or queued
+  notice behind a newer failed one offers a Retry that sends nothing).
+- MU19 the DF test's membership check is dropped and DF3's fixture is
+  added as an H-RESTART row (the completeness test fails on a tuple
+  matching a row and U3).
 - MU17 the sweep's call is removed from `SessionMailbox.start()` (CP3).
 - MU18 the migration is added to the baseline instead of `MIGRATIONS`
   (the migration rows of task 2.1).
@@ -602,15 +689,18 @@ which.
   the requester, and the next snapshot no longer lists W2; a resent
   command replays. Failure paths: a stale-base request is refused through
   the same tool server, and an ordinary `team-task-publish` with a
-  `handoff:` key is refused (H33). Mutants: MU9, and removing the W2
+  `handoff:` key is refused (H33), as is the same key on a linked-draft
+  publish (H33d), each leaving W2 listed. Mutants: MU9, and removing the W2
   source's registration fails the snapshot assertion. The remaining W
   rows, F and S3 land in group 8.
 - **CP3** (with the reconciliation): boot the production composition
-  (`ChatSessionManager` starting `teamMail`) over a database holding an
-  `open` handoff whose task moved past its base while the server was
-  down; after start the handoff reads `stale` and one wakeup mail is
-  queued and dispatched. Mutant: MU17 (the sweep's call removed) leaves it
-  `open` with no mail.
+  (`ChatSessionManager` starting `teamMail`) over a database seeded with
+  DF3's fixture (an `open` handoff whose task revision is past its base,
+  as an older build or a manual edit could leave it) beside a healthy
+  `open` handoff with a current base on another task; after start the
+  first reads `stale` and one wakeup mail is queued and dispatched, and
+  the second stays `open` with no mail (H29). Mutant: MU17 (the sweep's
+  call removed) leaves the first `open` with no mail.
 - **CP2** (before attention and supervision polish): through the real
   supervision monitor and loader, a change whose holder is archived and
   whose task has an open handoff reads `owner-publication`, raises no
@@ -663,11 +753,11 @@ states. There is no in-place downgrade.
 
 ### Acceptance
 - A1: `task_request_publication` records one `open` handoff per partition H-REQ (H1–H11, in its check order), with exact provenance (task, base revision and contract identity, requester, payload hash, base commit, evidence) and no revision, notice, fact or mail.
-- A2: **Publish prepared revision** (human command and owner `task_amend { handoff_id }`) publishes exactly one revision through `TaskService.publish` with the prepared fields, notices per notify, the server-written `team_task_revisions.handoff_id` association and the handoff `published`, per H-PUB and H-DRAFT (H12–H19, H34–H38); fulfillment is read only from that association, and caller keys with the reserved `handoff:` prefix are refused (H33).
+- A2: **Publish prepared revision** (human command and owner `task_amend { handoff_id }`) publishes exactly one revision through `TaskService`'s one publication routine (the prepared entry) with the prepared fields, notices per notify, the server-written `team_task_revisions.handoff_id` association and the handoff `published`, per H-PUB and H-DRAFT (H12–H19, H33d, H35–H38s); fulfillment is read only from that association; the ordinary entry refuses every caller key with the reserved `handoff:` prefix before reading any draft or handoff, with no exemption for a linked draft (H33, H33d), and only the prepared entry builds `handoff:<id>`, so neither command replays the other's revision (H16b, H38s); DF6 refuses a key without its association.
 - A3: Every publication not from a pending handoff makes it `stale`, every task close (including `prepareStatus` and override cancellations) makes it `closed`, decline and withdraw end it with reason and actor, and neutral events change nothing, per H-OTHER, H-SETTLE, H-CLOSE and H-NEUTRAL (H20–H28b, H39, H40).
-- A4: The schema is one numbered migration appended to `MIGRATIONS` (never the baseline or a constructor), and startup reconciliation runs from `SessionMailbox.start()` before dispatch release, applying H29–H31c and H34r once (CP3), with its row in `docs/recovery-matrix.md`.
+- A4: The schema is one numbered migration appended to `MIGRATIONS` (never the baseline or a constructor), and startup reconciliation runs from `SessionMailbox.start()` before dispatch release, changing nothing in the healthy domain (H29) and applying DF1–DF5 once to seeded defensive fixtures (CP3), with its row in `docs/recovery-matrix.md`.
 - A5: Each `published`, `declined`, `stale` and `closed` transition enqueues exactly one system message to the live requester, else its group, in the transition's transaction.
-- A6: The workspace attention snapshot matches tables W (W1–W13, with `handoffPhase`'s closed, acknowledged and uncertain precedence) and F, and the post-Amend item is suppressed per S3.
+- A6: The workspace attention snapshot matches tables W (W1–W13 with W12d, in `handoffPhase`'s order: closed, acknowledged, no holder, delivered awaiting acknowledgement, uncertain, queued, failed, not notified) and F; **Retry notification** and **Notify** are offered exactly when `TaskNotices.notify` would write a notice to the claimant (P7); and the post-Amend item is suppressed per S3.
 - A7: Supervision lists `owner-publication` per S1–S2, keeps S6's precedence, names a gone holder per S5, and follows transitions S7–S10, with parallel counts, dependencies and landing slot unchanged (P5).
 - A8: `task_get` shows handoff rows and one handoff whole, team-scoped; delivered task context names a pending handoff without using its text as the direction.
 - A9: The task detail shows the handoff panel with diff, provenance and the three actions; the agent guidance names `task_request_publication` and states that a card answer publishes nothing.
@@ -722,9 +812,9 @@ states. There is no in-place downgrade.
 - `openspec/changes/owner-publication-handoff/**`
 
 ### Verification
-- V1: Tables H (every partition), W, F and S (rows and transitions S7–S10) are committed verbatim as table-driven tests beside the code they cover, with H's completeness test enumerating each partition's axis product against its rows and U1–U6, and W's against W1–W13.
-- V2: P1–P6 run with the stated seeds and case counts through `propertyCases`; P4 runs the H table as the reference model with a crash at each named transaction boundary.
-- V3: Each mutant MU1–MU18 (with MU1b, MU1c) is applied once and makes its cited oracle fail; the result maps each oracle id to a test title and a killed mutant.
+- V1: Tables H (every partition), W, F and S (rows and transitions S7–S10) are committed verbatim as table-driven tests beside the code they cover, with H's completeness test enumerating each partition's healthy axis product against its rows and U1–U7 (each tuple matching exactly one row or one claim, never both), the DF fixtures in their own test asserting each seeded tuple lies in its U-claim and in no H row, and W's completeness against W1–W13 with W12d.
+- V2: P1–P7 run with the stated seeds and case counts through `propertyCases`; P4 runs the H table as the reference model with a crash at each named transaction boundary.
+- V3: Each mutant MU1–MU19 (with MU1b–MU1e, MU15b, MU16b) is applied once and makes its cited oracle fail; the result maps each oracle id to a test title and a killed mutant.
 - V4: CP1, CP2 and CP3 pass through the production composition before the work expands past them, with their failure paths and omission mutants.
 - V5: The blind oracle reading (inputs-only commit, a cross-model advisor's outputs, author's outputs, resolved diff) is journaled and bound by the Lead before production code.
 - V6: `bun run check` passes on the clean committed head with the pinned Bun, and `scripts/verify-result.ts` runs on the submitted commit; UI changes are verified in a real browser against a disposable server and database. The migration is covered by `src/server/__tests__/schemaMigrations.test.ts` and a new migration test (fresh database, a database at the previous version, a failing `up` rolling back with its backup).

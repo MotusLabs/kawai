@@ -127,7 +127,7 @@ The human SHALL be able to load an open handoff into the task's draft and edit i
 - **THEN** the revision is published as an ordinary revision, and H stays declined
 
 ### Requirement: A handoff is published at most once
-A handoff SHALL be fulfilled only by a revision recorded as published from it by its own publication; a request key or matching content alone SHALL never fulfill it. A replay or concurrent duplicate SHALL return the same revision and write nothing more. Publishing a handoff no longer open SHALL be refused naming its state. Publication keys in the handoff namespace SHALL be refused from any other caller.
+A handoff SHALL be fulfilled only by a revision recorded as published from it; a key or matching content SHALL never fulfill it. A replay or concurrent duplicate SHALL return the same revision and write nothing more. Publishing a handoff no longer open SHALL be refused naming its state. Every other publication, a linked draft's included, SHALL be refused a handoff-namespace key, and the two publish actions SHALL NOT replay each other.
 
 #### Scenario: Two clicks publish once
 - **WHEN** two **Publish prepared revision** requests for handoff H are processed at the same time
@@ -140,6 +140,14 @@ A handoff SHALL be fulfilled only by a revision recorded as published from it by
 #### Scenario: An ordinary publication cannot take a handoff's key
 - **WHEN** the human publishes a draft with a command key in the handoff namespace while handoff H is open
 - **THEN** the publication is refused naming the reserved key, nothing is published, and H stays open
+
+#### Scenario: A linked draft cannot take a handoff's key
+- **WHEN** the human loads handoff H into the draft, edits it, and publishes it with a command key in the handoff namespace
+- **THEN** the publication is refused naming the reserved key, nothing is published, the draft is unchanged, and H stays open
+
+#### Scenario: The two publish actions never replay each other
+- **WHEN** the human publishes handoff H through its linked draft and then chooses **Publish prepared revision** for H
+- **THEN** the second action is refused naming H as published with the linked revision, and exactly one revision is published from H
 
 #### Scenario: A key is never proof of fulfillment after restart
 - **WHEN** handoff H became stale through another revision and Kawai restarts
@@ -207,6 +215,10 @@ Handoffs and their transitions SHALL persist. At startup Kawai SHALL mark stale,
 #### Scenario: A crash after publication
 - **WHEN** Kawai restarts after a publication committed but before the requester's message was sent
 - **THEN** the handoff reads published, and exactly one message about it is sent after startup
+
+#### Scenario: A refused key changes nothing at restart
+- **WHEN** an ordinary publication with a key in H's handoff namespace was refused while H is open with a current base, and Kawai restarts
+- **THEN** H still reads open, and no message about H is sent
 
 #### Scenario: A restart changes nothing settled
 - **WHEN** Kawai restarts with one open handoff whose base is current and one declined handoff

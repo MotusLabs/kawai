@@ -80,11 +80,15 @@ The attention queue SHALL hold one item per pending publication handoff, linked 
 - **THEN** the card's item leaves the queue and the handoff's item stays
 
 ### Requirement: A published handoff stays visible until its holder acknowledges
-After a handoff is published, the queue SHALL hold one follow-up item until the task's current claimed holder acknowledges that revision or a later one, or the task closes, whatever its notices' states. It SHALL send an uncertain notice to the Mailbox's Retry or Discard, a failed one to **Retry notification**, name no session running the task when none holds it, and otherwise wait for the holder.
+After a handoff is published, the queue SHALL hold one follow-up item until the task's current claimed holder acknowledges that revision or a later one, or the task closes, whatever its notices' states. It SHALL wait for the holder once the revision was delivered to it, else send an uncertain notice to the Mailbox's Retry or Discard and a failed one to **Retry notification**; it SHALL name no session running the task when none holds it.
 
 #### Scenario: Notice failure needs the human
-- **WHEN** the revision 2 notice from a published handoff is dead-lettered
+- **WHEN** the revision 2 notice from a published handoff is dead-lettered and no other task mail has delivered revision 2 to the holder
 - **THEN** the follow-up item is human-required with **Retry notification** and a link to the revision's publication detail
+
+#### Scenario: Delivery after a failed notice waits for the holder
+- **WHEN** the revision 2 notice was dead-lettered, later task mail carrying revision 2 is delivered to the same holder, and it has not acknowledged revision 2
+- **THEN** the follow-up item is an agent-owned wait owned by the holder, naming delivered revision 2, and offers no **Retry notification**
 
 #### Scenario: Waiting for the holder's acknowledgement
 - **WHEN** the notice was delivered and the holder has not acknowledged revision 2
@@ -99,7 +103,7 @@ After a handoff is published, the queue SHALL hold one follow-up item until the 
 - **THEN** the follow-up item leaves the queue, and no **Retry notification** item remains
 
 #### Scenario: An uncertain notice goes to the Mailbox
-- **WHEN** the revision 2 notice from a published handoff is held as an uncertain delivery
+- **WHEN** the revision 2 notice from a published handoff is held as an uncertain delivery and revision 2 has not been delivered to the holder another way
 - **THEN** the follow-up item is human-required with Resolve in the Mailbox (Retry or Discard) linked to that message, and offers neither **Notify** nor **Retry notification**
 
 #### Scenario: Closing the task ends the follow-up

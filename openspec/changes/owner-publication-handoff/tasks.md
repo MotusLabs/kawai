@@ -11,7 +11,7 @@ killed mutant.
 ## 1. Bind the oracles before production code
 
 - [ ] 1.1 Journal the mechanism challenge note (`docs/agent-collaboration.md`, "Challenge the mechanism before substantial coding") covering D3's server-written association and reserved key prefix, D4's store-level stale and close hooks, D6's in-transaction wakeup, D7's sweep and its `SessionMailbox.start()` hook, and D1's numbered migration, and record the Lead's proceed/revise decision. Verify: the note id and the Lead's decision are in the task journal before any file under `src/` changes.
-- [ ] 1.2 Commit A1: every H partition, W, F and S (rows and transitions) with their inputs and every output `?`, plus U1–U6 and W-U1, in `openspec/changes/owner-publication-handoff/oracles-blind.md`. Verify: the commit touches only that file and every output cell reads `?`.
+- [ ] 1.2 Commit A1: every H partition, W, F and S (rows and transitions) with their inputs and every output `?`, plus U1–U7, W-U1 and the DF fixtures (seeded states and commands), in `openspec/changes/owner-publication-handoff/oracles-blind.md`. Verify: the commit touches only that file and every output cell reads `?`.
 - [ ] 1.3 Have an advisor from another model family fill the outputs from the delta specs alone; commit A2 with the author's outputs, diff the two readings, and resolve each disagreement in the design's tables. Verify: the diff and each resolution are journaled; design.md's tables equal the resolved readings.
 - [ ] 1.4 Record the Lead's binding of the resolved oracles. Verify: a journal note names the binding commit; no production commit precedes it.
 
@@ -29,8 +29,8 @@ killed mutant.
 
 ## 4. Publish path
 
-- [ ] 4.1 Add the server-internal `handoffId` to `TaskPublishInput`, the in-transaction association and transition in the `within` callback, the reserved `handoff:` prefix check, `task_amend { handoff_id }`, and the human commands `team-task-handoff-publish` and `team-task-handoff-load-draft` (router whitelist in `chatConnectionTypes.ts`, `src/shared/types.ts`). Verify: partitions H-PUB, H-DRAFT and H33 in `taskHandoffCommands.test.ts`, including the reviewer's collision trace (an ordinary publication with H's derived key while H is open is refused by H33; H stays open); mutants: MU1 (random publish key) fails H14, MU1b (fulfillment read from the key) fails H34, MU1c (prefix check removed) fails H33, and MU4 (any agent publishes) fails H13.
-- [ ] 4.2 Production-path checkpoint CP1, publish half: over the real WS connection, the human publishes the handoff from 3.3 as revision 2, one notice reaches the claimed holder, one message reaches the requester, the next workspace snapshot no longer lists W2, a resent command replays, and an ordinary `team-task-publish` with a `handoff:` key is refused. Verify: `taskHandoffConnections.test.ts`; mutants MU9 (command missing from the whitelist) and the W2 registration removal each fail it. Journal the checkpoint.
+- [ ] 4.1 Split `TaskService` publication into D3's ordinary entry (`publish`, whose first check refuses a caller `handoff:` key before reading the draft or any handoff, with no linked-draft exemption, and which only then attaches the draft's `handoff_id`) and the prepared entry (`publishHandoff`, which builds `handoff:<id>` and takes no caller key) over one internal routine with the in-transaction association and transition in the `within` callback; add `task_amend { handoff_id }` and the human commands `team-task-handoff-publish { handoffId }` and `team-task-handoff-load-draft` (router whitelist in `chatConnectionTypes.ts`, `src/shared/types.ts`). Verify: partitions H-PUB and H-DRAFT and row H33 in `taskHandoffCommands.test.ts`, including both collision traces (a plain ordinary publish and a linked-draft publish with H's derived key while H is open are refused by H33 and H33d; H and the draft stay unchanged) and the cross-command rows (linked then prepared reads H16b; prepared then linked reads H38s), and DF6 in `taskHandoffDefensive.test.ts`; mutants: MU1 (random publish key) fails H14, MU1b (fulfillment read from the key) fails DF6, MU1c (prefix check removed) fails H33 and H33d, MU1d (linked-draft exemption) fails H33d, MU1e (linked publish writes the derived key) fails H16b, and MU4 (any agent publishes) fails H13.
+- [ ] 4.2 Production-path checkpoint CP1, publish half: over the real WS connection, the human publishes the handoff from 3.3 as revision 2, one notice reaches the claimed holder, one message reaches the requester, the next workspace snapshot no longer lists W2, a resent command replays, and an ordinary `team-task-publish` with a `handoff:` key is refused, with or without a linked draft (H33, H33d), leaving W2 listed. Verify: `taskHandoffConnections.test.ts`; mutants MU9 (command missing from the whitelist) and the W2 registration removal each fail it. Journal the checkpoint.
 
 ## 5. Staleness, closing, and dispositions
 
@@ -43,16 +43,16 @@ killed mutant.
 
 ## 7. Restart reconciliation
 
-- [ ] 7.1 Add D7's sweep and call it from `SessionMailbox.start()` after `reconcileMailbox` and before `dispatcher.release()`, with its `docs/recovery-matrix.md` row citing the CP3 test. Verify: partition H-RESTART (H29, H31a–H31c, H34r) and model-based property P4 (seed `0x0A11CE04`, 200 cases, a crash at each named transaction boundary, H as reference model, restart through `SessionMailbox.start()`, the collision trace included) in `src/server/__tests__/taskHandoffRecovery.integration.test.ts`; `recoveryMatrix.test.ts` resolves the new row; mutants MU3 (transition after commit) fails P4 and MU1b fails the collision trace.
-- [ ] 7.2 Production-path checkpoint CP3: boot the production composition (`ChatSessionManager` starting `teamMail`) over a database with an `open` handoff whose task moved past its base while down; after start it reads `stale` and one wakeup mail is dispatched. Verify: a CP3 test in `taskHandoffRecovery.integration.test.ts`; mutant MU17 (the sweep's call removed from `SessionMailbox.start()`) leaves it `open` with no mail. Journal the checkpoint.
-- [ ] 7.3 Add the H completeness test enumerating each partition's axis product against its rows and U1–U6 in `src/server/__tests__/taskHandoffCompleteness.test.ts`. Verify: it fails when one row is removed from the table and when two rows are made to overlap (journal both negative controls).
+- [ ] 7.1 Add D7's sweep and call it from `SessionMailbox.start()` after `reconcileMailbox` and before `dispatcher.release()`, with its `docs/recovery-matrix.md` row citing the CP3 test. Verify: partition H-RESTART (H29) and model-based property P4 (seed `0x0A11CE04`, 200 cases, healthy-domain sequences only, a crash at each named transaction boundary, H as reference model, restart through `SessionMailbox.start()`, both collision traces ending with H still `open`) in `src/server/__tests__/taskHandoffRecovery.integration.test.ts`, and Table DF (DF1–DF5 through the sweep) in `src/server/__tests__/taskHandoffDefensive.test.ts`, which also asserts each fixture's seeded tuple lies in its U-claim and in no H row; `recoveryMatrix.test.ts` resolves the new row; mutants MU3 (transition after commit) fails P4, MU1c fails P4's collision traces, and MU1b fails DF4a and DF4b.
+- [ ] 7.2 Production-path checkpoint CP3: boot the production composition (`ChatSessionManager` starting `teamMail`) over a database seeded with DF3's fixture beside a healthy `open` handoff with a current base; after start the first reads `stale` with one wakeup mail dispatched and the second stays `open` with no mail. Verify: a CP3 test in `taskHandoffRecovery.integration.test.ts`; mutant MU17 (the sweep's call removed from `SessionMailbox.start()`) leaves the first `open` with no mail. Journal the checkpoint.
+- [ ] 7.3 Add the H completeness test enumerating each partition's healthy axis product against its rows and U1–U7 in `src/server/__tests__/taskHandoffCompleteness.test.ts`, failing on a tuple matching no row and no claim, two rows, two claims, or a row and a claim. Verify: it fails when one row is removed, when two rows are made to overlap, and under MU19 (a DF fixture added as an H-RESTART row overlaps its U-claim); journal the three negative controls.
 
 ## 8. Attention
 
-- [ ] 8.1 Extend `handoffAttention.ts` to every W row with `handoffPhase` from `src/shared/taskHandoffs.ts` (D5's order: task-closed, acknowledged, no-holder, notice-uncertain, notice-failed, not-notified, awaiting-ack), the `kawai` attention owner kind, and link anchors (W9 links the uncertain message). Verify: W1–W13 committed verbatim in `taskHandoffAttention.test.ts`, with rows for close without acknowledgement (W5), acknowledgement after a failed notice (W6) and an uncertain notice (W9); mutants: MU6 (only `open` kept) fails W3/W4, MU7 fails W2, MU15 (failed before acknowledged, or no task-closed) fails W5/W6, and MU16 (uncertain read as failed) fails W9.
+- [ ] 8.1 Extend `handoffAttention.ts` to every W row with `handoffPhase` from `src/shared/taskHandoffs.ts` (D5's order: task-closed, acknowledged, no-holder, delivered-awaiting-ack, notice-uncertain, notice-queued, notice-failed, not-notified), the `kawai` attention owner kind, and link anchors (W9 links the uncertain message). Verify: W1–W13 with W12d committed verbatim in `taskHandoffAttention.test.ts`, with rows for close without acknowledgement (W5), acknowledgement after a failed notice (W6), a failed notice followed by ordinary task mail delivering the revision (W12d: holder wait, no Retry notification) and an uncertain notice (W9); mutants: MU15b (delivered after failed) fails W12d, MU6 (only `open` kept) fails W3/W4, MU7 fails W2, MU15 (failed before acknowledged, or no task-closed) fails W5/W6, and MU16 (uncertain read as failed) fails W9.
 - [ ] 8.2 Resolve fixes-requested owners per table F in `attentionAcceptance.ts`. Verify: F1–F5 in `taskHandoffAttention.test.ts`, and the existing `teamWorkspaceRead.test.ts` acceptance rows still pass; mutant MU7 fails F2–F5.
 - [ ] 8.3 Suppress `amendItems` for a task with a pending handoff. Verify: S3 and S4 rows in `teamWorkspacePlanAttention.test.ts` (the existing "after Amend" test unchanged and passing); mutant MU12 fails S3.
-- [ ] 8.4 Add properties P2 (seed `0x0A11CE02`, 400 cases) and P6 (seed `0x0A11CE06`, 200 cases). Verify: both pass in `taskHandoffProperties.test.ts`, P2 with table W as the reference model; mutant MU6 fails P2 and MU15 fails P6.
+- [ ] 8.4 Add properties P2 (seed `0x0A11CE02`, 400 cases), P6 (seed `0x0A11CE06`, 200 cases) and P7 (seed `0x0A11CE07`, 200 cases, against the real `TaskNotices.notify` on a database copy). Verify: all pass in `taskHandoffProperties.test.ts`, P2 with table W as the reference model; mutant MU6 fails P2, MU15 fails P6, and MU15b and MU16b fail P7.
 - [ ] 8.5 Update `docs/architecture/team-page.md` for the two attention kinds, the follow-up order, and the `kawai` owner. Verify: the bullet names W's owners and next actions, including the Mailbox route for an uncertain notice.
 
 ## 9. Supervision
@@ -89,6 +89,16 @@ planned oracle rows; each is coded with its group's tests.
 | F4 | tied refusals, unloadable stale handoff, override closing a task | H-REQ order (H3 before H2), H37, H28b, U5; S7–S10 transitions |
 | F5 | CP1 without owner visibility; recovery never wired into boot | tasks 3.2, 3.3, 4.2 (W2 in CP1), CP3 with MU17 |
 
+The second review's counterexamples (findings-0854c403; F2 and F5 there
+were resolved) are carried the same way, under the reopened mechanism of
+the design-reopen journal.
+
+| Finding | Counterexample | Planned rows and mutants |
+| --- | --- | --- |
+| F1 | load H into the draft, edit, publish it through the ordinary route with H's reserved key; the inferred association bypassed H33 and a later prepared publish replayed the edited revision | H33d (refused before any read; H open), H16b (linked then prepared), H38s (prepared then linked), H17r; CP1 failure path; MU1c, MU1d, MU1e (tasks 4.1, 4.2) |
+| F3 | R2's notice dead-letters, later task mail delivers R2 to the same claimant, no acknowledgement; the item offered Retry notification and `notify` wrote nothing | W12d (delivered-awaiting-ack ahead of uncertain and failed), P7 against the real `notify`; MU15b, MU16b (tasks 8.1, 8.4) |
+| F4 | sweep rows H31a, H31b, H31c matched the same tuples as U1, U5, U3; the collision trace expected `stale` though H33 writes nothing | healthy H-RESTART is H29 only; Table DF (DF1–DF6) with its membership assertion; P4's collision traces end `open`; completeness fails on a row-and-claim overlap; MU19, MU1b (tasks 7.1–7.3) |
+
 ## Scenario-to-test plan
 
 Planned files are relative to `src/server/__tests__/` unless stated; every
@@ -103,17 +113,17 @@ row is future work.
 | › A task has at most one pending handoff (2) | H8, H9, U2 | `taskHandoffCommands.test.ts`, `taskHandoffMigration.test.ts` |
 | › A handoff is never a revision (2) | H1, H19 | `taskHandoffRead.test.ts`, `taskHandoffCommands.test.ts` |
 | › The publisher publishes a handoff with one action (3) | H12, H13 | `taskHandoffCommands.test.ts`, `taskHandoffConnections.test.ts` |
-| › Editing before publishing still fulfills the handoff (4) | H17, H18, H37, H38 | `taskHandoffCommands.test.ts`, `src/client/__tests__/taskPublicationHandoff.test.tsx` |
-| › A handoff is published at most once (4) | H14, H15, H33, H34r, P1 | `taskHandoffCommands.test.ts`, `taskHandoffRecovery.integration.test.ts` |
+| › Editing before publishing still fulfills the handoff (4) | H17, H17r, H18, H37, H38 | `taskHandoffCommands.test.ts`, `src/client/__tests__/taskPublicationHandoff.test.tsx` |
+| › A handoff is published at most once (6) | H14, H15, H16b, H33, H33d, H38s, DF6, P1 | `taskHandoffCommands.test.ts`, `taskHandoffRecovery.integration.test.ts` |
 | › Another publication makes a pending handoff stale (2) | H20, H21, H8 | `taskHandoffCommands.test.ts` |
 | › A handoff ends only by an explicit disposition (4) | H22, H24, H27, H28b | `taskHandoffCommands.test.ts`, `taskHandoffProperties.test.ts` |
 | › Answers, time, and archival never settle a handoff (2) | H28, P3 | `taskHandoffProperties.test.ts` |
 | › Each disposition wakes the next actor once (3) | D6 rows, P1 | `taskHandoffWakeups.test.ts` |
-| › Handoffs survive restart and reconcile once (2) | H29, H31a–H31c, P4, CP3 | `taskHandoffRecovery.integration.test.ts` |
+| › Handoffs survive restart and reconcile once (3) | H29, DF1–DF5, P4, CP3 | `taskHandoffRecovery.integration.test.ts`, `taskHandoffDefensive.test.ts` |
 | › Agents read a task's handoffs (2) | A8 rows | `taskHandoffRead.test.ts` |
 | team-workspace › The attention queue lists what needs a human or is waiting on an agent (11) | F1–F5; existing rows | `taskHandoffAttention.test.ts`, `teamWorkspaceRead.test.ts` |
 | › The attention queue lists pending publication handoffs (6) | W1–W4, W13 | `taskHandoffAttention.test.ts` |
-| › A published handoff stays visible until its holder acknowledges (8) | W5–W12 | `taskHandoffAttention.test.ts` |
+| › A published handoff stays visible until its holder acknowledges (9) | W5–W12, W12d, P7 | `taskHandoffAttention.test.ts` |
 | plan-supervision › A pending publication handoff is a named wait (6) | S1, S2, S7, S9, S10, P5 | `supervisionOwnerPublication.test.ts` |
 | › A pending handoff stands for the post-Amend item (3) | S3, S4, S8 | `teamWorkspacePlanAttention.test.ts`, `supervisionOwnerPublication.test.ts` |
 | › A stall names a gone holder (1) | S5 | `supervisionOwnerPublication.test.ts` |
