@@ -16,7 +16,7 @@
   - C14 kills "no input yields a name".
   - B2 and B4 kill "workspace name outranks the context name" and "context name requires server information".
   - B3 kills "an empty heading instead of `KAWAI`".
-- [ ] 1.3 Split `workspaceName(info)` out of `src/client/utils/pageTitle.ts` and have `pageTitle` return `brandLabels(null, workspaceName(info)).title`. Verify: `bun run test src/client/__tests__/pageTitle.test.ts` passes with T1–T7 unchanged (A5). The mutant "`workspaceName` reads `cwd` first" must fail T1.
+- [x] 1.3 Split `workspaceName(info)` out of `src/client/utils/pageTitle.ts` and have `pageTitle` return `brandLabels(null, workspaceName(info)).title`. Verify: `bun run test src/client/__tests__/pageTitle.test.ts` passes with T1–T7 unchanged (A5). The mutant "`workspaceName` reads `cwd` first" must fail T1.
 
 ## 2. Show it in the app
 
