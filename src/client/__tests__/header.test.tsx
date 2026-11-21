@@ -23,7 +23,7 @@ describe('Header', () => {
 
     let created = 0
     const renderer = TestRenderer.create(
-      <Header connectionStatus="connected" onNewSession={() => { created += 1 }} onOpenSettings={() => {}} tailscaleIp={null} />
+      <Header connectionStatus="connected" onNewSession={() => { created += 1 }} onOpenSettings={() => {}} tailscaleIp={null} contextLabel="KAWAI" />
     )
 
     const statusDot = renderer.root.findAllByType('span').find((node) =>
@@ -55,7 +55,7 @@ describe('Header', () => {
 
   test('shows disconnected status styling', () => {
     const renderer = TestRenderer.create(
-      <Header connectionStatus="disconnected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} />
+      <Header connectionStatus="disconnected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} contextLabel="KAWAI" />
     )
 
     const statusDot = renderer.root.findAllByType('span').find((node) =>
@@ -75,7 +75,7 @@ describe('Header', () => {
 
   test('displays tailscale IP when provided', () => {
     const renderer = TestRenderer.create(
-      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp="100.64.1.2" />
+      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp="100.64.1.2" contextLabel="KAWAI" />
     )
 
     const buttons = renderer.root.findAllByType('button')
@@ -97,7 +97,7 @@ describe('Header', () => {
 
   test('does not display tailscale IP when null', () => {
     const renderer = TestRenderer.create(
-      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} />
+      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} contextLabel="KAWAI" />
     )
 
     const spans = renderer.root.findAllByType('span')
@@ -113,7 +113,7 @@ describe('Header', () => {
 
   test('shows the server version as a tooltip on the title', () => {
     const renderer = TestRenderer.create(
-      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} version="1.0.0-17" />
+      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} version="1.0.0-17" contextLabel="kawai" />
     )
 
     expect(renderer.root.findByType('h1').props.title).toBe('Kawai v1.0.0-17')
@@ -123,9 +123,26 @@ describe('Header', () => {
     })
   })
 
+  test('renders the context label as the heading, one line, with the version tooltip', () => {
+    const renderer = TestRenderer.create(
+      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} version="1.0.0-17" contextLabel="Manga Studio 日本" />
+    )
+
+    const heading = renderer.root.findByType('h1')
+    expect(heading.children).toEqual(['Manga Studio 日本'])
+    expect(heading.props.title).toBe('Kawai v1.0.0-17')
+    // A long name truncates on one line instead of widening the navigator (D4).
+    expect(heading.props.className).toContain('truncate')
+    expect(heading.props.className).toContain('min-w-0')
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
   test('omits the title tooltip without a version', () => {
     const renderer = TestRenderer.create(
-      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} />
+      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} contextLabel="KAWAI" />
     )
 
     expect(renderer.root.findByType('h1').props.title).toBeUndefined()
