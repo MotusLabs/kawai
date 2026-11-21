@@ -458,11 +458,13 @@ Installing this protocol is not activation: the artifacts add role and
 protocol files only — no server, API, schema, or CI behavior — so
 installation alone sends no mail and starts or enrolls no sessions.
 
-**References.** `.kawai/groups/change-leads.md` (coordinator role, D2); this
+**References.** `~/.kawai/groups/change-leads.md` (coordinator role, D2); this
 protocol; `lead.md`'s "Change Lead pilot" section (Team Lead duties); the
 reporting exception in the three developer roles, `reviewers.md`, and the
-user-level reviewer roles (I1); `docs/agent-collaboration.md` (composition,
-one dispatcher per result). Mechanical evidence: Section 11.
+other reviewer roles (I1); `docs/agent-collaboration.md` (composition,
+one dispatcher per result). Mechanical evidence: Section 11. The role groups
+were in this repository's `.kawai/groups/` when Section 11 was recorded; they
+are now user-level configuration in `~/.kawai/groups/`.
 
 **Candidate-selection checklist.** At least two coherent implementation
 groups and meaningful local coordination; stable scope and contracts; not
