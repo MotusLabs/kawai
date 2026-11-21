@@ -171,27 +171,27 @@ async function observed(run: () => Promise<unknown>): Promise<unknown[][]> {
   }
 }
 
-describe('the reference model', () => {
-  // The design's O1–O16 outputs, verbatim, as (status, ref, pin) inputs and the class each output names.
-  const ROWS: Array<[string, Status, Ref, Pin, Expected['class'], string]> = [
-    ['O1', 'open', 'valid', 'current', 'accepted', '{auth} by Kawai | done | —'],
-    ['O2', 'open', 'valid', 'current', 'accepted', '{auth}; earlier stays unaccepted | done | —'],
-    ['O3', 'open', 'valid', 'current', 'accepted', '{auth}; earlier stays unaccepted | done | —'],
-    ['O4', 'open', 'valid', 'current', 'accepted', "{carried round's result} | done | —"],
-    ['O5', 'open', 'valid', 'current', 'accepted', '{that result}, once | done | —'],
-    ['O6', 'open', 'valid', 'current', 'accepted', '{auth}; new result unaccepted | done | —'],
-    ['O7', 'open', 'valid', 'current', 'accepted', "{auth}; later round's result unaccepted | done | —"],
-    ['O8', 'open', 'null', 'current', 'refused', '∅ | open | identity refused: no-round'],
-    ['O9', 'open', 'missing', 'current', 'refused', '∅ | open | identity refused: round-missing'],
-    ['O10', 'open', 'foreign-change', 'current', 'refused', '∅ | open | identity refused: round-mismatch'],
-    ['O11', 'open', 'wrong-commit', 'current', 'refused', '∅ | open | identity refused: commit-mismatch'],
-    ['O12', 'done-human', 'valid', 'current', 'terminal', '{X} by human only | done | —'],
-    ['O13', 'cancelled', 'valid', 'current', 'terminal', 'unchanged (∅ when none) | cancelled | —'],
-    ['O14', 'open', 'valid', 'older', 'stale', '∅ | open | accept failed (needs stated reason)'],
-    ['O15', 'done-kawai', 'valid', 'current', 'terminal', '{auth}, exactly one acceptance row and journal entry | done | —'],
-    ['O16', 'open', 'valid', 'current', 'accepted', 'restart with the merge effect `running`: after inspection, {auth} once | done | —'],
-  ]
+// The design's O1–O16 outputs, verbatim, as (status, ref, pin) inputs and the class each output names.
+const ROWS: Array<[string, Status, Ref, Pin, Expected['class'], string]> = [
+  ['O1', 'open', 'valid', 'current', 'accepted', '{auth} by Kawai | done | —'],
+  ['O2', 'open', 'valid', 'current', 'accepted', '{auth}; earlier stays unaccepted | done | —'],
+  ['O3', 'open', 'valid', 'current', 'accepted', '{auth}; earlier stays unaccepted | done | —'],
+  ['O4', 'open', 'valid', 'current', 'accepted', "{carried round's result} | done | —"],
+  ['O5', 'open', 'valid', 'current', 'accepted', '{that result}, once | done | —'],
+  ['O6', 'open', 'valid', 'current', 'accepted', '{auth}; new result unaccepted | done | —'],
+  ['O7', 'open', 'valid', 'current', 'accepted', "{auth}; later round's result unaccepted | done | —"],
+  ['O8', 'open', 'null', 'current', 'refused', '∅ | open | identity refused: no-round'],
+  ['O9', 'open', 'missing', 'current', 'refused', '∅ | open | identity refused: round-missing'],
+  ['O10', 'open', 'foreign-change', 'current', 'refused', '∅ | open | identity refused: round-mismatch'],
+  ['O11', 'open', 'wrong-commit', 'current', 'refused', '∅ | open | identity refused: commit-mismatch'],
+  ['O12', 'done-human', 'valid', 'current', 'terminal', '{X} by human only | done | —'],
+  ['O13', 'cancelled', 'valid', 'current', 'terminal', 'unchanged (∅ when none) | cancelled | —'],
+  ['O14', 'open', 'valid', 'older', 'stale', '∅ | open | accept failed (needs stated reason)'],
+  ['O15', 'done-kawai', 'valid', 'current', 'terminal', '{auth}, exactly one acceptance row and journal entry | done | —'],
+  ['O16', 'open', 'valid', 'current', 'accepted', 'restart with the merge effect `running`: after inspection, {auth} once | done | —'],
+]
 
+describe('the reference model', () => {
   test('the ordered model reproduces every O1–O16 output class of the decision table', () => {
     for (const [id, status, ref, pin, cls, output] of ROWS) {
       const want = expected(status, ref, pin)
@@ -313,7 +313,7 @@ const TWO: Pick<History, 'steps' | 'head' | 'authorizer' | 'later' | 'humanPick'
 const MECHANISMS: readonly Mechanism[] = ['direct', 'integration']
 const OPEN: readonly Status[] = ['open', 'active', 'blocked']
 
-describe('the decision table and finite-axis completeness at the afterLanded seam', () => {
+describe('decision table rows and finite-axis completeness at the afterLanded seam', () => {
   // The rows not run through the production composition, each under both
   // mechanisms and, where the task is open, under open, active and blocked.
   const TABLE: Array<{ id: string; ref: Ref; statuses: readonly Status[]; pin: Pin; history: Pick<History, 'steps' | 'head' | 'authorizer' | 'later' | 'humanPick'> }> = [
@@ -331,25 +331,49 @@ describe('the decision table and finite-axis completeness at the afterLanded sea
     { id: 'O15', ref: 'valid', statuses: ['done-kawai'], pin: 'current', history: TWO },
   ]
 
-  // @covers: plan-landing › Kawai accepts the authorizing round's own result › A carried round lands
-  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
-  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The task was closed by hand during the merge
-  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing result is pinned to an older revision
-  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The follow-on is replayed
-  test('decision table rows O4, O5, O7–O15 hold at the afterLanded seam under both mechanisms and every open status', async () => {
-    const cases = TABLE.flatMap(row => row.statuses.flatMap(status => MECHANISMS.map(mechanism => ({ row, hist: { ...row.history, status, pin: row.pin, mechanism } }))))
-    expect(cases).toHaveLength(2 * (9 * 3 + 3))
+  /** One row under both mechanisms and each of its statuses, against the model, labelled with the row's verbatim output. */
+  async function tableRow(id: string): Promise<void> {
+    const output = ROWS.find(entry => entry[0] === id.split(' ')[0])![5]
+    const cases = TABLE.filter(row => row.id === id).flatMap(row => row.statuses.flatMap(status => MECHANISMS.map(mechanism => ({ row, hist: { ...row.history, status, pin: row.pin, mechanism } }))))
+    expect(cases.length).toBeGreaterThan(0)
     await overLanes(cases.length, async (lane, k, others) => {
       const { row, hist } = cases[k]!
-      const { built, humanPick } = await seamCase(lane, others, hist, row.ref, `${row.id} ${hist.status} ${hist.mechanism}`)
-      const acceptances = snapshot(lane).acceptances.map(({ id, by }) => ({ id, by }))
-      if (row.id === 'O12') expect(acceptances).toEqual([{ id: humanPick, by: 'human' }])
-      if (row.id === 'O12') expect(humanPick).not.toBe(built.authorizing.resultId)
+      const { built, humanPick } = await seamCase(lane, others, hist, row.ref, `${row.id} [${output}] ${hist.status} ${hist.mechanism}`)
+      const acceptances = snapshot(lane).acceptances.map(({ id: result, by }) => ({ id: result, by }))
       if (row.id === 'O4') expect(built.authorizing.carriedFrom).toBe(built.rounds[0]!.id)
       if (row.id === 'O5') expect(built.authorizing.regateOf).toBe(built.rounds[0]!.id)
-      if (row.id === 'O15') expect(acceptances).toEqual([{ id: built.authorizing.resultId, by: 'system' }])
-    }, 32)
-  }, 600_000)
+      if (row.id === 'O5' || row.id === 'O7') expect(acceptances).toEqual([{ id: built.authorizing.resultId, by: 'system' }])
+      if (row.id === 'O12') expect([humanPick !== built.authorizing.resultId, acceptances]).toEqual([true, [{ id: humanPick, by: 'human' }]])
+      if (row.id === 'O15') {
+        expect(acceptances).toEqual([{ id: built.authorizing.resultId, by: 'system' }])
+        expect(h.tasks.store.journal(lane.taskId).filter(entry => entry.text.startsWith('Accepted result'))).toHaveLength(1)
+      }
+    })
+  }
+
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › A carried round lands
+  test('O4 a carried round lands: the carried round\'s result is accepted by Kawai and the task is done', () => tableRow('O4'), 600_000)
+  test('O5 a re-gate round of a failed round lands: that result is accepted by Kawai once and the task is done', () => tableRow('O5'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › Two results share the landed commit
+  test('O7 a later same-commit round inserted after authorization: the authorizing result is accepted and the later round\'s result is not', () => tableRow('O7'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
+  test('O8 a landing step naming no round accepts nothing, keeps the exact open status and logs no-round', () => tableRow('O8'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
+  test('O9 a landing step naming a missing round accepts nothing, keeps the exact open status and logs round-missing', () => tableRow('O9'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
+  test('O10 a round of another change accepts nothing, keeps the exact open status and logs round-mismatch', () => tableRow('O10 other change'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
+  test('O10 a round of another execution accepts nothing, keeps the exact open status and logs round-mismatch', () => tableRow('O10 other execution'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
+  test('O11 a round on a commit other than the landed head accepts nothing, keeps the exact open status and logs commit-mismatch', () => tableRow('O11'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The task was closed by hand during the merge
+  test('O12 a task done by a human accepting another result keeps that human acceptance only and Kawai accepts nothing', () => tableRow('O12'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The task was closed by hand during the merge
+  test('O13 a task cancelled by the human stays cancelled with its acceptances unchanged', () => tableRow('O13'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing result is pinned to an older revision
+  test('O14 a stale-pinned authorizing result is refused for want of a stated reason and the task stays in its open status', () => tableRow('O14'), 600_000)
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The follow-on is replayed
+  test('O15 a replayed follow-on after Kawai accepted keeps exactly one acceptance row and journal entry', () => tableRow('O15'), 600_000)
 
   // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
   // @covers: plan-landing › Kawai accepts the authorizing round's own result › The task was closed by hand during the merge

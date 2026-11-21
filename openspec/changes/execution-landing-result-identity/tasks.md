@@ -4,7 +4,7 @@ Planning-only proposal: every task below is a future obligation. Nothing here is
 
 ## 1. Oracles first (before production code)
 
-- [ ] 1.1 Commit the decision table O1–O16 verbatim as a table-driven test in `src/server/__tests__/landingResultIdentity.integration.test.ts`, one test per row whose title starts with the oracle id, each with its `// @covers: plan-landing › Kawai accepts the authorizing round's own result › <scenario>` annotation where a scenario applies. Verify: on the base head, O2 and O3 fail (the earlier same-commit result is accepted) and O1, O12–O15 pass; record that negative-control run with its head.
+- [ ] 1.1 Commit the decision table O1–O16 verbatim as table-driven tests — the production-composition rows (O1, O2, O3, O6, O9, O16) in `src/server/__tests__/landingResultIdentity.integration.test.ts`, the seam rows (O4, O5, O7–O15) beside the one reference model in `src/server/__tests__/landingResultIdentityProperties.test.ts` (Lead decision, local placement) — one test per row whose title starts with the oracle id, each with its `// @covers: plan-landing › Kawai accepts the authorizing round's own result › <scenario>` annotation where a scenario applies. Verify: on the base head, O2 and O3 fail (the earlier same-commit result is accepted) and O1, O12–O15 pass; record that negative-control run with its head.
 - [ ] 1.2 Commit properties P1–P3 in `src/server/__tests__/landingResultIdentityProperties.test.ts` with their seeds and `propertyCases(64)`, using the in-tree mulberry32 pattern and no new dependency. Verify: P1 fails on the base head with a printed seed and case.
 
 ## 2. Bind acceptance to the authorizing round
