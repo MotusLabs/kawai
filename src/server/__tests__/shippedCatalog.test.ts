@@ -120,7 +120,8 @@ describe('grouped shipped default on a fresh HOME', () => {
     const { profiles, errors } = resolveProfileCatalog(freshHomeCtx())
     expect(errors).toEqual([])
     for (const [id, label, model] of [
-      ['codex-sol', 'Codex Sol', 'gpt-6.1-sol'],
+      ['codex-sol', 'Codex Sol', 'gpt-6.2-sol'],
+      ['codex-astra', 'Codex Astra', 'gpt-6.2-astra'],
       ['codex-luna', 'Codex Luna', 'gpt-6-luna'],
     ]) {
       // Codex entries sit outside every provider: the provider id is the
