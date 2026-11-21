@@ -149,9 +149,15 @@ Key namespaces are disjoint: every key the prepared entry writes starts
 with `handoff:`, and no key the ordinary entry accepts does, so neither
 command can replay the other's revision. A replay of the prepared command
 resolves through `resolveKey` to the revision whose `handoff_id` is this
-handoff (H14). A prepared publish after the handoff was published through
-its linked draft finds no revision under `handoff:<id>` and is refused by
-the state check naming the linked revision (H16b); a linked-draft publish
+handoff (H14). Whether a handoff has an associated revision is one
+task-scoped fact, read the same way by every reader (H-PUB, H-RESTART,
+U1): a revision of the task whose `handoff_id` is this handoff, whatever
+its request key. The prepared-key lookup is a separate fact used only as
+replay and orphan evidence, never to infer association. A prepared
+publish after the handoff was published through its linked draft finds no
+revision under `handoff:<id>`, finds the associated revision under the
+draft's ordinary key, and is refused by the state check naming that
+linked revision (H16b); a linked-draft publish
 after a prepared publish is refused by the existing stale-base check
 (H38s). A revision holding `handoff:<id>` without the association cannot
 arise (U6: the ordinary entry refuses the prefix, and before this change
@@ -385,22 +391,50 @@ team/id, key, right, status, base, payload, pending.
 
 **H-PUB — Publish prepared revision** (human `team-task-handoff-publish`
 or owner `task_amend { handoff_id }`, the prepared entry; it takes no
-caller key). Axes: the derived key's revision (none, carries this
-handoff's association; one carrying no association is U6, proved by
-DF6);
-publisher right (human or owner, other); extra fields beside `handoff_id`
-on `task_amend` (none, some); handoff state (open, stale, published,
-declined, withdrawn, superseded, closed). Order: team/id, key, extra
-fields, right, state.
+caller key). Axes, read from one consistent snapshot of the task's
+revisions and the handoff row:
+
+- revision facts R (findings-4b13b98a), the joint domain of the
+  task-scoped association (a revision whose `handoff_id` is H.id, any
+  key) and the prepared-key row (the revision whose stored key is exactly
+  `handoff:<H.id>`), under the unique (`task_id`, `request_key`) and
+  unique `handoff_id` constraints: **R0** no associated revision, no
+  prepared-key row; **R1** no associated revision, an orphan prepared-key
+  row; **R2** the associated revision is the prepared-key row; **R3** the
+  associated revision carries another key, no prepared-key row (a linked
+  draft's ordinary key); **R4** the associated revision carries another
+  key, plus a separate orphan prepared-key row. These five cells are every
+  consistent combination; the two facts are never inferred from each
+  other;
+- publisher right (human or owner, other); extra fields beside
+  `handoff_id` on `task_amend` (none, some);
+- handoff state (open, stale, published, declined, withdrawn, superseded,
+  closed), every state kept.
+
+Declared product 5 × 2 × 2 × 7 = 140. Reasons: U1 when (state is
+`published`) differs from association present (R2, R3, R4); U6 when an
+orphan prepared-key row exists (R1, R4). The empty-reason (R, state)
+pairs are R0 with each non-published state, R2 with `published` and R3
+with `published`: 8 × 4 = 32 healthy tuples, 108 excluded. Order for
+healthy tuples: team/id, key, extra fields, right, state.
+
+Paired witnesses (asserted on classification): R3, `published`, human,
+no extras → empty, H16b naming the linked revision; R0, `published`,
+same caller → `{U1}`, zero H rows (the pair differs only in the
+association, both lacking a prepared-key row). R2, `published` → empty,
+H14. R0, `open` → empty, H12. R1, `open` → `{U6}` (DF6). R4,
+`published` → `{U6}`, no H16b, and the orphan is never returned as the
+fulfilling revision. Every other tuple keeps all its reasons (R3 with
+`open` is `{U1}`; R4 with `open` is `{U1, U6}`).
 
 | Id | First failing check, or the accepted case | Result |
 | --- | --- | --- |
-| H14 | key revision carries this handoff's association (replay, including concurrent duplicates) | that revision returned; no revision, notice, fact, event or mail written (snapshot of every handoff, revision, notice, wakeup and mailbox row identical before and after) |
+| H14 | R2 with `published`: the prepared-key row carries this handoff's association (replay, including concurrent duplicates) | that revision returned; no revision, notice, fact, event or mail written (snapshot of every handoff, revision, notice, wakeup and mailbox row identical before and after) |
 | H35 | extra fields on `task_amend` | refused; nothing written |
 | H13 | right: other agent or Kawai | refused as their publication is; handoff unchanged |
-| H15 | state stale, declined, withdrawn, superseded or closed | refused naming the state |
-| H16b | state published (through its linked draft: the derived key names no revision) | refused naming published and the linked revision; no cross-command replay |
-| H12 | state open, accepted | revision N+1 with the prepared fields and `handoff_id`; handoff `published` with N+1; notices iff notify; one fact; one wakeup `published` |
+| H15 | R0 with state stale, declined, withdrawn, superseded or closed | refused naming the state |
+| H16b | R3 with state published (through its linked draft: associated revision under an ordinary key, no prepared-key row) | refused naming published and the linked revision; no cross-command replay |
+| H12 | R0 with state open, accepted | revision N+1 with the prepared fields and `handoff_id`; handoff `published` with N+1; notices iff notify; one fact; one wakeup `published` |
 
 **H-DRAFT — load into draft and publish the linked draft** (human only).
 Load axes: caller (human, agent); handoff state; draft (none, exists);
@@ -473,7 +507,7 @@ key, a past refusal or prose:
 
 | Observation | Values | Source |
 | --- | --- | --- |
-| `associationPresent` | true, false | a revision of T whose server-written `handoff_id` is H.id |
+| `associationPresent` | true, false | a revision of T whose server-written `handoff_id` is H.id, whatever its request key (the same fact H-PUB reads) |
 | `unassociatedReservedKeyPresent` | true, false | a revision of T whose stored `request_key` is exactly `handoff:<H.id>` (the prepared entry's canonical key, resolved by (`task_id`, `request_key`) as `taskStore.ts` does today) and whose `handoff_id` is not H.id, null included |
 | task status | open, closed | T's status |
 | base relation | current, behind | T's revision against H's `base_revision` |
@@ -481,8 +515,10 @@ key, a past refusal or prose:
 
 The two revision facts are independent: both can be true in one
 defensive snapshot (an associated revision plus a separate orphan
-reserved key), so neither is inferred from the other. An orphan key never
-proves publication.
+reserved key), so neither is inferred from the other. They are H-PUB's
+revision facts R projected onto two booleans: R0 (false, false), R1
+(false, true), R2 and R3 (true, false), R4 (true, true). An orphan key
+never proves publication.
 
 | Id | Case | Result |
 | --- | --- | --- |
@@ -522,12 +558,12 @@ prefilter:
 
 | Claim | Evaluated in | Declared observations it reads |
 | --- | --- | --- |
-| U1 | H-PUB, H-RESTART | H-PUB: derived key's revision carries the association × state; H-RESTART: `associationPresent` × state |
+| U1 | H-PUB, H-RESTART | the task-scoped association (any key) × state, in both: H-PUB's R (R2, R3, R4 present) and H-RESTART's `associationPresent`; never the prepared-key row alone |
 | U2 | H-REQ | pending handoff on the task (the partial unique index; a second pending row is not a declared value, so U2 is proved by the migration test, not enumerated) |
 | U3 | H-RESTART | state × base relation |
 | U4 | none enumerated | an ended state is a declared value whose commands have rows (H26, H40, H15, H37); the claim that its row never changes is proved by task 2.2's guarded-`UPDATE` rows |
 | U5 | H-RESTART, table W (W-U1) | state (pending) × task status |
-| U6 | H-PUB, H-RESTART | H-PUB: derived key's revision without the association; H-RESTART: `unassociatedReservedKeyPresent` |
+| U6 | H-PUB, H-RESTART | the prepared-key row without H's association: H-PUB's R (R1, R4) and H-RESTART's `unassociatedReservedKeyPresent` |
 | U7 | H-DRAFT | draft base relation × linked handoff state |
 
 Completeness claim (findings-7c473fea F4: exclusion is one
@@ -563,7 +599,8 @@ then task closed, then base advanced.
 | DF4b | orphan reserved key, no association, task open, base behind (the task advanced), `open` | {U3, U6} | startup sweep, then a second restart | first: never `published`, `stale` only because the task advanced, one `stale` wakeup; second: still excluded as `{U6}` (now `stale`), writes and sends nothing, the orphan revision is kept |
 | DF5 | associated revision on a closed task, base behind | {U1, U3, U5} | startup sweep | `published` once (association first), one `published` wakeup, no `closed` or `stale` |
 | DF5o | DF5's snapshot plus a separate orphan reserved-key revision | {U1, U3, U5, U6} | startup sweep | as DF5: `published` with the associated revision (never the orphan), one `published` wakeup; the orphan revision is kept |
-| DF6 | revision holding `handoff:<id>` with no association | {U6} | Publish prepared revision | refused naming that revision; handoff unchanged; never `published` |
+| DF6 | revision holding `handoff:<id>` with no association (R1), handoff `open` | {U6} | Publish prepared revision | refused naming that revision; handoff unchanged; never `published` |
+| DF6p | R4: the handoff `published` through its linked revision, plus an orphan `handoff:<id>` row | {U6} | Publish prepared revision | refused; the orphan is never returned as the fulfilling revision; nothing written |
 
 ### Table W — attention for a handoff
 
@@ -755,6 +792,10 @@ which.
   only the first matching U reason (positive control fails: DF5's set
   reads `{U1}` instead of `{U1, U3, U5}`, DF4b's `{U6}` instead of
   `{U3, U6}`).
+- MU21 association is read as "the prepared-key row carries this
+  handoff's association" instead of the task-scoped any-key fact: the R3
+  and R0 `published` witnesses collapse (R3 reads `{U1}`), so H16b's
+  classification assertion fails (H-PUB witnesses, U fact table).
 - MU20 the classifier drops `unassociatedReservedKeyPresent` (or H29
   ignores it): paired witnesses (1) and (2) collapse onto one tuple, so
   either the H29/U6 overlap or a missing `{U6}` fails the classification
@@ -844,7 +885,7 @@ states. There is no in-place downgrade.
 
 ### Acceptance
 - A1: `task_request_publication` records one `open` handoff per partition H-REQ (H1–H11, in its check order), with exact provenance (task, base revision and contract identity, requester, payload hash, base commit, evidence) and no revision, notice, fact or mail.
-- A2: **Publish prepared revision** (human command and owner `task_amend { handoff_id }`) publishes exactly one revision through `TaskService`'s one publication routine (the prepared entry) with the prepared fields, notices per notify, the server-written `team_task_revisions.handoff_id` association and the handoff `published`, per H-PUB and H-DRAFT (H12–H19, H33d, H35–H38s); fulfillment is read only from that association; the ordinary entry computes the canonical key once (`requestKey?.trim() || undefined`, as today) and refuses it when it carries the reserved `handoff:` prefix, whatever whitespace surrounded the raw input, before reading any draft or handoff, looking up a replay or writing, and uses only that canonical key for lookup and storage, with no exemption for a linked draft (H33, H33d), and only the prepared entry builds `handoff:<id>`, so neither command replays the other's revision (H16b, H38s); DF6 refuses a key without its association.
+- A2: **Publish prepared revision** (human command and owner `task_amend { handoff_id }`) publishes exactly one revision through the prepared entry with the prepared fields, notices per notify, the server-written `handoff_id` association and the handoff `published`, per H-PUB and H-DRAFT (H12–H19, H33d, H35–H38s). Association is the task-scoped any-key fact in every reader, over H-PUB's revision facts R0–R4 (140 tuples, 32 healthy); fulfillment is read only from it. The ordinary entry trims the request key once (as today), refuses a reserved `handoff:` key before any draft read, replay lookup or write, and uses only that key for lookup and storage, with no linked-draft exemption (H33, H33d); only the prepared entry builds `handoff:<id>`, so neither command replays the other's revision (H16b, H38s); DF6/DF6p refuse an orphan prepared key without returning it.
 - A3: Every publication not from a pending handoff makes it `stale`, every task close (including `prepareStatus` and override cancellations) makes it `closed`, decline and withdraw end it with reason and actor, and neutral events change nothing, per H-OTHER, H-SETTLE, H-CLOSE and H-NEUTRAL (H20–H28b, H39, H40).
 - A4: The schema is one numbered migration appended to `MIGRATIONS` (never the baseline or a constructor), and startup reconciliation runs from `SessionMailbox.start()` before dispatch release, changing nothing in the healthy domain (H29, which requires neither an associated revision nor an orphan reserved key in one pre-sweep snapshot) and applying DF1–DF5o once to seeded defensive fixtures (CP3), with its row in `docs/recovery-matrix.md`.
 - A5: Each `published`, `declined`, `stale` and `closed` transition enqueues exactly one system message to the live requester, else its group, in the transition's transaction.
@@ -905,7 +946,7 @@ states. There is no in-place downgrade.
 ### Verification
 - V1: Tables H (every partition), W, F and S (rows and transitions S7–S10) are committed verbatim as table-driven tests beside the code they cover, with H's completeness test enumerating each partition's full axis product against its rows and U1–U7 (an empty reason set matches exactly one row; a nonempty set, possibly of several reasons, matches no row and is kept whole), the DF fixtures in their own test classified with their complete reason sets before their repair is asserted, and W's completeness against W1–W13 with W12d.
 - V2: P1–P7 run with the stated seeds and case counts through `propertyCases`; P4 runs the H table as the reference model with a crash at each named transaction boundary.
-- V3: Each mutant MU1–MU20 (with MU1b–MU1f, MU15b, MU15c, MU16b) is applied once and makes its cited oracle fail; the result maps each oracle id to a test title and a killed mutant.
+- V3: Each mutant MU1–MU21 (with MU1b–MU1f, MU15b, MU15c, MU16b) is applied once and makes its cited oracle fail; the result maps each oracle id to a test title and a killed mutant.
 - V4: CP1, CP2 and CP3 pass through the production composition before the work expands past them, with their failure paths and omission mutants.
 - V5: The blind oracle reading (inputs-only commit, a cross-model advisor's outputs, author's outputs, resolved diff) is journaled and bound by the Lead before production code.
 - V6: `bun run check` passes on the clean committed head with the pinned Bun, and `scripts/verify-result.ts` runs on the submitted commit; UI changes are verified in a real browser against a disposable server and database. The migration is covered by `src/server/__tests__/schemaMigrations.test.ts` and a new migration test (fresh database, a database at the previous version, a failing `up` rolling back with its backup).
