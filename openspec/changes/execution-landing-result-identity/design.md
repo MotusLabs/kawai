@@ -185,7 +185,7 @@ None blocking. The choice in D2 not to re-check the authorizing round's outcome 
 
 - V1: The decision table is committed as a table-driven test whose rows carry the oracle ids; each property runs seeded through `propertyCases`.
 - V2: The result maps each oracle id and property to a literal test title and each mutant to the test that killed it, with the negative control for O2 run on the base head.
-- V3: `bun run check --full-properties` passes on the clean committed head, and `scripts/verify-result.ts` exits 0 for that commit.
+- V3: The clean committed implementation head passes `bun run check --full-properties` under the selected latest stable Bun. Run the complete, unfiltered `scripts/verify-result.ts --commit <head> --coverage <map>` and disclose its exit code and every diagnostic. Commit identity, current HEAD, clean state, the matching recorded certificate and toolchain, the authoritative base/integration checks, scope and all cited test outcomes must pass, with zero unresolved citations. An exit of 1 is allowed only when its sole failed category is comparison against unrelated open-task branches, and the Lead records evidence that those conflicts pre-exist and are neither introduced nor worsened by this change. A conflict with the authoritative base or a required dependency, any new or worsened conflict, any result-owned verification failure, and any omitted required check still block completion. Do not suppress diagnostics, weaken the verifier or a guard, invent a filter flag, skip failing tests, modify held branches, or claim the global verifier passed.
 
 ### Excluded
 
