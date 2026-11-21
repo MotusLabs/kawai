@@ -44,7 +44,7 @@ export async function afterLanded(deps: LandingDeps, row: ChangeRow, executionId
 The direct follow-on passes `{ head, roundId: effect.roundId ?? null }`; `fastForwarded` passes `{ head: sha, roundId: effect.roundId }`.
 
 Alternatives rejected:
-- *Last round on the commit* (`filter(...).at(-1)`): agrees with D1 only while no round is inserted after authorization; it is still a commit search and carries no authority. A commit never identifies a result (contract I2).
+- *Last round on the commit* (`filter(...).at(-1)`): agrees with D1 only while no round is inserted after authorization; it is still a commit search and carries no authority. A commit never identifies a result (contract I1).
 - *Latest passing round*: re-derives authority at follow-on time instead of reading what authorized the step; a replay after a later round would drift.
 - *Newest unsuperseded result of the task*: may name a result submitted during the merge that was never gated.
 - *Storing a result id on the effect or the landing fact*: duplicates what the round already records and needs a migration.
