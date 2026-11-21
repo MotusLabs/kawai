@@ -50,8 +50,14 @@ sources:
 
 ### D1. A dedicated handoff record, not a draft, card, or widened right
 
-New tables (additive, in a new `taskHandoffSchema.ts` migrated from
-`TaskStore`'s constructor beside `migrateRevisionSchema`):
+The schema is one new numbered migration, `taskHandoffMigration` in a
+new `src/server/team/taskHandoffSchema.ts`, appended to `MIGRATIONS` in
+`src/server/dbSafety/migrations.ts` (the next dense version after the last
+entry at implementation time). It is never added to the frozen baseline
+(`baseline.ts`, `ensureTaskSchema`) or to a store constructor: stores never
+create their own tables (`docs/architecture/database.md`), and the
+migration runner takes the `pre-migration-<n>` backup and applies `up` and
+its version row in one transaction. Additive, no backfill:
 
 - `team_task_handoffs`: `id`, `team_id`, `task_id`, `base_revision`,
   `base_contract_hash` (null without a contract), `direction`,
@@ -68,6 +74,10 @@ New tables (additive, in a new `taskHandoffSchema.ts` migrated from
   the mailbox `message_id`.
 - `team_task_drafts.handoff_id` (nullable column) links a draft loaded
   from a handoff.
+- `team_task_revisions.handoff_id` (nullable column, partial unique index
+  `(handoff_id) WHERE handoff_id IS NOT NULL`): the server-written
+  association between a revision and the handoff it fulfilled (D3). It is
+  the only proof of fulfillment; older revisions read null.
 
 Alternatives: (a) write the prepared content into the human's draft —
 rejected: one draft per task, human-private, an agent write would clobber
@@ -92,26 +102,48 @@ it removes the human's publication authority (I1 of the contract below).
 Alternative: any team agent may request — rejected: it lets the reviewer
 or developer whose work the correction judges prepare its own contract.
 
-### D3. Publishing reuses `TaskService.publish` under a derived key
+### D3. Publishing reuses `TaskService.publish`; fulfillment is a server-written association
 
-`TaskPublishInput` gains `handoffId`. **Publish prepared revision** (human
-command `team-task-handoff-publish`; owner `task_amend { handoff_id }`)
-calls `publish` with the handoff's prepared fields, `baseRevision` =
-`base_revision`, `notify` = the handoff's choice, and
-`requestKey = 'handoff:' + id`. Inside the `within` callback the handoff
-row is re-read and must still be `open`; it moves to `published` with the
-new revision and writes its event and wakeup rows. Everything — revision,
-notices, findings re-map, handoff transition, wakeup mail — commits or
-rolls back together. A replay hits the unique request key and returns the
-prior revision; the handoff is already `published` with that revision, so
-nothing else is written (H14). `task_amend` with `handoff_id` refuses any
-direction, acceptance or contract argument beside it.
+Invariant: a handoff is fulfilled only by a revision whose row the
+handoff transaction wrote with that handoff's id. A request key, a
+matching payload, or both never prove fulfillment (findings-6e7d3c2c F1:
+`TaskStore.publish` resolves a matching key before the base check and
+before `within`, so a key alone cannot show the handoff transaction ran).
+
+`TaskPublishInput` gains a server-internal `handoffId`, never read from a
+client or agent payload. **Publish prepared revision** (human command
+`team-task-handoff-publish { handoffId, requestKey }`; owner `task_amend
+{ handoff_id }`) re-reads the handoff, refuses unless it is `open`, and
+calls `publish` with its prepared fields, `baseRevision` =
+`base_revision`, `notify` = its choice, `handoffId`, and the server-built
+key `handoff:<id>`. Inside `within` the handoff row is re-read and must
+still be `open`; the revision row gets `handoff_id`, the handoff moves to
+`published` with the new revision, and its event and wakeup rows are
+written. Revision, association, notices, findings re-map, transition and
+wakeup mail commit or roll back together.
+
+Key namespaces: the `handoff:` prefix is reserved for revision keys.
+`TaskService.publish` refuses a caller-supplied `requestKey` starting with
+`handoff:` unless the call is the handoff path's own (it carries
+`handoffId`), before any read (H33); today only `team-task-publish`
+supplies a key (`task_amend` sends none), so an ordinary publication can
+never occupy a handoff's key. A replay of the handoff's
+own command resolves through `resolveKey` to the revision whose
+`handoff_id` is this handoff (H14); if a revision holds the key but not
+the association — only possible from a pre-change row, since the prefix
+was not reserved before — the publish is refused naming that revision and
+the handoff is left as it is (H34). `task_amend` with `handoff_id`
+refuses any direction, acceptance or contract argument beside it.
 
 **Edit before publishing** copies the handoff into the draft
 (`team-task-handoff-load-draft`, requiring `replace: true` when a draft
-exists) and sets `handoff_id`. Publishing that draft passes `handoffId`;
-the handoff becomes `published` with `published_payload_hash` set to the
-published payload's hash, shown as "published as edited" when it differs.
+exists) and sets the draft's `handoff_id`. Publishing that draft goes
+through `team-task-publish` with the human's ordinary key; the server
+reads the draft's `handoff_id` (never the client payload), passes it as
+`handoffId`, and the association is written as above, with
+`published_payload_hash` shown as "published as edited" when it differs.
+A replay of that ordinary key returns its revision, which already carries
+the association.
 
 ### D4. Every publication path checks pending handoffs in its transaction
 
@@ -119,11 +151,15 @@ The stale transition lives in `TaskStore.publish`, not in `TaskService`,
 so the human form, `task_amend`, a handoff publication and any future
 path cannot bypass it (oracle hazard "Several readers disagreeing on
 derived state"). After inserting revision N, a pending handoff of the
-task that this publication does not fulfill moves `open → stale` naming N
-(a `stale` one stays stale; its wakeup is keyed once). Closing the task —
-every `done`/`cancelled` transition, including Kawai's — moves a pending
-handoff to `closed` in the status transaction (`TaskService.setStatus`'s
-transaction, beside `onStatusTransition`).
+task whose id is not this publication's `handoffId` moves `open → stale`
+naming N (a `stale` one stays stale; its wakeup is keyed once). Closing
+the task — every `done`/`cancelled` transition through
+`TaskService.setStatus` or `prepareStatus`, including Kawai's and the
+override path's cancellation of earlier fix tasks
+(`src/server/plans/decisions/fixTasks.ts`, `prepareOverrideFix`) — moves a
+pending handoff to `closed` in that status transaction. A `published`
+handoff is not changed by closing; its follow-up item ends because the
+task is closed (D5).
 
 ### D5. States, and one derived follow-up phase
 
@@ -135,11 +171,28 @@ The follow-up phase of a `published` handoff is derived at read time by
 one pure function, `handoffPhase(handoff, task, publicationDetail,
 holder, executionOwns)` in `src/shared/taskHandoffs.ts`, from the facts
 the publication detail already shows (notice state, delivered and
-acknowledged revision per holder) and holder liveness:
-`no-holder` > `notice-failed` > `not-notified` > `awaiting-ack` >
-`acknowledged`. Attention, the supervision loader and `task_get` all call
-it. Nothing new is stored for notice or acknowledgement, so restart has
-nothing to reconcile for it.
+acknowledged revision per holder), holder liveness and task status. First
+match wins:
+
+1. `task-closed` — the task is `done` or `cancelled`: no follow-up item.
+2. `acknowledged` — the current claimant's acknowledged revision is at
+   least the published revision: no item, whatever any notice's state
+   (a failed or uncertain notice followed by an acknowledgement through
+   another path needs nothing more).
+3. `no-holder` — no live claimed assignment.
+4. `notice-uncertain` — the claimant's newest notice for that revision or
+   later is `uncertain`: the human resolves it in the Mailbox (Retry or
+   Discard), as `TaskPublications.tsx` already directs; **Notify** and
+   **Retry notification** stay suppressed, as `taskNotices.ts` `reached`
+   suppresses them.
+5. `notice-failed` — that notice is `failed` (dead, cancelled, discarded,
+   forwarded): **Retry notification**.
+6. `not-notified` — no notice, and nothing at that revision delivered.
+7. `awaiting-ack` — queued or delivered, not acknowledged.
+
+Attention, the supervision loader and `task_get` all call it. Nothing new
+is stored for notice or acknowledgement, so restart has nothing to
+reconcile for it.
 
 ### D6. Wakeups are system mail written in the transition's transaction
 
@@ -160,14 +213,23 @@ already trusts for revision notices.
 
 ### D7. Startup reconciliation
 
-At startup, one idempotent sweep reads pending handoffs and applies, in
-this order: a revision whose `request_key` is `handoff:<id>` exists →
-`published` (defensive; D3 makes it unreachable); the task is
-`done`/`cancelled` → `closed`; the task's revision exceeds the base and
-the handoff is `open` → `stale`. Each applies with its wakeup row, so the
-sweep sends a message only for a transition it performs. This is a
-recovery mechanism, so it adds its `docs/recovery-matrix.md` row. It holds
-no exclusive slot, so no liveness predicate is needed.
+At startup, one idempotent sweep (`reconcileHandoffs` in
+`taskHandoffStore.ts`) reads pending handoffs and applies, in this order:
+a revision whose `handoff_id` is this handoff exists → `published`
+(defensive; D3 makes it unreachable, H31a); the task is `done`/`cancelled`
+→ `closed` (H31b); the task's revision exceeds the base and the handoff is
+`open` → `stale` (H31c). A revision that merely carries a `handoff:` key
+without the association is never fulfillment (H34). Each applies with its
+wakeup row, so the sweep sends a message only for a transition it
+performs.
+
+Production hook: `SessionMailbox.start()` (`src/server/team/
+sessionMailbox.ts`) calls the sweep after `reconcileMailbox` and before
+`this.dispatcher.release()`, so the wakeup mail it enqueues is dispatched
+by the first cycle; `ChatSessionManager` already calls `teamMail.start()`
+once after persisted chat records are restored. This is a recovery
+mechanism, so it adds its `docs/recovery-matrix.md` row. It holds no
+exclusive slot, so no liveness predicate is needed.
 
 ### D8. Attention sources
 
@@ -244,82 +306,175 @@ mailbox rows. `*` is a don't-care.
 
 ### Table H — handoff commands
 
-Axes: command; handoff state before (`none`, `open`, `stale`, `published`,
-terminal-other = `declined`/`withdrawn`/`superseded`/`closed`); actor's
-right for the command (yes/no); validity (base current, task open, same
-team, payload valid); key relation (new, replay-same, replay-different).
+Each command is its own partition with fixed axes. Inside a partition
+the refusal checks run in the order given, and the first failing check is
+the result. So a tuple with several failing conditions (for example an
+authorized request on a closed task with a stale base) matches exactly
+one row: the earliest failing check. Every partition starts with the same
+two checks: a task or handoff of another team gets the same not-found as
+an unknown id (H4), and an unknown id is not found (H16). Each refused row
+writes nothing: no handoff, event, revision, notice, fact, draft change
+or mail.
 
-| Id | Command | State before | Right | Validity / key | Result |
-| --- | --- | --- | --- | --- | --- |
-| H1 | request | none | yes | valid, new | handoff `open`; task revision unchanged; no notice, fact or mail |
-| H2 | request | * | yes | base not current | refused naming current revision; nothing written |
-| H3 | request | * | yes | task done/cancelled | refused naming status; nothing written |
-| H4 | request | * | * | foreign team | same not-found as unknown id; nothing written |
-| H5 | request | * | no (group cannot create tasks) | * | refused suggesting `task_note`/message; nothing written |
-| H6 | request | * | no (caller is live owner) | * | refused naming `task_amend`; nothing written |
-| H7 | request | * | yes | bad contract, empty, oversize, bad ref, unknown commit | refused naming the problem; nothing written |
-| H8 | request | open/stale | yes, same requester or group | valid, new | old `superseded` by new; new `open`; no wakeup |
-| H9 | request | open/stale | yes, other group | valid, new | refused naming pending handoff and requester |
-| H10 | request | * | yes | replay-same | returns existing handoff; nothing written |
-| H11 | request | * | yes | replay-different | refused naming differing field; nothing written |
-| H12 | publish-prepared | open | yes | base current, new key | revision N+1 with prepared fields; `published`; notices iff notify; one fact; one wakeup `published` |
-| H13 | publish-prepared | open | no (other agent, Kawai) | * | refused as publication is; unchanged |
-| H14 | publish-prepared | published | yes | replay-same (incl. concurrent) | same revision returned; no revision, notice, fact or mail written |
-| H15 | publish-prepared | stale/terminal-other | yes | * | refused naming state |
-| H16 | publish-prepared | none | * | unknown id | not found |
-| H17 | publish edited draft | open | yes | draft linked | revision N+1 with edited fields; `published` as edited; both hashes; one wakeup |
-| H18 | load into draft | open/stale | human | draft exists, not confirmed | refused; draft and handoff unchanged |
-| H19 | load into draft | open | human | confirmed or no draft | draft holds prepared fields, linked; handoff `open` |
-| H20 | other publication | open | * | * | `stale` naming the new revision; one wakeup `stale` |
-| H21 | other publication | stale | * | * | stays `stale`, newest revision shown; no second wakeup |
-| H22 | decline | open/stale | yes (human/owner), reason | * | `declined` with reason and actor; one wakeup `declined` |
-| H23 | decline | open/stale | no, or no reason | * | refused; unchanged |
-| H24 | withdraw | open/stale | yes (requester side), reason | * | `withdrawn`; no wakeup |
-| H25 | withdraw | open/stale | no | * | refused; unchanged |
-| H26 | settle (decline/withdraw) | published/terminal-other | * | * | refused naming state |
-| H27 | task closed | open/stale | * | * | `closed`; one wakeup `closed` |
-| H28 | neutral event (card answer/decision/override, note, mail, time, archive, exhaustion) | * | * | * | handoff rows unchanged; task revision unchanged |
-| H29 | restart | consistent | * | * | nothing changes; no mail |
-| H30 | restart | open, task revision > base | * | * | `stale` once with its wakeup |
-| H31 | restart | open/stale, task closed | * | * | `closed` once with its wakeup |
+**H-REQ — `task_request_publication`.** Axes: key relation (new,
+replay-same, replay-different); requester right (ok, group cannot create
+tasks, caller is the live owner); task status (open, closed); base (current,
+behind); payload (valid, invalid); pending handoff on the task (none,
+open/stale by the requester side, open/stale by another group). Order:
+team/id, key, right, status, base, payload, pending.
+
+| Id | First failing check, or the accepted case | Result |
+| --- | --- | --- |
+| H10 | key replay-same | returns the existing handoff in its current state, even if the task moved past its base or closed since; nothing written |
+| H11 | key replay-different | refused naming the first differing field (direction, acceptance, contract, rationale, notify, base revision, base commit, evidence) |
+| H5 | right: group cannot create tasks | refused suggesting `task_note` or a message to the owner |
+| H6 | right: caller is the live owner | refused naming `task_amend` |
+| H3 | status: closed | refused naming the status |
+| H2 | base: behind | refused naming the current revision |
+| H7 | payload invalid | refused naming the first problem in field order: direction, acceptance, contract parse, rationale, size limits, evidence references, base commit |
+| H9 | pending by another group | refused naming the pending handoff and its requester |
+| H8 | pending by the requester side, else accepted | old handoff `superseded` by the new one in one transaction; new `open`; no wakeup |
+| H1 | none pending, accepted | handoff `open`; task unchanged; no notice, fact or mail |
+
+**H-PUB — Publish prepared revision** (human `team-task-handoff-publish`
+or owner `task_amend { handoff_id }`). Axes: the derived key's revision
+(none, carries this handoff's association, carries no association);
+publisher right (human or owner, other); extra fields beside `handoff_id`
+on `task_amend` (none, some); handoff state (open, stale, published,
+declined, withdrawn, superseded, closed). Order: team/id, key, extra
+fields, right, state.
+
+| Id | First failing check, or the accepted case | Result |
+| --- | --- | --- |
+| H14 | key revision carries this handoff's association (replay, including concurrent duplicates) | that revision returned; no revision, notice, fact, event or mail written (snapshot of every handoff, revision, notice, wakeup and mailbox row identical before and after) |
+| H34 | key revision carries no association (pre-change row) | refused naming that revision; handoff unchanged; it is never marked published |
+| H35 | extra fields on `task_amend` | refused; nothing written |
+| H13 | right: other agent or Kawai | refused as their publication is; handoff unchanged |
+| H15 | state stale, declined, withdrawn, superseded or closed | refused naming the state |
+| H16b | state published (as edited, through its draft) | refused naming published and its revision |
+| H12 | state open, accepted | revision N+1 with the prepared fields and `handoff_id`; handoff `published` with N+1; notices iff notify; one fact; one wakeup `published` |
+
+**H-DRAFT — load into draft and publish the linked draft** (human only).
+Load axes: caller (human, agent); handoff state; draft (none, exists);
+`replace` (false, true). Order: team/id, caller, state, draft/replace.
+Publish axes: the existing `team-task-publish` checks run first,
+unchanged (ordinary key replay, rationale, stale base); then the linked
+handoff's state.
+
+| Id | First failing check, or the accepted case | Result |
+| --- | --- | --- |
+| H36 | load by an agent | refused: drafts are the human's |
+| H37 | load of a handoff not `open` (stale or ended) | refused naming the state; draft unchanged |
+| H18 | load with a draft and `replace` false | refused; draft and handoff unchanged |
+| H19 | load accepted | draft holds the prepared fields with `handoff_id`; handoff `open` |
+| H17 | publish linked draft, handoff `open` | revision N+1 with the edited fields and `handoff_id`; handoff `published` as edited with both hashes; one wakeup |
+| H38 | publish linked draft, handoff no longer `open` | published as an ordinary revision with no association; the ended handoff is unchanged |
+
+**H-OTHER — a publication not from this handoff** (any author, any path
+without this `handoffId`). Axes: the key (ordinary, reserved prefix);
+the task's pending handoff state.
+
+| Id | Case | Result |
+| --- | --- | --- |
+| H33 | caller-supplied key starts with `handoff:` | refused before any read; nothing written |
+| H20 | ordinary, pending handoff `open` | revision published as today; handoff `stale` naming it; one wakeup `stale` |
+| H21 | ordinary, pending handoff `stale` | revision published; handoff stays `stale`, newest revision shown; no second wakeup |
+| H39 | ordinary, no pending handoff | revision published as today; no handoff row changes |
+
+**H-SETTLE — decline and withdraw.** Axes: action; right (decline: human
+or owner; withdraw: requester or its group); reason (given, empty);
+state. Order: team/id, right, reason, state.
+
+| Id | First failing check, or the accepted case | Result |
+| --- | --- | --- |
+| H23 | right missing | refused; unchanged |
+| H23b | reason empty | refused; unchanged |
+| H26 | state not pending | refused naming the state |
+| H22 | decline accepted | `declined` with reason and actor; one wakeup `declined` |
+| H24 | withdraw accepted | `withdrawn` with reason and actor; no wakeup |
+
+**H-CLOSE — the task moves to `done` or `cancelled`** through any
+authorized path, including Kawai's closing and an override's cancellation
+of an earlier fix task (`prepareOverrideFix`).
+
+| Id | Handoff state | Result |
+| --- | --- | --- |
+| H27 | open or stale | `closed` in the status transaction; one wakeup `closed` |
+| H40 | published or ended | unchanged (a published handoff's follow-up ends by W5) |
+
+**H-NEUTRAL — events that grant nothing.** A decision answer, own call,
+or an override that does not close the handoff's task; a journal note;
+mail; elapsed time; archival or exhaustion of the requester, the owner or
+the holder; a notice retry; an acknowledgement.
+
+| Id | Case | Result |
+| --- | --- | --- |
+| H28 | any neutral event, any state | every handoff row and the task's revision unchanged |
+| H28b | an override that also cancels the handoff's task | H27 applies through the close; the decision itself changes nothing else on the handoff |
+
+**H-RESTART — startup sweep.** Axes per pending handoff: association
+present; task status; base relation. Order: association, status, base.
+
+| Id | Case | Result |
+| --- | --- | --- |
+| H31a | a revision carries this handoff's association | `published` with it (defensive, U1) and its wakeup if unsent |
+| H31b | task closed | `closed` with its wakeup |
+| H31c | `open`, task revision past the base | `stale` with its wakeup |
+| H29 | `open` with current base, or `stale` | unchanged; no mail |
+| H34r | a revision holds `handoff:<id>` with no association | not fulfillment: H31b/H31c/H29 decide as if it were any other revision |
 
 Unreachable, with reasons:
 
-- U1: `published` without a revision keyed `handoff:<id>` and vice versa —
-  D3 writes both in one transaction (H30's defensive branch in D7 still
-  has its own test).
+- U1: `published` without an associated revision, or the reverse — D3
+  writes both in one transaction (H31a still has its own test).
 - U2: two pending handoffs on one task — the partial unique index refuses
   the second insert; H8 supersedes in the inserting transaction.
-- U3: publish-prepared of an `open` handoff whose base is not current —
-  D4 makes it `stale` in the transaction that advanced the revision.
-- U4: a terminal handoff changing state — every transition's `UPDATE`
-  is guarded by `state IN ('open','stale')`.
+- U3: an `open` handoff whose base is not current — D4 makes it `stale` in
+  the transaction that advanced the revision.
+- U4: an ended handoff changing state — every transition's `UPDATE` is
+  guarded by `state IN ('open','stale')`.
+- U5: a pending handoff on a closed task — D4 closes it in the status
+  transaction.
+- U6: an ordinary publication occupying `handoff:<id>` after this change —
+  H33 refuses the reserved prefix.
 
-Completeness claim: every combination of (command × state before × right
-× validity/key) matches exactly one row of H1–H31 or one of U1–U4, with
-refusals checked in the order foreign team, unknown id, right, state,
-validity, key. The completeness test expands the axes, applies that
-order, and fails on a gap or an overlap.
+Completeness claim: within each partition, every combination of its axes
+matches exactly one row, because the rows follow the partition's check
+order and the last row is the accepted case; combinations a partition's
+axes allow but the system cannot produce are U1–U6. The completeness test
+enumerates every partition's axis product, applies the check order, and
+fails on a tuple that matches no row or unreachable claim, or two of
+them.
 
 ### Table W — attention for a handoff
 
-| Id | Phase | Task owner | Requester | Execution owns | Item kind | Owner | Needs human | Next action |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| W1 | open | live agent | * | * | publication-handoff | owner session | no | Publish prepared revision |
-| W2 | open | none or gone | * | * | publication-handoff | human | yes | Publish prepared revision |
-| W3 | stale | * | live | * | publication-handoff | requester session | no | Re-prepare or withdraw |
-| W4 | stale | * | gone | * | publication-handoff | requester group | no | Re-prepare or withdraw |
-| W5 | published: no-holder | * | * | yes | publication-follow-up | Kawai | no | Wait for Kawai |
-| W6 | published: no-holder | * | * | no | publication-follow-up | human | yes | Hand off the task |
-| W7 | published: notice-failed | * | * | * | publication-follow-up | human | yes | Retry notification |
-| W8 | published: not-notified | * | * | * | publication-follow-up | human | yes | Notify |
-| W9 | published: awaiting-ack | * | * | * | publication-follow-up | holder session | no | Wait for acknowledgement |
-| W10 | published: acknowledged | * | * | * | none | — | — | — |
-| W11 | declined/withdrawn/superseded/closed | * | * | * | none | — | — | — |
+Pending handoffs:
 
-The phases are `handoffPhase`'s precedence (D5), so each published
-handoff has exactly one phase. Unreachable: W-U1, `open` or `stale` on a
-closed task (D4).
+| Id | State | Task owner | Requester | Item | Owner | Needs human | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W1 | open | live agent | * | publication-handoff | owner session | no | Publish prepared revision |
+| W2 | open | none or gone | * | publication-handoff | human | yes | Publish prepared revision |
+| W3 | stale | * | live | publication-handoff | requester session | no | Re-prepare or withdraw |
+| W4 | stale | * | gone | publication-handoff | requester group | no | Re-prepare or withdraw |
+
+Published handoffs, by `handoffPhase` (D5, first match wins):
+
+| Id | Phase | Execution owns | Item | Owner | Needs human | Next action |
+| --- | --- | --- | --- | --- | --- | --- |
+| W5 | task-closed | * | none | — | — | — |
+| W6 | acknowledged (even after a failed or uncertain notice) | * | none | — | — | — |
+| W7 | no-holder | yes | publication-follow-up | Kawai | no | Wait for Kawai |
+| W8 | no-holder | no | publication-follow-up | human | yes | Hand off the task |
+| W9 | notice-uncertain | * | publication-follow-up | human | yes | Resolve in the Mailbox (Retry or Discard), linked to the message |
+| W10 | notice-failed | * | publication-follow-up | human | yes | Retry notification |
+| W11 | not-notified | * | publication-follow-up | human | yes | Notify |
+| W12 | awaiting-ack | * | publication-follow-up | holder session | no | Wait for acknowledgement |
+
+Ended handoffs (declined, withdrawn, superseded, closed): W13, no item.
+Unreachable: W-U1, a pending handoff on a closed task (U5). Completeness:
+the pending rows partition (state × owner liveness × requester liveness),
+the published rows are `handoffPhase`'s total order, and W13 covers every
+ended state; the test expands these axes.
 
 ### Table F — fixes requested
 
@@ -338,14 +493,22 @@ the task.
 
 | Id | Pending handoff | Other named wait | Convergence awaiting revision | Change cause | Stall | Attention for the task |
 | --- | --- | --- | --- | --- | --- | --- |
-| S1 | yes | no | no | owner-publication | none | handoff item only |
+| S1 | yes | no | no | owner-publication (next actor per W1–W4) | none | handoff item only |
 | S2 | yes | yes | no | the other wait; owner-publication also applying | none | handoff item and the other wait's item |
 | S3 | yes | * | yes | convergence stall (unchanged precedence) | convergence | handoff item only (no **Publish a task revision**) |
 | S4 | no | * | yes | convergence stall | convergence | **Publish a task revision** (unchanged) |
 | S5 | no | no | no, holder gone, no progress past deadline | no-progress stall | no-progress, holder named gone | Lead role's **Unblock the holder** naming the holder archived |
+| S6 | * | * | no, repeating failure | repeating-failure stall (unchanged precedence) | repeating-failure | stall item as today |
 
-A `repeating-failure` stall keeps its precedence over any wait, with or
-without a handoff (unchanged; row S6 asserts it).
+Transitions (each its own row, observed on the supervision read and the
+dispatched mail):
+
+| Id | From | Event | Result |
+| --- | --- | --- | --- |
+| S7 | S1 | the handoff is published | no owner-publication wait; the publication is not meaningful progress; no stall alert raised by the transition |
+| S8 | S3 | the handoff is published as revision N | the diagnosis closes, one fix attempt naming revision N is dispatched, the backstop reads zero, and no **Publish a task revision** item appears |
+| S9 | S1 | the handoff becomes stale | still owner-publication, next actor the requester side (W3/W4) |
+| S10 | S1 | the handoff ends (declined, withdrawn, closed) | no owner-publication wait; the change's other waits or stall rules apply as today |
 
 ### Properties
 
@@ -356,8 +519,10 @@ generators use the existing `mulberry32` helper (`src/shared/__tests__/contractF
 - **P1 exactly once.** Seeded command sequences over request, re-request,
   publish-prepared (1–3 duplicates, some concurrent through
   `Promise.all`), edit-and-publish, other publication, decline, withdraw,
-  close, neutral events, and restart. Invariant: per handoff at most one
-  revision keyed `handoff:<id>`; `published` iff exactly one such revision;
+  close, neutral events, ordinary publications (including ones that try
+  the reserved prefix), and restart. Invariant: per handoff at most one
+  revision whose `handoff_id` is it; `published` iff exactly one such
+  revision; no revision outside the handoff path holds a `handoff:` key;
   at most one wakeup row and one mailbox row per (handoff, transition); at
   most one notice per holder per revision. Seed `0x0A11CE01`, 400 cases.
 - **P2 visibility.** Same generator; after every command the workspace
@@ -373,7 +538,11 @@ generators use the existing `mulberry32` helper (`src/shared/__tests__/contractF
   insert, the publish transaction, the status transaction, the reconcile
   sweep) by throwing inside the transaction (rollback) or immediately
   after commit (before post-commit announce and recipient restore), then
-  reopening the database and running startup reconciliation. Every stored
+  reopening the database and running startup reconciliation through
+  `SessionMailbox.start()`. Sequences include an ordinary publication
+  attempted with the handoff's derived key before the crash (the
+  reviewer's collision trace, which must end `stale`, never `published`).
+  Every stored
   state equals the model's, and P1's counts hold. Seed `0x0A11CE04`,
   200 cases.
 - **P5 limits unchanged.** Seeded plans with parallel limits, dependencies
@@ -392,6 +561,9 @@ Each named mutant must make at least one cited oracle fail; tasks name
 which.
 
 - MU1 the publish key is random instead of `handoff:<id>` (H14, P1).
+- MU1b fulfillment and the sweep read the request key instead of
+  `handoff_id` (H34, H34r, P4's collision trace).
+- MU1c the reserved-prefix check is removed (H33, U6).
 - MU2 the stale transition is removed from `TaskStore.publish` (H20, P2).
 - MU3 the handoff transition runs after the publish commit (P4).
 - MU4 the publisher check accepts any agent of the team (H13).
@@ -404,7 +576,15 @@ which.
 - MU10 the wakeup primary key is dropped (P1, H14).
 - MU11 the supervision wait frees the change's parallel slot (P5).
 - MU12 `amendItems` is not suppressed for a pending handoff (S3).
-- MU13 the close hook is missing from the status transaction (H27).
+- MU13 the close hook is missing from the status transaction (H27), and
+  separately from `prepareStatus` (H28b, the override cancellation).
+- MU15 `handoffPhase` puts `notice-failed` before `acknowledged`, or
+  omits `task-closed` (W5, W6).
+- MU16 an uncertain notice reads as failed (W9: the item offers Retry
+  notification instead of the Mailbox).
+- MU17 the sweep's call is removed from `SessionMailbox.start()` (CP3).
+- MU18 the migration is added to the baseline instead of `MIGRATIONS`
+  (the migration rows of task 2.1).
 - MU14 the replay check compares only the unique key, not the surrounding
   rows (H10/H14 snapshot rows; oracle hazard "An idempotence oracle
   observing only the uniquely constrained row").
@@ -414,11 +594,23 @@ which.
 - **CP1** (before expanding beyond the request and publish path): through
   the real chat-session composition's `kawai-team` tool server, a Lead
   session calls `task_request_publication` on a Kawai-created task; the
-  team workspace snapshot over the real WS connection shows W2; the
+  team workspace snapshot over the real WS connection shows W2, so the
+  minimal W2 attention source (pending `open` handoff on an ownerless
+  task only) is wired into `workspaceRead.ts` in this checkpoint; the
   human's `team-task-handoff-publish` over the same connection publishes
   revision 2, queues one notice to the claimed holder and one message to
-  the requester; a resent command replays. Failure path: a stale-base
-  request is refused through the same tool server. Mutant: MU9.
+  the requester, and the next snapshot no longer lists W2; a resent
+  command replays. Failure paths: a stale-base request is refused through
+  the same tool server, and an ordinary `team-task-publish` with a
+  `handoff:` key is refused (H33). Mutants: MU9, and removing the W2
+  source's registration fails the snapshot assertion. The remaining W
+  rows, F and S3 land in group 8.
+- **CP3** (with the reconciliation): boot the production composition
+  (`ChatSessionManager` starting `teamMail`) over a database holding an
+  `open` handoff whose task moved past its base while the server was
+  down; after start the handoff reads `stale` and one wakeup mail is
+  queued and dispatched. Mutant: MU17 (the sweep's call removed) leaves it
+  `open` with no mail.
 - **CP2** (before attention and supervision polish): through the real
   supervision monitor and loader, a change whose holder is archived and
   whose task has an open handoff reads `owner-publication`, raises no
@@ -434,7 +626,7 @@ which.
   handoff id, task, transition and revision, so any group member can
   continue from `task_get`.
 - [`kawai` as an attention owner may be misread as "nothing to do"] → it
-  is used only where a running execution owns the next dispatch (W5, F3),
+  is used only where a running execution owns the next dispatch (W7, F3),
   the case the existing task row already calls Wait for Kawai.
 - [Stale handoffs accumulate after quick human edits] → stale returns the
   item to the requester side with Re-prepare or withdraw, and closing the
@@ -454,21 +646,29 @@ which.
 
 ## Migration Plan
 
-Additive tables and one nullable draft column, created idempotently at
-store construction; no existing row changes. Rollback: the older build
-ignores the new tables and column; handoffs then sit unread, and their
-tasks keep publishing through the existing paths.
+Deploy: the numbered migration (D1) runs at the first start of the new
+build, after the runner's `pre-migration-<n>` backup, with `up` and its
+version row in one transaction; a failure rolls back and leaves the
+database at the previous version. Additive tables and nullable columns
+only; no existing row changes and nothing is backfilled.
+
+Rollback: an older build refuses to start against the migrated database
+(the database-safety startup refusal: a database newer than the build).
+To go back, restore the `pre-migration-<n>` backup of this migration as
+`docs/operations/database-backups.md` describes; handoffs and anything
+written after the upgrade are lost with that restore, which the same page
+states. There is no in-place downgrade.
 
 ## Implementation contract
 
 ### Acceptance
-- A1: `task_request_publication` records one `open` handoff per table H rows H1–H11, with exact provenance (task, base revision and contract identity, requester, payload hash, base commit, evidence) and no revision, notice, fact or mail.
-- A2: **Publish prepared revision** (human command and owner `task_amend { handoff_id }`) publishes exactly one revision through `TaskService.publish` under key `handoff:<id>` with the prepared fields, notices per notify, and the handoff `published`, per H12–H19.
-- A3: Every publication not from a pending handoff makes it `stale`, every task close makes it `closed`, decline and withdraw end it with reason and actor, and neutral events change nothing, per H20–H28.
-- A4: Startup reconciliation applies H29–H31 once and adds its row to `docs/recovery-matrix.md`.
+- A1: `task_request_publication` records one `open` handoff per partition H-REQ (H1–H11, in its check order), with exact provenance (task, base revision and contract identity, requester, payload hash, base commit, evidence) and no revision, notice, fact or mail.
+- A2: **Publish prepared revision** (human command and owner `task_amend { handoff_id }`) publishes exactly one revision through `TaskService.publish` with the prepared fields, notices per notify, the server-written `team_task_revisions.handoff_id` association and the handoff `published`, per H-PUB and H-DRAFT (H12–H19, H34–H38); fulfillment is read only from that association, and caller keys with the reserved `handoff:` prefix are refused (H33).
+- A3: Every publication not from a pending handoff makes it `stale`, every task close (including `prepareStatus` and override cancellations) makes it `closed`, decline and withdraw end it with reason and actor, and neutral events change nothing, per H-OTHER, H-SETTLE, H-CLOSE and H-NEUTRAL (H20–H28b, H39, H40).
+- A4: The schema is one numbered migration appended to `MIGRATIONS` (never the baseline or a constructor), and startup reconciliation runs from `SessionMailbox.start()` before dispatch release, applying H29–H31c and H34r once (CP3), with its row in `docs/recovery-matrix.md`.
 - A5: Each `published`, `declined`, `stale` and `closed` transition enqueues exactly one system message to the live requester, else its group, in the transition's transaction.
-- A6: The workspace attention snapshot matches tables W and F, and the post-Amend item is suppressed per S3.
-- A7: Supervision lists `owner-publication` per S1–S2 and names a gone holder per S5, with parallel counts, dependencies and landing slot unchanged (P5).
+- A6: The workspace attention snapshot matches tables W (W1–W13, with `handoffPhase`'s closed, acknowledged and uncertain precedence) and F, and the post-Amend item is suppressed per S3.
+- A7: Supervision lists `owner-publication` per S1–S2, keeps S6's precedence, names a gone holder per S5, and follows transitions S7–S10, with parallel counts, dependencies and landing slot unchanged (P5).
 - A8: `task_get` shows handoff rows and one handoff whole, team-scoped; delivered task context names a pending handoff without using its text as the direction.
 - A9: The task detail shows the handoff panel with diff, provenance and the three actions; the agent guidance names `task_request_publication` and states that a card answer publishes nothing.
 
@@ -486,6 +686,9 @@ tasks keep publishing through the existing paths.
 - `src/server/team/taskStore.ts`
 - `src/server/team/taskDrafts.ts`
 - `src/server/team/taskRevisionSchema.ts`
+- `src/server/team/sessionMailbox.ts`
+- `src/server/dbSafety/migrations.ts`
+- `src/server/plans/decisions/fixTasks.ts`
 - `src/server/team/taskTools.ts`
 - `src/server/team/taskConnections.ts`
 - `src/server/team/taskContext.ts`
@@ -519,12 +722,12 @@ tasks keep publishing through the existing paths.
 - `openspec/changes/owner-publication-handoff/**`
 
 ### Verification
-- V1: Tables H, W, F and S are committed verbatim as table-driven tests beside the code they cover, with H's completeness test expanding its axes against H1–H31 and U1–U4.
+- V1: Tables H (every partition), W, F and S (rows and transitions S7–S10) are committed verbatim as table-driven tests beside the code they cover, with H's completeness test enumerating each partition's axis product against its rows and U1–U6, and W's against W1–W13.
 - V2: P1–P6 run with the stated seeds and case counts through `propertyCases`; P4 runs the H table as the reference model with a crash at each named transaction boundary.
-- V3: Each mutant MU1–MU14 is applied once and makes its cited oracle fail; the result maps each oracle id to a test title and a killed mutant.
-- V4: CP1 and CP2 pass through the production composition before the work expands past them, with their failure paths.
+- V3: Each mutant MU1–MU18 (with MU1b, MU1c) is applied once and makes its cited oracle fail; the result maps each oracle id to a test title and a killed mutant.
+- V4: CP1, CP2 and CP3 pass through the production composition before the work expands past them, with their failure paths and omission mutants.
 - V5: The blind oracle reading (inputs-only commit, a cross-model advisor's outputs, author's outputs, resolved diff) is journaled and bound by the Lead before production code.
-- V6: `bun run check` passes on the clean committed head with the pinned Bun, and `scripts/verify-result.ts` runs on the submitted commit; UI changes are verified in a real browser against a disposable server and database.
+- V6: `bun run check` passes on the clean committed head with the pinned Bun, and `scripts/verify-result.ts` runs on the submitted commit; UI changes are verified in a real browser against a disposable server and database. The migration is covered by `src/server/__tests__/schemaMigrations.test.ts` and a new migration test (fresh database, a database at the previous version, a failing `up` rolling back with its backup).
 
 ### Excluded
 - X1: No change to who may publish, approve, Stop, Retry or accept; no Lead publication right for unowned tasks.

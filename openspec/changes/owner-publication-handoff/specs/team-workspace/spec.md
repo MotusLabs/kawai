@@ -80,7 +80,7 @@ The attention queue SHALL hold one item per pending publication handoff, linked 
 - **THEN** the card's item leaves the queue and the handoff's item stays
 
 ### Requirement: A published handoff stays visible until its holder acknowledges
-After a handoff is published, the queue SHALL hold one follow-up item until the task's current claimed holder acknowledges that revision or a later one, or the task closes. It SHALL be human-required with **Retry notification** when the holder's notice failed, an agent-owned wait for the holder while not acknowledged, and name no session running the task when none holds it.
+After a handoff is published, the queue SHALL hold one follow-up item until the task's current claimed holder acknowledges that revision or a later one, or the task closes, whatever its notices' states. It SHALL send an uncertain notice to the Mailbox's Retry or Discard, a failed one to **Retry notification**, name no session running the task when none holds it, and otherwise wait for the holder.
 
 #### Scenario: Notice failure needs the human
 - **WHEN** the revision 2 notice from a published handoff is dead-lettered
@@ -93,6 +93,18 @@ After a handoff is published, the queue SHALL hold one follow-up item until the 
 #### Scenario: Acknowledgement clears the follow-up
 - **WHEN** the holder acknowledges revision 2
 - **THEN** the follow-up item leaves the queue
+
+#### Scenario: Acknowledgement after a failed notice
+- **WHEN** the revision 2 notice failed and the holder then acknowledges revision 2 after reading the task another way
+- **THEN** the follow-up item leaves the queue, and no **Retry notification** item remains
+
+#### Scenario: An uncertain notice goes to the Mailbox
+- **WHEN** the revision 2 notice from a published handoff is held as an uncertain delivery
+- **THEN** the follow-up item is human-required with Resolve in the Mailbox (Retry or Discard) linked to that message, and offers neither **Notify** nor **Retry notification**
+
+#### Scenario: Closing the task ends the follow-up
+- **WHEN** the task of a published handoff closes before its holder acknowledges
+- **THEN** the follow-up item leaves the queue, and no Hand off the task item is raised
 
 #### Scenario: No session holds the task
 - **WHEN** a handoff is published for a task with no live claimed assignment

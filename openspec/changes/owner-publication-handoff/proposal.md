@@ -81,11 +81,13 @@ convergence diagnosis decided with `Amend the contract`.
 - Server: a new handoff store and service beside `src/server/team/`
   (`TaskService.ts`, `taskStore.ts`, `taskRevisionSchema.ts`), new agent
   tools in `taskTools.ts`, a human command in `taskConnections.ts` and the
-  chat connection types, attention sources in `workspaceRead.ts`,
+  chat connection types, the startup sweep in `sessionMailbox.ts`, attention sources in `workspaceRead.ts`,
   `attentionAcceptance.ts` and `planAttention.ts`, and the supervision
   loader and `src/shared/planSupervision.ts` wait list.
-- Database: additive tables for handoffs and their transitions; no change to
-  existing rows.
+- Database: one new numbered migration (`src/server/dbSafety/migrations.ts`)
+  adding handoff tables and nullable association columns on revisions and
+  drafts; no change to existing rows. Going back to an older build means
+  restoring the migration's pre-migration backup.
 - Client: a handoff panel in the task detail (`TeamTaskDetail.tsx`, reusing
   `TaskDirectionEditor.tsx`'s diff and publish flow) and attention links.
 - Docs: `docs/architecture/tasks.md`, `team-page.md`, `plan-supervision.md`,

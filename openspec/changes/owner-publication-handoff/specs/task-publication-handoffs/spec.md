@@ -66,6 +66,10 @@ A request SHALL carry a request key. Replaying the same key and payload SHALL re
 - **WHEN** a request reuses an earlier request key with a different direction
 - **THEN** it is refused naming the direction, and the earlier handoff is unchanged
 
+#### Scenario: A replay after the task moved on returns the handoff
+- **WHEN** a request is resent with the same key and payload after its handoff became stale or its task closed
+- **THEN** the existing handoff is returned in its current state, and nothing is recorded or refused
+
 ### Requirement: A task has at most one pending handoff
 A task SHALL have at most one handoff that is open or stale. A new request from the pending handoff's requester or from a session of the same group SHALL supersede it in the same transaction; a request from any other session SHALL be refused naming the pending handoff and its requester.
 
@@ -114,8 +118,16 @@ The human SHALL be able to load an open handoff into the task's draft and edit i
 - **WHEN** the human loads handoff H while a draft exists and does not confirm replacing it
 - **THEN** the draft is unchanged and H stays open
 
+#### Scenario: A stale handoff cannot be loaded
+- **WHEN** the human loads handoff H after it became stale
+- **THEN** it is refused naming stale, and the draft is unchanged
+
+#### Scenario: A linked draft outlives its handoff
+- **WHEN** the human publishes a draft loaded from handoff H after H was declined
+- **THEN** the revision is published as an ordinary revision, and H stays declined
+
 ### Requirement: A handoff is published at most once
-Publishing a handoff SHALL use a command key derived from the handoff. A replay or concurrent duplicate SHALL return the same revision and write no further revision, notice, or revision-published fact. Publishing a handoff that is no longer open SHALL be refused naming its state.
+A handoff SHALL be fulfilled only by a revision recorded as published from it by its own publication; a request key or matching content alone SHALL never fulfill it. A replay or concurrent duplicate SHALL return the same revision and write nothing more. Publishing a handoff no longer open SHALL be refused naming its state. Publication keys in the handoff namespace SHALL be refused from any other caller.
 
 #### Scenario: Two clicks publish once
 - **WHEN** two **Publish prepared revision** requests for handoff H are processed at the same time
@@ -124,6 +136,14 @@ Publishing a handoff SHALL use a command key derived from the handoff. A replay 
 #### Scenario: A declined handoff cannot be published
 - **WHEN** the human tries to publish handoff H after it was declined
 - **THEN** it is refused naming declined, and no revision is written
+
+#### Scenario: An ordinary publication cannot take a handoff's key
+- **WHEN** the human publishes a draft with a command key in the handoff namespace while handoff H is open
+- **THEN** the publication is refused naming the reserved key, nothing is published, and H stays open
+
+#### Scenario: A key is never proof of fulfillment after restart
+- **WHEN** handoff H became stale through another revision and Kawai restarts
+- **THEN** H still reads stale, whatever request keys earlier revisions carry
 
 ### Requirement: Another publication makes a pending handoff stale
 When a revision not published from a pending handoff is published for its task, an open handoff SHALL read stale in the same transaction, naming that revision. A stale handoff SHALL NOT be publishable; it SHALL stay pending until it is superseded, withdrawn, declined, or its task closes.
@@ -146,6 +166,10 @@ A pending handoff SHALL end only as published, declined by a publisher with a re
 #### Scenario: Closing the task ends the handoff
 - **WHEN** the task of open handoff H is set to cancelled
 - **THEN** H reads closed with its task, and no revision is published
+
+#### Scenario: An override's cancellation closes the handoff
+- **WHEN** the owner overrides a decision, and the override cancels the earlier fix task that holds open handoff H
+- **THEN** H reads closed with that task, and the override changes nothing else on H
 
 #### Scenario: The requester withdraws
 - **WHEN** the requester calls `task_settle_publication` withdrawing H with a reason

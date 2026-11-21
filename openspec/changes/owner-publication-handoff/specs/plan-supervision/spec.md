@@ -17,6 +17,14 @@ While a running change's task has a pending publication handoff, the change SHAL
 - **WHEN** change `api` waits on pending CI while its task has an open handoff
 - **THEN** `api`'s cause is pending CI, and the owner-publication wait is listed as also applying
 
+#### Scenario: A stale handoff waits on its requester
+- **WHEN** another revision is published while change `api`'s task has an open handoff
+- **THEN** `api` still reads waiting on owner publication, naming the stale handoff and its requester (or the requester's group) as the next actor
+
+#### Scenario: An ended handoff ends the wait
+- **WHEN** `api`'s handoff is declined or withdrawn
+- **THEN** `api` no longer lists an owner-publication wait, and its other waits and stall rules apply as before
+
 #### Scenario: Publication ends the wait
 - **WHEN** the human publishes the handoff
 - **THEN** the change no longer lists an owner-publication wait, and the publication is not counted as meaningful progress
