@@ -127,8 +127,12 @@ const handle = (line) => {
   // it exits without answering, while a grandchild that inherited stdout
   // writes the response a moment later and holds the pipe. The response
   // must still be routed: settling at the exit itself would reject a
-  // request whose answer is already in flight. Two readers on one stream
-  // race, so the plain loop below stands down for it.
+  // request whose answer is already in flight. The post-response hold is
+  // 10 s, so the grandchild's closes land far past that case's 5 s
+  // watchdog and only its ~600 ms drain-bound settlement can pass: a
+  // transport that settles the exit on the closes instead fails the case.
+  // Two readers on one stream race, so the plain loop below stands down
+  // for it.
   if (mode === 'late-response-grandchild') {
     let late = ''
     process.stdin.setEncoding('utf8')
@@ -144,7 +148,7 @@ const handle = (line) => {
         const dir = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'codex-late-'))
         const file = require('node:path').join(dir, 'response')
         require('node:fs').writeFileSync(file, JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { late: true } }) + '\\n')
-        require('node:child_process').spawn('sh', ['-c', 'sleep 0.25; cat ' + file + '; rm -rf ' + dir + '; sleep 2'], { stdio: ['ignore', 'inherit', 'inherit'] })
+        require('node:child_process').spawn('sh', ['-c', 'sleep 0.25; cat ' + file + '; rm -rf ' + dir + '; sleep 10'], { stdio: ['ignore', 'inherit', 'inherit'] })
         setTimeout(() => process.exit(7), 20)
         return
       }
@@ -466,8 +470,13 @@ test('a response a grandchild writes after the exit still resolves its request (
   // response ~250 ms in, well inside the ~600 ms drain bound — the bound
   // must not outrun an answer that is already in flight. Settling at the
   // exit itself rejects the pending request before its answer lands, so
-  // this kills the immediate-settle shape; waiting for the closes forever
-  // hangs on the exit report, so it kills that shape too.
+  // this kills the immediate-settle shape. The grandchild then holds the
+  // pipes for 10 s after that reply, so the closes land ~10.25 s in:
+  // past this case's 5 s watchdog, a wait-for-the-closes settlement
+  // cannot report the exit, and only the ~600 ms drain-bound settlement
+  // passes — that kills the closes-only shape too. The 5 s budget admits
+  // the loaded full-check setup that outran the former 2 s one while
+  // still rejecting both faulty shapes.
   const { transport, timeline, reportedExit, stop } = startTransport('late-response-grandchild', { drainBoundMs: 600 })
   const result = await transport.request('initialize') as { late?: boolean }
   expect(result.late).toBe(true)
@@ -481,7 +490,7 @@ test('a response a grandchild writes after the exit still resolves its request (
   expect({ nativeBeforeReply: nativeExit >= 0 && nativeExit < received, replyBeforeReport: received >= 0 && received < reported })
     .toEqual({ nativeBeforeReply: true, replyBeforeReport: true })
   expect(await stop()).toMatchObject({ state: 'exited', code: 7, signal: null, groupCleared: true })
-}, 2_000)
+}, 5_000)
 
 test('initialize sends clientInfo and the experimental capability', async () => {
   const { transport } = startTransport('echo', { clientInfo: { name: 'kawai-test', title: 'Kawai test', version: '0.0.0' } })
