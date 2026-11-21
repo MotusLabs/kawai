@@ -124,7 +124,7 @@ describe('Table F — shipped catalogs', () => {
       'openrouter-opus': 'claude', 'openrouter-sonnet': 'claude', 'openrouter-haiku': 'claude',
       'openrouter-deepseek-flash': 'deepseek', 'openrouter-minimax-flash': 'minimax',
       glm: 'glm', 'glm-flash': 'glm', minimax: 'minimax', mimo: 'mimo', kimi: 'kimi',
-      'codex-sol': 'gpt', 'codex-luna': 'gpt',
+      'codex-sol': 'gpt', 'codex-astra': 'gpt', 'codex-luna': 'gpt',
     }
     expect(Object.fromEntries(catalog.families)).toEqual(expected)
   })
