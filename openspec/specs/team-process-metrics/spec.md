@@ -224,6 +224,13 @@ Kawai SHALL report per window: failure rate by tool/class; the closed-cohort fir
 - **WHEN** healthy ticks have unchanged recovery status and counts
 - **THEN** checkedAt, raw checkpoint bytes and all-field canonical status stay unchanged, with no cache invalidation or push; failed/unverified recovery still requires a successful process verification
 
+### Requirement: Observation definitions are shared across surfaces
+The Metrics view, team tools and Prometheus export SHALL share observation definitions, units and scope. Histogram approximations SHALL be distinguished from exact read-time percentiles.
+
+#### Scenario: Different percentile methods
+- **WHEN** Prometheus estimates a percentile from histogram buckets
+- **THEN** it is documented as an approximation and is not claimed to equal the Metrics view's exact percentile
+
 ### Requirement: Tool metric drill-down opens the first failed call
 The Tools drill-down SHALL reach every abandoned streak of the window through any number of pages of at most 50 entries, behind a stable cursor bound to team, slice, window end, page size, and a high-water mark, each page carrying the total; the inline drill stays at most 50 plus the total, with the five longest recovered streaks. Opening one SHALL reveal its first failed call, or report `not-found`, `archived`, or `unreadable` instead of clearing silently.
 
