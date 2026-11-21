@@ -1,4 +1,4 @@
-// @reads: .kawai/groups, .kawai/groups/**
+// @reads: config/groups, config/groups/**
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -173,8 +173,8 @@ describe('grouped shipped default on a fresh HOME', () => {
     expect([...profiles.keys()]).toEqual(['only', 'default'])
   })
 
-  test('the tracked group files name profile ids the shipped catalog resolves', () => {
-    const groupsDir = path.resolve(process.cwd(), '.kawai', 'groups')
+  test('the shipped group templates name profile ids the shipped catalog resolves', () => {
+    const groupsDir = path.resolve(process.cwd(), 'config', 'groups')
     const files = fs.readdirSync(groupsDir).filter(name => name.endsWith('.md'))
     expect(files.length).toBeGreaterThan(0)
     const { profiles, errors } = resolveProfileCatalog(freshHomeCtx())
