@@ -39,7 +39,13 @@ export function repositoryTeamKey(repository: WorkspaceRepository): string {
   return trimmed(main.path)
 }
 
-export function teamKeyOf(projectPath: string, repositories: readonly WorkspaceRepository[] | null | undefined): string {
+/**
+ * The repository owning a path: the one whose deepest worktree contains it by
+ * whole path segments, or null when no discovered worktree does. The one
+ * ownership rule shared by team keys and the context name (chat-context-name
+ * D1), so the Team views, heading, and title agree on a path's repository.
+ */
+export function owningRepository(projectPath: string, repositories: readonly WorkspaceRepository[] | null | undefined): WorkspaceRepository | null {
   const target = trimmed(projectPath)
   let best: { repository: WorkspaceRepository; depth: number } | null = null
   for (const repository of repositories ?? []) {
@@ -48,6 +54,10 @@ export function teamKeyOf(projectPath: string, repositories: readonly WorkspaceR
       if (contains(root, target) && (!best || root.length > best.depth)) best = { repository, depth: root.length }
     }
   }
-  if (!best) return target
-  return repositoryTeamKey(best.repository)
+  return best?.repository ?? null
+}
+
+export function teamKeyOf(projectPath: string, repositories: readonly WorkspaceRepository[] | null | undefined): string {
+  const repository = owningRepository(projectPath, repositories)
+  return repository ? repositoryTeamKey(repository) : trimmed(projectPath)
 }

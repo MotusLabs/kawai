@@ -2,7 +2,7 @@
 
 ## 1. Derive the context name
 
-- [ ] 1.1 Extract `owningRepository(path, repositories)` in `src/client/utils/teamKey.ts` (design Decision 1) and rewrite `teamKeyOf` on top of it. Verify: `bun run test src/client/__tests__/teamKey.test.ts src/client/__tests__/teamKeyChatView.test.tsx` passes unchanged (A3). The mutant "shallowest match wins" must fail an existing nested-worktree case; add one to `teamKey.test.ts` if none exists. I2 (one matcher) is checked in review: `teamKeyOf` contains no containment loop of its own.
+- [x] 1.1 Extract `owningRepository(path, repositories)` in `src/client/utils/teamKey.ts` (design Decision 1) and rewrite `teamKeyOf` on top of it. Verify: `bun run test src/client/__tests__/teamKey.test.ts src/client/__tests__/teamKeyChatView.test.tsx` passes unchanged (A3). The mutant "shallowest match wins" must fail an existing nested-worktree case; add one to `teamKey.test.ts` if none exists. I2 (one matcher) is checked in review: `teamKeyOf` contains no containment loop of its own.
 - [ ] 1.2 Add `src/client/utils/contextName.ts` with `contextName` and `brandLabels` (Decision 2), and `src/client/__tests__/contextName.test.ts` with tables C and B verbatim. Annotate with `@covers` the workspace-navigation scenarios "A linked worktree names its repository" (C4), "A sibling path is not inside a worktree by prefix" (C6), "A remote session uses its directory name" (C7), "A Team page names the team's repository" (C1b, C3), "A plain-directory Team page uses its directory name" (C2), and "Nothing selected has no context name" (C14). Verify with `bun run test src/client/__tests__/contextName.test.ts`. Mutants:
   - C6 kills "prefix match without the `/` boundary".
   - C9 and C10 kill "shallowest worktree wins".
