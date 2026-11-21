@@ -20,10 +20,23 @@ What exists today (master at fd0b835b):
   (`TeamLocation.teamKey`), so a team key is a main checkout or a plain
   directory.
 - `App.tsx` already holds every input: `selectedSession`
-  (`useSessionRow`, which also returns archived rows), `teamLocation`
-  (`useTeamPageRoute`), the workspace snapshot (`useWorkspaceStore`), and
-  `serverInfo`. `Session.remote` marks a session from another host.
-  `workspaceView.ts` never places remote sessions in local worktrees.
+  (`useSessionRow`: a chat or a tmux terminal, live or archived),
+  `selectedHibernatingSession` (`App.tsx:295`, from the filtered hibernating
+  list or the pending one), `teamLocation` (`useTeamPageRoute`), the
+  workspace snapshot (`useWorkspaceStore`), and `serverInfo`. The two
+  selections are exclusive: setting one clears the other
+  (`sessionStore.ts:237-246`). `Session.remote` marks a session from another
+  host, and `workspaceView.ts` never places remote sessions in local
+  worktrees. Hibernating `AgentSession`s come from this server's own logs
+  (`host: config.hostLabel`, `src/server/agentSessions.ts:16`), so they are
+  always local.
+- Filters change the selection. When a filter hides the selected live chat,
+  or the selected hibernating session, `App.tsx:502-526` and `:528-566`
+  select the first visible target or clear the selection, except while a
+  Team route is shown, where the correction waits until the user returns.
+- The server names a repository after its main checkout's basename
+  (`src/server/git/workspaceSnapshot.ts:119`). The client reads `name` as
+  given and never re-derives it.
 - Tests: `src/client/__tests__/pageTitle.test.ts` (T1–T7),
   `src/client/__tests__/app.test.tsx` "App workspace title" (L1–L6, with
   `@covers` on the instance-identity scenarios), and
@@ -54,7 +67,8 @@ heading.
 
 2. **A pure context-name module.** Add `src/client/utils/contextName.ts`:
    - `contextName({ teamKey, session, repositories })` returns a string or
-     null. With a team key it names the team's repository
+     null. `session` is `{ projectPath, remote }` or null. With a team key it
+     names the team's repository
      (`owningRepository(teamKey)?.name`, else the key's final component).
      Otherwise, with a session that is not remote, it uses
      `owningRepository(projectPath)?.name`, else the final component. A remote
@@ -69,14 +83,33 @@ heading.
    so the T1–T7 table stands unchanged.
 
 3. **App computes once and hands it out.** `App.tsx` computes `labels` with
-   `useMemo` from `teamLocation?.teamKey`, `selectedSession`, the snapshot's
-   repositories, and the last successful `serverInfo`. The title effect
+   `useMemo` from `teamLocation?.teamKey`, the displayed session, the
+   snapshot's repositories, and the last successful `serverInfo`. The
+   displayed session is `selectedSession` (chat or terminal, live or
+   archived, passed as `{ projectPath, remote: remote === true }`), else
+   `selectedHibernatingSession` (passed as `{ projectPath, remote: false }`),
+   else null. That is the same session the pane renders. The title effect
    depends on `labels.title`, and `Header` gets a new `contextLabel` prop
    (`labels.heading`). Both read one value, so the heading and the title
-   cannot disagree. Filters and browser defaults are not inputs, so they
-   cannot affect either. *Alternative:* a hook inside `Header`. Rejected:
+   cannot disagree. *Alternative:* a hook inside `Header`. Rejected:
    `Header` does not mount under the redesigned `TeamShell`
    (team-workspace-redesign), and the title must keep working there.
+   *Alternative:* label only chats. Rejected: a terminal or hibernating
+   session would then show the instance name while its own project fills the
+   pane.
+
+6. **Filters reach the labels only through the selection.** Filters and the
+   browser default are not inputs to `labels`. A filter that hides the
+   selected session works through the existing fallback (Context), which
+   changes the displayed session, and the labels follow it. While a Team
+   route is shown, the fallback waits, so the title keeps the team name.
+   This change does not touch the fallback.
+
+7. **The heading belongs to the navigator.** The heading is shown wherever
+   `Header` mounts. Today that includes Team routes, so it shows the team's
+   repository there. Under `team-workspace-redesign`'s `TeamShell`, `Header`
+   is not mounted, and the browser title alone carries the Team context.
+   Table L states both shells for the Team rows.
 
 4. **The heading truncates.** The `h1` gets `min-w-0 truncate`, and its
    container gets `min-w-0`, so a long name ellipsizes and the navigator width
@@ -97,20 +130,24 @@ cover. `*` means don't care. In all of them, repository `kawai` has worktrees
 `/home/coder/kawai` (main) and `/home/coder/kawai/.worktrees/adopt`.
 Repository `outer` has `/p/outer`. Repository `inner` has
 `/p/outer/vendor/inner`. Repository `Manga Studio 日本` has
-`/projects/manga`.
+`/projects/manga` (main). Its display name deliberately differs from the
+checkout's basename, so a row expecting it fails any implementation that
+returns the basename instead of the repository. Today's server would name it
+`manga`, but the client contract is to show `name` as given.
 
 Table C — `contextName` (in `src/client/__tests__/contextName.test.ts`):
 
 | Oracle | teamKey | session path | remote | repositories | Expected |
 | --- | --- | --- | --- | --- | --- |
 | C1 | `/home/coder/kawai` | * | * | as above | `kawai` |
+| C1b | `/projects/manga` | * | * | as above | `Manga Studio 日本` (not the basename `manga`) |
 | C2 | `/projects/plain` | * | * | as above | `plain` |
-| C3 | `/home/coder/kawai` | `/projects/manga` | false | as above | `kawai` |
+| C3 | `/projects/manga` | `/home/coder/kawai` | false | as above | `Manga Studio 日本` |
 | C4 | none | `/home/coder/kawai/.worktrees/adopt/src` | false | as above | `kawai` |
 | C5 | none | `/home/coder/kawai` | false | as above | `kawai` |
 | C6 | none | `/home/coder/kawai-notes` | false | as above | `kawai-notes` |
-| C7 | none | `/home/coder/kawai` | true | as above | `kawai` (final component, not the lookup) |
-| C7b | none | `/srv/manga-studio` | true | as above | `manga-studio` |
+| C7 | none | `/home/coder/kawai/.worktrees/adopt` | true | as above | `adopt` (the local lookup would give `kawai`) |
+| C7b | none | `/projects/manga` | true | as above | `manga` (the local lookup would give `Manga Studio 日本`) |
 | C8 | none | `/home/coder/kawai/.worktrees/adopt` | false | null | `adopt` |
 | C9 | none | `/p/outer/vendor/inner/x` | false | as above | `inner` |
 | C10 | none | `/p/outer/src` | false | as above | `outer` |
@@ -119,12 +156,10 @@ Table C — `contextName` (in `src/client/__tests__/contextName.test.ts`):
 | C13 | none | `/` | false | as above | null |
 | C14 | none | none | * | as above | null |
 
-C7 is the remote case where the lookup and the final component would give
-the same name. C7b separates them: it uses a remote path that shares no name
-with a local worktree, and a separate assertion checks that
-`owningRepository` is never called for a remote session. Unreachable
-combination: a team key together with a remote session needs no row, because
-the team key always wins (C3).
+Unreachable combination: a team key together with a remote session needs no
+row, because the team key always wins (C3). Session kind (chat, terminal,
+archived, hibernating) is not an input to `contextName`. App maps each kind
+to `{ projectPath, remote }` (Decision 3), and table L covers each mapping.
 
 Table B — `brandLabels` (same file):
 
@@ -137,26 +172,41 @@ Table B — `brandLabels` (same file):
 
 Table L — the production App (`src/client/__tests__/app.test.tsx`, replacing
 "App workspace title"). The server reports `/projects/anime-studio` unless a
-row says otherwise. Each row asserts both `document.title` and the heading
-text.
+row says otherwise, and the snapshot holds the repositories above unless a row
+says it has not arrived. Each row asserts both `document.title` and the
+heading. "Kawai chat" means a live local chat in
+`/home/coder/kawai/.worktrees/adopt`, and "manga chat" a live local chat in
+`/projects/manga`. In the Team rows (L3b, L3b2, L3d4), the Heading cell names
+the heading for today's shell, and after `TeamShell` (team-workspace-redesign)
+the same row asserts that no navigator heading is rendered.
 
 | Oracle | Prior state | Event | Title | Heading |
 | --- | --- | --- | --- | --- |
 | L1 | nothing selected | initial server-info pending, network failure, or HTTP failure | `Kawai` | `KAWAI` |
 | L2 | nothing selected | initial server-info succeeds | `anime-studio - Kawai` | `anime-studio` |
-| L3a | L2 | select a chat in `/home/coder/kawai/.worktrees/adopt` with the snapshot loaded | `kawai - Kawai` | `kawai` |
-| L3b | L3a | open the Team route `/projects/another-project` | `another-project - Kawai` | `another-project` |
-| L3c | L3b | leave the Team route | `kawai - Kawai` | `kawai` |
-| L3d | L3a | change project and host filters | `kawai - Kawai` | `kawai` |
+| L3a | L2 | select the kawai chat | `kawai - Kawai` | `kawai` |
+| L3j | L3a | select the manga chat | `Manga Studio 日本 - Kawai` | `Manga Studio 日本` |
+| L3i | L2 | select an archived chat in `/home/coder/kawai/.worktrees/adopt` | `kawai - Kawai` | `kawai` |
+| L3k | L2 | select a terminal session in `/projects/manga/x` | `Manga Studio 日本 - Kawai` | `Manga Studio 日本` |
+| L3l | L2 | select a hibernating session in `/home/coder/kawai/.worktrees/adopt` | `kawai - Kawai` | `kawai` |
+| L3m | L2 | select a remote chat in `/home/coder/kawai/.worktrees/adopt` | `adopt - Kawai` | `adopt` |
+| L3b | L3a | open the Team route `/projects/manga` | `Manga Studio 日本 - Kawai` | `Manga Studio 日本` (TeamShell: absent) |
+| L3b2 | L3a | open the Team route `/projects/another-project` | `another-project - Kawai` | `another-project` (TeamShell: absent) |
+| L3c | L3b | leave the Team route | `kawai - Kawai` | `kawai` (shown again under both shells) |
+| L3d | L3a | change project and host filters so the kawai chat stays visible | `kawai - Kawai` | `kawai` |
+| L3d2 | L3a | change filters so only the manga chat is visible (the fallback selects it) | `Manga Studio 日本 - Kawai` | `Manga Studio 日本` |
+| L3d3 | L3d2 | change filters so no session is visible (the fallback clears the selection) | `anime-studio - Kawai` | `anime-studio` |
+| L3d4 | L3b | change filters so the kawai chat is hidden | `Manga Studio 日本 - Kawai` | `Manga Studio 日本` (TeamShell: absent) |
 | L3e | L3a | change the browser default project setting | `kawai - Kawai` | `kawai` |
 | L3f | L3a | clear the selection | `anime-studio - Kawai` | `anime-studio` |
-| L3g | L2, no snapshot | select the L3a chat, then the snapshot arrives | `adopt - Kawai`, then `kawai - Kawai` | `adopt`, then `kawai` |
-| L3h | initial server-info pending | select the L3a chat | `kawai - Kawai` | `kawai` |
+| L3g | L2, no snapshot | select the kawai chat, then the snapshot arrives | `adopt - Kawai`, then `kawai - Kawai` | `adopt`, then `kawai` |
+| L3h | initial server-info pending | select the kawai chat | `kawai - Kawai` | `kawai` |
 | L4 | L2 | reconnect server-info succeeds with `/projects/manga-studio` | `manga-studio - Kawai` | `manga-studio` |
 | L5 | L2 | reconnect server-info fails (network or HTTP) | `anime-studio - Kawai` | `anime-studio` |
 | L6 | L2 | reconnect server-info succeeds with `/` and `///` | `Kawai` | `KAWAI` |
 
-Each L1 and L5 alternative is its own case. T1–T7 in `pageTitle.test.ts`
+Each L1 and L5 alternative is its own case. Each row's prior state is reached
+through the same App, not seeded into it. T1–T7 in `pageTitle.test.ts`
 stay verbatim. No property test is needed: the matcher's whole-segment rule
 is pinned by C6, C9, and C10, and its trailing-slash rule by C11.
 
@@ -174,9 +224,13 @@ is pinned by C6, C9, and C10, and its trailing-slash rule by C11.
 - [`team-workspace-redesign` splits `App.tsx` into shells] → The derivation is
   pure and App-level, so it moves with whichever shell owns the title. Its
   task 1.3 must keep the title effect mounted in both shells. Whichever
-  change lands second re-runs table L.
+  change lands second re-runs table L, with the Team rows asserting the
+  heading absent under `TeamShell` (Decision 7).
+- [A filter can retitle the tab] → This is intended, because the filter
+  changed what the pane shows (Decision 6, L3d2–L3d3). The title never reads
+  the filter itself (I3).
 - [Removing an `instance-identity` requirement orphans existing `@covers`
-  annotations] → Task 3.1 rewrites them to the new scenario names in the same
+  annotations] → Task 2.2 rewrites them to the new scenario names in the same
   commits, and the coverage guard checks them.
 
 ## Migration Plan
@@ -193,7 +247,8 @@ title.
   table C, and `brandLabels` returns the heading and title of every row of
   table B.
 - A2: The production App shows the Title and Heading of every row of table L,
-  in order, for each alternative.
+  in order, for each alternative. Under `TeamShell`, the Team rows show the
+  Title with no navigator heading, and L3c shows it again.
 - A3: `teamKeyOf` returns the same key as before for every existing
   `teamKey.test.ts` case. The extraction changes no behavior.
 - A4: A context name wider than the navigator truncates on one line without
@@ -209,8 +264,11 @@ title.
 - I2: Repository ownership of a path is decided by one function
   (`owningRepository`), used by both `teamKeyOf` and `contextName`.
 - I3: Filters, host filters, and the browser default project setting are not
-  inputs to the context name or the labels.
+  inputs to the context name or the labels. They reach the labels only by
+  changing the displayed session through the existing fallback.
 - I4: A remote session's name never comes from the local snapshot.
+- I5: The labels name the session the pane renders: the selected chat or
+  terminal, else the selected hibernating session, else none.
 
 ### Scope
 
@@ -244,3 +302,4 @@ title.
 - X3: No branch or worktree name in the heading.
 - X4: No restructuring of `App.tsx` beyond the labels computation and props.
   The shell split belongs to `team-workspace-redesign`.
+- X5: No change to the filtered-selection fallback.

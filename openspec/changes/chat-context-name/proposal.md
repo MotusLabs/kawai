@@ -16,8 +16,9 @@ repository from it.
 - The browser title becomes `<context name> - Kawai`.
 - The context name comes from one derivation shared by both places:
   - In Team mode (a team route is shown): the team's repository.
-  - Otherwise, for the selected chat: the name of the repository that owns
-    the chat's working directory, taken from the workspace snapshot, so every
+  - Otherwise, for the session the pane shows (a chat or terminal, live or
+    archived, or a hibernating session): the name of the repository that owns
+    its working directory, taken from the workspace snapshot, so every
     worktree of `kawai` shows `kawai`.
   - A path no known repository owns (a remote session, a plain directory, or
     the snapshot not loaded yet): the path's final directory name.
@@ -31,8 +32,10 @@ repository from it.
   title stays the same across session selection and Team pages, a non-goal
   of the archived `workspace-page-title` change (2026-10-26). With nothing
   selected the title is still the instance title. Filters and the browser's
-  default-project setting still do not affect it, and the loading,
-  refresh-failure, and reconnect rules stay as they are.
+  default-project setting do not affect it directly. A filter that hides the
+  selected session changes the title only because the existing fallback
+  changes the selection. The loading, refresh-failure, and reconnect rules
+  stay as they are.
 
 ## Capabilities
 
@@ -43,7 +46,7 @@ None.
 ### Modified Capabilities
 
 - `instance-identity`: the browser title follows the current context (the
-  Team route's repository, else the selected chat's repository or directory)
+  Team route's repository, else the displayed session's repository or directory)
   and falls back to the server workspace name only when nothing is selected.
 - `workspace-navigation`: adds a requirement that the navigator heading shows
   the same context name, with `KAWAI` as its fallback.

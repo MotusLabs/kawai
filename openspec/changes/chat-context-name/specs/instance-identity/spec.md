@@ -45,7 +45,7 @@ With no context name, the browser title SHALL be `Kawai` before server informati
 ## ADDED Requirements
 
 ### Requirement: Title follows the current context
-When there is a context name (workspace-navigation, "The current context names its repository"), the browser title SHALL be `<context name> - Kawai`, keeping its spelling, case, spaces, and Unicode characters. The title SHALL change whenever the context name changes. Project and host filters and the browser-local default project setting SHALL NOT affect the title.
+When there is a context name (workspace-navigation, "The current context names its repository"), the browser title SHALL be `<context name> - Kawai`, keeping its spelling, case, spaces, and Unicode characters. The title SHALL change whenever the context name changes. Project and host filters and the browser-local default project setting SHALL NOT affect the title except through the selection they change.
 
 #### Scenario: Selecting a chat titles its repository
 - **GIVEN** the server workspace is `anime-studio`
@@ -53,9 +53,9 @@ When there is a context name (workspace-navigation, "The current context names i
 - **THEN** the browser title is `kawai - Kawai`
 
 #### Scenario: A Team page titles the team's repository
-- **GIVEN** a chat of repository `manga-studio` is selected
-- **WHEN** the user opens the Team page of repository `kawai`
-- **THEN** the browser title is `kawai - Kawai`
+- **GIVEN** a chat of repository `kawai` is selected
+- **WHEN** the user opens the Team page of the discovered repository `Manga Studio 日本`, whose main checkout is `/projects/manga`
+- **THEN** the browser title is `Manga Studio 日本 - Kawai`
 
 #### Scenario: Clearing the selection returns to the instance title
 - **GIVEN** the server workspace is `anime-studio` and the title is `kawai - Kawai`
@@ -63,8 +63,14 @@ When there is a context name (workspace-navigation, "The current context names i
 - **THEN** the browser title is `anime-studio - Kawai`
 
 #### Scenario: Filters and browser defaults leave the title alone
-- **WHEN** the title is `kawai - Kawai` and the user changes the project or host filters or the browser's default project setting
+- **WHEN** the title is `kawai - Kawai` and the user changes the browser's default project setting, or changes the project or host filters so the selected session stays visible
 - **THEN** the title remains `kawai - Kawai`
+
+#### Scenario: A filter that moves the selection retitles
+- **GIVEN** the server workspace is `anime-studio`, the title is `kawai - Kawai`, and no Team page is shown
+- **WHEN** the user changes the filters so the selected chat is hidden and the app selects the first visible session, a chat of repository `manga-studio`
+- **THEN** the browser title is `manga-studio - Kawai`
+- **AND** when a later filter leaves no session visible and the selection is cleared, the title is `anime-studio - Kawai`
 
 ### Requirement: Workspace fallback follows server information
 A successful server-information refresh SHALL update the workspace name to match the reported directories, and the browser title SHALL show it whenever there is no context name.
