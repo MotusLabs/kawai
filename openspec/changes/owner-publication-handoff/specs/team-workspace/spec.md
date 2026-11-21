@@ -102,6 +102,10 @@ After a handoff is published, the queue SHALL hold one follow-up item until the 
 - **WHEN** the revision 2 notice failed and the holder then acknowledges revision 2 after reading the task another way
 - **THEN** the follow-up item leaves the queue, and no **Retry notification** item remains
 
+#### Scenario: Acknowledgement without any delivery needs no notice
+- **WHEN** a handoff is published as revision 2 without notify, and the holder reads the task and acknowledges revision 2 although no task mail carrying it was delivered
+- **THEN** the follow-up item leaves the queue, and no **Notify** or **Retry notification** is offered
+
 #### Scenario: An uncertain notice goes to the Mailbox
 - **WHEN** the revision 2 notice from a published handoff is held as an uncertain delivery and revision 2 has not been delivered to the holder another way
 - **THEN** the follow-up item is human-required with Resolve in the Mailbox (Retry or Discard) linked to that message, and offers neither **Notify** nor **Retry notification**

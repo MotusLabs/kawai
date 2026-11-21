@@ -141,6 +141,14 @@ A handoff SHALL be fulfilled only by a revision recorded as published from it; a
 - **WHEN** the human publishes a draft with a command key in the handoff namespace while handoff H is open
 - **THEN** the publication is refused naming the reserved key, nothing is published, and H stays open
 
+#### Scenario: Surrounding whitespace does not hide a handoff key
+- **WHEN** the human publishes, with or without a draft loaded from handoff H, using a command key that is H's handoff-namespace key with a leading space, a tab and newline, or trailing spaces around it
+- **THEN** the publication is refused naming the reserved key, nothing is published, the draft is unchanged, and H stays open
+
+#### Scenario: A padded ordinary key works as before
+- **WHEN** the human publishes with an ordinary command key surrounded by spaces
+- **THEN** the revision is published, and a resend with the same key padded differently returns that revision
+
 #### Scenario: A linked draft cannot take a handoff's key
 - **WHEN** the human loads handoff H into the draft, edits it, and publishes it with a command key in the handoff namespace
 - **THEN** the publication is refused naming the reserved key, nothing is published, the draft is unchanged, and H stays open
