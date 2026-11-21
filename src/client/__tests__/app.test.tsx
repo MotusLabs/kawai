@@ -2697,87 +2697,182 @@ describe('App team route (team-workspace-pages D3, team-workspace D10)', () => {
 })
 
 
-// Lifecycle acceptance table from workspace-page-title/design.md.
-const titleLifecycleCases = [
-  ['L1 pending', 'Kawai', 'initial pending', 'Kawai'],
-  ['L1 failure', 'Kawai', 'initial failure', 'Kawai'],
-  ['L1 HTTP failure', 'Kawai', 'initial HTTP failure', 'Kawai'],
-  ['L2', 'Kawai', 'initial success', 'anime-studio - Kawai'],
-  ['L3 selection', 'anime-studio - Kawai', 'selection', 'anime-studio - Kawai'],
-  ['L3 Team route', 'anime-studio - Kawai', 'Team route', 'anime-studio - Kawai'],
-  ['L3 filter', 'anime-studio - Kawai', 'filter', 'anime-studio - Kawai'],
-  ['L3 browser default', 'anime-studio - Kawai', 'browser default', 'anime-studio - Kawai'],
-  ['L4', 'anime-studio - Kawai', 'reconnect success', 'manga-studio - Kawai'],
-  ['L5', 'anime-studio - Kawai', 'reconnect failure', 'anime-studio - Kawai'],
-  ['L5 HTTP failure', 'anime-studio - Kawai', 'reconnect HTTP failure', 'anime-studio - Kawai'],
-  ['L6', 'anime-studio - Kawai', 'reconnect nameless', 'Kawai'],
-] as const
+// Table L of chat-context-name/design.md, verbatim. Each row's prior state is
+// reached through the App (a row's steps extend the steps of the row it
+// starts from), and every checkpoint asserts the browser title, the navigator
+// heading, and I1 (the heading is the title's name part). Scenario map:
+// L1/L6 the loading and nameless fallbacks; L2 the workspace title and
+// heading fallback; L3a/L3j the heading following the selected chat; L3a the
+// title following it; L3i archived chats; L3k/L3l terminals and hibernating
+// sessions; L3b the Team page; L3c leaving it; L3d/L3e filters and defaults
+// leaving the title alone; L3d2/L3d3 a filter moving the selection; L3f a
+// cleared selection; L3g the repository name replacing the directory name;
+// L3h a context name without server information; L4 reconnect; L5 a failed
+// refresh.
+const labelRepository = (name: string, worktrees: Array<[path: string, isMain: boolean]>) => ({
+  id: name, name, commonDir: `${worktrees[0]![0]}/.git`, stale: false, branches: [],
+  worktrees: worktrees.map(([path, isMain]) => ({
+    id: `${name}::${path}`, repositoryId: name, path, branch: 'main', headRevision: 'aaaaaaa',
+    detached: false, isMain, dirty: false, openspec: { changes: [], stale: false },
+  })),
+})
+const labelSnapshot = {
+  repositories: [
+    labelRepository('kawai', [['/home/coder/kawai', true], ['/home/coder/kawai/.worktrees/adopt', false]]),
+    // Display name deliberately unlike the checkout basename (design, Acceptance oracles).
+    labelRepository('Manga Studio 日本', [['/projects/manga', true]]),
+  ],
+  generatedAt: '2026-01-01T00:00:00.000Z',
+} as unknown as NonNullable<ReturnType<typeof useWorkspaceStore.getState>['snapshot']>
+const labelChat = (id: string, projectPath: string, extra: Partial<Session> = {}): Session => ({
+  id, name: id, projectPath, status: 'waiting', host: 'local-host',
+  lastActivity: '2026-10-09T00:00:00.000Z', createdAt: '2026-10-09T00:00:00.000Z',
+  source: 'managed', kind: 'chat', ...extra,
+})
+const kawaiChat = labelChat('kawai-chat', '/home/coder/kawai/.worktrees/adopt')
+const mangaChat = labelChat('manga-chat', '/projects/manga')
+const remoteChat = labelChat('remote-chat', '/home/coder/kawai/.worktrees/adopt', { remote: true, host: 'other-host' })
+const archivedKawaiChat = labelChat('archived-kawai', '/home/coder/kawai/.worktrees/adopt', { archivedAt: '2026-01-01T00:00:00.000Z' })
+const mangaTerminal: TerminalSession = { ...baseSession, id: 'manga-terminal', projectPath: '/projects/manga/x', host: 'local-host' }
+const hibernatingKawai: AgentSession = { ...baseAgentSession, sessionId: 'hibernating-kawai', projectPath: '/home/coder/kawai/.worktrees/adopt', isActive: false }
 
-describe('App workspace title', () => {
-  for (const [oracle, priorTitle, event, expected] of titleLifecycleCases) {
-    // L1 covers the first scenario, L2 the second, L3 the third, L4 the fourth,
-    // L5 the fifth, L6 the sixth (workspace-page-title design table).
-    // @covers: instance-identity › Title has a usable loading and missing-name fallback › Initial load has no server information
-    // @covers: instance-identity › Workspace name leads the browser title › Configured project directory identifies the instance
-    // @covers: instance-identity › Title follows the server instance across navigation › Navigate within one instance
-    // @covers: instance-identity › Title follows the server instance across navigation › Reconnect refreshes instance information
-    // @covers: instance-identity › Title has a usable loading and missing-name fallback › Refresh fails after a successful load
-    // @covers: instance-identity › Title has a usable loading and missing-name fallback › Root directories have no workspace name
-    test(`${oracle}: ${event} yields ${expected}`, async () => {
-      const originalFetch = globalThis.fetch
-      const originalDefault = useSettingsStore.getState().defaultProjectDir
-      let response: 'success' | 'pending' | 'failure' | 'http-failure' | 'changed' | 'nameless' =
-        event === 'initial pending' ? 'pending' : event === 'initial failure' ? 'failure' : event === 'initial HTTP failure' ? 'http-failure' : 'success'
-      let infoCalls = 0
-      globalThis.fetch = (async (input: RequestInfo | URL) => {
-        if (String(input) !== '/api/server-info') return new Response('{}')
-        infoCalls++
-        if (response === 'pending') return new Promise<Response>(() => {})
-        if (response === 'failure') throw new Error('server unavailable')
-        if (response === 'http-failure') return new Response(JSON.stringify({ error: 'server unavailable' }), { status: 503 })
-        return new Response(JSON.stringify(response === 'nameless'
-          ? { defaultProjectDir: '/', cwd: '///' }
-          : { defaultProjectDir: response === 'changed' ? '/projects/manga-studio' : '/projects/anime-studio', cwd: '/opt/kawai' }))
-      }) as typeof fetch
-      try {
-        expect(document.title).toBe('Kawai')
-        act(() => { activeRenderer = TestRenderer.create(<App />) })
-        if (event === 'initial success') expect(document.title).toBe(priorTitle)
-        await act(async () => {})
-        if (!event.startsWith('initial')) expect(document.title).toBe(priorTitle)
+type ServerInfoReply = 'pending' | 'failure' | 'HTTP failure' | 'anime-studio' | 'manga-studio' | 'nameless'
+let serverInfoReply: ServerInfoReply = 'anime-studio'
+type LabelStep = () => void | Promise<void>
 
-        await act(async () => {
-          switch (event) {
-            case 'selection':
-              useSessionStore.setState({ sessions: [baseSession], hasLoaded: true })
-              useSessionStore.getState().setSelectedSessionId(baseSession.id)
-              break
-            case 'Team route':
-              useTeamLocationStore.getState().navigate({ teamKey: '/projects/another-project', tab: 'tasks' })
-              break
-            case 'filter':
-              useSettingsStore.setState({ projectFilters: ['/projects/another-project'], hostFilters: ['another-host'] })
-              break
-            case 'browser default':
-              useSettingsStore.setState({ defaultProjectDir: '/projects/another-project' })
-              break
-            case 'reconnect success':
-            case 'reconnect failure':
-            case 'reconnect HTTP failure':
-            case 'reconnect nameless':
-              response = event === 'reconnect success' ? 'changed' : event === 'reconnect failure' ? 'failure' : event === 'reconnect HTTP failure' ? 'http-failure' : 'nameless'
-              useSessionStore.setState({ connectionEpoch: 1 })
-              break
-          }
-        })
-        expect(infoCalls).toBe(event.startsWith('reconnect') ? 2 : 1)
-        expect(document.title).toBe(expected)
-      } finally {
-        act(() => { activeRenderer?.unmount() })
-        activeRenderer = null
-        globalThis.fetch = originalFetch
-        useSettingsStore.setState({ defaultProjectDir: originalDefault })
+const contextHeading = () => activeRenderer!.root.findByProps({ 'data-testid': 'context-heading' }).children.join('')
+const settle = () => act(async () => { await new Promise(done => setTimeout(done, 0)) })
+const labels = (title: string, heading: string): LabelStep => () => {
+  expect(document.title).toBe(title)
+  expect(contextHeading()).toBe(heading)
+  expect(title === 'Kawai' ? heading === 'KAWAI' : title === `${heading} - Kawai`).toBe(true)
+}
+const start = (reply: ServerInfoReply, snapshot = true): LabelStep => async () => {
+  serverInfoReply = reply
+  useSessionStore.setState({
+    sessions: [kawaiChat, mangaChat, remoteChat, mangaTerminal],
+    archivedChats: new Map([[archivedKawaiChat.id, archivedKawaiChat]]),
+    agentSessions: { active: [], hibernating: [hibernatingKawai], history: [] },
+    hasLoaded: true,
+  })
+  if (snapshot) useWorkspaceStore.setState({ snapshot: labelSnapshot })
+  act(() => { activeRenderer = TestRenderer.create(<App />) })
+  await settle()
+}
+const select = (id: string | null): LabelStep => async () => {
+  act(() => { useSessionStore.getState().setSelectedSessionId(id) })
+  await settle()
+}
+const selectHibernating = (id: string): LabelStep => async () => {
+  act(() => { useSessionStore.getState().setSelectedHibernatingSessionId(id) })
+  await settle()
+}
+const openTeam = (teamKey: string): LabelStep => async () => {
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey, tab: 'tasks' }) })
+  await settle()
+}
+const leaveTeam: LabelStep = async () => {
+  act(() => { useTeamLocationStore.getState().leave() })
+  await settle()
+}
+const filter = (projectFilters: string[], hostFilters: string[] = []): LabelStep => async () => {
+  act(() => { useSettingsStore.setState({ projectFilters, hostFilters }) })
+  await settle()
+}
+const browserDefault: LabelStep = async () => {
+  act(() => { useSettingsStore.setState({ defaultProjectDir: '/projects/another-project' }) })
+  await settle()
+}
+const snapshotArrives: LabelStep = async () => {
+  act(() => { useWorkspaceStore.setState({ snapshot: labelSnapshot }) })
+  await settle()
+}
+const reconnect = (reply: ServerInfoReply): LabelStep => async () => {
+  serverInfoReply = reply
+  act(() => { useSessionStore.setState({ connectionEpoch: 1 }) })
+  await settle()
+}
+const selected = (id: string | null): LabelStep => () => {
+  expect(useSessionStore.getState().selectedSessionId).toBe(id)
+}
+
+const L2 = [start('anime-studio'), labels('anime-studio - Kawai', 'anime-studio')]
+const L3a = [...L2, select('kawai-chat'), labels('kawai - Kawai', 'kawai')]
+const L3b = [...L3a, openTeam('/projects/manga'), labels('Manga Studio 日本 - Kawai', 'Manga Studio 日本')]
+const L3d2 = [...L3a, filter(['/projects/manga']), selected('manga-chat'), labels('Manga Studio 日本 - Kawai', 'Manga Studio 日本')]
+
+const tableL: ReadonlyArray<readonly [oracle: string, steps: LabelStep[]]> = [
+  ['L1 pending', [start('pending'), labels('Kawai', 'KAWAI')]],
+  ['L1 failure', [start('failure'), labels('Kawai', 'KAWAI')]],
+  ['L1 HTTP failure', [start('HTTP failure'), labels('Kawai', 'KAWAI')]],
+  ['L2', L2],
+  ['L3a', L3a],
+  ['L3j', [...L3a, select('manga-chat'), labels('Manga Studio 日本 - Kawai', 'Manga Studio 日本')]],
+  ['L3i', [...L2, select('archived-kawai'), labels('kawai - Kawai', 'kawai')]],
+  ['L3k', [...L2, select('manga-terminal'), labels('Manga Studio 日本 - Kawai', 'Manga Studio 日本')]],
+  ['L3l', [...L2, selectHibernating('hibernating-kawai'), labels('kawai - Kawai', 'kawai')]],
+  ['L3m', [...L2, select('remote-chat'), labels('adopt - Kawai', 'adopt')]],
+  ['L3b', L3b],
+  ['L3b2', [...L3a, openTeam('/projects/another-project'), labels('another-project - Kawai', 'another-project')]],
+  ['L3c', [...L3b, leaveTeam, labels('kawai - Kawai', 'kawai')]],
+  ['L3d project filter', [...L3a, filter(['/home/coder/kawai/.worktrees/adopt']), selected('kawai-chat'), labels('kawai - Kawai', 'kawai')]],
+  ['L3d host filter', [...L3a, filter([], ['local-host']), selected('kawai-chat'), labels('kawai - Kawai', 'kawai')]],
+  ['L3d2', L3d2],
+  ['L3d3', [...L3d2, filter(['/nowhere']), selected(null), labels('anime-studio - Kawai', 'anime-studio')]],
+  ['L3d4', [...L3b, filter(['/projects/manga']), selected('kawai-chat'), labels('Manga Studio 日本 - Kawai', 'Manga Studio 日本')]],
+  ['L3e', [...L3a, browserDefault, labels('kawai - Kawai', 'kawai')]],
+  ['L3f', [...L3a, select(null), labels('anime-studio - Kawai', 'anime-studio')]],
+  ['L3g', [start('anime-studio', false), select('kawai-chat'), labels('adopt - Kawai', 'adopt'), snapshotArrives, labels('kawai - Kawai', 'kawai')]],
+  ['L3h', [start('pending'), labels('Kawai', 'KAWAI'), select('kawai-chat'), labels('kawai - Kawai', 'kawai')]],
+  ['L4', [...L2, reconnect('manga-studio'), labels('manga-studio - Kawai', 'manga-studio')]],
+  ['L5 failure', [...L2, reconnect('failure'), labels('anime-studio - Kawai', 'anime-studio')]],
+  ['L5 HTTP failure', [...L2, reconnect('HTTP failure'), labels('anime-studio - Kawai', 'anime-studio')]],
+  ['L6', [...L2, reconnect('nameless'), labels('Kawai', 'KAWAI')]],
+]
+
+describe('App context labels (table L)', () => {
+  let originalDefault: string
+  beforeEach(() => {
+    originalDefault = useSettingsStore.getState().defaultProjectDir
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      // The hibernating preview (L3l) is not under test: keep it loading.
+      if (String(input).startsWith('/api/session-preview/')) return new Promise<Response>(() => {})
+      if (String(input) !== '/api/server-info') return new Response('{}')
+      switch (serverInfoReply) {
+        case 'pending': return new Promise<Response>(() => {})
+        case 'failure': throw new Error('server unavailable')
+        case 'HTTP failure': return new Response(JSON.stringify({ error: 'server unavailable' }), { status: 503 })
+        case 'nameless': return new Response(JSON.stringify({ defaultProjectDir: '/', cwd: '///' }))
+        default: return new Response(JSON.stringify({ defaultProjectDir: `/projects/${serverInfoReply}`, cwd: '/opt/kawai' }))
       }
+    }) as typeof fetch
+  })
+  afterEach(() => {
+    useSettingsStore.setState({ defaultProjectDir: originalDefault })
+  })
+
+  for (const [oracle, steps] of tableL) {
+    // @covers: instance-identity › Workspace name leads the browser title › Configured project directory identifies the instance
+    // @covers: instance-identity › Title has a usable loading and missing-name fallback › Initial load has no server information
+    // @covers: instance-identity › Title has a usable loading and missing-name fallback › Root directories have no workspace name
+    // @covers: instance-identity › Title has a usable loading and missing-name fallback › Refresh fails after a successful load
+    // @covers: instance-identity › Title has a usable loading and missing-name fallback › A context name needs no server information
+    // @covers: instance-identity › Title follows the current context › Selecting a chat titles its repository
+    // @covers: instance-identity › Title follows the current context › A Team page titles the team's repository
+    // @covers: instance-identity › Title follows the current context › Clearing the selection returns to the instance title
+    // @covers: instance-identity › Title follows the current context › Filters and browser defaults leave the title alone
+    // @covers: instance-identity › Title follows the current context › A filter that moves the selection retitles
+    // @covers: instance-identity › Workspace fallback follows server information › Reconnect refreshes instance information
+    // @covers: workspace-navigation › The navigator heading shows the context name › The heading follows the selected chat
+    // @covers: workspace-navigation › The navigator heading shows the context name › The heading falls back to the server workspace
+    // @covers: workspace-navigation › The navigator heading shows the context name › The heading has a last-resort fallback
+    // @covers: workspace-navigation › The navigator heading shows the context name › Leaving a Team page shows the chat's heading
+    // @covers: workspace-navigation › The current context names its repository › Archived chats name their repository too
+    // @covers: workspace-navigation › The current context names its repository › Terminals and hibernating sessions name their repository
+    // @covers: workspace-navigation › The current context names its repository › The repository name replaces the directory name once discovered
+    test(`${oracle}: title and heading follow the current context`, async () => {
+      expect(document.title).toBe('Kawai')
+      for (const step of steps) await step()
     })
   }
 })
