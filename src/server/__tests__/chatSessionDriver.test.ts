@@ -3615,6 +3615,7 @@ describe('ChatSessionDriver limit events', () => {
     expect(limits).toEqual([{ kind: 'rate_limit', final: false, status: 429, message: null, resetsAt: null, window: null }])
   })
 
+  // @covers: profile-limit-handling › Limit events are recorded per profile › Window recorded
   test('a failed assistant message is the final event, with the reset a rejected rate_limit_event announced', async () => {
     const { fake, limits } = await limitHarness()
     const reset = Math.floor(Date.now() / 1000) + 2400
