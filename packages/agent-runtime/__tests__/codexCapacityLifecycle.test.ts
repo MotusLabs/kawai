@@ -256,7 +256,13 @@ describe('codex-capacity-retry lifecycle rows L1-L10, L17', () => {
       s.notify(...frames.retryError('a2', 'serverOverloaded', willRetry))
       await s.flush()
       expect(recovery(s)).toEqual({ timers: 0, retries: 1, continuations: 1, terminals: 0, state: 'active' })
-      expect(s.activities.at(-1)).toEqual(willRetry ? { phase: 'retrying', attempt: 1, maxRetries: 1, elapsedMs: 0 } : { phase: 'requesting', elapsedMs: 0 })
+      // reduceActivity and projectActivity each default to an independent
+      // Date.now (common/activity.ts) and the fake capacity clock does not
+      // freeze the wall clock, so only a finite nonnegative elapsed is guaranteed.
+      const activity = s.activities.at(-1)!
+      expect(activity).toEqual(willRetry ? { phase: 'retrying', attempt: 1, maxRetries: 1, elapsedMs: expect.any(Number) } : { phase: 'requesting', elapsedMs: expect.any(Number) })
+      expect(Number.isFinite(activity.elapsedMs)).toBe(true)
+      expect(activity.elapsedMs).toBeGreaterThanOrEqual(0)
       await completeAttempt(s, 'a2')
       expect((await handle.result).outcome).toBe('success')
     }
