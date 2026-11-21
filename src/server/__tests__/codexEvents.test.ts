@@ -93,6 +93,7 @@ async function replay(frameList: Frame[], end: (script: Script) => Script = scri
 }
 
 describe('recorded frames', () => {
+  // @covers: codex-chat-sessions › Codex turns stream into the chat transcript › Streaming reply
   test('streaming: a delta writes text under the Kawai turn; the completed message is the text', async () => {
     const delta = recorded('item/agentMessage/delta')
     const completed = recorded('item/completed', itemOf('agentMessage'))
@@ -113,6 +114,7 @@ describe('recorded frames', () => {
     expect(run.events.filter(event => event.type === 'user_message')).toHaveLength(1)
   })
 
+  // @covers: codex-chat-sessions › Codex turns stream into the chat transcript › Command execution
   test('a command is a Bash tool call and its result carries the exit code', async () => {
     const started = recorded('item/started', itemOf('commandExecution'))
     const item = started.item as { id: string; command: string; cwd: string }
@@ -207,6 +209,7 @@ describe('synthetic frames', () => {
     expect(run.between[1]).toMatchObject({ output: 'boom', isError: true })
   })
 
+  // @covers: codex-chat-sessions › Codex turns stream into the chat transcript › Failed turn
   test('a failed turn is an error completion naming its reason; a completed one carries the final text and usage', async () => {
     const failed = await replay([], script => script.completed('ct-1', 'failed', [], { message: 'Quota exceeded', codexErrorInfo: { usageLimitExceeded: {} } }))
     const tail = failed.events.slice(failed.events.findIndex(event => event.type === 'turn_completed'))
