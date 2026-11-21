@@ -50,7 +50,7 @@
 
 ## 3. Integration
 
-- [ ] 3.1 Run `bun run check` on the clean committed tree. Report the result with a map from every oracle id (C1–C14 with C1b and C7b, B1–B4, L1–L6 with every L3 row and alternative, T1–T7, A1–A5, I1–I5) to its test title and killed mutant. Confirm each named mutant fails before reporting it killed. Verify: the check passes, the map has no unmapped id, and `openspec validate chat-context-name --strict` passes.
+- [x] 3.1 Run `bun run check` on the clean committed tree. Report the result with a map from every oracle id (C1–C14 with C1b and C7b, B1–B4, L1–L6 with every L3 row and alternative, T1–T7, A1–A5, I1–I5) to its test title and killed mutant. Confirm each named mutant fails before reporting it killed. Verify: the check passes, the map has no unmapped id, and `openspec validate chat-context-name --strict` passes.
 
 ## Workflow follow-up
 
