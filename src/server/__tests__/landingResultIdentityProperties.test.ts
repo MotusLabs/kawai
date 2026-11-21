@@ -214,67 +214,6 @@ describe('the reference model', () => {
   })
 })
 
-// ── One case at the seam ─────────────────────────────────────────────────
-interface Case { status: Status; ref: Ref; pin: Pin; mechanism: Mechanism }
-interface Prepared { lane: Lane; head: string; roundId: string | null; authorizing: string }
-
-/**
- * A lane with an earlier result X on the baseline and the authorizing result
- * R on the new head; `ref` decides which round id the landing effect names.
- * `foreign` is a lane of another execution, `sibling` another change here.
- */
-async function prepared(lane: Lane, others: Others, c: Case): Promise<Prepared> {
-  const [baseline, head] = lane.commits
-  const x = await submitted(lane, baseline)
-  const r = await submitted(lane, head)
-  const own = round(lane, r, head)
-  const roundId: Record<Ref, () => string | null> = {
-    valid: () => own.id,
-    null: () => null,
-    missing: () => `round-missing-${seq++}`,
-    'foreign-execution': () => round(others.foreign.lane, others.foreign.result, head).id,
-    'foreign-change': () => round(others.sibling.lane, others.sibling.result, head).id,
-    'wrong-commit': () => round(lane, r, baseline).id,
-  }
-  const id = roundId[c.ref]()
-  await prepare(lane, c.status, c.pin, r, x)
-  return { lane, head, roundId: id, authorizing: r }
-}
-
-/** A lane of another execution and another change of this one, each with one submitted result. */
-interface Others { foreign: { lane: Lane; result: string }; sibling: { lane: Lane; result: string } }
-async function other(lane: Lane): Promise<{ lane: Lane; result: string }> { return { lane, result: await submitted(lane, lane.commits[1]) } }
-
-async function runCase(p: Prepared, c: Case, label: string): Promise<void> {
-  const before = snapshot(p.lane)
-  const from = warn.mock.calls.length
-  const calls = await observed(() => land(p.lane, c.mechanism, p.head, p.roundId))
-  assertOutcome(p.lane, expected(c.status, c.ref, c.pin), before, from, calls, p.authorizing, label)
-}
-
-describe('finite-axis completeness at the afterLanded seam', () => {
-  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
-  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The task was closed by hand during the merge
-  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing result is pinned to an older revision
-  test('every one of the 144 status × reference × pin × mechanism inputs produces its ordered class outcome through the mechanism follow-on', async () => {
-    const cases: Case[] = []
-    for (const status of STATUSES) for (const ref of REFS) for (const pin of ['current', 'older'] as Pin[]) for (const mechanism of ['direct', 'integration'] as Mechanism[]) cases.push({ status, ref, pin, mechanism })
-    expect(cases).toHaveLength(144)
-    const [foreignLane] = await lanes(1)
-    const foreign = await other(foreignLane!)
-    const BATCH = 24
-    for (let start = 0; start < cases.length; start += BATCH) {
-      const batch = cases.slice(start, start + BATCH)
-      const pool = await lanes(batch.length + 1)
-      const others = { foreign, sibling: await other(pool.at(-1)!) }
-      for (const [k, c] of batch.entries()) {
-        const label = `${c.status}/${c.ref}/${c.pin}/${c.mechanism}`
-        await runCase(await prepared(pool[k]!, others, c), c, label)
-      }
-    }
-  }, 600_000)
-})
-
 // ── Seeded round histories (design "Properties") ─────────────────────────
 type Outcome = 'superseded' | 'fail' | 'pass'
 interface Step { commit: 0 | 1; outcome: Outcome; kind: 'plain' | 'carried' | 'regate' }
@@ -327,17 +266,111 @@ async function build(lane: Lane, hist: History): Promise<Built> {
   return { rounds, results, authorizing, label }
 }
 
+// ── One case at the seam ─────────────────────────────────────────────────
+/** A lane of another execution, and another change of this one, each with one submitted result. */
+interface Other { lane: Lane; result: string }
+interface Others { foreign: Other; sibling: Other }
+async function other(lane: Lane): Promise<Other> { return { lane, result: await submitted(lane, lane.commits[1]) } }
+
+/** Provision `count` lanes in batches (plus one sibling change each) and run `body` on each with its index. */
+async function overLanes(count: number, body: (lane: Lane, k: number, others: Others) => Promise<void>, batch = 16): Promise<void> {
+  const foreign = await other((await lanes(1))[0]!)
+  for (let start = 0; start < count; start += batch) {
+    const pool = await lanes(Math.min(batch, count - start) + 1)
+    const others = { foreign, sibling: await other(pool.pop()!) }
+    for (const [k, lane] of pool.entries()) await body(lane, start + k, others)
+  }
+}
+
+/** The round id the landing effect names for `ref`; every invalid one leaves the same-commit rounds in place. */
+function referenced(lane: Lane, built: Built, head: string, ref: Ref, others: Others): string | null {
+  if (ref === 'valid') return built.authorizing.id
+  if (ref === 'null') return null
+  if (ref === 'missing') return `round-missing-${seq++}`
+  if (ref === 'foreign-execution') return round(others.foreign.lane, others.foreign.result, head).id
+  if (ref === 'foreign-change') return round(others.sibling.lane, others.sibling.result, head).id
+  const off = built.rounds.find(entry => entry.commitSha !== head)
+  return off?.id ?? round(lane, built.authorizing.resultId, lane.commits[head === lane.commits[0] ? 1 : 0]).id
+}
+
+/** Write the history, bring the task to its status and pin, land on the mechanism, and assert the model's class. */
+async function seamCase(lane: Lane, others: Others, hist: History, ref: Ref, label: string): Promise<{ built: Built; humanPick: string }> {
+  const built = await build(lane, hist)
+  const head = lane.commits[hist.head]
+  const roundId = referenced(lane, built, head, ref, others)
+  const humanPick = built.results[hist.humanPick % built.results.length]!
+  await prepare(lane, hist.status, hist.pin, built.authorizing.resultId, humanPick)
+  const before = snapshot(lane)
+  const from = warn.mock.calls.length
+  const calls = await observed(() => land(lane, hist.mechanism, head, roundId))
+  assertOutcome(lane, expected(hist.status, ref, hist.pin), before, from, calls, built.authorizing.resultId, `${label} ${built.label} ${JSON.stringify(hist)}`)
+  return { built, humanPick }
+}
+
+const plain = (commit: 0 | 1, outcome: Outcome = 'pass'): Step => ({ commit, outcome, kind: 'plain' })
+/** X on the baseline (an earlier, superseded round), R on the landed head. */
+const TWO: Pick<History, 'steps' | 'head' | 'authorizer' | 'later' | 'humanPick'> = { steps: [plain(0, 'superseded'), plain(1)], head: 1, authorizer: 1, later: [], humanPick: 0 }
+const MECHANISMS: readonly Mechanism[] = ['direct', 'integration']
+const OPEN: readonly Status[] = ['open', 'active', 'blocked']
+
+describe('the decision table and finite-axis completeness at the afterLanded seam', () => {
+  // The rows not run through the production composition, each under both
+  // mechanisms and, where the task is open, under open, active and blocked.
+  const TABLE: Array<{ id: string; ref: Ref; statuses: readonly Status[]; pin: Pin; history: Pick<History, 'steps' | 'head' | 'authorizer' | 'later' | 'humanPick'> }> = [
+    { id: 'O4', ref: 'valid', statuses: OPEN, pin: 'current', history: { steps: [plain(0), { commit: 1, outcome: 'pass', kind: 'carried' }], head: 1, authorizer: 1, later: [], humanPick: 0 } },
+    { id: 'O5', ref: 'valid', statuses: OPEN, pin: 'current', history: { steps: [plain(1, 'fail'), { commit: 1, outcome: 'pass', kind: 'regate' }], head: 1, authorizer: 1, later: [], humanPick: 0 } },
+    { id: 'O7', ref: 'valid', statuses: OPEN, pin: 'current', history: { steps: [plain(1)], head: 1, authorizer: 0, later: [plain(1)], humanPick: 0 } },
+    { id: 'O8', ref: 'null', statuses: OPEN, pin: 'current', history: TWO },
+    { id: 'O9', ref: 'missing', statuses: OPEN, pin: 'current', history: TWO },
+    { id: 'O10 other change', ref: 'foreign-change', statuses: OPEN, pin: 'current', history: TWO },
+    { id: 'O10 other execution', ref: 'foreign-execution', statuses: OPEN, pin: 'current', history: TWO },
+    { id: 'O11', ref: 'wrong-commit', statuses: OPEN, pin: 'current', history: TWO },
+    { id: 'O12', ref: 'valid', statuses: ['done-human'], pin: 'current', history: TWO },
+    { id: 'O13', ref: 'valid', statuses: ['cancelled'], pin: 'current', history: TWO },
+    { id: 'O14', ref: 'valid', statuses: OPEN, pin: 'older', history: TWO },
+    { id: 'O15', ref: 'valid', statuses: ['done-kawai'], pin: 'current', history: TWO },
+  ]
+
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › A carried round lands
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The task was closed by hand during the merge
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing result is pinned to an older revision
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The follow-on is replayed
+  test('decision table rows O4, O5, O7–O15 hold at the afterLanded seam under both mechanisms and every open status', async () => {
+    const cases = TABLE.flatMap(row => row.statuses.flatMap(status => MECHANISMS.map(mechanism => ({ row, hist: { ...row.history, status, pin: row.pin, mechanism } }))))
+    expect(cases).toHaveLength(2 * (9 * 3 + 3))
+    await overLanes(cases.length, async (lane, k, others) => {
+      const { row, hist } = cases[k]!
+      const { built, humanPick } = await seamCase(lane, others, hist, row.ref, `${row.id} ${hist.status} ${hist.mechanism}`)
+      const acceptances = snapshot(lane).acceptances.map(({ id, by }) => ({ id, by }))
+      if (row.id === 'O12') expect(acceptances).toEqual([{ id: humanPick, by: 'human' }])
+      if (row.id === 'O12') expect(humanPick).not.toBe(built.authorizing.resultId)
+      if (row.id === 'O4') expect(built.authorizing.carriedFrom).toBe(built.rounds[0]!.id)
+      if (row.id === 'O5') expect(built.authorizing.regateOf).toBe(built.rounds[0]!.id)
+      if (row.id === 'O15') expect(acceptances).toEqual([{ id: built.authorizing.resultId, by: 'system' }])
+    }, 32)
+  }, 600_000)
+
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The task was closed by hand during the merge
+  // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing result is pinned to an older revision
+  test('every one of the 144 status × reference × pin × mechanism inputs produces its ordered class outcome through the mechanism follow-on', async () => {
+    const cases: History[] = []
+    const refs: Ref[] = []
+    for (const status of STATUSES) for (const ref of REFS) for (const pin of ['current', 'older'] as Pin[]) for (const mechanism of MECHANISMS) {
+      cases.push({ ...TWO, status, pin, mechanism })
+      refs.push(ref)
+    }
+    expect(cases).toHaveLength(144)
+    await overLanes(cases.length, async (lane, k, others) => {
+      await seamCase(lane, others, cases[k]!, refs[k]!, `${cases[k]!.status}/${refs[k]}/${cases[k]!.pin}/${cases[k]!.mechanism}`)
+    }, 24)
+  }, 600_000)
+})
+
 const P1_CASES = 64
 const P2_CASES = 64
 const P3_CASES = 64
-
-/** Provision `count` lanes in batches and run `body` on each with its index. */
-async function overLanes(count: number, body: (lane: Lane, k: number) => Promise<void>): Promise<void> {
-  for (let start = 0; start < count; start += 16) {
-    const pool = await lanes(Math.min(16, count - start))
-    for (const [k, lane] of pool.entries()) await body(lane, start + k)
-  }
-}
 
 describe('seeded properties', () => {
   // @covers: plan-landing › Kawai accepts the authorizing round's own result › Two results share the landed commit
@@ -353,17 +386,10 @@ describe('seeded properties', () => {
     ]
     const cases = [...fixed, ...Array.from({ length: propertyCases(P1_CASES) }, () => history(r))]
     const labels = { normal: 0, defensive: 0 }
-    await overLanes(cases.length, async (lane, k) => {
-      const hist = cases[k]!
-      const built = await build(lane, hist)
+    await overLanes(cases.length, async (lane, k, others) => {
+      const { built, humanPick } = await seamCase(lane, others, cases[k]!, 'valid', `P1 seed 0x5eed1d case ${k}`)
       labels[built.label] += 1
-      const humanPick = built.results[hist.humanPick % built.results.length]!
       if (k === 0) expect(humanPick).not.toBe(built.authorizing.resultId)
-      await prepare(lane, hist.status, hist.pin, built.authorizing.resultId, humanPick)
-      const before = snapshot(lane)
-      const from = warn.mock.calls.length
-      const calls = await observed(() => land(lane, hist.mechanism, lane.commits[hist.head], built.authorizing.id))
-      assertOutcome(lane, expected(hist.status, 'valid', hist.pin), before, from, calls, built.authorizing.resultId, `P1 seed 0x5eed1d case ${k} ${built.label} ${JSON.stringify(hist)}`)
     })
     console.info(`P1 labels: ${JSON.stringify(labels)}`)
     expect(labels.normal).toBeGreaterThan(0)
@@ -373,33 +399,13 @@ describe('seeded properties', () => {
   // @covers: plan-landing › Kawai accepts the authorizing round's own result › The authorizing round cannot be confirmed
   test('P2 fail closed: over 64 seeded histories (seed 0xc105ed) a null, unknown, foreign or wrong-commit round reference with same-commit rounds present changes no acceptance and no status', async () => {
     const r = rng(0xc105ed)
-    const [foreignLane] = await lanes(1)
-    const [siblingLane] = await lanes(1)
-    const others = { foreign: await other(foreignLane!), sibling: await other(siblingLane!) }
     const invalid = REFS.filter(ref => ref !== 'valid')
     const seen = new Set<Ref>()
-    await overLanes(propertyCases(P2_CASES), async (lane, k) => {
+    await overLanes(propertyCases(P2_CASES), async (lane, k, others) => {
       const hist = history(r)
       const ref = pick(r, invalid)
       seen.add(ref)
-      const built = await build(lane, hist)
-      const head = lane.commits[hist.head]
-      const off = built.rounds.find(entry => entry.commitSha !== head)
-      const roundId = {
-        null: null,
-        missing: `round-missing-${seq++}`,
-        'foreign-execution': round(others.foreign.lane, others.foreign.result, head).id,
-        'foreign-change': round(others.sibling.lane, others.sibling.result, head).id,
-        'wrong-commit': off?.id ?? round(lane, built.authorizing.resultId, lane.commits[1 - hist.head]!).id,
-      }[ref as Exclude<Ref, 'valid'>]
-      await prepare(lane, hist.status, hist.pin, built.authorizing.resultId, built.results[hist.humanPick % built.results.length]!)
-      const before = snapshot(lane)
-      const from = warn.mock.calls.length
-      const calls = await observed(() => land(lane, hist.mechanism, head, roundId))
-      const label = `P2 seed 0xc105ed case ${k} ${ref} ${JSON.stringify(hist)}`
-      assertOutcome(lane, expected(hist.status, ref, hist.pin), before, from, calls, built.authorizing.resultId, label)
-      expect(snapshot(lane).acceptances, label).toEqual(before.acceptances)
-      expect(snapshot(lane).status, label).toBe(before.status)
+      await seamCase(lane, others, hist, ref, `P2 seed 0xc105ed case ${k} ${ref}`)
     })
     expect(seen.size).toBeGreaterThan(1)
   }, 600_000)
