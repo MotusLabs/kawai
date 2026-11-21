@@ -16,7 +16,7 @@ Planning-only proposal: every task below is a future obligation. Nothing here is
 ## 3. Recovery matrix and existing workflows
 
 - [ ] 3.1 Add the "Landing follow-on replayed after a restart" row to `docs/recovery-matrix.md` citing the O15 and O16 test titles literally. Verify: `src/server/__tests__/recoveryMatrix.test.ts` passes.
-- [ ] 3.2 Run the existing landing and execution suites that exercise acceptance (`executionLandingMatrix.integration.test.ts`, `integrationLifecycleTable.test.ts`, `executionComposition.test.ts`, `effectResumeRounds.integration.test.ts`, `landingMechanisms.test.ts`) unchanged. Verify: all pass on the fix head; any edit to them is reported as a regression question, not silently changed.
+- [ ] 3.2 Run the existing landing and execution suites that exercise acceptance (`executionLandingMatrix.integration.test.ts`, `integrationLifecycleTable.test.ts`, `executionComposition.test.ts`, `effectResumeRounds.integration.test.ts`, `landingMechanisms.test.ts`) unchanged, except the one afterLanded call in `integrationLifecycleTable.test.ts` adapted to `LandedStep` (contract I5). Verify: all pass on the fix head; any other edit to them is reported as a regression question, not silently changed.
 
 ## 4. Result
 

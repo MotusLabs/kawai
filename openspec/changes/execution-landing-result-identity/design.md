@@ -170,6 +170,7 @@ None blocking. The choice in D2 not to re-check the authorizing round's outcome 
 - I2: `TaskResultService`, `systemCaller.ts`, the round and effect stores, the planner, and the schema are unchanged.
 - I3: No past acceptance, receipt, or journal entry is read for repair or rewritten.
 - I4: Landing facts, the `landed` transition, worktree cleanup, and execution and plan completion behave as before in every row.
+- I5: In integrationLifecycleTable.test.ts, only the existing afterLanded call's head-string argument may be adapted to LandedStep using the already available landing context. Existing fixtures, assertions, test title, coverage annotations, timeout and behavioral meaning remain unchanged.
 
 ### Scope
 
@@ -180,11 +181,12 @@ None blocking. The choice in D2 not to re-check the authorizing round's outcome 
 - `src/server/__tests__/landingResultIdentity.integration.test.ts`
 - `src/server/__tests__/landingResultIdentityProperties.test.ts`
 - `docs/recovery-matrix.md`
+- `src/server/__tests__/integrationLifecycleTable.test.ts`
 
 ### Verification
 
 - V1: The decision table is committed as a table-driven test whose rows carry the oracle ids; each property runs seeded through `propertyCases`.
-- V2: The result maps each oracle id and property to a literal test title and each mutant to the test that killed it, with the negative control for O2 run on the base head.
+- V2: A current literal-title map covers every oracle and property and records each killed M1–M8 mutant; O2/O3 and P1 have base-head negative-control evidence. Relevant existing landing/replay/acceptance suites pass with scenario/assertion semantics unchanged; the sole existing-test edit permitted is I5's afterLanded signature adaptation.
 - V3: The clean committed implementation head passes bun run check --full-properties under the selected latest stable Bun. Run the complete unfiltered scripts/verify-result.ts --commit <head> --coverage <map> and disclose its exit code and every diagnostic. Commit identity, current HEAD, clean state, the matching certificate/toolchain, authoritative base/integration checks, scope and cited test outcomes must pass, with zero unresolved citations. Exit 1 is permitted only when its sole failed category is comparison against unrelated open-task branches and the Lead records evidence those conflicts pre-exist and are neither introduced nor worsened by this change. A required-base/dependency conflict, new or worsened conflict, result-owned failure or omitted required check still blocks; no suppression, fictional filter, hidden skip or global PASS claim.
 
 ### Excluded
