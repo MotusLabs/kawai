@@ -1,7 +1,8 @@
 // owner-publication-handoff CP1 (tasks 3.3, 4.2) through the production
 // composition: a Lead chat's own kawai-team server records a publication
 // request for a Kawai task whose holder claimed it; the workspace snapshot
-// lists the human-owned W2 item; an ordinary publish under a reserved
+// lists the human-owned W2 item; task mail delivered to the holder while the
+// handoff is pending names it as pending beside the published direction; an ordinary publish under a reserved
 // `handoff:` key (bare or padded, with a blank rationale, and from a persisted
 // draft linked to the handoff) is refused first, writes nothing and leaves W2
 // in a fresh snapshot; the human's `team-task-handoff-publish` publishes
@@ -48,6 +49,7 @@ function git(args: string[], cwd?: string) {
 }
 
 // @covers: task-publication-handoffs › Task authors may request an owner publication › A Lead prepares a correction for a Kawai task
+// @covers: task-publication-handoffs › A handoff is never a revision › Delivered context keeps the published revision
 // @covers: team-workspace › The attention queue lists pending publication handoffs › A Kawai task's handoff needs the human
 // @covers: task-publication-handoffs › The publisher publishes a handoff with one action › The human publishes a prepared correction
 // @covers: task-publication-handoffs › Each disposition wakes the next actor once › The requester learns of the publication
@@ -180,6 +182,21 @@ test('a Lead requests a publication, W2 asks the human, a reserved key is refuse
       nextAction: 'Publish prepared revision', link: { kind: 'task', id: task.id, handoffId }, requiresHuman: true,
     }]
     expect(handoffItems()).toEqual(w2)
+
+    // 2b. Task mail delivered while H is pending (A8, F9): the Lead's own
+    // send_message reaches the holder through the real dispatcher, and the
+    // header the holder receives names H as pending on revision 1, carries
+    // the published direction, and never the prepared text.
+    const note = await call('send_message', { to_kind: 'session', to_id: holder, body: 'Headers are being prepared', task_id: task.id })
+    expect(note.error).toBeNull()
+    const noteId = JSON.parse(note.text).id as string
+    await waitFor(() => manager.mailbox.store.get(noteId)?.state === 'delivered', 'the task mail delivered')
+    const received = fs.readdirSync(transcriptDir).map(file => fs.readFileSync(path.join(transcriptDir, file), 'utf8'))
+      .flatMap(text => text.split('\n').filter(line => line.includes('Headers are being prepared')))
+    expect(received).toHaveLength(1)
+    expect(received[0]).toContain(`Pending publication handoff ${handoffId} (open) prepared on revision 1`)
+    expect(received[0]).toContain('CSV export')
+    expect(received[0]).not.toContain('CSV export with headers')
 
     // 3. The human's saved draft, linked to H (the load command is a later
     // wave, so only the link columns are seeded on the real saved row).
