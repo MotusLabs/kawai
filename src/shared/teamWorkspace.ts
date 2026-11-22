@@ -35,6 +35,8 @@ export type AttentionKind =
   | 'plan-fix'
   | 'plan-condition'
   | 'plan-promotion'
+  // A prepared revision waiting for its publisher (owner-publication-handoff D8).
+  | 'publication-handoff'
   | (string & {})
 
 /** Who an attention item is waiting on: the human, one session, or a group. */
@@ -70,6 +72,8 @@ export interface AttentionLink {
   planId?: string
   /** The change of the plan the link scrolls to, when the item has one. */
   change?: string
+  /** A `task` link's publication handoff anchor (owner-publication-handoff D8). */
+  handoffId?: string
 }
 
 export interface AttentionItem {

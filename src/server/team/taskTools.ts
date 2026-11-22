@@ -12,9 +12,10 @@ import type { TaskService } from './TaskService'
 import type { TaskResultService } from './TaskResultService'
 import { JOURNAL_LIMIT_MAX, TaskJournalReads } from './taskJournalWindow'
 import { TASK_LIST_LIMIT_MAX, TASK_LIST_STATUSES } from './taskListWindow'
+import { PREPARED_PAYLOAD_FIELDS } from './taskHandoffService'
 
 export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_journal_read', 'task_result_diff_read', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
-  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result', 'task_transfer_owner'] as const
+  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result', 'task_transfer_owner', 'task_request_publication'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
 const taskId = { task_id: z.string().min(1) }
@@ -64,6 +65,15 @@ export const taskSchemas = {
   task_amend: z.object({
     ...taskId, direction: z.string().optional(), acceptance: z.string().optional(), contract: z.string().optional(),
     rationale: z.string().optional(), notify: z.boolean().optional(),
+    // Publish a prepared revision (owner-publication-handoff D3): beside it only task_id.
+    handoff_id: z.string().min(1).optional(),
+  }),
+  // owner-publication-handoff D10: a prepared revision for the owner or the human to publish.
+  task_request_publication: z.object({
+    ...taskId, base_revision: z.number().int().min(1), rationale: z.string(),
+    direction: z.string().optional(), acceptance: z.string().optional(), contract: z.string().optional(),
+    notify: z.boolean().optional(), base_commit: z.string().optional(), evidence_refs: z.array(z.string()).optional(),
+    request_key: z.string().min(1),
   }),
   task_list: z.object({
     status: z.enum(TASK_LIST_STATUSES as [TaskListStatus, ...TaskListStatus[]], { error: listStatus }).optional(),
@@ -127,7 +137,8 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_result_diff_read: 'Read one result\'s diff losslessly (result_id from task_get): up to 8,192 stored bytes from offset_bytes (default 0; a whole result\'s diffResumeOffsetBytes continues its preview) as dataBase64, which is authoritative, with their text when valid UTF-8 (else null), the diff\'s totalBytes (0 without a diff), and nextOffsetBytes (null at the end). Read-only.',
   task_note: "Append a note to a task's journal (decisions, findings, progress). Notes are permanent.",
   task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its owner only). Optional note is journaled.',
-  task_amend: "Publish a new revision of a task's direction, acceptance criteria, or contract (its owner only). Optional contract (the task_create grammar) replaces the current one; omitted or blank carries it forward unchanged, and a contract can never be removed. A contract that does not parse refuses the amendment with every problem and publishes nothing. Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice.",
+  task_amend: "Publish a new revision of a task's direction, acceptance criteria, or contract (its owner only). Optional contract (the task_create grammar) replaces the current one; omitted or blank carries it forward unchanged, and a contract can never be removed. A contract that does not parse refuses the amendment with every problem and publishes nothing. Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice. With handoff_id (and only task_id beside it) publishes that prepared revision as it was requested.",
+  task_request_publication: 'Ask the task\'s owner (or the human, when the task has no live owner) to publish a revision you prepared, when you may author task directions but do not own the task: base_revision (the task\'s current revision), a rationale, and at least one of direction, acceptance, contract (the task_create grammar); notify (default true) also sends the holder a revision notice when it is published. Optional base_commit (a full commit id) and up to 20 evidence_refs (repository-relative paths or ids). request_key makes a resend a replay; the same key with a different payload is refused naming the field. A newer request of yours supersedes your pending one; another group\'s pending request refuses it. This publishes nothing: the owner publishes it with task_amend { task_id, handoff_id }. A decision card answer publishes nothing either.',
   task_list: `List this team's tasks as compact rows (no direction or acceptance — use task_get), newest first. Without status, only open, active, and blocked tasks; status takes one status or "all". At most limit rows (1–${TASK_LIST_LIMIT_MAX}, default 50); page older with before set to bounds.nextBefore. bounds.total counts every match; statuses names the filter applied.`,
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
   task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
@@ -177,8 +188,21 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
       return tasks.setStatus(caller, task_id, next, note)
     },
     task_amend: async (input: unknown) => {
-      const { task_id, direction, acceptance, contract, rationale, notify } = taskSchemas.task_amend.parse(input)
+      const { task_id, direction, acceptance, contract, rationale, notify, handoff_id } = taskSchemas.task_amend.parse(input)
+      if (handoff_id !== undefined) {
+        const given = { direction, acceptance, contract, rationale, notify }
+        const extras = PREPARED_PAYLOAD_FIELDS.filter(field => given[field] !== undefined)
+        return (await tasks.handoffs.publish(caller, task_id, handoff_id, extras)).task
+      }
       return tasks.amend(caller, task_id, { direction, acceptance, contract, rationale, notify })
+    },
+    task_request_publication: async (input: unknown) => {
+      const args = taskSchemas.task_request_publication.parse(input)
+      return tasks.handoffs.request(caller, args.task_id, {
+        baseRevision: args.base_revision, rationale: args.rationale, direction: args.direction, acceptance: args.acceptance,
+        contract: args.contract, notify: args.notify ?? true, baseCommit: args.base_commit, evidenceRefs: args.evidence_refs,
+        requestKey: args.request_key,
+      })
     },
     task_acknowledge: async (input: unknown) => {
       const { task_id, revision } = taskSchemas.task_acknowledge.parse(input)

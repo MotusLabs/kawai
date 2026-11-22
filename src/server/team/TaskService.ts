@@ -36,6 +36,8 @@ import { executionOf, refuseSystem, type SystemCaller } from './systemCaller'
 import { originStatusRefusal, ownerLabel, statusRefusal, taskOwner } from './taskStatusRights'
 import { TaskOwnership } from './taskOwnership'
 import { contractInput } from './taskContractRows'
+import { canonicalRequestKey, isReservedRequestKey } from '../../shared/taskHandoffs'
+import { RESERVED_KEY_REFUSAL, TaskHandoffService, type PublicationLink } from './taskHandoffService'
 export { statusRefusal } from './taskStatusRights'
 
 export interface TaskCreateInput {
@@ -142,7 +144,11 @@ export class TaskService {
   }) {
     this.worktrees = options.worktrees ?? new TeamWorktrees()
     this.ownership = new TaskOwnership(this, options.getSession)
+    this.handoffs = new TaskHandoffService(this, options.getSession)
   }
+
+  /** Publication handoffs (owner-publication-handoff D2, D3). */
+  readonly handoffs: TaskHandoffService
 
   /** `task_transfer_owner` (group-mail-task-affinity D7). */
   readonly ownership: TaskOwnership
@@ -238,9 +244,13 @@ export class TaskService {
    * UI sends the draft's base revision and a command key, so a resend is a
    * replay and a stale base is refused; the agent tool sends neither. A
    * human publication drops the draft it came from. Announced once after a
-   * new revision commits — never on a replay.
+   * new revision commits — never on a replay. The ordinary entry refuses a
+   * reserved `handoff:` key first (owner-publication-handoff D3, H33); only
+   * the prepared entry passes `link`, its own key and in-transaction writes.
    */
-  async publish(caller: TaskCaller, taskId: string, input: TaskPublishInput): Promise<PublishOutcome> {
+  async publish(caller: TaskCaller, taskId: string, input: TaskPublishInput, link?: PublicationLink): Promise<PublishOutcome> {
+    const requestKey = link ? link.requestKey : canonicalRequestKey(input.requestKey)
+    if (!link && isReservedRequestKey(requestKey)) throw new Error(RESERVED_KEY_REFUSAL)
     const { team, actor } = await this.revisionPublisher(caller)
     const task = this.sameTeamTask(team, taskId)
     if (actor.kind === 'agent' && taskOwner(task) !== actor.sessionId) {
@@ -255,7 +265,6 @@ export class TaskService {
     // Refused before anything is written, as notify() refuses: never a notify revision without its notices.
     if (input.notify && !this.store.notices) throw new Error('Revision notices are not available')
     const sender = this.noticeSender(team, actor)
-    const requestKey = input.requestKey?.trim() || undefined
     let sent: SentNotice[] = []
     const outcome = this.store.publish(taskId, {
       ...(input.direction !== undefined ? { direction: input.direction.trim() } : {}),
@@ -263,7 +272,7 @@ export class TaskService {
       ...(contract !== undefined ? { contract } : {}),
       rationale: emptyToNull(input.rationale),
       ...(input.baseRevision !== undefined ? { baseRevision: input.baseRevision } : {}),
-      ...(input.requestKey?.trim() ? { requestKey: input.requestKey.trim() } : {}),
+      ...(requestKey ? { requestKey } : {}),
       notify: input.notify === true,
       // Only the publication that came from the draft discards it (D2).
       discardDraft: actor.kind === 'human' && input.fromDraft === true,
@@ -276,6 +285,7 @@ export class TaskService {
             sender, requestKey: requestKey ?? `publish-r${revision.revision}`, sessionExists: id => !!this.options.getSession(id),
           })
         }
+        link?.within(revision, current)
       },
     }, actor)
     if (!outcome) throw new Error(`Task not found in this team: ${taskId}`)

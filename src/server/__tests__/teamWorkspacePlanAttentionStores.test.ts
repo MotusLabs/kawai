@@ -222,7 +222,7 @@ describe('WorkspaceRead.snapshot carries the plan facts (B3, 9.2/9.3 wiring)', (
         list: () => [], get: () => null,
         results: { get: () => null, outstandingSince: () => [], submittedBy: () => false },
         acknowledgements: { highest: () => null },
-      } },
+      }, handoffs: { store: { pendingForTeam: () => [] }, live: () => false } },
       mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
       waitingFor: () => ({}),
       teamRecords: () => [],

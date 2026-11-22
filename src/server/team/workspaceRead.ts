@@ -27,6 +27,7 @@ import type { TeamTaskSummary } from '../../shared/teamTasks'
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { acceptanceItems, taskImpact, type PendingAcceptance } from './attentionAcceptance'
+import { handoffAttentionItems, type HandoffAttentionFact } from './handoffAttention'
 import { exhaustionAttentionItems, type ExhaustionFact } from './workspaceExhaustion'
 import { CAPACITY_CONSTRAINT_KINDS, capacityConstraintLabel, morningSummary } from './workspaceSummary'
 import {
@@ -220,6 +221,8 @@ export interface AttentionInput {
   plans?: PlanAttentionFact[]
   /** Each open plan's holds and pauses, from the one revision-control reader (revision-control D13). */
   revisionControl?: RevisionControlAttentionFact[]
+  /** Pending publication handoffs with their publisher's liveness (owner-publication-handoff D8). */
+  handoffs?: HandoffAttentionFact[]
 }
 
 /** One attention source: a pure function over the input (D5's registry). */
@@ -295,6 +298,9 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }
 const outboundItems: AttentionSource = ({ outboundViolations, nameOf }) => outboundAttentionItems(outboundViolations, nameOf)
 
 /** Context-exhausted sessions awaiting a decision (chat-context-exhaustion D8; workspaceExhaustion.ts). */
+/** Prepared revisions awaiting their publisher (owner-publication-handoff D8; handoffAttention.ts). */
+const handoffItems: AttentionSource = ({ handoffs }) => handoffAttentionItems(handoffs ?? [])
+
 const exhaustionItems: AttentionSource = ({ exhaustion, taskTitle, nameOf }) =>
   exhaustionAttentionItems(exhaustion ?? [], taskTitle, nameOf)
 
@@ -308,6 +314,7 @@ export const ATTENTION_SOURCES: readonly AttentionSource[] = [
   planStopItems, planStallItems, decisionQuestionItems, planFixItems, planConditionItems, planPromotionItems,
   // revision-control D13: the owner's overdue holds and pauses, and the checkpoint decisions.
   planHoldOverdueItems, planPauseOverdueItems, planCheckpointDecisionItems,
+  handoffItems,
 ]
 
 /** Every attention item the current state yields, in a stable order. */
@@ -381,6 +388,13 @@ export class WorkspaceRead {
       // The plan sources' facts, gathered over the supervision reads (plan-supervision D13).
       plans: manager.planAttentionFacts?.(teamId) ?? [],
       revisionControl: revisionControlFacts(manager, teamId),
+      handoffs: manager.tasks.handoffs.store.pendingForTeam(teamId).map(handoff => {
+        const ownerId = taskOwner(store.get(handoff.taskId)!)
+        return {
+          handoff, taskTitle: taskTitle(handoff.taskId) ?? handoff.taskId, requesterName: nameOf(handoff.requesterSession),
+          liveOwner: ownerId && manager.tasks.handoffs.live(ownerId) ? { sessionId: ownerId, name: nameOf(ownerId) } : null,
+        }
+      }),
       exhaustion: manager.exhaustionEpisodes(teamId).map(episode => {
         const record = records.find(row => row.sessionId === episode.sessionId)
         const task = episode.taskId ? store.get(episode.taskId) : null

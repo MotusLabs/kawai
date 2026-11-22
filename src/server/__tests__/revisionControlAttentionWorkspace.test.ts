@@ -40,7 +40,7 @@ const manager = () => ({
     list: () => [], get: () => null,
     results: { get: () => null, outstandingSince: () => [], submittedBy: () => false },
     acknowledgements: { highest: () => null },
-  } },
+  }, handoffs: { store: { pendingForTeam: () => [] }, live: () => false } },
   mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
   waitingFor: () => ({}),
   teamRecords: () => [],

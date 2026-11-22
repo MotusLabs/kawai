@@ -13,6 +13,8 @@ import { unknownTeamError } from '../../shared/team'
 import type { TeamTask } from '../../shared/teamTasks'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
+import { canonicalRequestKey, isReservedRequestKey } from '../../shared/taskHandoffs'
+import { PREPARED_PAYLOAD_FIELDS, RESERVED_KEY_REFUSAL } from './taskHandoffService'
 
 type TaskClientMessage = Extract<ClientMessage, { type: `team-task${string}` }>
 
@@ -150,6 +152,8 @@ export class TaskConnections {
           task = tasks.store.get(message.taskId) ?? undefined
           break
         case 'team-task-publish': {
+          // A reserved key is refused before any other check (owner-publication-handoff D3, H33).
+          if (isReservedRequestKey(canonicalRequestKey(message.requestKey))) throw new Error(RESERVED_KEY_REFUSAL)
           // The human form requires a rationale (Q6); the store keeps it optional.
           if (!message.rationale.trim()) throw new Error('A publication needs a rationale')
           const outcome = await tasks.publish(caller, message.taskId, {
@@ -158,6 +162,13 @@ export class TaskConnections {
             baseRevision: message.baseRevision, requestKey: message.requestKey, notify: message.notify,
             ...(message.fromDraft ? { fromDraft: true } : {}),
           })
+          result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
+          return
+        }
+        case 'team-task-handoff-publish': {
+          // Payload fields beside the handoff id are refused (H35), whatever the client sent.
+          const extras = PREPARED_PAYLOAD_FIELDS.filter(field => field in message)
+          const outcome = await tasks.handoffs.publish(caller, message.taskId, message.handoffId, extras)
           result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
           return
         }
