@@ -118,7 +118,7 @@ describe('task_get handoffs', () => {
 })
 
 describe('delivered task context', () => {
-  // @covers: task-publication-handoffs › A pending handoff changes nothing it does not own › Delivered context keeps the published revision
+  // @covers: task-publication-handoffs › A handoff is never a revision › Delivered context keeps the published revision
   test('a pending handoff is named only as pending; the direction is the published revision\'s and its text never appears', async () => {
     const task = kawaiTask()
     const h = await requestOn(task.id, 'lead', 'A prepared direction that must not be delivered')

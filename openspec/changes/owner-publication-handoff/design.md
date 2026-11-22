@@ -470,8 +470,13 @@ against the base revision (the editor's existing diff and contract parse
 view), and three actions — **Publish prepared revision** (labelled
 **Publish and notify** when notify is set), **Edit before publishing**,
 **Decline** (reason required). The three WS commands join the router
-whitelist and `chatConnectionTypes.ts`. Each carries a client command key;
-a resend replays.
+whitelist and `chatConnectionTypes.ts`. Each publish and decline carries a
+client command key armed per payload; it correlates a resend with its
+transport request, and the replay semantics are the commands' own: a
+resent prepared publish returns the revision it originally published
+(H14), while a repeated decline or withdrawal after a disposition follows
+H26 — it reports the terminal state and writes no event or notification.
+There is no settlement replay ledger.
 
 ### D12. No backfill, no new gate
 

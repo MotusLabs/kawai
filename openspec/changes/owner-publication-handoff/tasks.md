@@ -52,15 +52,15 @@ killed mutant.
 - [ ] 8.1 Extend `handoffAttention.ts` to every W row with `handoffPhase` from `src/shared/taskHandoffs.ts` (D5's order: task-closed, acknowledged, no-holder, delivered-awaiting-ack, notice-uncertain, notice-queued, notice-failed, not-notified), the `kawai` attention owner kind, and link anchors (W9 links the uncertain message). Verify: W1–W13 with W12d committed verbatim in `taskHandoffAttention.test.ts`, with rows for close without acknowledgement (W5), acknowledgement after a failed notice (W6), a failed notice followed by ordinary task mail delivering the revision (W12d: holder wait, no Retry notification) and an uncertain notice (W9); mutants: MU15b (delivered after failed) fails W12d, MU6 (only `open` kept) fails W3/W4, MU7 fails W2, MU15 (failed before acknowledged, or no task-closed) fails W5/W6, and MU16 (uncertain read as failed) fails W9.
 - [ ] 8.2 Resolve fixes-requested owners per table F in `attentionAcceptance.ts`. Verify: F1–F5 in `taskHandoffAttention.test.ts`, and the existing `teamWorkspaceRead.test.ts` acceptance rows still pass; mutant MU7 fails F2–F5.
 - [ ] 8.3 Suppress `amendItems` for a task with a pending handoff. Verify: S3 and S4 rows in `teamWorkspacePlanAttention.test.ts` (the existing "after Amend" test unchanged and passing); mutant MU12 fails S3.
-- [ ] 8.4 Add properties P2 (seed `0x0A11CE02`, 400 cases), P6 (seed `0x0A11CE06`, 200 cases) and P7 (seed `0x0A11CE07`, 200 cases): P7a suppression over every history, including the always-generated publish without notify → `task_get` → acknowledge-without-delivery trace, and P7b parity only for an open task with a live claimant below the published acknowledgement, counting the new notification rows the real `TaskNotices.notify` writes with a fresh key on a database copy, including histories where a delivered, queued or uncertain notice at or above the revision is followed by a later failed notice (no new row, nothing offered). Verify: all pass in `taskHandoffProperties.test.ts`, P2 with table W as the reference model; mutant MU6 fails P2, MU15 fails P6, MU15c fails P7a, and MU15b and MU16b fail P7b.
+- [ ] 8.4 Add properties P2 (seed `0x0A11CE02`, 400 cases), P6 (seed `0x0A11CE06`, 200 cases) and P7 (seed `0x0A11CE07`, 200 cases): P7a suppression over every history, including the always-generated publish without notify → `task_get` → acknowledge-without-delivery trace, and P7b parity only for an open task with a live claimant below the published acknowledgement, counting the new notification rows the real `TaskNotices.notify` writes with a fresh key on a database copy, including histories where a delivered, queued or uncertain notice at or above the revision is followed by a later failed notice (no new row, nothing offered). Verify: P2 and P7 pass in `taskHandoffAttentionProperties.test.ts` and P6 in `supervisionOwnerPublicationProperties.test.ts`, P2 with table W as the reference model; mutant MU6 fails P2, MU15 fails P6, MU15c fails P7a, MU15b fails P7b, and MU16b fails the W9 row with a later failed notice in `taskHandoffAttention.test.ts` (`W9 and W12: an uncertain notice goes to the Mailbox linked to its message; a queued one is the holder's wait`).
 - [ ] 8.5 Update `docs/architecture/team-page.md` for the two attention kinds, the follow-up order, and the `kawai` owner. Verify: the bullet names W's owners and next actions, including the Mailbox route for an uncertain notice.
 
 ## 9. Supervision
 
 - [ ] 9.1 Add the `owner-publication` wait (appended last in `stageWaits`), the loader's `handoff` facts, and `holderGone` on stall items and the report. Verify: S1, S2, S5, S6 and transitions S7, S9, S10 in `src/server/__tests__/supervisionOwnerPublication.test.ts`; mutant MU8 (wait not appended) fails S1 and S9.
-- [ ] 9.2 Prove the post-Amend path end to end: S8 (publishing the handoff closes the diagnosis, dispatches exactly one fix attempt against the revision actually published, backstop zero, no **Publish a task revision** item) through the execution runtime's revision handling. Verify: an S8 row in `supervisionOwnerPublication.test.ts`; mutant: dropping the association-independent "any new revision closes the diagnosis" path fails it.
+- [ ] 9.2 Prove the post-Amend path end to end: S8 (publishing the handoff closes the diagnosis, dispatches exactly one fix attempt against the revision actually published, backstop zero, no **Publish a task revision** item) through the execution runtime's revision handling. Verify: the S8 test in `supervisionOwnerPublicationAmend.integration.test.ts`; mutant: dropping the association-independent "any new revision closes the diagnosis" path fails it.
 - [ ] 9.3 Add property P5 (seed `0x0A11CE05`, 200 cases) comparing scheduler admission, parallel counts, dependency waits and slot holder with and without handoffs. Verify: it passes; mutant MU11 (the wait frees the slot) fails it.
-- [ ] 9.4 Production-path checkpoint CP2 through the real supervision monitor and loader: archived holder plus open handoff reads `owner-publication`, no stall-alert row, W2 and no Lead stall item. Verify: `supervisionOwnerPublication.test.ts`; mutant MU8 fails it. Journal the checkpoint.
+- [ ] 9.4 Production-path checkpoint CP2 through the real supervision monitor and loader: archived holder plus open handoff reads `owner-publication`, no stall-alert row, W2 and no Lead stall item. Verify: `supervisionOwnerPublicationBoot.integration.test.ts`, booting `ChatSessionManager` over a database with the running execution so the real monitor, loader and workspace read run; mutant MU8 fails it. Journal the checkpoint.
 - [ ] 9.5 Update `docs/architecture/plan-supervision.md` for the wait and `holderGone`. Verify: the bullet names the append-only position and that the scheduler never reads the wait.
 
 ## 10. Agent reads and guidance
@@ -169,6 +169,22 @@ row is future work.
 | › A stall names a gone holder (1) | S5 | `supervisionOwnerPublication.test.ts` |
 
 Each covering test carries its `// @covers:` annotation when it is written.
+
+Actual verification files. The plan above named some files before they
+were written; the committed tests are: the H-REQ, H-PUB, H33 and
+H-SETTLE/H-CLOSE rows in `taskHandoffCommands.test.ts`,
+`taskHandoffDispositions.test.ts` and `taskHandoffPaths.test.ts`; the
+CP1 request and publish halves over the real tool server and WS
+connection in `taskHandoffPublish.integration.test.ts` (planned as
+`taskHandoffConnections.test.ts`); H-DRAFT (H36–H38s, H41–H44, H17m,
+H17r, H16b and its traces) through the real WS draft commands in
+`taskHandoffDrafts.test.ts`; A8 and the delivered-context line in
+`taskHandoffRead.test.ts`; P2 and P7 in
+`taskHandoffAttentionProperties.test.ts`; P5 and P6 in
+`supervisionOwnerPublicationProperties.test.ts`; S8 in
+`supervisionOwnerPublicationAmend.integration.test.ts`; CP2 in
+`supervisionOwnerPublicationBoot.integration.test.ts`; and the client panel
+and editor provenance in `src/client/__tests__/taskPublicationHandoff.test.tsx`.
 
 ## Workflow follow-up
 
