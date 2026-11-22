@@ -1,11 +1,15 @@
 // Properties P2 and P7 (owner-publication-handoff design "Properties", task
 // 8.4) over the real decision bench, through the workspace read's handoff
 // facts and items:
-// - P2 visibility: after every command of a seeded sequence (requests,
-//   prepared and ordinary publications, settlements, a close, notices in
-//   every state, task mail, acknowledgements, archival and revival), the
-//   items equal what Table W (`helpers/handoffWTable.ts`, the reference
-//   model) predicts from the raw rows, read here by their own queries.
+// - P2 visibility: after every command of P1's seeded command family
+//   (`helpers/handoffFamily.ts`: requests, prepared and ordinary
+//   publications, linked-draft histories, the real Adapt, settlements, a
+//   close, notices in every state, task mail, acknowledgements, archival and
+//   revival), the command's handoff side effect matches the model's own
+//   transition (stale past a revision, closed by a close, unchanged
+//   otherwise) and the items equal what Table W (`helpers/handoffWTable.ts`,
+//   the reference model) predicts from the raw rows, read by their own
+//   queries, with execution ownership from the case itself (W7).
 // - P7 notice actions over random histories of one published revision:
 //   P7a — a closed task or an acknowledgement at or above the revision
 //   leaves no follow-up item and no notice action; P7b — for an open task
@@ -24,6 +28,7 @@ import { TaskNotices } from '../team/taskNotices'
 import { createHandoffAttentionBench, type HandoffAttentionBench, type NoticeMove } from './helpers/handoffAttentionBench'
 import { shown, W_PENDING, W_PUBLISHED, type Shown } from './helpers/handoffWTable'
 import { propertyCases } from './helpers/propertyCases'
+import { createHandoffFamily, familySteps, type HandoffFamily } from './helpers/handoffFamily'
 
 let b: HandoffAttentionBench
 beforeAll(async () => { b = await createHandoffAttentionBench('kawai-handoff-attention-properties-') })
@@ -41,8 +46,12 @@ const MESSAGE_STATE: Record<string, HandoffNoticeState> = {
   queued: 'queued', claimed: 'queued', spawning: 'queued', 'awaiting-request': 'queued', parked: 'queued', delivered: 'delivered', uncertain: 'uncertain',
   dead: 'failed', cancelled: 'failed', discarded: 'failed', forwarded: 'failed',
 }
-const one = <T,>(sql: string, ...params: Array<string | number>) => db().prepare(sql).get(...params) as T
-function modelItems(taskId: string, claimant: string | null): Array<{ id: string; shown: Shown }> {
+/** The model over `world` (the P2 family's database and liveness); `owns` is the case's own knowledge of execution ownership. */
+interface ModelWorld { db: Database; live: (session: string) => boolean }
+function modelItems(world: ModelWorld, taskId: string, claimant: string | null, owns: boolean): Array<{ id: string; shown: Shown }> {
+  const { live } = world
+  const db = () => world.db
+  const one = <T,>(sql: string, ...params: Array<string | number>) => db().prepare(sql).get(...params) as T
   const task = one<{ status: string; owner_session: string | null }>('SELECT status, owner_session FROM team_tasks WHERE id = ?', taskId)
   const closed = task.status === 'done' || task.status === 'cancelled'
   const rows = db().prepare('SELECT * FROM team_task_handoffs WHERE task_id = ? ORDER BY rowid').all(taskId) as Array<Record<string, string | number | null>>
@@ -63,58 +72,73 @@ function modelItems(taskId: string, claimant: string | null): Array<{ id: string
       WHERE n.task_id = ? AND n.recipient_session = ? AND n.revision >= ?`).all(taskId, claimant, revision) as Array<{ state: string }>).map(entry => MESSAGE_STATE[entry.state]!)
     const axes = {
       closed, claimant: claimant === null ? 'none' as const : live(claimant) ? 'live' as const : 'gone' as const,
-      acked: (acked ?? 0) >= revision, delivered: (delivered ?? 0) >= revision, notices, owns: false,
+      acked: (acked ?? 0) >= revision, delivered: (delivered ?? 0) >= revision, notices, owns,
     }
     const matched = W_PUBLISHED.filter(entry => entry.match(axes))
     expect([id, matched.length]).toEqual([id, 1])
     return matched[0]!.expect === null ? [] : [{ id: `publication-follow-up:${id}`, shown: matched[0]!.expect }]
   })
 }
-const actualItems = (taskId: string) => b.items().filter(item => item.impact.taskId === taskId)
-  .map(item => ({ id: item.id, shown: shown([item])[0]! })).sort((x, y) => x.id.localeCompare(y.id))
+
+/** The task's revision, status and pending handoff, the inputs of P2's own transition model. */
+function observed(db: Database, taskId: string) {
+  const task = db.prepare('SELECT revision, status FROM team_tasks WHERE id = ?').get(taskId) as { revision: number; status: string }
+  const pending = db.prepare("SELECT id, state FROM team_task_handoffs WHERE task_id = ? AND state IN ('open', 'stale')").get(taskId) as { id: string; state: string } | null
+  return { ...task, pending }
+}
+const SETTLING = new Set(['request', 'rerequest', 'decline', 'withdraw', 'publish', 'publish-dup', 'linked-publish'])
+/**
+ * The W model's side effects of one command, judged from the command's own outcome (the revision and
+ * status it left) rather than the source's handoff facts: a revision past an open handoff that is not
+ * its fulfilment makes it stale (D4), a close makes it closed, and a command that neither publishes,
+ * closes nor settles leaves it as it was.
+ */
+function transition(db: Database, taskId: string, step: string, before: ReturnType<typeof observed>): string[] {
+  if (!before.pending) return []
+  const after = observed(db, taskId)
+  const state = (db.prepare('SELECT state FROM team_task_handoffs WHERE id = ?').get(before.pending.id) as { state: string }).state
+  const fulfilled = !!db.prepare('SELECT 1 FROM team_task_revisions WHERE task_id = ? AND handoff_id = ? AND revision > ?').get(taskId, before.pending.id, before.revision)
+  const closed = after.status !== before.status && (after.status === 'done' || after.status === 'cancelled')
+  const expected = fulfilled ? 'published'
+    : closed ? 'closed'
+    : after.revision > before.revision && before.pending.state === 'open' ? 'stale'
+    : SETTLING.has(step) ? null : before.pending.state
+  return expected === null || expected === state ? [] : [`${step}: ${before.pending.id} is ${state}, the model expects ${expected}`]
+}
 
 describe('P2: visibility', () => {
   const CASES = 400
-  type Step = 'request' | 'request2' | 'publish' | 'other' | 'decline' | 'withdraw' | 'close' | 'notice' | 'mail' | 'ack' | 'archive' | 'revive'
-  const STEPS: Step[] = ['request', 'request', 'request2', 'publish', 'publish', 'other', 'decline', 'withdraw', 'notice', 'notice', 'mail', 'ack', 'archive', 'revive']
+  let family: HandoffFamily
+  beforeAll(async () => { family = await createHandoffFamily('kawai-handoff-p2-') })
+  afterAll(() => family.close())
 
   // @covers: team-workspace › The attention queue lists pending publication handoffs › A disposition clears the item
   test('P2: seed 0x0A11CE02, 400 cases — after every command the items are exactly Table W\'s prediction from the rows', async () => {
     const random = mulberry32(0x0A11CE02)
-    const pick = <T,>(items: readonly T[]) => items[Math.floor(random() * items.length)]!
+    const world = { db: family.bench.taskService.store.db, live: family.live }
     const seen = new Set<string>()
     for (let index = 0; index < propertyCases(CASES); index++) {
-      reviveAll()
-      const taskId = await b.task(random() < 0.5 ? 'lead2' : null)
-      const claimant = random() < 0.8 ? 'dev' : null
-      if (claimant) b.claim(taskId, claimant)
-      const steps: Step[] = Array.from({ length: 3 + Math.floor(random() * 6) }, () => pick(STEPS))
+      const item = await family.start(random)
+      const steps = familySteps(random, item.kind)
       if (random() < 0.15) steps.push('close')
       for (const [position, step] of steps.entries()) {
-        const pending = tasks().handoffs.store.pendingOf(taskId)
-        const revision = tasks().store.get(taskId)!.revision
-        const n = index * 100 + position
-        switch (step) {
-          case 'request': await swallow(() => b.request(taskId, random() < 0.5, 'lead')); break
-          case 'request2': await swallow(() => b.request(taskId, random() < 0.5, 'lead2')); break
-          case 'publish': if (pending) await swallow(() => b.publish(taskId, pending.id)); break
-          case 'other': await swallow(() => tasks().publish(b.bench.human, taskId, { direction: `Other ${n}`, rationale: 'mine', notify: random() < 0.5, requestKey: `o${n}` })); break
-          case 'decline': if (pending) await swallow(() => tasks().handoffs.settle(b.bench.human, pending.id, 'decline', 'no')); break
-          case 'withdraw': if (pending) await swallow(() => tasks().handoffs.settle({ kind: 'agent', sessionId: pending.requesterSession }, pending.id, 'withdraw', 'not needed')); break
-          case 'close': await swallow(() => tasks().setStatus(b.bench.human, taskId, random() < 0.5 ? 'done' : 'cancelled')); break
-          case 'notice': if (claimant && revision > 1) { try { b.notice(taskId, revision, pick(NOTICES)) } catch { /* nobody holds it */ } } break
-          case 'mail': if (claimant) b.taskMail(taskId, claimant, revision, random() < 0.7); break
-          case 'ack': if (claimant && live(claimant)) await swallow(() => b.acknowledge(taskId, claimant, revision)); break
-          case 'archive': b.gone(pick(['lead', 'lead2', 'dev'])); break
-          case 'revive': reviveAll(); break
-        }
-        const expected = modelItems(taskId, claimant).sort((x, y) => x.id.localeCompare(y.id))
-        for (const item of expected) seen.add(`${item.id.split(':')[0]}:${item.shown?.action}:${item.shown?.owner}`)
-        expect<unknown>([index, steps.slice(0, position + 1), actualItems(taskId)]).toEqual([index, steps.slice(0, position + 1), expected])
+        const before = observed(world.db, item.taskId)
+        await family.step(item, step, random)
+        expect([index, steps.slice(0, position + 1), transition(world.db, item.taskId, step, before)]).toEqual([index, steps.slice(0, position + 1), []])
+        const expected = modelItems(world, item.taskId, item.claimant, item.kind === 'paused').sort((x, y) => x.id.localeCompare(y.id))
+        for (const entry of expected) seen.add(`${entry.id.split(':')[0]}:${entry.shown?.action}:${entry.shown?.owner}`)
+        const actual = family.items([item]).filter(entry => entry.impact.taskId === item.taskId)
+          .map(entry => ({ id: entry.id, shown: shown([entry])[0]! })).sort((x, y) => x.id.localeCompare(y.id))
+        expect<unknown>([index, item.kind, steps.slice(0, position + 1), actual]).toEqual([index, item.kind, steps.slice(0, position + 1), expected])
       }
     }
-    // Every W row with an item was predicted somewhere (W7 needs execution ownership, covered by the table rows).
-    expect(seen.size).toBeGreaterThanOrEqual(8)
+    // Every W row with an item was predicted somewhere, W7 (an execution-owned task without a live holder) included.
+    expect([...seen].sort()).toEqual([
+      'publication-follow-up:Hand off the task:human', 'publication-follow-up:Notify:human', 'publication-follow-up:Resolve in the Mailbox (Retry or Discard):human',
+      'publication-follow-up:Retry notification:human', 'publication-follow-up:Wait for Kawai:kawai', 'publication-follow-up:Wait for acknowledgement:session',
+      'publication-handoff:Publish prepared revision:human', 'publication-handoff:Publish prepared revision:session',
+      'publication-handoff:Re-prepare or withdraw:group', 'publication-handoff:Re-prepare or withdraw:session',
+    ])
   }, 600_000)
 })
 

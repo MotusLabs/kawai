@@ -42,7 +42,11 @@ let serial = 0
 export async function createHandoffAttentionBench(prefix = 'kawai-handoff-attention-'): Promise<HandoffAttentionBench> {
   const world = await createPlanWorld(prefix)
   writeGroup(world, 'leads', '---\ncanCreatePlans: true\ncanCreateTasks: true\n---\nLead.')
-  const bench = createDecisionBench(world)
+  return handoffAttentionParts(world, createDecisionBench(world))
+}
+
+/** The bench's helpers over an existing world and decision bench (the handoff command family reuses them). */
+export function handoffAttentionParts(world: PlanWorld, bench: DecisionBench): HandoffAttentionBench {
   const service = bench.taskService
   const store = bench.tasks
   const mail = bench.mail

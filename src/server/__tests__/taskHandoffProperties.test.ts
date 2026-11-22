@@ -5,7 +5,11 @@
 // notice retry, a restart's sweep) over every handoff state changes no
 // handoff row and no revision — and property P3: a seeded command sequence
 // with neutral events interleaved yields the same normalized digest of every
-// handoff, event and revision row as the same sequence without them.
+// handoff, event and revision row as the same sequence without them. P1
+// runs the shared command family (`helpers/handoffFamily.ts`, the same
+// generator as P2: linked-draft histories, the pause resolution's real
+// Adapt, prepared and ordinary publications) and checks the exactly-once
+// invariants, with U3 and U5 never reached, after every command.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import { createPlanWorld, writeGroup, type PlanWorld } from './planHarness'
@@ -13,6 +17,7 @@ import { createDecisionBench, type DecisionBench } from './decisionHarness'
 import { propertyCases } from './helpers/propertyCases'
 import { mulberry32 } from '../../shared/__tests__/contractFixtures'
 import { HANDOFF_STATES } from '../../shared/taskHandoffs'
+import { createHandoffFamily, familySteps, type HandoffFamily } from './helpers/handoffFamily'
 
 let world: PlanWorld
 let bench: DecisionBench
@@ -177,52 +182,12 @@ describe('P3: no authority from neutral events', () => {
 
 describe('P1: exactly once', () => {
   const CASES = 400
-  type Step = 'request' | 'rerequest' | 'publish' | 'publish-dup' | 'other' | 'reserved' | 'decline' | 'withdraw' | 'close' | 'transfer' | 'neutral' | 'restart'
-  const STEPS: Step[] = ['request', 'request', 'rerequest', 'publish', 'publish-dup', 'other', 'reserved', 'decline', 'withdraw', 'close', 'transfer', 'neutral', 'restart']
-
-  async function step(taskId: string, kind: Step, random: () => number): Promise<void> {
-    const pending = tasks().handoffs.store.pendingOf(taskId)
-    const revision = tasks().store.get(taskId)!.revision
-    const n = next()
-    const requestAs = (session: string) => swallow(() => tasks().handoffs.request({ kind: 'agent', sessionId: session }, taskId, {
-      baseRevision: random() < 0.85 ? revision : Math.max(1, revision - 1), direction: `Prepared ${n}`, rationale: 'why', notify: random() < 0.5, requestKey: `k${n}`,
-    }))
-    switch (kind) {
-      case 'request': return requestAs('lead')
-      case 'rerequest': return requestAs('lead2')
-      case 'publish':
-        return pending ? swallow(() => tasks().handoffs.publish(human(), taskId, pending.id, [])) : undefined
-      case 'publish-dup': {
-        const target = pending ?? (tasks().store.db.prepare('SELECT id FROM team_task_handoffs WHERE task_id = ? ORDER BY rowid DESC').get(taskId) as { id: string } | null)
-        if (!target) return
-        const copies = 1 + Math.floor(random() * 3)
-        await Promise.all(Array.from({ length: copies }, () => swallow(() => tasks().handoffs.publish(human(), taskId, target.id, []))))
-        return
-      }
-      case 'other':
-        return swallow(() => tasks().publish(human(), taskId, { direction: `Other ${n}`, rationale: 'mine', notify: false, requestKey: `o${n}` }))
-      case 'reserved': {
-        const id = pending?.id ?? 'handoff-none'
-        const key = [`handoff:${id}`, ` handoff:${id}`, `\thandoff:${id}\n`, `handoff:${id}  `][Math.floor(random() * 4)]!
-        return swallow(() => tasks().publish(human(), taskId, { direction: `Reserved ${n}`, rationale: random() < 0.5 ? ' ' : 'r', notify: false, requestKey: key, ...(random() < 0.5 ? { fromDraft: true } : {}) }))
-      }
-      case 'decline':
-        return pending ? swallow(() => tasks().handoffs.settle(human(), pending.id, 'decline', 'no')) : undefined
-      case 'withdraw':
-        return pending ? swallow(() => tasks().handoffs.settle(lead, pending.id, 'withdraw', 'not needed')) : undefined
-      case 'close':
-        return swallow(() => tasks().setStatus(human(), taskId, random() < 0.5 ? 'cancelled' : 'done'))
-      case 'transfer':
-        return swallow(() => tasks().ownership.transfer({ kind: 'agent', sessionId: 'cl' }, { task_id: taskId, to_session: 'cl2' }))
-      case 'neutral':
-        return neutral(taskId, NEUTRALS[Math.floor(random() * NEUTRALS.length)]!)
-      case 'restart':
-        tasks().handoffs.reconcile()
-    }
-  }
+  let family: HandoffFamily
+  beforeAll(async () => { family = await createHandoffFamily('kawai-handoff-p1-') })
+  afterAll(() => family.close())
 
   function invariants(taskId: string): string[] {
-    const db = tasks().store.db
+    const db = family.bench.taskService.store.db
     const problems: string[] = []
     const handoffs = db.prepare('SELECT id, state, published_revision FROM team_task_handoffs WHERE task_id = ?').all(taskId) as Array<{ id: string; state: string; published_revision: number | null }>
     for (const handoff of handoffs) {
@@ -236,30 +201,47 @@ describe('P1: exactly once', () => {
         if (mail > 1 || rows > 1) problems.push(`${handoff.id}: ${transition} wakeups ${rows}, mail ${mail}`)
       }
     }
+    // No command reaches U3 or U5: an open handoff's base is the task's revision, and a closed task holds no pending one.
+    const task = db.prepare('SELECT revision, status FROM team_tasks WHERE id = ?').get(taskId) as { revision: number; status: string }
+    for (const handoff of db.prepare("SELECT id, state, base_revision FROM team_task_handoffs WHERE task_id = ? AND state IN ('open', 'stale')").all(taskId) as Array<{ id: string; state: string; base_revision: number }>) {
+      if (handoff.state === 'open' && handoff.base_revision !== task.revision) problems.push(`${handoff.id}: open on revision ${handoff.base_revision} of ${task.revision} (U3)`)
+      if (task.status === 'done' || task.status === 'cancelled') problems.push(`${handoff.id}: ${handoff.state} on a ${task.status} task (U5)`)
+    }
     const strays = db.prepare("SELECT revision FROM team_task_revisions WHERE task_id = ? AND request_key LIKE 'handoff:%' AND (handoff_id IS NULL OR request_key != 'handoff:' || handoff_id)").all(taskId)
     if (strays.length) problems.push(`reserved keys outside the handoff path: ${JSON.stringify(strays)}`)
-    const notices = db.prepare('SELECT recipient_session, revision, COUNT(*) AS n FROM team_task_notifications WHERE task_id = ? GROUP BY recipient_session, revision HAVING n > 1').all(taskId)
+    // The family's `notice` step writes extra notices straight through `TaskNotices.write` (P2's notice
+    // states, keyed `notice-…`); the invariant judges the notices the product's paths write.
+    const notices = db.prepare("SELECT recipient_session, revision, COUNT(*) AS n FROM team_task_notifications WHERE task_id = ? AND request_key NOT LIKE 'notice-%' GROUP BY recipient_session, revision HAVING n > 1").all(taskId)
     if (notices.length) problems.push(`duplicate notices: ${JSON.stringify(notices)}`)
     return problems
   }
 
   test('P1: seed 0x0A11CE01, 400 cases — at most one associated revision, published iff associated, one wakeup per transition, no stray reserved key', async () => {
-    writeGroup(world, 'change-leads', '---\ncanCreateTasks: true\n---\nCoordinate.')
-    bench.records.set('cl', { ...bench.records.get('lead')!, sessionId: 'cl', name: 'cl', groupId: 'change-leads' })
-    bench.records.set('cl2', { ...bench.records.get('lead')!, sessionId: 'cl2', name: 'cl2', groupId: 'change-leads' })
     const random = mulberry32(0x0A11CE01)
     for (let index = 0; index < propertyCases(CASES); index++) {
-      await freshTask()
-      const owned = random() < 0.5
-      const taskId = owned ? (await tasks().create({ kind: 'agent', sessionId: 'cl' }, { title: `Owned ${index}`, direction: 'v1' })).id : await freshTask()
-      const steps = Array.from({ length: 3 + Math.floor(random() * 8) }, () => STEPS[Math.floor(random() * STEPS.length)]!)
-      for (const kind of steps) {
-        await step(taskId, kind, random)
-        expect([index, steps, kind, invariants(taskId)]).toEqual([index, steps, kind, []])
+      const item = await family.start(random)
+      const steps = familySteps(random, item.kind)
+      for (const [position, kind] of steps.entries()) {
+        await family.step(item, kind, random)
+        expect([index, item.kind, steps.slice(0, position + 1), invariants(item.taskId)]).toEqual([index, item.kind, steps.slice(0, position + 1), []])
       }
     }
-    // The generator reaches every state (the invariants are not vacuous).
-    const reached = (tasks().store.db.prepare('SELECT DISTINCT state FROM team_task_handoffs').all() as Array<{ state: string }>).map(row => row.state).sort()
+    // The generator reaches every state and every path (the invariants are not vacuous).
+    const db = family.bench.taskService.store.db
+    const reached = (db.prepare('SELECT DISTINCT state FROM team_task_handoffs').all() as Array<{ state: string }>).map(row => row.state).sort()
     expect(reached).toEqual([...HANDOFF_STATES].sort())
+    expect(reachedPaths(db)).toEqual({ adapt: true, linkedFulfilled: true, publishedAsEdited: true, prepared: true, ordinaryOverLinkedDraft: true })
   }, 600_000)
 })
+
+/** The paths a run reached, read from the rows: Adapt's `pause:` revision, a linked-draft fulfilment edited, a prepared publish, an ordinary publication while a linked draft was kept. */
+function reachedPaths(db: import('bun:sqlite').Database) {
+  const any = (sql: string) => !!db.prepare(sql).get()
+  return {
+    adapt: any("SELECT 1 FROM team_task_revisions WHERE request_key LIKE 'pause:%'"),
+    linkedFulfilled: any("SELECT 1 FROM team_task_revisions WHERE handoff_id IS NOT NULL AND request_key LIKE 'd%'"),
+    publishedAsEdited: any("SELECT 1 FROM team_task_handoffs WHERE state = 'published' AND published_payload_hash != payload_hash"),
+    prepared: any("SELECT 1 FROM team_task_revisions WHERE handoff_id IS NOT NULL AND request_key = 'handoff:' || handoff_id"),
+    ordinaryOverLinkedDraft: any("SELECT 1 FROM team_task_drafts WHERE handoff_id IS NOT NULL AND base_revision < (SELECT revision FROM team_tasks t WHERE t.id = task_id)"),
+  }
+}
