@@ -141,6 +141,14 @@ export interface PublishInput {
   discardDraft?: boolean
   /** The prepared handoff this publication fulfills, exempt from the stale hook (owner-publication-handoff D4). */
   handoffId?: string
+  /** On a key replay (H17m): a stored linked draft names another handoff than the key's revision is associated with. */
+  linkedHandoffDiffers?: (revision: number) => boolean
+  /**
+   * The linked-draft check (H43, H17, H38), in the transaction after the key
+   * replay and before the stale-base check: the handoff this publication
+   * fulfills with its in-transaction writes, or null for an ordinary revision.
+   */
+  claim?: (current: TeamTask) => { handoffId: string; within: (revision: TaskRevision, task: TeamTask) => void } | null
   /** Runs inside the publication transaction after the revision row (the notices, D3). */
   within?: (revision: TaskRevision, task: TeamTask) => void
 }
@@ -355,6 +363,7 @@ export class TaskStore {
         if (prior) return prior
         const current = this.get(id)
         if (!current) return null
+        const claimed = input.claim?.(current) ?? null
         if (input.baseRevision !== undefined && input.baseRevision !== current.revision) {
           throw new Error(`Stale: revision ${current.revision} was published since revision ${input.baseRevision}; nothing was published. Rebase the draft onto revision ${current.revision}.`)
         }
@@ -369,10 +378,11 @@ export class TaskStore {
           author.kind, author.sessionId, now, input.rationale ?? null, input.requestKey ?? null, input.notify ? 1 : 0,
           columns.contract, columns.contract_hash,
         )
-        this.handoffHooks?.published(this.get(id)!, next, input.handoffId, author, now)
+        this.handoffHooks?.published(this.get(id)!, next, input.handoffId ?? claimed?.handoffId, author, now)
         if (input.discardDraft) this.drafts.discard(id, false)
         const revision = this.revisions(id).at(-1)!
         input.within?.(revision, this.get(id)!)
+        claimed?.within(revision, this.get(id)!)
         return { replay: false, task: this.get(id)!, revision }
       })()
     } catch (error) {

@@ -67,6 +67,7 @@ export const CHAT_CONNECTION_TYPES = [
   'team-task-handoff',
   'team-task-handoff-publish',
   'team-task-handoff-decline',
+  'team-task-handoff-load-draft',
   'team-task-release',
   'team-task-note',
   'team-task-status',

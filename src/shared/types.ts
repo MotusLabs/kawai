@@ -794,6 +794,8 @@ export type ClientMessage =
       rationale?: string
       /** Raw contract text, saved unparsed. */
       contract?: string
+      /** The draft lineage identity the form loaded (owner-publication-handoff H41–H43); omitted when it loaded none. */
+      observedDraft?: string
     }
   | {
       type: 'team-task-publish'
@@ -809,8 +811,10 @@ export type ClientMessage =
       contract?: string
       rationale: string
       notify: boolean
-      /** Published from the human's saved draft, which is discarded with it. */
+      /** Published from the human's saved draft, which is discarded with it. Fixed when the edit began, never re-read. */
       fromDraft?: boolean
+      /** The draft lineage identity the form loaded (owner-publication-handoff H43); omitted when it loaded none. */
+      observedDraft?: string
     }
   | { type: 'team-task-notify'; teamPath: string; requestId: string; taskId: string; revision: number; requestKey: string }
   // Publish prepared revision (owner-publication-handoff D3, D11): the
@@ -818,6 +822,8 @@ export type ClientMessage =
   // a resend replays its revision.
   | { type: 'team-task-handoff-publish'; teamPath: string; requestId: string; taskId: string; handoffId: string; requestKey: string }
   | { type: 'team-task-handoff-decline'; teamPath: string; requestId: string; taskId: string; handoffId: string; reason: string; requestKey: string }
+  // Edit before publishing (D3, H-DRAFT): copy an open handoff into the draft; `replace` confirms overwriting one.
+  | { type: 'team-task-handoff-load-draft'; teamPath: string; requestId: string; taskId: string; handoffId: string; replace: boolean }
   // Task results (task-results-handoffs D5): accept one result and close the
   // task under the existing closing rights; a reason when it is flagged or
   // child work is open.

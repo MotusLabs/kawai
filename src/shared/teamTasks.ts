@@ -101,6 +101,14 @@ export interface TaskDraft {
   rationale: string | null
   /** The draft's raw contract text, possibly unparsed (D3); null = the base revision's contract, unedited. */
   contractText?: string | null
+  /**
+   * The publication handoff loaded into this draft by **Edit before
+   * publishing** (owner-publication-handoff D3), and the server-owned lineage
+   * identity that load minted. A form sends the identity it observed with
+   * every save and publish; both detach when the base moves.
+   */
+  handoffId?: string | null
+  lineageId?: string | null
   updatedAt: string
 }
 

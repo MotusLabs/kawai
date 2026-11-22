@@ -14,6 +14,7 @@ import type { TeamTask } from '../../shared/teamTasks'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 import { PREPARED_PAYLOAD_FIELDS } from './taskHandoffService'
+import { loadHandoffDraft } from './taskHandoffDrafts'
 
 type TaskClientMessage = Extract<ClientMessage, { type: `team-task${string}` }>
 
@@ -145,8 +146,9 @@ export class TaskConnections {
               direction: message.direction ?? '', acceptance: message.acceptance ?? null, rationale: message.rationale ?? null,
               ...(message.contract !== undefined ? { contract: message.contract } : {}),
               ...(message.baseRevision !== undefined ? { baseRevision: message.baseRevision } : {}),
+              observedDraft: message.observedDraft ?? null,
             })
-          } else if (message.action === 'rebase') await tasks.rebaseDraft(caller, message.taskId)
+          } else if (message.action === 'rebase') await tasks.rebaseDraft(caller, message.taskId, message.observedDraft ?? null)
           else await tasks.discardDraft(caller, message.taskId)
           task = tasks.store.get(message.taskId) ?? undefined
           break
@@ -161,6 +163,7 @@ export class TaskConnections {
             ...(message.contract !== undefined ? { contract: message.contract } : {}),
             baseRevision: message.baseRevision, requestKey: message.requestKey, notify: message.notify,
             ...(message.fromDraft ? { fromDraft: true } : {}),
+            observedDraft: message.observedDraft ?? null,
           })
           result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
           return
@@ -172,6 +175,10 @@ export class TaskConnections {
           result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
           return
         }
+        case 'team-task-handoff-load-draft':
+          await loadHandoffDraft(tasks, caller, message.taskId, message.handoffId, message.replace === true)
+          task = tasks.store.get(message.taskId) ?? undefined
+          break
         case 'team-task-handoff-decline':
           await tasks.handoffs.settle(caller, message.handoffId, 'decline', message.reason, message.taskId)
           task = tasks.store.get(message.taskId) ?? undefined

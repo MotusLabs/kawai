@@ -155,17 +155,7 @@ export class TaskHandoffService {
     }, {
       requestKey: key,
       handoffId: found.id,
-      within: (revision: TaskRevision, current: TeamTask) => {
-        const fresh = this.store.get(found.id)
-        if (fresh?.state !== 'open') throw new Error(`The publication handoff is ${fresh?.state ?? 'gone'}; nothing was published`)
-        this.store.associate(taskId, revision.revision, found.id)
-        this.store.transition(found.id, 'published', {
-          actor: { kind: actor.kind, sessionId: actor.sessionId }, revision: revision.revision, publishedPayloadHash: handoffPayloadHash(found),
-        }, now)
-        writeHandoffWakeup(this.tasks.store.db, this.tasks.store.mail, this.store.get(found.id)!, 'published', {
-          taskTitle: current.title, revision: revision.revision, originPath: team.groupsRoot, live: this.live,
-        }, now)
-      },
+      within: (revision: TaskRevision, current: TeamTask) => this.fulfill(found.id, actor, team.groupsRoot, revision, current, handoffPayloadHash(found), now),
     })
     // A concurrent duplicate resolved through the store's catch path: it is
     // this handoff's revision only when the association says so (R2).
@@ -173,6 +163,24 @@ export class TaskHandoffService {
       throw new Error(`Revision ${outcome.revision.revision} holds this handoff's key without its association; it is not this handoff's publication`)
     }
     return { ...outcome, handoff: this.store.get(found.id)! }
+  }
+
+  /**
+   * D3's in-transaction fulfillment, shared by the prepared entry and the
+   * linked-draft publish: the handoff still `open`, the revision's
+   * association, the `published` transition with the published payload's
+   * hash, and its wakeup — committed or rolled back with the revision.
+   */
+  fulfill(handoffId: string, actor: HandoffActor, originPath: string, revision: TaskRevision, current: TeamTask, publishedPayloadHash: string, now: string): void {
+    const fresh = this.store.get(handoffId)
+    if (fresh?.state !== 'open') throw new Error(`The publication handoff is ${fresh?.state ?? 'gone'}; nothing was published`)
+    this.store.associate(current.id, revision.revision, handoffId)
+    this.store.transition(handoffId, 'published', {
+      actor: { kind: actor.kind, sessionId: actor.sessionId }, revision: revision.revision, publishedPayloadHash,
+    }, now)
+    writeHandoffWakeup(this.tasks.store.db, this.tasks.store.mail, this.store.get(handoffId)!, 'published', {
+      taskTitle: current.title, revision: revision.revision, originPath, live: this.live,
+    }, now)
   }
 
   /**

@@ -38,5 +38,8 @@ export function publishPayloadDiff(revision: TaskRevision, input: PublishInput):
   if (input.contract !== undefined && contractColumns(input.contract).contract_hash !== (revision.contractHash ?? null)) return 'contract'
   if (input.notify !== (revision.notify === true)) return 'notify'
   if (input.baseRevision !== undefined && input.baseRevision !== revision.revision - 1) return 'base revision'
+  // A linked-draft publish (owner-publication-handoff H17m): a stored linked
+  // draft for another handoff than the key's revision is a different intent.
+  if (input.linkedHandoffDiffers?.(revision.revision)) return 'linked handoff'
   return null
 }
