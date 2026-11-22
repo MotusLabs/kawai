@@ -77,9 +77,9 @@ test('a database at version 15 with plan rows upgrades, twice, keeping every row
     if (table !== 'process_observation_teams') expect(after[table]).toEqual(rows)
   }
   // Later migrations (17 revision-control, 19 plan-workspace, 20 result-checks,
-  // 22 team-approval-defaults, 24 review-findings, 25 review-convergence) also land in this upgrade.
+  // 22 team-approval-defaults, 24 review-findings, 25 review-convergence, 29 task-publication-handoffs) also land in this upgrade.
   expect(Object.keys(after).filter(table => !(table in before)).sort())
-    .toEqual([...SUPERVISION_TABLES, ...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', ...FINDING_TABLES, 'plan_execution_diagnoses', 'team_task_convergence_notices', 'team_task_stall_notices'].sort())
+    .toEqual([...SUPERVISION_TABLES, ...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', ...FINDING_TABLES, 'plan_execution_diagnoses', 'team_task_convergence_notices', 'team_task_stall_notices', 'team_task_handoffs', 'team_task_handoff_events', 'team_task_handoff_wakeups'].sort())
   expect(versions(dbPath).filter(row => row.version === 16)).toHaveLength(1)
 })
 
