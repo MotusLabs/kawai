@@ -174,3 +174,92 @@ describe('P3: no authority from neutral events', () => {
     }
   }, 600_000)
 })
+
+describe('P1: exactly once', () => {
+  const CASES = 400
+  type Step = 'request' | 'rerequest' | 'publish' | 'publish-dup' | 'other' | 'reserved' | 'decline' | 'withdraw' | 'close' | 'transfer' | 'neutral' | 'restart'
+  const STEPS: Step[] = ['request', 'request', 'rerequest', 'publish', 'publish-dup', 'other', 'reserved', 'decline', 'withdraw', 'close', 'transfer', 'neutral', 'restart']
+
+  async function step(taskId: string, kind: Step, random: () => number): Promise<void> {
+    const pending = tasks().handoffs.store.pendingOf(taskId)
+    const revision = tasks().store.get(taskId)!.revision
+    const n = next()
+    const requestAs = (session: string) => swallow(() => tasks().handoffs.request({ kind: 'agent', sessionId: session }, taskId, {
+      baseRevision: random() < 0.85 ? revision : Math.max(1, revision - 1), direction: `Prepared ${n}`, rationale: 'why', notify: random() < 0.5, requestKey: `k${n}`,
+    }))
+    switch (kind) {
+      case 'request': return requestAs('lead')
+      case 'rerequest': return requestAs('lead2')
+      case 'publish':
+        return pending ? swallow(() => tasks().handoffs.publish(human(), taskId, pending.id, [])) : undefined
+      case 'publish-dup': {
+        const target = pending ?? (tasks().store.db.prepare('SELECT id FROM team_task_handoffs WHERE task_id = ? ORDER BY rowid DESC').get(taskId) as { id: string } | null)
+        if (!target) return
+        const copies = 1 + Math.floor(random() * 3)
+        await Promise.all(Array.from({ length: copies }, () => swallow(() => tasks().handoffs.publish(human(), taskId, target.id, []))))
+        return
+      }
+      case 'other':
+        return swallow(() => tasks().publish(human(), taskId, { direction: `Other ${n}`, rationale: 'mine', notify: false, requestKey: `o${n}` }))
+      case 'reserved': {
+        const id = pending?.id ?? 'handoff-none'
+        const key = [`handoff:${id}`, ` handoff:${id}`, `\thandoff:${id}\n`, `handoff:${id}  `][Math.floor(random() * 4)]!
+        return swallow(() => tasks().publish(human(), taskId, { direction: `Reserved ${n}`, rationale: random() < 0.5 ? ' ' : 'r', notify: false, requestKey: key, ...(random() < 0.5 ? { fromDraft: true } : {}) }))
+      }
+      case 'decline':
+        return pending ? swallow(() => tasks().handoffs.settle(human(), pending.id, 'decline', 'no')) : undefined
+      case 'withdraw':
+        return pending ? swallow(() => tasks().handoffs.settle(lead, pending.id, 'withdraw', 'not needed')) : undefined
+      case 'close':
+        return swallow(() => tasks().setStatus(human(), taskId, random() < 0.5 ? 'cancelled' : 'done'))
+      case 'transfer':
+        return swallow(() => tasks().ownership.transfer({ kind: 'agent', sessionId: 'cl' }, { task_id: taskId, to_session: 'cl2' }))
+      case 'neutral':
+        return neutral(taskId, NEUTRALS[Math.floor(random() * NEUTRALS.length)]!)
+      case 'restart':
+        tasks().handoffs.reconcile()
+    }
+  }
+
+  function invariants(taskId: string): string[] {
+    const db = tasks().store.db
+    const problems: string[] = []
+    const handoffs = db.prepare('SELECT id, state, published_revision FROM team_task_handoffs WHERE task_id = ?').all(taskId) as Array<{ id: string; state: string; published_revision: number | null }>
+    for (const handoff of handoffs) {
+      const associated = db.prepare('SELECT revision, request_key FROM team_task_revisions WHERE task_id = ? AND handoff_id = ?').all(taskId, handoff.id) as Array<{ revision: number; request_key: string | null }>
+      if (associated.length > 1) problems.push(`${handoff.id}: ${associated.length} associated revisions`)
+      if ((handoff.state === 'published') !== (associated.length === 1)) problems.push(`${handoff.id}: ${handoff.state} with ${associated.length} associated`)
+      if (handoff.state === 'published' && associated[0]?.revision !== handoff.published_revision) problems.push(`${handoff.id}: published revision differs`)
+      for (const transition of ['published', 'declined', 'stale', 'closed']) {
+        const mail = (db.prepare('SELECT COUNT(*) AS n FROM team_messages WHERE tags LIKE ? AND body LIKE ?').get(`%"handoff-${transition}"%`, `%${handoff.id}%`) as { n: number }).n
+        const rows = (db.prepare('SELECT COUNT(*) AS n FROM team_task_handoff_wakeups WHERE handoff_id = ? AND transition = ?').get(handoff.id, transition) as { n: number }).n
+        if (mail > 1 || rows > 1) problems.push(`${handoff.id}: ${transition} wakeups ${rows}, mail ${mail}`)
+      }
+    }
+    const strays = db.prepare("SELECT revision FROM team_task_revisions WHERE task_id = ? AND request_key LIKE 'handoff:%' AND (handoff_id IS NULL OR request_key != 'handoff:' || handoff_id)").all(taskId)
+    if (strays.length) problems.push(`reserved keys outside the handoff path: ${JSON.stringify(strays)}`)
+    const notices = db.prepare('SELECT recipient_session, revision, COUNT(*) AS n FROM team_task_notifications WHERE task_id = ? GROUP BY recipient_session, revision HAVING n > 1').all(taskId)
+    if (notices.length) problems.push(`duplicate notices: ${JSON.stringify(notices)}`)
+    return problems
+  }
+
+  test('P1: seed 0x0A11CE01, 400 cases — at most one associated revision, published iff associated, one wakeup per transition, no stray reserved key', async () => {
+    writeGroup(world, 'change-leads', '---\ncanCreateTasks: true\n---\nCoordinate.')
+    bench.records.set('cl', { ...bench.records.get('lead')!, sessionId: 'cl', name: 'cl', groupId: 'change-leads' })
+    bench.records.set('cl2', { ...bench.records.get('lead')!, sessionId: 'cl2', name: 'cl2', groupId: 'change-leads' })
+    const random = mulberry32(0x0A11CE01)
+    for (let index = 0; index < propertyCases(CASES); index++) {
+      await freshTask()
+      const owned = random() < 0.5
+      const taskId = owned ? (await tasks().create({ kind: 'agent', sessionId: 'cl' }, { title: `Owned ${index}`, direction: 'v1' })).id : await freshTask()
+      const steps = Array.from({ length: 3 + Math.floor(random() * 8) }, () => STEPS[Math.floor(random() * STEPS.length)]!)
+      for (const kind of steps) {
+        await step(taskId, kind, random)
+        expect([index, steps, kind, invariants(taskId)]).toEqual([index, steps, kind, []])
+      }
+    }
+    // The generator reaches every state (the invariants are not vacuous).
+    const reached = (tasks().store.db.prepare('SELECT DISTINCT state FROM team_task_handoffs').all() as Array<{ state: string }>).map(row => row.state).sort()
+    expect(reached).toEqual([...HANDOFF_STATES].sort())
+  }, 600_000)
+})
