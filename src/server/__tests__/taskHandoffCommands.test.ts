@@ -94,9 +94,9 @@ describe('H-REQ: task_request_publication', () => {
   // @covers: task-publication-handoffs › Task authors may request an owner publication › A Lead prepares a correction for a Kawai task
   test('H1: an eligible requester records one open handoff and the task is unchanged', async () => {
     const task = kawaiTask()
-    const { handoff, replay } = await service.handoffs.request(agent('lead'), task.id, request(task.id, { baseCommit: head, evidenceRefs: ['docs/a.md', 'note-1'] }))
+    const { handoff, replay } = await service.handoffs.request(agent('lead'), task.id, request(task.id, { baseCommit: head, evidenceRefs: ['src/a.md', 'note-1'] }))
     expect(replay).toBe(false)
-    expect(handoff).toMatchObject({ state: 'open', baseRevision: 1, requesterSession: 'lead', requesterGroup: 'leads', baseCommit: head, evidenceRefs: ['docs/a.md', 'note-1'] })
+    expect(handoff).toMatchObject({ state: 'open', baseRevision: 1, requesterSession: 'lead', requesterGroup: 'leads', baseCommit: head, evidenceRefs: ['src/a.md', 'note-1'] })
     expect(service.store.get(task.id)!.revision).toBe(1)
     expect(db.prepare('SELECT COUNT(*) AS n FROM team_messages').get()).toEqual({ n: 0 })
     expect(service.handoffs.store.events(handoff.id).map(event => [event.from, event.to])).toEqual([[null, 'open']])
