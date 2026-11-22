@@ -968,9 +968,22 @@ generators use the existing `mulberry32` helper (`src/shared/__tests__/contractF
   reviewers' collision traces): each is refused (H33, H33d) and writes
   nothing, and after restart the handoff is exactly as the model holds it
   — an `open` handoff with a current base stays `open` (H29), never
-  `published` and never `stale` from the refused attempt. Every stored
-  state equals the model's, and P1's counts hold. Seed `0x0A11CE04`,
-  200 cases.
+  `published` and never `stale` from the refused attempt. The linked
+  variants load a real linked draft first (H19) and also publish it
+  (H17, H38, H38s), and the draft load is a boundary too. The model is
+  independent of the source: each handoff's event history, the revisions
+  by key and association, the durable wakeup rows with their one mail to
+  the requester, and the stored linked draft. After every command the
+  stored facts equal it, every pending handoff still classifies healthy
+  and the linked draft has no U7; every reopen writes nothing (a healthy
+  sweep makes no writes: a fault armed on every sweep write never fires,
+  and a crash after the sweep's commit reboots to the same rows). Each
+  boundary crashes by both kinds on a command that writes. The sweep's
+  own faults run on the repairable DF fixtures apart from P4 (DF1, DF2,
+  DF3, DF5): a fault at the state write, event, wakeup row or mail rolls
+  the repair back whole; the next boot repairs once with one wakeup and
+  mail; a boot after the committed repair writes nothing. Seed
+  `0x0A11CE04`, 200 cases.
 - **P5 limits unchanged.** Seeded plans with parallel limits, dependencies
   and a landing slot, run through the supervision derivation and the
   scheduler's admission with and without random handoffs on running
