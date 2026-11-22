@@ -36,6 +36,9 @@ import { executionOf, refuseSystem, type SystemCaller } from './systemCaller'
 import { originStatusRefusal, ownerLabel, statusRefusal, taskOwner } from './taskStatusRights'
 import { TaskOwnership } from './taskOwnership'
 import { contractInput } from './taskContractRows'
+import { canonicalRequestKey, isReservedRequestKey } from '../../shared/taskHandoffs'
+import { RESERVED_KEY_REFUSAL, TaskHandoffService, type PublicationLink } from './taskHandoffService'
+import { linkedDraftPublish } from './taskHandoffDrafts'
 export { statusRefusal } from './taskStatusRights'
 
 export interface TaskCreateInput {
@@ -75,6 +78,10 @@ export interface TaskPublishInput extends TaskAmendInput {
   requestKey?: string
   /** The human published their saved draft: it is discarded with the publication (D2). */
   fromDraft?: boolean
+  /** The draft lineage identity the human's form loaded (owner-publication-handoff H43); none for an unlinked form. */
+  observedDraft?: string | null
+  /** The human form's rationale requirement (Q6), checked right after the reserved-key check. */
+  requireRationale?: boolean
 }
 
 /**
@@ -101,6 +108,8 @@ export interface TaskDraftInput {
   rationale?: string | null
   /** Raw contract text, kept unparsed so a half-edited draft survives restart. */
   contract?: string | null
+  /** The draft lineage identity the form loaded (owner-publication-handoff H41–H43). */
+  observedDraft?: string | null
 }
 
 /**
@@ -142,7 +151,11 @@ export class TaskService {
   }) {
     this.worktrees = options.worktrees ?? new TeamWorktrees()
     this.ownership = new TaskOwnership(this, options.getSession)
+    this.handoffs = new TaskHandoffService(this, options.getSession)
   }
+
+  /** Publication handoffs (owner-publication-handoff D2, D3). */
+  readonly handoffs: TaskHandoffService
 
   /** `task_transfer_owner` (group-mail-task-affinity D7). */
   readonly ownership: TaskOwnership
@@ -238,9 +251,14 @@ export class TaskService {
    * UI sends the draft's base revision and a command key, so a resend is a
    * replay and a stale base is refused; the agent tool sends neither. A
    * human publication drops the draft it came from. Announced once after a
-   * new revision commits — never on a replay.
+   * new revision commits — never on a replay. The ordinary entry refuses a
+   * reserved `handoff:` key first (owner-publication-handoff D3, H33); only
+   * the prepared entry passes `link`, its own key and in-transaction writes.
    */
-  async publish(caller: TaskCaller, taskId: string, input: TaskPublishInput): Promise<PublishOutcome> {
+  async publish(caller: TaskCaller, taskId: string, input: TaskPublishInput, link?: PublicationLink): Promise<PublishOutcome> {
+    const requestKey = link ? link.requestKey : canonicalRequestKey(input.requestKey)
+    if (!link && isReservedRequestKey(requestKey)) throw new Error(RESERVED_KEY_REFUSAL)
+    if (input.requireRationale && !input.rationale?.trim()) throw new Error('A publication needs a rationale')
     const { team, actor } = await this.revisionPublisher(caller)
     const task = this.sameTeamTask(team, taskId)
     if (actor.kind === 'agent' && taskOwner(task) !== actor.sessionId) {
@@ -255,7 +273,6 @@ export class TaskService {
     // Refused before anything is written, as notify() refuses: never a notify revision without its notices.
     if (input.notify && !this.store.notices) throw new Error('Revision notices are not available')
     const sender = this.noticeSender(team, actor)
-    const requestKey = input.requestKey?.trim() || undefined
     let sent: SentNotice[] = []
     const outcome = this.store.publish(taskId, {
       ...(input.direction !== undefined ? { direction: input.direction.trim() } : {}),
@@ -263,10 +280,13 @@ export class TaskService {
       ...(contract !== undefined ? { contract } : {}),
       rationale: emptyToNull(input.rationale),
       ...(input.baseRevision !== undefined ? { baseRevision: input.baseRevision } : {}),
-      ...(input.requestKey?.trim() ? { requestKey: input.requestKey.trim() } : {}),
+      ...(requestKey ? { requestKey } : {}),
+      ...(link ? { handoffId: link.handoffId } : {}),
       notify: input.notify === true,
-      // Only the publication that came from the draft discards it (D2).
+      // Only the publication that came from the draft discards it (D2); a
+      // linked draft's publish fulfills its handoff (owner-publication-handoff D3).
       discardDraft: actor.kind === 'human' && input.fromDraft === true,
+      ...(!link && actor.kind === 'human' && input.fromDraft === true ? linkedDraftPublish(this, taskId, input, actor, team.groupsRoot) : {}),
       // Publish, re-map open findings (review-findings-ledger D9), and notify
       // (D3): the events and notices commit or roll back with the revision.
       within: (revision, current) => {
@@ -276,6 +296,7 @@ export class TaskService {
             sender, requestKey: requestKey ?? `publish-r${revision.revision}`, sessionExists: id => !!this.options.getSession(id),
           })
         }
+        link?.within(revision, current)
       },
     }, actor)
     if (!outcome) throw new Error(`Task not found in this team: ${taskId}`)
@@ -371,16 +392,16 @@ export class TaskService {
     if (!Number.isInteger(baseRevision) || baseRevision < 1 || baseRevision > task.revision) {
       throw new Error(`A draft must be based on a published revision (1–${task.revision})`)
     }
-    return this.store.drafts.save(taskId, {
+    return this.store.drafts.saveObserved(taskId, {
       baseRevision, direction, acceptance: emptyToNull(input.acceptance), rationale: emptyToNull(input.rationale),
       contractText: input.contract ?? null,
-    })
+    }, input.observedDraft ?? null)
   }
 
   /** Move the draft onto the current revision, keeping its text (D1). */
-  async rebaseDraft(caller: TaskCaller, taskId: string): Promise<TaskDraft> {
+  async rebaseDraft(caller: TaskCaller, taskId: string, observedDraft: string | null = null): Promise<TaskDraft> {
     const task = await this.humanTask(caller, taskId)
-    const draft = this.store.drafts.rebase(taskId, task.revision)
+    const draft = this.store.drafts.rebase(taskId, task.revision, undefined, observedDraft)
     if (!draft) throw new Error('This task has no draft to rebase')
     return draft
   }

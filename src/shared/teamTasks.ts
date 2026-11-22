@@ -1,6 +1,7 @@
 // SDK-free team task records (team-tasks design D1) shared by server and
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
+import type { TaskHandoff } from './taskHandoffs'
 import type { ImplementationContract } from './implementationContract'
 import type { LedgerItem, LedgerRow } from './findingsLedger'
 import type { ActingParty, TeamActor, TeamMessage } from './team'
@@ -101,6 +102,14 @@ export interface TaskDraft {
   rationale: string | null
   /** The draft's raw contract text, possibly unparsed (D3); null = the base revision's contract, unedited. */
   contractText?: string | null
+  /**
+   * The publication handoff loaded into this draft by **Edit before
+   * publishing** (owner-publication-handoff D3), and the server-owned lineage
+   * identity that load minted. A form sends the identity it observed with
+   * every save and publish; both detach when the base moves.
+   */
+  handoffId?: string | null
+  lineageId?: string | null
   updatedAt: string
 }
 
@@ -613,6 +622,8 @@ export interface TaskJournalChunk { entryId: string; offsetBytes: number; totalB
  */
 export interface HumanTaskDetail extends TeamTaskDetail {
   draft?: TaskDraft | null
+  /** The task's newest publication handoffs, newest first (owner-publication-handoff D11). */
+  handoffs?: TaskHandoff[]
   /** What **Release worktree and hand off** would do now (task-results-handoffs D7). */
   release?: TaskReleasePreview
   /** A running execution owns the task (plan-execution D7): the view offers neither Accept result nor Mark done. */
@@ -660,6 +671,8 @@ export interface ChatPeerTaskContext {
   contract?: { identity: string; contract: ImplementationContract | null }
   /** The ledger's blocking and disputed ids (review-findings-ledger D10); absent while the task has no structured findings. */
   findings?: { blocking: string[]; disputed: string[] }
+  /** The task's pending publication handoff (owner-publication-handoff D10), named only as pending; absent without one. */
+  pendingHandoff?: { id: string; state: 'open' | 'stale'; baseRevision: number }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */

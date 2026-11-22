@@ -125,7 +125,7 @@ describe('table DO — opening a diagnosis at the fix step', () => {
     expect(journalOf(executionId, 'do-1').some(text => text.startsWith('Convergence notice'))).toBe(false)
     // The stall sweep reads convergence and finds the episode written at open: it sends nothing more.
     const planId = h.executions.execution(executionId)!.planId
-    const reads = { db: h.bench.db.db, mail: h.mail, executions: h.executions, plans: h.bench.plans, decisions: cards(), conditionsOf: () => [], runtime: { holder: () => null, blocker: () => null } }
+    const reads = { db: h.bench.db.db, mail: h.mail, executions: h.executions, plans: h.bench.plans, decisions: cards(), conditionsOf: () => [], runtime: { holder: () => null, blocker: () => null, live: () => false } }
     const derived = derivePlanSupervision(reads, teamId(), planId, new Date(h.clock.now))!
     expect(derived.changes[0]!.stall).toMatchObject({ kind: 'convergence', episodeKey: diagnosis!.id })
     const before = messageCount()

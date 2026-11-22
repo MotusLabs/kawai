@@ -8,7 +8,9 @@
 // outcomes. The holder's session facts and the instruction's mailbox blocker
 // are runtime facts, injected through `SupervisionRuntime`; `waitEndedAt` is
 // the monitor's in-memory fact (D11), read through the optional `waitEndedAt`
-// seam and null without it. Reads only, all in one read transaction (O1),
+// seam and null without it. The task's pending publication handoff
+// (owner-publication-handoff D9) is read with the runtime's liveness for its
+// next actor. Reads only, all in one read transaction (O1),
 // so a write committing meanwhile is wholly in the view or wholly out of it.
 import type { Database } from 'bun:sqlite'
 import { cardState } from '../../../shared/planDecisions'
@@ -27,6 +29,7 @@ import type { PlanRevision } from '../../../shared/plans'
 import { agentHeldStage, attemptStatus } from '../execution/attemptStatus'
 import { DiagnosisStore, type DiagnosisRow } from '../execution/diagnosisStore'
 import type { RevisionControlDetail } from '../revisionControl/revisionControlRead'
+import { pendingHandoffFact } from '../../team/taskHandoffFacts'
 
 /** The runtime facts the session and mailbox modules expose (D10). */
 export interface SupervisionRuntime {
@@ -34,6 +37,8 @@ export interface SupervisionRuntime {
   holder: (sessionId: string, taskId: string | null) => HolderFacts | null
   /** The mailbox waiting reason's immediate blocker for an unsettled message. */
   blocker: (messageId: string) => string | null
+  /** owner-publication-handoff D6/D9: live — the record present, neither archived nor context-exhausted. */
+  live: (sessionId: string) => boolean
 }
 
 export interface SupervisionReads {
@@ -214,6 +219,8 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
         waitEndedAt: reads.waitEndedAt?.(execution.id, entry.change) ?? null,
         diagnosis: diagnosisOf(reads.db, diagnoses.open(execution.id, entry.change), row.taskId),
         ...revisionControlWaits(control, execution.id, entry.change),
+        // owner-publication-handoff D9: the task's pending handoff and its next actor; a published one ends the wait (S7).
+        handoff: row.taskId === null ? null : pendingHandoffFact(reads.db, row.taskId, reads.runtime.live),
       }
     })
     return { executionId: execution.id, revision: revision.revision, inputs }

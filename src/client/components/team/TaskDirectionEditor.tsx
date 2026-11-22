@@ -10,6 +10,14 @@
 // textarea starts from the saved draft's raw text, else the base revision's
 // rendered contract; live parser problems disable publishing, and clearing
 // a contract the task already carries is refused before it is sent.
+//
+// Draft provenance (owner-publication-handoff D3, H41–H44): when the form
+// takes up its text from the server it also captures the draft identity it
+// observed (a draft loaded from a publication handoff carries one) and its
+// publish intent (`fromDraft`: it was editing a saved draft). Both stay fixed
+// while the human edits, are sent with every save and publish, and are never
+// re-read from a later draft snapshot; a refusal because another window
+// replaced the draft (H43) keeps the text and offers **Refresh**.
 import { useEffect, useState } from 'react'
 import type { TaskDraft, TeamTaskSummary } from '@shared/teamTasks'
 import { contractHashInput, parseContract, renderContract, type ContractProblem, type ImplementationContract } from '@shared/implementationContract'
@@ -46,13 +54,18 @@ function landed(form: SentForm, task: TeamTaskSummary, draft: TaskDraft | null |
 /** Send a task action; `command` arms (or reuses) the slot's request key for it. */
 export type TaskActFn = (action: TaskAction, message: Record<string, unknown>, command?: { slot: string; payload: string }) => void
 
-export default function TaskDirectionEditor({ task, draft, connected, disabled, act }: {
+/** The server's H43 refusal (`REPLACED_DRAFT_REFUSAL`): the stored draft is not the one this form loaded. */
+export const REPLACED_DRAFT_MARK = 'The draft was replaced since this form loaded it'
+
+export default function TaskDirectionEditor({ task, draft, connected, disabled, act, error }: {
   task: TeamTaskSummary
   draft: TaskDraft | null | undefined
   connected: boolean
   /** Disconnected, or an action is awaiting its result. */
   disabled: boolean
   act: TaskActFn
+  /** The task view's last action error, if any. */
+  error?: string | null
 }) {
   const [direction, setDirection] = useState('')
   const [acceptance, setAcceptance] = useState('')
@@ -69,6 +82,8 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
    * while the push is on its way.
    */
   const [sentForm, setSentForm] = useState<SentForm | null>(null)
+  /** What the form was editing when its text was taken up: fixed until it re-syncs (H43, H44). */
+  const [origin, setOrigin] = useState<{ fromDraft: boolean; observedDraft: string | null }>({ fromDraft: false, observedDraft: null })
   // Another task: start over.
   useEffect(() => { setTouched(false); setSentForm(null) }, [task.id])
   useEffect(() => {
@@ -88,7 +103,8 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
     // A draft saved before contracts has no text: start from the revision's.
     setContract(draft?.contractText ?? startText(task))
     setBase(draft?.baseRevision ?? task.revision)
-  }, [touched, task.id, task.revision, task.direction, task.acceptance, task.contractHash, draft?.updatedAt, draft?.baseRevision, draft?.direction, draft?.acceptance, draft?.rationale, draft?.contractText])
+    setOrigin({ fromDraft: !!draft, observedDraft: draft?.lineageId ?? null })
+  }, [touched, task.id, task.revision, task.direction, task.acceptance, task.contractHash, draft?.updatedAt, draft?.baseRevision, draft?.direction, draft?.acceptance, draft?.rationale, draft?.contractText, draft?.lineageId])
   const edit = (setter: (value: string) => void) => (value: string) => { setTouched(true); setter(value) }
   const sent = (form: SentForm) => { setTouched(true); setSentForm(form) }
 
@@ -103,21 +119,29 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
   // A task without a contract and a blank field sends none (C1); otherwise the text, which the server parses.
   const sendsContract = !!contract.trim() || !!task.contract || !!draft?.contractText
   const canPublish = !disabled && !stale && edited && !!direction.trim() && !!rationale.trim() && problems.length === 0 && !clearsContract
+  const observed = origin.observedDraft ? { observedDraft: origin.observedDraft } : {}
+  const replaced = !!error?.includes(REPLACED_DRAFT_MARK)
   const publish = (notify: boolean) => {
     const fields = { baseRevision: base, direction: direction.trim(), acceptance: acceptance.trim(), ...(sendsContract ? { contract } : {}), rationale: rationale.trim(), notify }
     sent({ kind: 'publish', direction: fields.direction, acceptance: fields.acceptance, rationale: fields.rationale, contract })
-    act('publish', { type: 'team-task-publish', ...fields, fromDraft: !!draft }, { slot: `publish:${task.id}`, payload: JSON.stringify(fields) })
+    act('publish', { type: 'team-task-publish', ...fields, fromDraft: origin.fromDraft, ...observed },
+      { slot: `publish:${task.id}`, payload: JSON.stringify({ ...fields, ...origin }) })
   }
 
   return <div className="mt-2 flex flex-col gap-2" data-testid="task-direction-editor">
     {draft && <p className="text-chat-meta text-secondary" data-testid="task-draft-status">
-      Draft saved · based on revision {draft.baseRevision} · not published</p>}
+      Draft saved · based on revision {draft.baseRevision} · not published{draft.handoffId ? ' · loaded from a prepared revision' : ''}</p>}
+    {replaced && touched && <div role="alert" className="text-chat-meta" data-testid="task-draft-replaced">
+      Another window replaced this draft since you started editing; nothing was saved or published. Your text is kept here.
+      <button type="button" className="btn ml-2 text-chat-meta" data-testid="task-draft-refresh" onClick={() => { setSentForm(null); setTouched(false) }}>
+        Refresh to the stored draft</button>
+    </div>}
     {stale && <div role="alert" className="text-chat-meta" data-testid="task-draft-stale">
       {draft ? 'Draft' : 'Your edit'} based on revision {base}; current is {task.revision}. Read revision {task.revision}, then rebase to publish.
       <button type="button" className="btn ml-2 text-chat-meta" disabled={disabled} data-testid="task-rebase-draft" onClick={() => {
         // The text stays; only its base moves. A saved draft moves on the server too.
         setBase(task.revision)
-        if (draft) act('draft', { type: 'team-task-draft', action: 'rebase' })
+        if (draft) act('draft', { type: 'team-task-draft', action: 'rebase', ...observed })
       }}>Rebase onto revision {task.revision}</button>
     </div>}
     <textarea className="input min-h-16 text-chat-body" aria-label="Draft direction" value={direction} disabled={!connected}
@@ -141,7 +165,7 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
         onClick={() => {
           const fields = { direction: direction.trim(), acceptance: acceptance.trim(), rationale: rationale.trim(), ...(sendsContract ? { contract } : {}) }
           sent({ kind: 'draft', ...fields, contract })
-          act('draft', { type: 'team-task-draft', action: 'save', baseRevision: base, ...fields })
+          act('draft', { type: 'team-task-draft', action: 'save', baseRevision: base, ...fields, ...observed })
         }}>Save draft</button>
       <button type="button" className="btn" data-testid="task-publish" disabled={!canPublish}
         onClick={() => publish(false)}>Publish revision {task.revision + 1}</button>
