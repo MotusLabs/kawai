@@ -1012,7 +1012,10 @@ which.
 - MU8 `owner-publication` is not appended in `stageWaits` (S1).
 - MU9 the request tool is not registered in the team tool server, and
   separately the publish command is missing from the WS whitelist (CP1).
-- MU10 the wakeup primary key is dropped (P1, H14).
+- MU10 the wakeup primary key is dropped (the direct second-write row of
+  `taskHandoffWakeups.test.ts`, "a second write of a transition is a
+  no-op: no second row and no second message"; P1 keeps its histories
+  but cannot reach it, since no healthy path writes a transition twice).
 - MU11 the supervision wait frees the change's parallel slot (P5).
 - MU12 `amendItems` is not suppressed for a pending handoff (S3).
 - MU13 the close hook is missing from the status transaction (H27), and
