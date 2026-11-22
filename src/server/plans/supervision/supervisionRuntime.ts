@@ -11,6 +11,7 @@ import type { WaitingReason } from '../../../shared/team'
 import type { ChatSessionRecord } from '../../db'
 import type { MailboxStore } from '../../team/mailboxStore'
 import type { SupervisionRuntime } from './supervisionRead'
+import { liveRecord } from '../../team/taskHandoffFacts'
 
 export interface SupervisionRuntimeDeps {
   db: Database
@@ -58,6 +59,7 @@ export function supervisionRuntime(deps: SupervisionRuntimeDeps): SupervisionRun
         coolingUntil: deps.cooldownUntil(record),
       }
     },
+    live: session => liveRecord(deps.getRecord(session)),
     blocker: messageId => {
       const message = deps.mail.get(messageId)
       if (message === null) return null

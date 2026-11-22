@@ -578,7 +578,7 @@ describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
             submittedBy: () => false,
           },
           acknowledgements: { highest: () => null },
-        }, handoffs: { store: { pendingForTeam: () => [] }, live: () => false },
+        }, handoffs: { store: { pendingForTeam: () => [], publishedOfOpenTasks: () => [] }, live: () => false },
       },
       mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
       waitingFor: () => ({}),
@@ -617,7 +617,11 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
         list: () => [task], get: () => task,
         results: { get: () => result(verdict), outstandingSince: () => [], submittedBy: () => false },
         acknowledgements: { highest: () => null },
-      }, handoffs: { store: { pendingForTeam: () => [] }, live: () => false } },
+      }, handoffs: {
+        store: { pendingForTeam: () => [], publishedOfOpenTasks: () => [] },
+        // The handoff liveness predicate over these records (owner-publication-handoff D6, Table F).
+        live: (id: string) => records.some(row => row.sessionId === id && !row.archivedAt && !row.contextExhausted),
+      } },
       mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
       waitingFor: () => ({}),
       teamRecords: () => records,

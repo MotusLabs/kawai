@@ -78,6 +78,13 @@ export class TaskHandoffStore {
       .map(handoffOf)
   }
 
+  /** Published handoffs of the team's open tasks (a closed task's read `task-closed`, W5, and carry no item). */
+  publishedOfOpenTasks(teamId: string): TaskHandoff[] {
+    return (this.db.prepare(`SELECT h.* FROM team_task_handoffs h JOIN team_tasks t ON t.id = h.task_id
+      WHERE h.team_id = ? AND h.state = 'published' AND t.status NOT IN ('done', 'cancelled') ORDER BY h.created_at, h.id`).all(teamId) as Record<string, unknown>[])
+      .map(handoffOf)
+  }
+
   /** Insert an `open` handoff with its first event; the caller holds the transaction. */
   insert(input: NewHandoff, now: string): TaskHandoff {
     const id = `handoff-${crypto.randomUUID()}`

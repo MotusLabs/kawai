@@ -42,7 +42,7 @@ function reads(): SupervisionDetailReads {
   return {
     db: bench.db.db, mail: bench.mail, executions, plans: bench.plans, decisions: bench.decisions, integration: new IntegrationStore(bench.db.db),
     conditionsOf: () => [], tasks: bench.tasks, impact: () => impact,
-    runtime: { holder: () => null, blocker: () => null },
+    runtime: { holder: () => null, blocker: () => null, live: () => false },
   }
 }
 

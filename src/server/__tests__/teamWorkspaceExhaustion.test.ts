@@ -99,7 +99,7 @@ describe('the read model gathers each episode\'s facts', () => {
         assignmentsOf: () => state.dispatches.map(createdAt => ({ createdAt })),
         results: { get: () => null, outstandingSince: () => [], submittedBy: () => false },
         acknowledgements: { highest: () => null },
-      }, handoffs: { store: { pendingForTeam: () => [] }, live: () => false } },
+      }, handoffs: { store: { pendingForTeam: () => [], publishedOfOpenTasks: () => [] }, live: () => false } },
       mailbox: { store: { listForTeam: () => [], eventsFor: () => [], get: () => ({ state: state.dropped }) } },
       waitingFor: () => ({}),
       teamRecords: () => records,

@@ -8,6 +8,7 @@
 // moves the handoff to `published` and writes its wakeup — all in the
 // revision's transaction. Fulfillment is only that association (D3): a
 // revision under the prepared key without it is an orphan and is refused.
+import { liveRecord } from './taskHandoffFacts'
 import type { ChatSessionRecord } from '../db'
 import type { TaskRevision, TeamTask } from '../../shared/teamTasks'
 import { preparedKey, type HandoffActor, type TaskHandoff } from '../../shared/taskHandoffs'
@@ -71,10 +72,7 @@ export class TaskHandoffService {
   }
 
   /** Live: the record present, neither archived nor context-exhausted (D6). */
-  live = (sessionId: string): boolean => {
-    const session = this.getSession(sessionId)
-    return !!session && !session.archivedAt && !session.contextExhausted
-  }
+  live = (sessionId: string): boolean => liveRecord(this.getSession(sessionId))
 
   /** `task_request_publication` (H-REQ): team/id, right, key, status, base, payload, pending. */
   async request(caller: TaskCaller, taskId: string, input: HandoffRequestInput): Promise<HandoffRequestOutcome> {

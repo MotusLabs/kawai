@@ -24,6 +24,8 @@ export interface SupervisionBench extends DecisionBench {
   integration: IntegrationStore
   clock: { at: number }
   holder: Partial<HolderFacts>
+  /** Sessions the runtime's `live` reads gone (owner-publication-handoff D9). */
+  gone: Set<string>
   announced: string[]
   logged: unknown[]
   /** Compose a monitor over the bench (a fresh one models a restart). */
@@ -49,6 +51,7 @@ export function createSupervisionBench(world: PlanWorld): SupervisionBench {
   const integration = new IntegrationStore(bench.db.db)
   const clock = { at: T0 }
   const holder: Partial<HolderFacts> = {}
+  const gone = new Set<string>()
   const announced: string[] = []
   const logged: unknown[] = []
   bench.plans.subscribe(plan => announced.push(plan.id))
@@ -65,6 +68,8 @@ export function createSupervisionBench(world: PlanWorld): SupervisionBench {
           dueDirectMail: false, parkedUntil: null, coolingUntil: null, lastTurnEndAt: null, lastTaskMailAt: null, ...holder,
         }),
         blocker: () => null,
+        // owner-publication-handoff D9: every session live unless the test marks it gone.
+        live: session => !gone.has(session),
       },
     },
     monitor: { now: () => new Date(clock.at), debounceMs: 0, timerMs: 3_600_000, log: (_message, error) => logged.push(error) },
@@ -74,7 +79,7 @@ export function createSupervisionBench(world: PlanWorld): SupervisionBench {
       .run(values.state, values.step ?? null, values.taskId ?? null, executionId, change)
   }
   return {
-    ...bench, executions, integration, clock, holder, announced, logged, compose, setChange,
+    ...bench, executions, integration, clock, holder, gone, announced, logged, compose, setChange,
     start: planId => {
       const revision = bench.plans.approvedRevision(planId)!
       return executions.insertExecution({

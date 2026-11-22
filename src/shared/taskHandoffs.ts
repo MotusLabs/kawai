@@ -79,3 +79,64 @@ export interface TaskHandoff extends HandoffPreparedFields {
   createdAt: string
   updatedAt: string
 }
+
+/**
+ * D5's follow-up phases of a `published` handoff, in `handoffPhase`'s check
+ * order (first match wins). Suppression (task-closed, acknowledged) outranks
+ * notice parity; phases 4–8 mirror `TaskNotices.reached`.
+ */
+export const HANDOFF_PHASES = [
+  'task-closed', 'acknowledged', 'no-holder', 'delivered-awaiting-ack', 'notice-uncertain', 'notice-queued', 'notice-failed', 'not-notified',
+] as const
+export type HandoffPhase = typeof HANDOFF_PHASES[number]
+
+/** A revision notice's derived state, as `taskNotices.ts` derives it (a missing notice is not listed). */
+export type HandoffNoticeState = 'queued' | 'delivered' | 'uncertain' | 'failed'
+
+/** The facts a published handoff's phase reads, all shown by the publication detail already (D5). */
+export interface HandoffFollowUpFacts {
+  publishedRevision: number
+  taskClosed: boolean
+  /** The outstanding assignment's current claimant; null when nobody holds it. */
+  claimant: { sessionId: string; live: boolean } | null
+  /** The highest revision task mail confirmed delivered to the claimant carried. */
+  deliveredRevision: number | null
+  acknowledgedRevision: number | null
+  /** Every notice to the claimant for the published revision or a later one (never only the newest). */
+  notices: Array<{ state: HandoffNoticeState; messageId: string }>
+}
+
+/** D5: the one derivation attention, the supervision loader and `task_get` call (contract I5). */
+export function handoffPhase(facts: HandoffFollowUpFacts): HandoffPhase {
+  if (facts.taskClosed) return 'task-closed'
+  if (facts.claimant !== null && (facts.acknowledgedRevision ?? 0) >= facts.publishedRevision) return 'acknowledged'
+  if (facts.claimant === null || !facts.claimant.live) return 'no-holder'
+  if ((facts.deliveredRevision ?? 0) >= facts.publishedRevision) return 'delivered-awaiting-ack'
+  if (facts.notices.some(notice => notice.state === 'uncertain')) return 'notice-uncertain'
+  if (facts.notices.some(notice => notice.state === 'queued')) return 'notice-queued'
+  // A delivered notice implies a delivered revision at or above it, read above.
+  if (facts.notices.length > 0) return 'notice-failed'
+  return 'not-notified'
+}
+
+/** Who moves a pending handoff next (W1–W4): its publisher while `open`, the requester side once `stale`. */
+export type HandoffNextActor =
+  | { kind: 'owner'; sessionId: string }
+  | { kind: 'human' }
+  | { kind: 'requester'; sessionId: string }
+  | { kind: 'requester-group'; group: string }
+
+/**
+ * W1–W4's next actor, shared by attention and the supervision wait (P6).
+ * A stale handoff whose requester is gone and had no group falls to the
+ * human, the only party left who can end it (by declining it).
+ */
+export function pendingHandoffActor(
+  handoff: Pick<TaskHandoff, 'state' | 'requesterSession' | 'requesterGroup'>,
+  liveOwner: string | null,
+  requesterLive: boolean,
+): HandoffNextActor {
+  if (handoff.state === 'open') return liveOwner !== null ? { kind: 'owner', sessionId: liveOwner } : { kind: 'human' }
+  if (requesterLive) return { kind: 'requester', sessionId: handoff.requesterSession }
+  return handoff.requesterGroup !== null ? { kind: 'requester-group', group: handoff.requesterGroup } : { kind: 'human' }
+}

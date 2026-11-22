@@ -35,14 +35,16 @@ export type AttentionKind =
   | 'plan-fix'
   | 'plan-condition'
   | 'plan-promotion'
-  // A prepared revision waiting for its publisher (owner-publication-handoff D8).
+  // A prepared revision waiting for its publisher, and a published one
+  // whose holder has not acknowledged it (owner-publication-handoff D8).
   | 'publication-handoff'
+  | 'publication-follow-up'
   | (string & {})
 
-/** Who an attention item is waiting on: the human, one session, or a group. */
+/** Who an attention item is waiting on: the human, one session, a group, or Kawai (owner-publication-handoff D8). */
 export interface AttentionOwner {
-  kind: 'human' | 'session' | 'group'
-  /** Null for the human; a group id otherwise. */
+  kind: 'human' | 'session' | 'group' | 'kawai'
+  /** Null for the human and Kawai; a session or group id otherwise. */
   id: string | null
   label: string
 }
