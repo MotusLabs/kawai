@@ -61,6 +61,7 @@ export function handoffRead(tasks: TaskService, task: TeamTask, handoffId?: stri
       publishedAsEdited: handoff.state === 'published' ? handoff.publishedPayloadHash !== handoff.payloadHash : null,
       disposition: handoff.state === 'open' ? null : { actor: handoff.stateActor, reason: handoff.stateReason },
       ...(pending ? { nextActor: pendingHandoffActor(handoff, owner !== null && service.live(owner) ? owner : null, service.live(handoff.requesterSession)) } : {}),
+      // P6: a pending row projects its next actor, a published one its handoffPhase (the Attention W row's phase).
       ...(handoff.state === 'published' && store.notices && store.mail ? {
         phase: handoffPhase(followUpFacts({ db: store.db, mail: store.mail, notices: store.notices, acknowledgements: store.acknowledgements, live: service.live }, handoff, task)),
       } : {}),

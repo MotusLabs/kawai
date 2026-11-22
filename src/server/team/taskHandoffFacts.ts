@@ -66,7 +66,7 @@ export interface PendingHandoffFact {
   nextActor: HandoffNextActor
 }
 
-/** The task's one pending handoff with W1–W4's next actor, or null (read inside the caller's transaction). */
+/** The task's one pending (open or stale) handoff with W1–W4's next actor, or null: a published handoff is no wait (S7), so no published phase is projected here (read inside the caller's transaction). */
 export function pendingHandoffFact(db: Database, taskId: string, live: (sessionId: string) => boolean): PendingHandoffFact | null {
   const row = db.prepare(`SELECT h.id, h.state, h.base_revision, h.requester_session, h.requester_group, t.owner_session
     FROM team_task_handoffs h JOIN team_tasks t ON t.id = h.task_id WHERE h.task_id = ? AND h.state IN ('open', 'stale')`).get(taskId) as {

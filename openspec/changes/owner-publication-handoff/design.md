@@ -427,7 +427,9 @@ anchor (`attentionLinks.ts`).
 ### D9. Supervision
 
 `SupervisionInput` gains `handoff: { id, state, baseRevision, nextActor }
-| null`, filled by the supervision loader from the task's pending handoff.
+| null`, filled by the supervision loader from the task's pending (open
+or stale) handoff only: publication ends the wait (S7), so the loader
+projects no published phase.
 `stageWaits` appends `{ kind: 'owner-publication', handoffId, state,
 baseRevision, nextActor }` last (the append-only rule), so an earlier wait
 remains the cause and this one is listed as also applying. The stall item
@@ -960,9 +962,16 @@ generators use the existing `mulberry32` helper (`src/shared/__tests__/contractF
   changes' tasks: admitted changes, parallel counts, dependency waits and
   the slot holder are identical. Seed `0x0A11CE05`, 200 cases.
 - **P6 one derivation.** For random handoff and publication states,
-  attention, the supervision loader and `task_get` report the same phase
-  and next actor (each reader gets its own row over `handoffPhase`).
-  Seed `0x0A11CE06`, 200 cases.
+  each reader reports its own projection over one derivation. A pending
+  handoff (open or stale, owner and requester live or gone) has the same
+  state and next actor in attention, the supervision loader's
+  `owner-publication` wait and `task_get`. A published handoff (random
+  notices, deliveries, acknowledgements, holder and task closure) has
+  `task_get`'s `handoffPhase` and the Attention item, actor and action
+  (or its suppression) of the one table W row an independent model
+  matches; the loader shows no `owner-publication` wait for it, in
+  neither the cause nor the waits also applying (S7). Seed `0x0A11CE06`,
+  200 cases.
 - **P7 notice actions.** Random histories for one published revision:
   publication with or without notify; notices (none to three, each
   queued, delivered, uncertain or failed, at that revision or a later

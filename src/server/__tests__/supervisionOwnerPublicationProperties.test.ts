@@ -8,10 +8,15 @@
 //   are recorded on random running changes' tasks: the scheduler's whole
 //   output, every waiting change's cause and waits, every dependency wait
 //   and every landing-slot wait are identical.
-// - P6 one derivation: for random pending handoffs (open or stale, owner
-//   live, gone or none, requester live or gone), the attention item's owner
-//   and the supervision wait's next actor and `task_get`'s handoff row name
-//   the same party.
+// - P6 one derivation (D9 and S7, as bound): for random pending handoffs
+//   (open or stale, owner live or none, requester live or gone) the
+//   attention item's owner, the supervision wait's state and next actor, and
+//   `task_get`'s row name the same state and party; for published handoffs
+//   built to each `handoffPhase` with random notices, delivery,
+//   acknowledgement, holder and closure, Table W's independent row gives the
+//   follow-up item (or its suppression) and the phase `task_get` names,
+//   and the loader's pending-only projection lists no owner-publication
+//   wait, as cause or also applying.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import { mulberry32 } from '../../shared/__tests__/contractFixtures'
@@ -20,9 +25,10 @@ import type { ChangeSupervision, SupervisionCause } from '../../shared/planSuper
 import { executionSnapshot } from '../plans/execution/executionSnapshot'
 import { planSteps } from '../plans/execution/executionPlanner'
 import { derivePlanSupervision } from '../plans/supervision/supervisionRead'
-import { handoffAttentionFacts, handoffAttentionItems } from '../team/handoffAttention'
+import { handoffAttentionFacts, handoffAttentionItems, handoffFollowUpItems } from '../team/handoffAttention'
 import { handoffRead } from '../team/taskHandoffRead'
-import type { HandoffNextActor } from '../../shared/taskHandoffs'
+import { HANDOFF_PHASES, type HandoffNextActor, type HandoffNoticeState, type HandoffPhase } from '../../shared/taskHandoffs'
+import { shown, W_PUBLISHED, type PublishedAxes } from './helpers/handoffWTable'
 import { createPlanWorld, writeGroup, type PlanWorld } from './planHarness'
 import { propertyCases } from './helpers/propertyCases'
 import { createSupervisionBench, MIN, T0, type SupervisionBench } from './supervisionHarness'
@@ -114,38 +120,116 @@ describe('P5: limits unchanged', () => {
 describe('P6: one derivation', () => {
   const CASES = 200
   const party = (owner: { kind: string; id: string | null }) => `${owner.kind}:${owner.id ?? ''}`
+  const named = (next: HandoffNextActor) => next.kind === 'human' ? 'human:' : next.kind === 'requester-group' ? `group:${next.group}` : `session:${next.sessionId}`
+  /** Table W's published row id → the phase it names (design "Table W"), independent of `handoffPhase`. */
+  const PHASE_OF_ROW: Record<string, HandoffPhase> = {
+    W5: 'task-closed', W6: 'acknowledged', W7: 'no-holder', W8: 'no-holder', W12d: 'delivered-awaiting-ack',
+    W9: 'notice-uncertain', W12: 'notice-queued', W10: 'notice-failed', W11: 'not-notified',
+  }
+  const archive = (id: string) => { bench.gone.add(id); bench.records.set(id, { ...bench.records.get(id)!, archivedAt: new Date().toISOString() }) }
+  const revive = (id: string) => { bench.gone.delete(id); bench.records.set(id, { ...bench.records.get(id)!, archivedAt: null }) }
+  const manager = () => ({ tasks: bench.taskService, results: { ownedByExecution: () => true } })
+  const loaderWaits = (planId: string) => {
+    const api = derivePlanSupervision(bench.compose().reads, teamId(), planId, NOW)!.changes.find(change => change.change === 'api')!
+    return [api.cause, ...api.alsoApplying].filter(entry => entry.kind === 'owner-publication')
+  }
+  /** One revision notice to the claimant from the real `TaskNotices.write`, moved to `state`. */
+  const notice = (taskId: string, state: HandoffNoticeState) => {
+    const store = bench.taskService.store
+    const task = store.get(taskId)!
+    const [sent] = store.notices!.write(task, store.revisions(taskId).at(-1)!, {
+      sender: { actor: { kind: 'human', sessionId: null }, fromGroup: null, originPath: world.repo },
+      requestKey: `p6-notice-${crypto.randomUUID()}`, sessionExists: () => true,
+    })
+    if (!sent) throw new Error('no claimant to notify')
+    if (state === 'queued') return
+    bench.mail.claim(sent.messageId, 'dev')
+    if (state === 'delivered') { bench.mail.markPushed(sent.messageId, undefined, task.revision); bench.mail.markDelivered(sent.messageId) }
+    else if (state === 'uncertain') bench.mail.holdUncertain(sent.messageId, 'push outcome unknown')
+    else bench.mail.deadLetter(sent.messageId, 'push failed')
+  }
+  const taskMail = (taskId: string) => {
+    const message = bench.mail.enqueue({ teamId: teamId(), toKind: 'session', toId: 'dev', fromKind: 'human', fromSession: null, fromGroup: null,
+      originPath: world.repo, body: 'A note', taskId })
+    bench.mail.claim(message.id, 'dev')
+    bench.mail.markPushed(message.id, undefined, bench.taskService.store.get(taskId)!.revision)
+    bench.mail.markDelivered(message.id)
+  }
+  const pick = <T,>(random: () => number, options: readonly T[]): T => options[Math.floor(random() * options.length)]!
 
   // @covers: plan-supervision › A pending publication handoff is a named wait › A stale handoff waits on its requester
-  test('P6: seed 0x0A11CE06, 200 cases — attention, the supervision loader and task_get name the same next actor', async () => {
+  // @covers: plan-supervision › A pending publication handoff is a named wait › Publication ends the wait
+  test('P6: seed 0x0A11CE06, 200 cases — attention, the supervision loader and task_get derive pending next actors and published phases alike', async () => {
     const random = mulberry32(0x0A11CE06)
     const seen = new Set<string>()
     for (let index = 0; index < propertyCases(CASES); index++) {
-      for (const id of ['lead', 'lead2']) { bench.gone.delete(id); bench.records.set(id, { ...bench.records.get(id)!, archivedAt: null }) }
+      for (const id of ['lead', 'lead2', 'dev']) revive(id)
       for (const running of bench.executions.runningForTeam(teamId())) bench.executions.finishExecution(running.id, 'completed')
       const planId = await bench.approvedPlan()
       const executionId = bench.start(planId)
       const { taskId } = await bench.implementing(executionId, planId, new Date(T0).toISOString())
-      const owned = random() < 0.5
-      if (owned) bench.db.db.prepare('UPDATE team_tasks SET owner_session = ? WHERE id = ?').run('lead2', taskId)
+      if (index % 2 === 0) {
+        // Pending: one state and next actor in all three readers.
+        const owned = random() < 0.5
+        if (owned) bench.db.db.prepare('UPDATE team_tasks SET owner_session = ? WHERE id = ?').run('lead2', taskId)
+        const { handoff } = await bench.taskService.handoffs.request({ kind: 'agent', sessionId: 'lead' }, taskId, {
+          baseRevision: 1, direction: 'Prepared', rationale: 'why', notify: false, requestKey: `p6-${index}`,
+        })
+        if (random() < 0.5) await bench.taskService.publish(bench.human, taskId, { direction: 'Mine', rationale: 'own', notify: false, requestKey: `own-${index}` })
+        for (const id of ['lead', 'lead2']) if (random() < 0.4) archive(id)
+        const item = handoffAttentionItems(handoffAttentionFacts(manager() as never, teamId(), id => id).handoffs).find(entry => entry.link.handoffId === handoff.id)!
+        const [wait] = loaderWaits(planId)
+        if (wait?.kind !== 'owner-publication') throw new Error(`case ${index}: no owner-publication wait`)
+        const fromTaskGet = handoffRead(bench.taskService, bench.taskService.store.get(taskId)!).handoffs.find(entry => entry.id === handoff.id)!
+        seen.add(`${wait.state}:${wait.nextActor.kind}`)
+        expect([index, owned, wait.state, party(item.owner), fromTaskGet.state, named(fromTaskGet.nextActor!)])
+          .toEqual([index, owned, wait.state, named(wait.nextActor), wait.state, named(wait.nextActor)])
+        continue
+      }
+      // Published: the facts of one target phase, the rest random; Table W's
+      // independent row gives the item and the phase task_get must name, and
+      // the loader's S7 projection lists no owner-publication wait at all.
+      const target = HANDOFF_PHASES[(index >> 1) % HANDOFF_PHASES.length]!
       const { handoff } = await bench.taskService.handoffs.request({ kind: 'agent', sessionId: 'lead' }, taskId, {
         baseRevision: 1, direction: 'Prepared', rationale: 'why', notify: false, requestKey: `p6-${index}`,
       })
-      if (random() < 0.5) await bench.taskService.publish(bench.human, taskId, { direction: 'Mine', rationale: 'own', notify: false, requestKey: `own-${index}` })
-      for (const id of ['lead', 'lead2']) {
-        if (random() < 0.4) { bench.gone.add(id); bench.records.set(id, { ...bench.records.get(id)!, archivedAt: new Date().toISOString() }) }
+      await bench.taskService.handoffs.publish(bench.human, taskId, handoff.id, [])
+      const extra = pick(random, [[], ['failed'], ['queued'], ['failed', 'queued']] as HandoffNoticeState[][])
+      const facts: PublishedAxes = { closed: false, claimant: 'live', acked: false, delivered: false, notices: [], owns: true }
+      const write = (states: HandoffNoticeState[]) => {
+        for (const state of states) { notice(taskId, state); if (state === 'delivered') facts.delivered = true; else facts.notices.push(state) }
       }
-      const manager = { tasks: bench.taskService, results: { ownedByExecution: () => true } }
-      const item = handoffAttentionItems(handoffAttentionFacts(manager as never, teamId(), id => id).handoffs).find(entry => entry.link.handoffId === handoff.id)!
-      const api = derivePlanSupervision(bench.compose().reads, teamId(), planId, NOW)!.changes.find(change => change.change === 'api')!
-      const wait = [api.cause, ...api.alsoApplying].find(entry => entry.kind === 'owner-publication')
-      if (wait?.kind !== 'owner-publication') throw new Error(`case ${index}: no owner-publication wait`)
-      const actor = wait.nextActor
-      const named = (next: HandoffNextActor) => next.kind === 'human' ? 'human:' : next.kind === 'requester-group' ? `group:${next.group}` : `session:${next.sessionId}`
+      if (target === 'task-closed') {
+        write(extra)
+        if (random() < 0.5) { await bench.taskService.acknowledge({ kind: 'agent', sessionId: 'dev' }, taskId, 2); facts.acked = true }
+        await bench.taskService.setStatus(bench.human, taskId, 'cancelled')
+        facts.closed = true
+      } else if (target === 'acknowledged') {
+        write(extra)
+        await bench.taskService.acknowledge({ kind: 'agent', sessionId: 'dev' }, taskId, 2)
+        facts.acked = true
+        if (random() < 0.5) { archive('dev'); facts.claimant = 'gone' }
+      } else if (target === 'no-holder') {
+        write(extra)
+        archive('dev'); facts.claimant = 'gone'
+      } else if (target === 'delivered-awaiting-ack') {
+        write(extra)
+        if (random() < 0.5) write(['delivered'])
+        else { taskMail(taskId); facts.delivered = true }
+      } else if (target === 'notice-uncertain') write([...extra, 'uncertain'])
+      else if (target === 'notice-queued') write([...extra.filter(state => state !== 'queued'), 'queued'])
+      else if (target === 'notice-failed') write(['failed', ...(random() < 0.5 ? ['failed' as const] : [])])
+      const rows = W_PUBLISHED.filter(row => row.match(facts))
+      expect([index, rows.length]).toEqual([index, 1])
+      const [row] = rows
+      const items = shown(handoffFollowUpItems(handoffAttentionFacts(manager() as never, teamId(), id => id).handoffFollowUps)
+        .filter(entry => entry.impact?.taskId === taskId))
       const fromTaskGet = handoffRead(bench.taskService, bench.taskService.store.get(taskId)!).handoffs.find(entry => entry.id === handoff.id)!
-      seen.add(`${wait.state}:${actor.kind}`)
-      expect([index, owned, wait.state, party(item.owner), fromTaskGet.state, named(fromTaskGet.nextActor!)])
-        .toEqual([index, owned, wait.state, named(actor), wait.state, named(actor)])
+      seen.add(`published:${PHASE_OF_ROW[row!.id]}`)
+      expect([index, target, row!.id, fromTaskGet.state, fromTaskGet.phase, items, loaderWaits(planId)])
+        .toEqual([index, target, row!.id, 'published', PHASE_OF_ROW[row!.id], row!.expect ? [row!.expect] : [], []])
     }
-    expect([...seen].sort()).toEqual(['open:human', 'open:owner', 'stale:requester', 'stale:requester-group'])
+    expect([...seen].sort()).toEqual([...['open:human', 'open:owner', 'stale:requester', 'stale:requester-group'],
+      ...HANDOFF_PHASES.map(phase => `published:${phase}`)].sort())
   }, 600_000)
 })

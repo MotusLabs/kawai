@@ -219,7 +219,7 @@ function readInputs(reads: SupervisionReads, teamId: string, planId: string): Pl
         waitEndedAt: reads.waitEndedAt?.(execution.id, entry.change) ?? null,
         diagnosis: diagnosisOf(reads.db, diagnoses.open(execution.id, entry.change), row.taskId),
         ...revisionControlWaits(control, execution.id, entry.change),
-        // owner-publication-handoff D9: the task's pending handoff and its next actor.
+        // owner-publication-handoff D9: the task's pending handoff and its next actor; a published one ends the wait (S7).
         handoff: row.taskId === null ? null : pendingHandoffFact(reads.db, row.taskId, reads.runtime.live),
       }
     })
