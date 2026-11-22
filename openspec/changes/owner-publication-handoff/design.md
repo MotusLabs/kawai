@@ -632,11 +632,20 @@ Publish (the ordinary entry) axes: the canonical key `k` (ordinary,
 reserved prefix; raw input bare or padded); the publish intent; the existing
 `team-task-publish` checks (rationale, rights, ordinary key replay or
 mismatch, stale base); the observed draft identity against the stored
-linked draft; the linked handoff's state. Order: reserved prefix (after
-team scope, before the WS rationale guard), then the existing rationale
-and right checks, then the key replay or mismatch, then the observed
-identity, stored link and base (inside the publish transaction, before
-the draft discard), then the linked state.
+linked draft; the command's submitted base; the linked handoff's state.
+The submitted base (the numeric `baseRevision` of the typed WS command;
+an owner's `task_amend` keeps its existing optional base) and the stored
+draft's base are independent observations: U7 reads only the stored
+facts, an ordinary write compares the submitted base with the task's
+revision (T-stale or H44) and ignores the draft, and a draft write
+compares it with the stored draft's base (H38m), then the stored base
+with the task's (H38s). Order: reserved prefix (after team scope, before
+the WS rationale guard), then the existing rationale and right checks,
+then the key replay or mismatch, then, for a draft write, the observed
+identity and stored link, the submitted base against the stored draft's,
+and the stored base against the task's (inside the publish transaction,
+before the draft discard), then the linked state; for an ordinary write,
+the submitted base against the task's.
 
 | Id | First failing check, or the accepted case | Result |
 | --- | --- | --- |
@@ -650,10 +659,11 @@ the draft discard), then the linked state.
 | H33d | publish linked draft whose canonical key `k` starts with `handoff:` (bare or padded raw input) | refused before the rationale guard and before the draft or handoff is read; no revision; draft and handoff unchanged (H stays `open`) |
 | H17r | publish linked draft, the same ordinary key and payload already name its revision (a resend, also after its own draft was discarded) | that revision returned as today; nothing written; handoff unchanged |
 | H17m | publish linked draft, the ordinary key names a revision with a different payload or a different linked handoff | refused naming the first differing field, as today; nothing written |
-| H38s | publish linked draft, draft base no longer current (including after a prepared publish of the same handoff) | refused by the existing stale-base check; no second revision; handoff unchanged |
-| H17 | publish linked draft, observed identity, link and base verified, handoff `open` | revision N+1 with the edited fields and `handoff_id`; handoff `published` as edited with both hashes; one wakeup |
-| H38 | publish linked draft, base current, handoff declined, withdrawn, superseded or closed | published as an ordinary revision with no association; the ended handoff is unchanged (a superseding `open` handoff turns `stale` by D4) |
-| H44 | explicit ordinary publication (`fromDraft: false` chosen by the operator, or an owner's `task_amend`) while a replacement linked draft exists | published as today; the pending handoff turns `stale` (H20); the replacement draft is kept, not discarded |
+| H38m | publish linked draft, observed identity and link verified, submitted base differs from the stored draft's base | refused until the form refreshes, naming both bases; nothing written; the draft, its link and the handoff unchanged |
+| H38s | publish linked draft, submitted base equal to the stored draft's, which is no longer current (including after a prepared publish of the same handoff) | refused by the existing stale-base check; no second revision; handoff unchanged |
+| H17 | publish linked draft, observed identity and link verified, submitted and stored bases current, handoff `open` | revision N+1 with the edited fields and `handoff_id`; handoff `published` as edited with both hashes; one wakeup |
+| H38 | publish linked draft, submitted and stored bases current, handoff declined, withdrawn, superseded or closed | published as an ordinary revision with no association; the ended handoff is unchanged (a superseding `open` handoff turns `stale` by D4) |
+| H44 | explicit ordinary publication (`fromDraft: false` chosen by the operator, or an owner's `task_amend`) at the current submitted base while a linked draft exists, whatever the stored draft's base | published as today; the pending handoff turns `stale` (H20); the replacement draft is kept, not discarded |
 
 Declared products (the completeness test, U7). Load: caller × state ×
 draft × `replace` = 56 tuples, no claim (H36 28, H37 24, H18 1, H19 3).
@@ -664,11 +674,22 @@ behind) × the linked state = 336; U7 excludes 192, and H43 96, H42 24,
 H41 24 (a rebase onto the base it already has keeps the link, as a
 same-base save). Publish: key × raw × intent × rationale × right ×
 replay (new, same, different) × observed identity × the two U7 bases ×
-state = 8064; U7 excludes 4608 whatever the key, and 3456 are healthy.
-Rows the table names but does not number are the existing
-`team-task-publish` outcomes as today: the rationale guard, the right
-check, the ordinary replay and mismatch for `fromDraft: false`, and its
-stale base.
+the submitted base × state = 24192. The submitted base takes three
+representatives with the task at r2 and the stored draft at r2 (current)
+or r1 (behind): r2, r1 and r3, which realise every pair of its two
+relations (equal to the task's revision, equal to the stored draft's
+base) under each stored base. U7 excludes 13824 whatever the key or the
+submitted base, and 10368 are healthy: H44 72, T-stale 144, H43 144,
+H38m 48, H38s 14, H17 2, H38 8. Paired witnesses on one snapshot (H
+loaded at r1, then an explicit ordinary r2: H stale, the r1 draft kept)
+hold the payload, the stored draft and the intent fixed: ordinary at r1
+is T-stale and at r2 is H44 (r3; the draft, its link and H unchanged);
+draft at r1 is H38s and at r2 is H38m, each writing nothing. Reading the
+stored draft's base as the command's would call the second H44 T-stale
+and the H38m H38s. Rows the table names but does not number are the
+existing `team-task-publish` outcomes as today: the rationale guard, the
+right check, the ordinary replay and mismatch for `fromDraft: false`,
+and its stale base.
 
 Readouts and controls: each H-DRAFT row is driven through the real WS
 commands (`team-task-draft` save and rebase, `team-task-handoff-load-draft`,

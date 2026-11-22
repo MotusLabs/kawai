@@ -662,12 +662,32 @@ or property that would have caught it, and the source finding.
 - **Oracle that catches it.** Each declared partition is an entry of the
   classifier with its full axis product, its claims and its rows, and the
   test pins each product's size and row multiplicities from the design
-  (H-DRAFT load 56, save and rebase 336 with U7 192, publish 8064 with U7
-  4608), plus paired U7 witnesses whose excluded tuples match no row even
+  (H-DRAFT load 56, save and rebase 336 with U7 192, publish 24192 with U7
+  13824), plus paired U7 witnesses whose excluded tuples match no row even
   where the first check (the reserved prefix) would
-  (`src/server/__tests__/taskHandoffCompleteness.test.ts` › "publish: 8064
-  tuples, 3456 healthy and 4608 excluded {U7}, every row in check order").
+  (`src/server/__tests__/taskHandoffCompleteness.test.ts` › "publish: 24192
+  tuples, 10368 healthy and 13824 excluded {U7}, the submitted base apart
+  from the stored one, every row in check order").
 - **Source finding.** findings-c3e4ff8d F6 (owner-publication-handoff).
+
+### One observation standing for two inputs (findings-6ab63b52 F6)
+
+- **Hazard.** A classifier that reads a stored fact as the command's own
+  input (the stored draft's base as the publish command's base) has no
+  tuple for a lawful command that differs from it, so the product is
+  complete and every row matches while the service takes another path:
+  an ordinary publish at the current base, beside a draft left behind, is
+  called stale and the service publishes it.
+- **Oracle that catches it.** The command input is its own axis beside
+  the stored facts it is compared with, and paired witnesses on one
+  snapshot vary only that input through the real command, asserting the
+  classification equals the observed outcome and that the conflated
+  reading disagrees
+  (`src/server/__tests__/taskHandoffDraftBase.test.ts` › "paired
+  witnesses on one snapshot: ordinary r1 T-stale, linked r1 H38s, linked
+  r2 H38m write nothing; ordinary r2 is H44 with r3, the r1 draft and
+  stale H kept; the conflation misreads H44 and H38m").
+- **Source finding.** findings-6ab63b52 F6 (owner-publication-handoff).
 
 ### Properties sharing a name but not a generator (findings-c3e4ff8d F7)
 
