@@ -395,6 +395,43 @@ lookup is a different control, recorded under its own heading.
 - **Status.** equivalent; restored to the HEAD blob: yes
 - **Why equivalent.** A claim that throws before the key replay aborts the publish transaction, and the D2 arbiter's catch path (`TaskStore.publish`, `resolveKey` after the rollback) resolves the same key as its replay; a claim that does not throw is never acted on, because the replay returns before the claim's `within` runs. No input distinguishes the two orders, so no oracle can kill it.
 
+## Reruns against the tasks' further oracles
+
+The same edits as their rows above, run against the property tasks.md also cites. MU15b's and MU16b's P7 histories are rare: at the reduced profile only P2 and the W rows fail, so these two ran with `CI=true` (the declared 200 and 400 cases).
+
+### MU15 (failed before acknowledged) — P6
+
+- **Edit.** `src/shared/taskHandoffs.ts`: `if (facts.claimant !== null && (facts.acknowledgedRevision ?? 0) >= facts.publishedRevision) return 'acknowledged'` → `if (facts.notices.length > 0 && facts.notices.every(notice => notice.state === 'failed')) return 'notice-failed'⏎  if (facts.claimant !== null && (facts.acknowledgedRevision ?? 0) >= facts.publishedRevision) return 'acknowledged'`
+- **Pin.** HEAD `98981ba0d8c87840e9f7b024540719df00cacc2f`; `src/shared/taskHandoffs.ts` blob `6b06b7e4cd733472d303f79aacb85c55260dd3d7`
+- **Ran.** `src/server/__tests__/supervisionOwnerPublicationProperties.test.ts` (exit 1)
+- **Killed by** (1): `P6: seed 0x0A11CE06, 200 cases — attention, the supervision loader and task_get derive pending next actors and published phases alike`
+- **Status.** killed; restored to the HEAD blob: yes
+
+### MU15 (task-closed omitted) — P6
+
+- **Edit.** `src/shared/taskHandoffs.ts`: `if (facts.taskClosed) return 'task-closed'⏎` → ``
+- **Pin.** HEAD `98981ba0d8c87840e9f7b024540719df00cacc2f`; `src/shared/taskHandoffs.ts` blob `6b06b7e4cd733472d303f79aacb85c55260dd3d7`
+- **Ran.** `src/server/__tests__/supervisionOwnerPublicationProperties.test.ts` (exit 1)
+- **Killed by** (1): `P6: seed 0x0A11CE06, 200 cases — attention, the supervision loader and task_get derive pending next actors and published phases alike`
+- **Status.** killed; restored to the HEAD blob: yes
+
+### MU15b — P7b, full case count
+
+- **Edit.** `src/shared/taskHandoffs.ts`: `if ((facts.deliveredRevision ?? 0) >= facts.publishedRevision) return 'delivered-awaiting-ack'⏎  if (facts.notices.some(notice => notice.state === 'uncertain')) return 'notice-uncertain'⏎  if (facts.notices.some(notice => notice.state === 'queued')) return 'notice-queued'⏎` → `if (facts.notices.some(notice => notice.state === 'uncertain')) return 'notice-uncertain'⏎  if (facts.notices.some(notice => notice.state === 'queued')) return 'notice-queued'⏎  if (facts.notices.some(notice => notice.state === 'failed')) return 'notice-failed'⏎  if ((facts.deliveredRevision ?? 0) >= facts.publishedRevision) return 'delivered-awaiting-ack'⏎`
+- **Pin.** HEAD `98981ba0d8c87840e9f7b024540719df00cacc2f`; `src/shared/taskHandoffs.ts` blob `6b06b7e4cd733472d303f79aacb85c55260dd3d7`
+- **Ran.** `src/server/__tests__/taskHandoffAttentionProperties.test.ts` (exit 1, CI=true)
+- **Killed by** (2): `P2: seed 0x0A11CE02, 400 cases — after every command the items are exactly Table W's prediction from the rows`; `P7: seed 0x0A11CE07, 200 cases — suppression over every history (P7a) and notice parity with the real notify (P7b)`
+- **Status.** killed; restored to the HEAD blob: yes
+
+### MU16b — P7b, full case count
+
+- **Edit.** `src/server/team/taskHandoffFacts.ts`: `AND revision >= ? ORDER BY created_at, rowid`` → `AND revision >= ? ORDER BY created_at DESC, rowid DESC LIMIT 1``
+- **Pin.** HEAD `98981ba0d8c87840e9f7b024540719df00cacc2f`; `src/server/team/taskHandoffFacts.ts` blob `ee8748795afe196776f911fb4789de1fb3b3e485`
+- **Ran.** `src/server/__tests__/taskHandoffAttentionProperties.test.ts` (exit 1, CI=true)
+- **Killed by** (2): `P2: seed 0x0A11CE02, 400 cases — after every command the items are exactly Table W's prediction from the rows`; `P7: seed 0x0A11CE07, 200 cases — suppression over every history (P7a) and notice parity with the real notify (P7b)`
+- **Status.** killed; restored to the HEAD blob: yes
+
+
 ## Fix controls for findings-c3e4ff8d (F6–F9)
 
 Applied once each at the head named, restored by copy and re-hashed.
