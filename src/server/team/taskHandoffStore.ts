@@ -67,6 +67,12 @@ export class TaskHandoffStore {
     return row ? handoffOf(row) : null
   }
 
+  /** The task's newest handoffs, newest first (the human's panel, D11). */
+  forTask(taskId: string, limit = 10): TaskHandoff[] {
+    const rows = this.db.prepare('SELECT id FROM team_task_handoffs WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(taskId, limit) as Array<{ id: string }>
+    return rows.map(row => this.get(row.id)!)
+  }
+
   /** The task's one open or stale handoff (U2), or null. */
   pendingOf(taskId: string): TaskHandoff | null {
     const row = this.db.prepare("SELECT * FROM team_task_handoffs WHERE task_id = ? AND state IN ('open', 'stale')").get(taskId) as Record<string, unknown> | null

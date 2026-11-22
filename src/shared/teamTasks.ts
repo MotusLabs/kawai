@@ -1,6 +1,7 @@
 // SDK-free team task records (team-tasks design D1) shared by server and
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
+import type { TaskHandoff } from './taskHandoffs'
 import type { ImplementationContract } from './implementationContract'
 import type { LedgerItem, LedgerRow } from './findingsLedger'
 import type { ActingParty, TeamActor, TeamMessage } from './team'
@@ -621,6 +622,8 @@ export interface TaskJournalChunk { entryId: string; offsetBytes: number; totalB
  */
 export interface HumanTaskDetail extends TeamTaskDetail {
   draft?: TaskDraft | null
+  /** The task's newest publication handoffs, newest first (owner-publication-handoff D11). */
+  handoffs?: TaskHandoff[]
   /** What **Release worktree and hand off** would do now (task-results-handoffs D7). */
   release?: TaskReleasePreview
   /** A running execution owns the task (plan-execution D7): the view offers neither Accept result nor Mark done. */

@@ -61,7 +61,8 @@ export class TaskConnections {
       const human = store.humanDetail(taskId)
       const release = human ? this.manager.results?.release?.preview(taskId) : undefined
       const executionOwned = this.manager.results?.ownedByExecution(taskId) === true
-      const detail = human && { ...human, ...(release ? { release } : {}), ...(executionOwned ? { executionOwned } : {}) }
+      const handoffs = human ? this.manager.tasks.handoffs.store.forTask(taskId) : []
+      const detail = human && { ...human, ...(release ? { release } : {}), ...(executionOwned ? { executionOwned } : {}), ...(handoffs.length ? { handoffs } : {}) }
       if (detail) connection.send({
         type: 'team-task-detail', teamPath, teamId: subscription.teamId, detail,
         // Its messages name participants; the directory keeps a killed one's.
