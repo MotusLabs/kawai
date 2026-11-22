@@ -2,11 +2,14 @@
 // composition: a Lead chat's own kawai-team server records a publication
 // request for a Kawai task whose holder claimed it; the workspace snapshot
 // lists the human-owned W2 item; an ordinary publish under a reserved
-// `handoff:` key (bare or padded, with a blank rationale) is refused first and
-// writes nothing; the human's `team-task-handoff-publish` publishes revision 2
-// with the handoff's association, one notice to the holder and one wakeup to
-// the requester; W2 clears; a resend replays with every row unchanged; and a
-// request on the old base is refused naming the current revision.
+// `handoff:` key (bare or padded, with a blank rationale, and from a persisted
+// draft linked to the handoff) is refused first, writes nothing and leaves W2
+// in a fresh snapshot; the human's `team-task-handoff-publish` publishes
+// revision 2 with the handoff's association, and its one notice and one
+// requester wakeup are delivered to the holder and the Lead; W2 clears; a
+// resend replays with every row unchanged; a request on the old base is
+// refused naming the current revision; and a padded ordinary key publishes
+// under its one canonical value, which a differently padded resend replays.
 import { expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -25,6 +28,7 @@ import { SYSTEM_ACTOR } from '../../shared/team'
 import { handleMessage, type MessageRouterContext } from '../ws/messageRouter'
 import type { ServerWebSocket } from 'bun'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
+import type { AttentionItem } from '../../shared/teamWorkspace'
 
 type Registered = Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ content: Array<{ text: string }>; isError?: boolean }> }>
 type Workspace = Extract<ServerMessage, { type: 'team-workspace-snapshot' | 'team-workspace' }>
@@ -50,7 +54,9 @@ function git(args: string[], cwd?: string) {
 // @covers: task-publication-handoffs › Each disposition wakes the next actor once › A replay sends nothing more
 // @covers: task-publication-handoffs › A handoff is published at most once › A handoff key is refused before other checks
 // @covers: task-publication-handoffs › A request is validated before it is recorded › A stale base is refused
-test('a Lead requests a publication, W2 asks the human, a reserved key is refused, the human publishes once with one notice and one wakeup, and a resend replays', async () => {
+// @covers: task-publication-handoffs › A handoff is published at most once › Surrounding whitespace does not hide a handoff key
+// @covers: task-publication-handoffs › A handoff is published at most once › A padded ordinary key works as before
+test('a Lead requests a publication, W2 asks the human, a reserved key is refused with and without a linked draft, the human publishes once with one delivered notice and wakeup, and resends replay', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-handoff-publish-')))
   const repo = path.join(root, 'repo')
   git(['init', '-q', repo])
@@ -106,6 +112,12 @@ test('a Lead requests a publication, W2 asks the human, a reserved key is refuse
     await waitFor(() => !!answer(message.requestId), `the answer to ${message.type}`)
     return answer(message.requestId)
   }
+  // A workspace open through the same router; resolves on a snapshot pushed after it.
+  const openWorkspace = async () => {
+    const seen = pushed.length
+    handleMessage(router, {} as ServerWebSocket<never>, JSON.stringify({ type: 'team-workspace-open', teamPath: repo }))
+    await waitFor(() => pushed.slice(seen).some(message => message.type === 'team-workspace-snapshot' || message.type === 'team-workspace'), 'a fresh workspace snapshot')
+  }
   const handoffItems = () => {
     const latest = pushed.filter((message): message is Workspace => message.type === 'team-workspace-snapshot' || message.type === 'team-workspace').at(-1)
     return latest?.attention.filter(item => item.kind === 'publication-handoff') ?? []
@@ -117,7 +129,8 @@ test('a Lead requests a publication, W2 asks the human, a reserved key is refuse
     wakeups: rows('SELECT * FROM team_task_handoff_wakeups ORDER BY handoff_id, transition'),
     revisions: rows('SELECT * FROM team_task_revisions ORDER BY task_id, revision'),
     notices: rows('SELECT * FROM team_task_notifications ORDER BY id'),
-    messages: rows('SELECT id FROM team_messages ORDER BY id'),
+    messages: rows('SELECT * FROM team_messages ORDER BY id'),
+    drafts: rows('SELECT * FROM team_task_drafts ORDER BY task_id'),
   })
   try {
     await manager.whenRestored()
@@ -144,8 +157,7 @@ test('a Lead requests a publication, W2 asks the human, a reserved key is refuse
       const reply = await tools[name]!.handler(input, {})
       return { error: reply.isError ? reply.content[0]!.text : null, text: reply.content[0]!.text }
     }
-    await send({ type: 'team-workspace-open', teamPath: repo })
-    await connections.flushWorkspace()
+    await openWorkspace()
     expect(handoffItems()).toEqual([])
 
     // 1. The Lead requests a publication of revision 1 (H1): open, task unchanged.
@@ -159,22 +171,39 @@ test('a Lead requests a publication, W2 asks the human, a reserved key is refuse
 
     // 2. W2: the human owns the item, with the publish action and the handoff link.
     await connections.flushWorkspace()
-    expect(handoffItems()).toEqual([{
+    const w2: AttentionItem[] = [{
       id: `publication-handoff:${handoffId}`, kind: 'publication-handoff',
       cause: `Prepared revision on revision 1 awaits publication (requested by ${lead.session.name})`,
       owner: { kind: 'human', id: null, label: 'Human' }, impact: { taskId: task.id, taskTitle: 'Export CSV' },
       nextAction: 'Publish prepared revision', link: { kind: 'task', id: task.id, handoffId }, requiresHuman: true,
-    }])
+    }]
+    expect(handoffItems()).toEqual(w2)
 
-    // 3. An ordinary publish under the reserved key, bare or padded, is refused
-    // before the blank-rationale guard; nothing is written and W2 stays.
+    // 3. The human's saved draft, linked to H (the load command is a later
+    // wave, so only the link columns are seeded on the real saved row).
+    expect((await routed({ type: 'team-task-draft', teamPath: repo, requestId: 'draft', taskId: task.id, action: 'save', baseRevision: 1, direction: 'Edited from the handoff', rationale: 'edit' })).error).toBeUndefined()
+    db.db.prepare('UPDATE team_task_drafts SET handoff_id = ?, lineage_id = ? WHERE task_id = ?').run(handoffId, 'lineage-1', task.id)
+    expect(rows(`SELECT direction, handoff_id, lineage_id FROM team_task_drafts WHERE task_id = '${task.id}'`)).toEqual([{ direction: 'Edited from the handoff', handoff_id: handoffId, lineage_id: 'lineage-1' }])
+
+    // An ordinary publish under the reserved key, bare or padded, without the
+    // draft (H33) and from the linked draft (H33d), is refused before the
+    // blank-rationale requirement; nothing is written, and a fresh snapshot
+    // still lists W2.
     const before = snapshot()
-    for (const [index, key] of [`handoff:${handoffId}`, ` handoff:${handoffId}`, `\thandoff:${handoffId}\n`, `handoff:${handoffId}  `].entries()) {
-      const refused = await routed({ type: 'team-task-publish', teamPath: repo, requestId: `reserved-${index}`, taskId: task.id, baseRevision: 1, requestKey: key, direction: 'Other', rationale: ' ', notify: false })
-      expect(refused.error).toBe(RESERVED_KEY_REFUSAL)
+    const reserved = [`handoff:${handoffId}`, ` handoff:${handoffId}`, `\thandoff:${handoffId}\n`, `handoff:${handoffId}  `]
+    for (const fromDraft of [false, true]) {
+      for (const [index, key] of reserved.entries()) {
+        const refused = await routed({
+          type: 'team-task-publish', teamPath: repo, requestId: `reserved-${fromDraft}-${index}`, taskId: task.id, baseRevision: 1, requestKey: key,
+          direction: fromDraft ? 'Edited from the handoff' : 'Other', rationale: ' ', notify: false, ...(fromDraft ? { fromDraft: true } : {}),
+        })
+        expect(refused.error).toBe(RESERVED_KEY_REFUSAL)
+      }
     }
     expect(snapshot()).toEqual(before)
     expect(manager.tasks.handoffs.store.get(handoffId)!.state).toBe('open')
+    await openWorkspace()
+    expect(handoffItems()).toEqual(w2)
 
     // 4. The human publishes the prepared revision (H12).
     const publish = await routed({ type: 'team-task-handoff-publish', teamPath: repo, requestId: 'publish', taskId: task.id, handoffId, requestKey: 'publish-1' })
@@ -185,7 +214,8 @@ test('a Lead requests a publication, W2 asks the human, a reserved key is refuse
     expect(rows(`SELECT revision, request_key, handoff_id FROM team_task_revisions WHERE task_id = '${task.id}' AND revision = 2`)).toEqual([{ revision: 2, request_key: `handoff:${handoffId}`, handoff_id: handoffId }])
     expect(manager.tasks.handoffs.store.get(handoffId)).toMatchObject({ state: 'published', publishedRevision: 2, stateActor: { kind: 'human', sessionId: null } })
     // One notice, to the claimed holder.
-    expect(rows('SELECT recipient_session, revision FROM team_task_notifications')).toEqual([{ recipient_session: holder, revision: 2 }])
+    const notices = rows('SELECT recipient_session, revision, message_id FROM team_task_notifications') as Array<{ recipient_session: string; revision: number; message_id: string }>
+    expect(notices.map(row => [row.recipient_session, row.revision])).toEqual([[holder, 2]])
     // One wakeup, direct to the live requester, with no task attachment.
     const wakeups = rows('SELECT transition, message_id FROM team_task_handoff_wakeups') as Array<{ transition: string; message_id: string }>
     expect(wakeups.map(row => row.transition)).toEqual(['published'])
@@ -193,6 +223,13 @@ test('a Lead requests a publication, W2 asks the human, a reserved key is refuse
     expect([wakeup.toKind, wakeup.toId, wakeup.taskId ?? null, wakeup.tags]).toEqual(['session', lead.session.id, null, ['publication-handoff', 'handoff-published']])
     expect(wakeup.body).toContain(handoffId)
     expect(wakeup.body).toContain('revision 2')
+    // Both reach their recipients: the dispatcher delivers each to that session
+    // (delivery is confirmed by the recipient's transcript carrying the id).
+    const delivered = (id: string) => manager.mailbox.store.get(id)?.state === 'delivered'
+    await waitFor(() => delivered(notices[0]!.message_id) && delivered(wakeup.id), 'the notice and the wakeup delivered')
+    expect([notices[0]!.message_id, wakeup.id].map(id => manager.mailbox.store.get(id)!.claimedBy)).toEqual([holder, lead.session.id])
+    // The linked draft is not this publication's: it stays.
+    expect(rows(`SELECT handoff_id FROM team_task_drafts WHERE task_id = '${task.id}'`)).toEqual([{ handoff_id: handoffId }])
 
     // 5. W2 clears.
     await connections.flushWorkspace()
@@ -208,6 +245,19 @@ test('a Lead requests a publication, W2 asks the human, a reserved key is refuse
     const stale = await call('task_request_publication', { ...request, request_key: 'fix-again' })
     expect(stale.error).toContain('current revision is 2')
     expect(snapshot()).toEqual(published)
+    // Nothing more about H ever reached either recipient.
+    const since = [manager.mailbox.store.get(notices[0]!.message_id)!.createdAt, wakeup.createdAt].sort()[0]
+    expect(rows(`SELECT id FROM team_messages WHERE to_id IN ('${holder}', '${lead.session.id}') AND created_at >= '${since}' ORDER BY id`))
+      .toEqual([notices[0]!.message_id, wakeup.id].sort().map(id => ({ id })))
+
+    // 8. The ordinary entry, through the router: a blank rationale is still
+    // refused, and a padded key publishes under its one canonical value, which
+    // a differently padded resend replays.
+    const ordinary = { type: 'team-task-publish' as const, teamPath: repo, taskId: task.id, baseRevision: 2, direction: 'CSV v3', rationale: 'Ordinary edit', notify: false }
+    expect((await routed({ ...ordinary, requestId: 'blank', requestKey: 'plain-1', rationale: '  ' })).error).toBe('A publication needs a rationale')
+    expect(await routed({ ...ordinary, requestId: 'plain', requestKey: '  plain-1  ' })).toMatchObject({ revision: 3, replay: false })
+    expect(await routed({ ...ordinary, requestId: 'plain-resend', requestKey: '\tplain-1' })).toMatchObject({ revision: 3, replay: true })
+    expect(rows(`SELECT revision, request_key FROM team_task_revisions WHERE task_id = '${task.id}' AND revision = 3`)).toEqual([{ revision: 3, request_key: 'plain-1' }])
   } finally {
     manager.shutdown()
     db.close()

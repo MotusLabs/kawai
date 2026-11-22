@@ -13,8 +13,7 @@ import { unknownTeamError } from '../../shared/team'
 import type { TeamTask } from '../../shared/teamTasks'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
-import { canonicalRequestKey, isReservedRequestKey } from '../../shared/taskHandoffs'
-import { PREPARED_PAYLOAD_FIELDS, RESERVED_KEY_REFUSAL } from './taskHandoffService'
+import { PREPARED_PAYLOAD_FIELDS } from './taskHandoffService'
 
 type TaskClientMessage = Extract<ClientMessage, { type: `team-task${string}` }>
 
@@ -152,11 +151,12 @@ export class TaskConnections {
           task = tasks.store.get(message.taskId) ?? undefined
           break
         case 'team-task-publish': {
-          // A reserved key is refused before any other check (owner-publication-handoff D3, H33).
-          if (isReservedRequestKey(canonicalRequestKey(message.requestKey))) throw new Error(RESERVED_KEY_REFUSAL)
-          // The human form requires a rationale (Q6); the store keeps it optional.
-          if (!message.rationale.trim()) throw new Error('A publication needs a rationale')
+          // The ordinary entry computes the canonical key once and refuses a
+          // reserved one before the human form's rationale requirement (Q6) and
+          // every other check (owner-publication-handoff D3, H33); the store
+          // keeps the rationale optional for agents.
           const outcome = await tasks.publish(caller, message.taskId, {
+            requireRationale: true,
             direction: message.direction, acceptance: message.acceptance ?? null, rationale: message.rationale,
             ...(message.contract !== undefined ? { contract: message.contract } : {}),
             baseRevision: message.baseRevision, requestKey: message.requestKey, notify: message.notify,

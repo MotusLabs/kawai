@@ -77,6 +77,8 @@ export interface TaskPublishInput extends TaskAmendInput {
   requestKey?: string
   /** The human published their saved draft: it is discarded with the publication (D2). */
   fromDraft?: boolean
+  /** The human form's rationale requirement (Q6), checked right after the reserved-key check. */
+  requireRationale?: boolean
 }
 
 /**
@@ -251,6 +253,7 @@ export class TaskService {
   async publish(caller: TaskCaller, taskId: string, input: TaskPublishInput, link?: PublicationLink): Promise<PublishOutcome> {
     const requestKey = link ? link.requestKey : canonicalRequestKey(input.requestKey)
     if (!link && isReservedRequestKey(requestKey)) throw new Error(RESERVED_KEY_REFUSAL)
+    if (input.requireRationale && !input.rationale?.trim()) throw new Error('A publication needs a rationale')
     const { team, actor } = await this.revisionPublisher(caller)
     const task = this.sameTeamTask(team, taskId)
     if (actor.kind === 'agent' && taskOwner(task) !== actor.sessionId) {
