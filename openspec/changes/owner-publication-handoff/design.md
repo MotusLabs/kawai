@@ -655,6 +655,21 @@ the draft discard), then the linked state.
 | H38 | publish linked draft, base current, handoff declined, withdrawn, superseded or closed | published as an ordinary revision with no association; the ended handoff is unchanged (a superseding `open` handoff turns `stale` by D4) |
 | H44 | explicit ordinary publication (`fromDraft: false` chosen by the operator, or an owner's `task_amend`) while a replacement linked draft exists | published as today; the pending handoff turns `stale` (H20); the replacement draft is kept, not discarded |
 
+Declared products (the completeness test, U7). Load: caller × state ×
+draft × `replace` = 56 tuples, no claim (H36 28, H37 24, H18 1, H19 3).
+Save and rebase observe the stored linked draft as U7 reads it: command
+(save, rebase) × observed identity × base × the draft's base against the
+handoff's (same, differs) × against the task's revision (current,
+behind) × the linked state = 336; U7 excludes 192, and H43 96, H42 24,
+H41 24 (a rebase onto the base it already has keeps the link, as a
+same-base save). Publish: key × raw × intent × rationale × right ×
+replay (new, same, different) × observed identity × the two U7 bases ×
+state = 8064; U7 excludes 4608 whatever the key, and 3456 are healthy.
+Rows the table names but does not number are the existing
+`team-task-publish` outcomes as today: the rationale guard, the right
+check, the ordinary replay and mismatch for `fromDraft: false`, and its
+stale base.
+
 Readouts and controls: each H-DRAFT row is driven through the real WS
 commands (`team-task-draft` save and rebase, `team-task-handoff-load-draft`,
 `team-task-publish`) and read back as the stored draft (text, base,

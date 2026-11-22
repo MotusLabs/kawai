@@ -4,14 +4,15 @@
 // observations — and its rows as independent predicates in check order. A
 // tuple whose reason set is empty must match exactly one row; a tuple with
 // a nonempty set matches none and is one excluded classification keeping
-// every reason. The DF fixtures are observed from a database snapshot into
+// every reason. H-DRAFT's three partitions evaluate U7 over the stored
+// linked draft (`observeDraft`). The DF fixtures are observed from a database snapshot into
 // the same tuples (`observeRestart`, `observePublish`), so a seeded state is
 // classified exactly as the enumeration classifies it.
 import type { Database } from 'bun:sqlite'
 import { HANDOFF_STATES, preparedKey } from '../../../shared/taskHandoffs'
 
 export type Tuple = Record<string, string>
-export type Reason = 'U1' | 'U3' | 'U5' | 'U6'
+export type Reason = 'U1' | 'U3' | 'U5' | 'U6' | 'U7'
 export interface Row { id: string; match: (tuple: Tuple) => boolean }
 export interface Claim { id: Reason; reads: readonly string[]; holds: (tuple: Tuple) => boolean }
 export interface Partition { name: string; axes: Record<string, readonly string[]>; claims: Claim[]; rows: Row[] }
@@ -131,7 +132,78 @@ export const H_RESTART: Partition = {
   ],
 }
 
-export const PARTITIONS = [H_REQ, H_PUB, H_OTHER, H_SETTLE, H_CLOSE, H_NEUTRAL, H_RESTART]
+// H-DRAFT (design "H-DRAFT", U7): the load, the form's save and rebase, and
+// the ordinary entry's publish against a stored linked draft. The save and
+// publish partitions observe the stored linked draft as U7 reads it: its base
+// against the handoff's base (`draftBase`), its base against the task's
+// revision (`draftRevision`) and the linked handoff's state. `T-*` rows are
+// the existing `team-task-publish` outcomes the table names but does not
+// number (rationale, right, ordinary replay and mismatch, stale base), as today.
+const LINK_ENDED = ['declined', 'withdrawn', 'superseded', 'closed']
+const U7: Claim = {
+  id: 'U7', reads: ['draftBase', 'draftRevision', 'state'],
+  holds: t => t.draftBase === 'differs' || (t.draftRevision === 'current' && (t.state === 'stale' || t.state === 'published')),
+}
+const linkHealthy = (t: Tuple) => !U7.holds(t)
+
+export const H_DRAFT_LOAD: Partition = {
+  name: 'H-DRAFT load',
+  axes: { caller: ['human', 'agent'], state: STATES, draft: ['none', 'exists'], replace: ['false', 'true'] },
+  claims: [],
+  rows: [
+    { id: 'H36', match: t => t.caller === 'agent' },
+    { id: 'H37', match: t => t.caller === 'human' && t.state !== 'open' },
+    { id: 'H18', match: t => t.caller === 'human' && t.state === 'open' && t.draft === 'exists' && t.replace === 'false' },
+    { id: 'H19', match: t => t.caller === 'human' && t.state === 'open' && (t.draft === 'none' || t.replace === 'true') },
+  ],
+}
+
+export const H_DRAFT_SAVE: Partition = {
+  name: 'H-DRAFT save and rebase',
+  axes: {
+    command: ['save', 'rebase'], observed: ['stored', 'other', 'none'], base: ['unchanged', 'moved'],
+    draftBase: ['same', 'differs'], draftRevision: ['current', 'behind'], state: STATES,
+  },
+  claims: [U7],
+  rows: [
+    { id: 'H43', match: t => linkHealthy(t) && t.observed !== 'stored' },
+    { id: 'H42', match: t => linkHealthy(t) && t.observed === 'stored' && t.base === 'moved' },
+    // A rebase onto the base it already has keeps the link as a same-base save does (`TaskDrafts.rebase`).
+    { id: 'H41', match: t => linkHealthy(t) && t.observed === 'stored' && t.base === 'unchanged' },
+  ],
+}
+
+export const H_DRAFT_PUBLISH: Partition = {
+  name: 'H-DRAFT publish',
+  axes: {
+    key: ['ordinary', 'reserved'], raw: ['bare', 'padded'], intent: ['draft', 'ordinary'],
+    rationale: ['given', 'missing'], right: ['ok', 'missing'], replay: ['new', 'same', 'different'],
+    observed: ['stored', 'other', 'none'], draftBase: ['same', 'differs'], draftRevision: ['current', 'behind'], state: STATES,
+  },
+  claims: [U7],
+  rows: [
+    { id: 'H33d', match: t => linkHealthy(t) && t.key === 'reserved' && t.intent === 'draft' },
+    { id: 'H33', match: t => linkHealthy(t) && t.key === 'reserved' && t.intent === 'ordinary' },
+    { id: 'T-rationale', match: t => linkHealthy(t) && t.key === 'ordinary' && t.rationale === 'missing' },
+    { id: 'T-right', match: t => linkHealthy(t) && t.key === 'ordinary' && t.rationale === 'given' && t.right === 'missing' },
+    { id: 'H17r', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'same' && t.intent === 'draft' },
+    { id: 'T-replay', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'same' && t.intent === 'ordinary' },
+    { id: 'H17m', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'different' && t.intent === 'draft' },
+    { id: 'T-mismatch', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'different' && t.intent === 'ordinary' },
+    { id: 'H43', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed !== 'stored' },
+    { id: 'H38s', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && t.draftRevision === 'behind' },
+    { id: 'H17', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && t.draftRevision === 'current' && t.state === 'open' },
+    { id: 'H38', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && t.draftRevision === 'current' && LINK_ENDED.includes(t.state!) },
+    { id: 'T-stale', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'new' && t.intent === 'ordinary' && t.draftRevision === 'behind' },
+    { id: 'H44', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'new' && t.intent === 'ordinary' && t.draftRevision === 'current' },
+  ],
+}
+/** Past the reserved prefix, the rationale guard and the right check. */
+function ordinaryEntry(t: Tuple) { return t.key === 'ordinary' && t.rationale === 'given' && t.right === 'ok' }
+/** A draft publish past the key replay: the identity, link and base checks inside the publish transaction, then the linked state. */
+function newDraftWrite(t: Tuple) { return ordinaryEntry(t) && t.replay === 'new' && t.intent === 'draft' }
+
+export const PARTITIONS = [H_REQ, H_PUB, H_OTHER, H_SETTLE, H_CLOSE, H_NEUTRAL, H_RESTART, H_DRAFT_LOAD, H_DRAFT_SAVE, H_DRAFT_PUBLISH]
 
 export function product(partition: Partition): Tuple[] {
   return Object.entries(partition.axes).reduce<Tuple[]>(
@@ -178,4 +250,18 @@ export function observePublish(db: Database, handoffId: string, caller: { right:
     .get(handoff.task_id, preparedKey(handoffId), handoffId)
   const facts = !associated ? (orphan ? 'R1' : 'R0') : associated.request_key === preparedKey(handoffId) ? 'R2' : orphan ? 'R4' : 'R3'
   return { revisionFacts: facts, ...caller, state: handoff.state }
+}
+
+/** U7's observations of the task's stored linked draft and its handoff, read from one snapshot; null for an unlinked draft. */
+export function observeDraft(db: Database, taskId: string): Tuple | null {
+  return db.transaction(() => {
+    const draft = db.prepare('SELECT base_revision, handoff_id FROM team_task_drafts WHERE task_id = ? AND handoff_id IS NOT NULL AND lineage_id IS NOT NULL').get(taskId) as { base_revision: number; handoff_id: string } | null
+    if (!draft) return null
+    const handoff = db.prepare('SELECT base_revision, state FROM team_task_handoffs WHERE id = ?').get(draft.handoff_id) as { base_revision: number; state: string }
+    const task = db.prepare('SELECT revision FROM team_tasks WHERE id = ?').get(taskId) as { revision: number }
+    return {
+      draftBase: draft.base_revision === handoff.base_revision ? 'same' : 'differs',
+      draftRevision: draft.base_revision === task.revision ? 'current' : 'behind', state: handoff.state,
+    }
+  })()
 }

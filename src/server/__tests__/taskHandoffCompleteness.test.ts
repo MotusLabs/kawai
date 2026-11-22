@@ -6,12 +6,13 @@
 // their row multiplicities, the paired witnesses of H-PUB and H-RESTART,
 // H29's tolerated (stale, current) tuple reported apart, the DF fixtures'
 // reason sets, and the U fact-to-observation table (each claim reads only
-// its partition's declared observations). H-DRAFT's rows join with the
-// draft wave (tasks 4.1's H-DRAFT half), which has not landed yet.
+// its partition's declared observations), and H-DRAFT's load, save and
+// rebase, and publish products with U7 kept whole over the stored linked
+// draft (the WS row tests in taskHandoffDrafts.test.ts drive each row).
 import { describe, expect, test } from 'bun:test'
 import { schemaCopy } from './schemaDb'
 import {
-  H_PUB, H_RESTART, PARTITIONS, classify, observePublish, product, type Reason, type Tuple,
+  H_DRAFT_LOAD, H_DRAFT_PUBLISH, H_DRAFT_SAVE, H_PUB, H_RESTART, PARTITIONS, classify, observeDraft, observePublish, product, type Partition, type Reason, type Tuple,
 } from './helpers/handoffClassifier'
 import { preparedKey } from '../../shared/taskHandoffs'
 
@@ -117,5 +118,88 @@ describe('H-RESTART', () => {
       ['DF5o', restart(true, true, 'closed', 'behind', 'open'), ['U1', 'U3', 'U5', 'U6']],
     ]
     for (const [id, tuple, reasons] of cases) expect({ id, result: classify(H_RESTART, tuple) }).toEqual({ id, result: { kind: 'excluded', reasons: reasons as Reason[] } })
+  })
+})
+
+const tally = (partition: Partition) => product(partition).map(tuple => classify(partition, tuple)).reduce<Record<string, number>>((counts, result) => {
+  const key = result.kind === 'healthy' ? result.row : result.kind === 'excluded' ? `excluded ${result.reasons.join('+')}` : result.kind
+  return { ...counts, [key]: (counts[key] ?? 0) + 1 }
+}, {})
+
+describe('H-DRAFT', () => {
+  test('load: 56 tuples, all healthy; H36 28, H37 24, H18 1, H19 3', () => {
+    expect(tally(H_DRAFT_LOAD)).toEqual({ H36: 28, H37: 24, H18: 1, H19: 3 })
+  })
+
+  test('save and rebase: 336 tuples, 144 healthy and 192 excluded {U7}; H43 96, H42 24, H41 24', () => {
+    expect(tally(H_DRAFT_SAVE)).toEqual({ H43: 96, H42: 24, H41: 24, 'excluded U7': 192 })
+  })
+
+  test('publish: 8064 tuples, 3456 healthy and 4608 excluded {U7}, every row in check order', () => {
+    expect(tally(H_DRAFT_PUBLISH)).toEqual({
+      H33d: 864, H33: 864, 'T-rationale': 864, 'T-right': 432, H17r: 72, 'T-replay': 72, H17m: 72, 'T-mismatch': 72,
+      H43: 48, H38s: 14, H17: 2, H38: 8, 'T-stale': 42, H44: 30, 'excluded U7': 4608,
+    })
+  })
+
+  test('U7 witnesses: a linked draft off its handoff\'s base, or current while H is stale or published, is excluded under every command; the legal neighbours are rows', () => {
+    const save = { command: 'save', observed: 'stored', base: 'unchanged' }
+    const publish = { key: 'ordinary', raw: 'bare', intent: 'draft', rationale: 'given', right: 'ok', replay: 'new', observed: 'stored' }
+    for (const link of [
+      { draftBase: 'differs', draftRevision: 'current', state: 'open' }, { draftBase: 'same', draftRevision: 'current', state: 'stale' },
+      { draftBase: 'same', draftRevision: 'current', state: 'published' }, { draftBase: 'differs', draftRevision: 'behind', state: 'published' },
+    ]) {
+      expect([link, classify(H_DRAFT_SAVE, { ...save, ...link })]).toEqual([link, { kind: 'excluded', reasons: ['U7'] }])
+      // Even the reserved prefix, checked first, is not a row for an excluded tuple: the reason is kept, never shadowed.
+      for (const key of ['ordinary', 'reserved']) expect([link, key, classify(H_DRAFT_PUBLISH, { ...publish, ...link, key })]).toEqual([link, key, { kind: 'excluded', reasons: ['U7'] }])
+    }
+    expect(classify(H_DRAFT_SAVE, { ...save, draftBase: 'same', draftRevision: 'behind', state: 'stale' })).toEqual({ kind: 'healthy', row: 'H41' })
+    expect(classify(H_DRAFT_PUBLISH, { ...publish, draftBase: 'same', draftRevision: 'current', state: 'open' })).toEqual({ kind: 'healthy', row: 'H17' })
+    expect(classify(H_DRAFT_PUBLISH, { ...publish, draftBase: 'same', draftRevision: 'behind', state: 'published' })).toEqual({ kind: 'healthy', row: 'H38s' })
+    expect(classify(H_DRAFT_PUBLISH, { ...publish, draftBase: 'same', draftRevision: 'current', state: 'declined' })).toEqual({ kind: 'healthy', row: 'H38' })
+  })
+
+  test('precedence: the reserved prefix before the rationale and right checks, the replay before the identity, the identity before the base', () => {
+    const legal = { raw: 'padded', draftBase: 'same', draftRevision: 'behind', state: 'stale' }
+    const at = (axes: Tuple) => classify(H_DRAFT_PUBLISH, { ...legal, key: 'ordinary', intent: 'draft', rationale: 'given', right: 'ok', replay: 'new', observed: 'stored', ...axes })
+    expect(at({ key: 'reserved', rationale: 'missing', right: 'missing', observed: 'other' })).toEqual({ kind: 'healthy', row: 'H33d' })
+    expect(at({ rationale: 'missing', right: 'missing' })).toEqual({ kind: 'healthy', row: 'T-rationale' })
+    expect(at({ replay: 'same', observed: 'none' })).toEqual({ kind: 'healthy', row: 'H17r' })
+    expect(at({ replay: 'different', observed: 'other' })).toEqual({ kind: 'healthy', row: 'H17m' })
+    expect(at({ observed: 'other' })).toEqual({ kind: 'healthy', row: 'H43' })
+    expect(at({})).toEqual({ kind: 'healthy', row: 'H38s' })
+    expect(at({ intent: 'ordinary', observed: 'other' })).toEqual({ kind: 'healthy', row: 'T-stale' })
+    expect(classify(H_DRAFT_SAVE, { command: 'rebase', observed: 'none', base: 'moved', ...legal })).toEqual({ kind: 'healthy', row: 'H43' })
+  })
+
+  test('the observation reads the stored linked draft, its handoff and the task revision from one snapshot', () => {
+    const db = schemaCopy()
+    try {
+      const seed = (task: string, revision: number, handoff: { base: number; state: string } | null, draft: { base: number; link: boolean } | null) => {
+        db.prepare("INSERT INTO team_tasks (id, team_id, title, status, creator_kind, revision, created_at, updated_at) VALUES (?, 't', 'x', 'open', 'human', ?, 'now', 'now')").run(task, revision)
+        if (handoff) {
+          db.prepare(`INSERT INTO team_task_handoffs (id, team_id, task_id, base_revision, rationale, notify, payload_hash, evidence_refs, requester_session, request_key, state, created_at, updated_at)
+            VALUES (?, 't', ?, ?, 'r', 0, 'h', '[]', 'lead', 'k', ?, 'now', 'now')`).run(`h-${task}`, task, handoff.base, handoff.state)
+        }
+        if (draft) {
+          db.prepare("INSERT INTO team_task_drafts (task_id, base_revision, direction, updated_at, handoff_id, lineage_id) VALUES (?, ?, 'd', 'now', ?, ?)")
+            .run(task, draft.base, draft.link ? `h-${task}` : null, draft.link ? 'lineage' : null)
+        }
+      }
+      seed('loaded', 1, { base: 1, state: 'open' }, { base: 1, link: true })
+      seed('overtaken', 2, { base: 1, state: 'stale' }, { base: 1, link: true })
+      seed('fulfilled', 2, { base: 1, state: 'published' }, { base: 1, link: true })
+      seed('plain', 1, { base: 1, state: 'open' }, { base: 1, link: false })
+      seed('off-base', 2, { base: 1, state: 'open' }, { base: 2, link: true })
+      seed('current-stale', 2, { base: 2, state: 'stale' }, { base: 2, link: true })
+      const save = { command: 'save', observed: 'stored', base: 'unchanged' }
+      const of = (task: string) => { const observed = observeDraft(db, task); return observed && classify(H_DRAFT_SAVE, { ...save, ...observed }) }
+      expect(['loaded', 'overtaken', 'fulfilled', 'plain', 'off-base', 'current-stale'].map(of)).toEqual([
+        { kind: 'healthy', row: 'H41' }, { kind: 'healthy', row: 'H41' }, { kind: 'healthy', row: 'H41' }, null,
+        { kind: 'excluded', reasons: ['U7'] }, { kind: 'excluded', reasons: ['U7'] },
+      ])
+    } finally {
+      db.close()
+    }
   })
 })
