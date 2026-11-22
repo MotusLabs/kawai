@@ -132,9 +132,12 @@ describe('H-REQ: task_request_publication', () => {
     const first = await service.handoffs.request(agent('lead'), task.id, request(task.id))
     const before = snapshot()
     expect(await service.handoffs.request(agent('lead2'), task.id, request(task.id))).toEqual({ handoff: first.handoff, replay: true, superseded: null })
+    expect(snapshot()).toEqual(before)
+    // The close moves the handoff to closed (H27); the replay returns it as it is now and writes nothing.
     service.store.setStatus(task.id, 'cancelled')
-    expect((await service.handoffs.request(agent('lead'), task.id, request(task.id))).replay).toBe(true)
-    expect(snapshot().team_task_handoffs).toEqual(before.team_task_handoffs)
+    const closed = snapshot()
+    expect(await service.handoffs.request(agent('lead'), task.id, request(task.id))).toMatchObject({ replay: true, handoff: { id: first.handoff.id, state: 'closed' } })
+    expect(snapshot()).toEqual(closed)
   })
 
   // @covers: task-publication-handoffs › Requests are idempotent under a request key › A reused key with another payload is refused

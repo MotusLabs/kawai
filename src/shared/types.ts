@@ -817,6 +817,7 @@ export type ClientMessage =
   // handoff's own fields, base and notify choice; no payload is accepted, and
   // a resend replays its revision.
   | { type: 'team-task-handoff-publish'; teamPath: string; requestId: string; taskId: string; handoffId: string; requestKey: string }
+  | { type: 'team-task-handoff-decline'; teamPath: string; requestId: string; taskId: string; handoffId: string; reason: string; requestKey: string }
   // Task results (task-results-handoffs D5): accept one result and close the
   // task under the existing closing rights; a reason when it is flagged or
   // child work is open.

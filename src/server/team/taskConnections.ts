@@ -172,6 +172,10 @@ export class TaskConnections {
           result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
           return
         }
+        case 'team-task-handoff-decline':
+          await tasks.handoffs.settle(caller, message.handoffId, 'decline', message.reason, message.taskId)
+          task = tasks.store.get(message.taskId) ?? undefined
+          break
         case 'team-task-handoff': {
           const outcome = await this.manager.results.handoff(caller, message.taskId, {
             kind: message.kind, resultId: message.resultId, target: message.target, instructions: message.instructions,

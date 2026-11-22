@@ -276,6 +276,7 @@ export class TaskService {
       rationale: emptyToNull(input.rationale),
       ...(input.baseRevision !== undefined ? { baseRevision: input.baseRevision } : {}),
       ...(requestKey ? { requestKey } : {}),
+      ...(link ? { handoffId: link.handoffId } : {}),
       notify: input.notify === true,
       // Only the publication that came from the draft discards it (D2).
       discardDraft: actor.kind === 'human' && input.fromDraft === true,

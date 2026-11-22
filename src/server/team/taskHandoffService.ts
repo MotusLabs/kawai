@@ -17,6 +17,7 @@ import { taskOwner } from './taskStatusRights'
 import { handoffPayloadHash, TaskHandoffStore } from './taskHandoffStore'
 import { firstDifference, normalizeHandoffRequest, validateHandoffRequest, type HandoffRequestFields, type NormalizedHandoffRequest } from './taskHandoffValidation'
 import { writeHandoffWakeup } from './taskHandoffWakeups'
+import { handoffHooks, reconcileHandoffs, type HandoffHookContext } from './taskHandoffHooks'
 
 export interface HandoffRequestInput extends HandoffRequestFields {
   baseRevision: number
@@ -37,6 +38,8 @@ export interface HandoffRequestOutcome {
 /** The prepared entry's publication (D3): its `handoff:` key and in-transaction writes, passed to TaskService.publish. */
 export interface PublicationLink {
   requestKey: string
+  /** Exempts this handoff from the store's stale hook (D4). */
+  handoffId: string
   within: (revision: TaskRevision, current: TeamTask) => void
 }
 
@@ -47,8 +50,24 @@ const nowIso = () => new Date().toISOString()
 export class TaskHandoffService {
   readonly store: TaskHandoffStore
 
+  /** The hooks' and the sweep's context (D4, D6, D7). */
+  readonly hookContext: HandoffHookContext
+
   constructor(private readonly tasks: TaskService, private readonly getSession: (id: string) => ChatSessionRecord | null | undefined) {
     this.store = new TaskHandoffStore(tasks.store.db)
+    this.hookContext = {
+      db: tasks.store.db, mail: tasks.store.mail, handoffs: this.store, live: this.live,
+      originOf: (handoff, task) => this.getSession(handoff.requesterSession)?.projectPath ?? task.worktree ?? handoff.teamId,
+    }
+    // Every publication and close path runs through the store (D4).
+    tasks.store.handoffHooks = handoffHooks(this.hookContext)
+  }
+
+  /** D7's startup sweep; SessionMailbox.start() calls it before the first dispatch. */
+  reconcile(now = nowIso()): string[] {
+    const moved = reconcileHandoffs(this.hookContext, id => this.tasks.store.get(id), now)
+    for (const taskId of new Set(moved.map(id => this.store.get(id)!.taskId))) this.tasks.store.touch(taskId)
+    return moved
   }
 
   /** Live: the record present, neither archived nor context-exhausted (D6). */
@@ -137,6 +156,7 @@ export class TaskHandoffService {
       rationale: found.rationale, notify: found.notify, baseRevision: found.baseRevision,
     }, {
       requestKey: key,
+      handoffId: found.id,
       within: (revision: TaskRevision, current: TeamTask) => {
         const fresh = this.store.get(found.id)
         if (fresh?.state !== 'open') throw new Error(`The publication handoff is ${fresh?.state ?? 'gone'}; nothing was published`)
@@ -155,6 +175,45 @@ export class TaskHandoffService {
       throw new Error(`Revision ${outcome.revision.revision} holds this handoff's key without its association; it is not this handoff's publication`)
     }
     return { ...outcome, handoff: this.store.get(found.id)! }
+  }
+
+  /**
+   * Decline (human or the task's owner) or withdraw (the requester side),
+   * Table H-SETTLE in its order: team/id, right, reason, state. A decline
+   * wakes the requester side (D6); a withdrawal is its own act and wakes nobody.
+   */
+  async settle(caller: TaskCaller, handoffId: string, action: 'decline' | 'withdraw', reason: string, taskId?: string): Promise<TaskHandoff> {
+    const { team, actor } = await this.tasks.context(caller)
+    const found = this.store.get(handoffId)
+    if (!found || found.teamId !== team.teamId || (taskId !== undefined && found.taskId !== taskId)) throw new Error(`Publication handoff not found in this team: ${handoffId}`)
+    const task = this.tasks.sameTeamTask(team, found.taskId)
+    if (action === 'decline') {
+      if (actor.kind === 'system') throw new Error('Kawai never declines a publication handoff; only the owner or the human does.')
+      if (actor.kind === 'agent' && taskOwner(task) !== actor.sessionId) {
+        throw new Error("Only the task's owner or the human can decline a publication handoff; nothing was changed. Withdraw your own request instead.")
+      }
+    } else if (actor.kind !== 'agent' || !this.requesterSide(found, actor.sessionId!, this.getSession(actor.sessionId!)?.groupId ?? null)) {
+      throw new Error('Only the requester or a session of its group can withdraw a publication handoff; nothing was changed.')
+    }
+    const why = reason?.trim()
+    if (!why) throw new Error(`A ${action} needs a reason; nothing was changed`)
+    if (found.state !== 'open' && found.state !== 'stale') throw new Error(`The publication handoff is ${found.state}; nothing was changed.`)
+    const now = nowIso()
+    const settled = this.tasks.store.atomically(() => {
+      const to = action === 'decline' ? 'declined' : 'withdrawn'
+      if (!this.store.transition(found.id, to, { actor: { kind: actor.kind, sessionId: actor.sessionId }, reason: why }, now)) {
+        throw new Error(`The publication handoff is ${this.store.get(found.id)?.state ?? 'gone'}; nothing was changed.`)
+      }
+      const handoff = this.store.get(found.id)!
+      if (action === 'decline') {
+        writeHandoffWakeup(this.tasks.store.db, this.tasks.store.mail, handoff, 'declined', {
+          taskTitle: task.title, revision: null, originPath: team.groupsRoot, live: this.live,
+        }, now)
+      }
+      return handoff
+    })
+    this.tasks.store.touch(task.id)
+    return settled
   }
 
   /** H14 (R2 `published`), the orphan refusal (R1, R4), H16b (R3) and H15; null for R0 `open`. */
