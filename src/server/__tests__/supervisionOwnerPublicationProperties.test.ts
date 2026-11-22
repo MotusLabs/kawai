@@ -10,8 +10,8 @@
 //   and every landing-slot wait are identical.
 // - P6 one derivation: for random pending handoffs (open or stale, owner
 //   live, gone or none, requester live or gone), the attention item's owner
-//   and the supervision wait's next actor name the same party. (The
-//   `task_get` reader joins with the agent reads, task 10.)
+//   and the supervision wait's next actor and `task_get`'s handoff row name
+//   the same party.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import { mulberry32 } from '../../shared/__tests__/contractFixtures'
@@ -21,6 +21,8 @@ import { executionSnapshot } from '../plans/execution/executionSnapshot'
 import { planSteps } from '../plans/execution/executionPlanner'
 import { derivePlanSupervision } from '../plans/supervision/supervisionRead'
 import { handoffAttentionFacts, handoffAttentionItems } from '../team/handoffAttention'
+import { handoffRead } from '../team/taskHandoffRead'
+import type { HandoffNextActor } from '../../shared/taskHandoffs'
 import { createPlanWorld, writeGroup, type PlanWorld } from './planHarness'
 import { propertyCases } from './helpers/propertyCases'
 import { createSupervisionBench, MIN, T0, type SupervisionBench } from './supervisionHarness'
@@ -114,7 +116,7 @@ describe('P6: one derivation', () => {
   const party = (owner: { kind: string; id: string | null }) => `${owner.kind}:${owner.id ?? ''}`
 
   // @covers: plan-supervision › A pending publication handoff is a named wait › A stale handoff waits on its requester
-  test('P6: seed 0x0A11CE06, 200 cases — attention and the supervision loader name the same next actor', async () => {
+  test('P6: seed 0x0A11CE06, 200 cases — attention, the supervision loader and task_get name the same next actor', async () => {
     const random = mulberry32(0x0A11CE06)
     const seen = new Set<string>()
     for (let index = 0; index < propertyCases(CASES); index++) {
@@ -138,9 +140,11 @@ describe('P6: one derivation', () => {
       const wait = [api.cause, ...api.alsoApplying].find(entry => entry.kind === 'owner-publication')
       if (wait?.kind !== 'owner-publication') throw new Error(`case ${index}: no owner-publication wait`)
       const actor = wait.nextActor
-      const named = actor.kind === 'human' ? 'human:' : actor.kind === 'requester-group' ? `group:${actor.group}` : `session:${actor.sessionId}`
+      const named = (next: HandoffNextActor) => next.kind === 'human' ? 'human:' : next.kind === 'requester-group' ? `group:${next.group}` : `session:${next.sessionId}`
+      const fromTaskGet = handoffRead(bench.taskService, bench.taskService.store.get(taskId)!).handoffs.find(entry => entry.id === handoff.id)!
       seen.add(`${wait.state}:${actor.kind}`)
-      expect([index, owned, wait.state, party(item.owner)]).toEqual([index, owned, wait.state, named])
+      expect([index, owned, wait.state, party(item.owner), fromTaskGet.state, named(fromTaskGet.nextActor!)])
+        .toEqual([index, owned, wait.state, named(actor), wait.state, named(actor)])
     }
     expect([...seen].sort()).toEqual(['open:human', 'open:owner', 'stale:requester', 'stale:requester-group'])
   }, 600_000)

@@ -668,6 +668,8 @@ export interface ChatPeerTaskContext {
   contract?: { identity: string; contract: ImplementationContract | null }
   /** The ledger's blocking and disputed ids (review-findings-ledger D10); absent while the task has no structured findings. */
   findings?: { blocking: string[]; disputed: string[] }
+  /** The task's pending publication handoff (owner-publication-handoff D10), named only as pending; absent without one. */
+  pendingHandoff?: { id: string; state: 'open' | 'stale'; baseRevision: number }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */
