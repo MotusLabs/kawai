@@ -9,7 +9,7 @@
 // snapshot (captured `true` with no identity, and captured `false`).
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
-import type { ClientMessage } from '@shared/types'
+import type { ClientMessage, Session } from '@shared/types'
 import type { TaskHandoff } from '@shared/taskHandoffs'
 import type { HumanTaskDetail, TaskDraft, TeamTaskSummary } from '@shared/teamTasks'
 import TeamTaskDetail from '../components/team/TeamTaskDetail'
@@ -17,7 +17,7 @@ import { REPLACED_DRAFT_MARK } from '../components/team/TaskDirectionEditor'
 import { REPLACED_DRAFT_REFUSAL } from '../../server/team/taskDrafts'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 
-afterEach(() => { useTeamTaskStore.setState({ views: {} }) })
+afterEach(() => { useTeamTaskStore.setState({ views: {} }); sessions = [] })
 
 const task = (extra: Partial<TeamTaskSummary> = {}): TeamTaskSummary => ({
   id: 't1', teamId: 'team', title: 'Export', status: 'active', creator: { kind: 'human', sessionId: null }, parentId: null,
@@ -41,12 +41,15 @@ const detail = (extra: Partial<HumanTaskDetail> = {}): HumanTaskDetail => ({
 })
 
 let sent: ClientMessage[]
+let sessions: Session[] = []
+const sessionRow = (id: string, name: string): Session =>
+  ({ id, name, projectPath: '/repo', status: 'waiting', lastActivityAt: '', createdAt: '', source: 'managed', kind: 'chat' } as unknown) as Session
 let renderer: TestRenderer.ReactTestRenderer
 const push = (view: HumanTaskDetail) => act(() => {
   useTeamTaskStore.getState().applyDetail({ type: 'team-task-detail', teamPath: 'dev', teamId: 'team', detail: view, directory: [] })
 })
 const element = () => <TeamTaskDetail teamPath="dev" projectPath="/repo" view={useTeamTaskStore.getState().views.dev!}
-  sendMessage={message => sent.push(message)} connected sessions={[]} onOpenMailbox={() => {}} />
+  sendMessage={message => sent.push(message)} connected sessions={sessions} onOpenMailbox={() => {}} />
 function mount(view: HumanTaskDetail) {
   sent = []
   useTeamTaskStore.getState().open('dev', 't1')
@@ -67,7 +70,9 @@ const settle = (error?: string) => {
 }
 
 test('the panel shows provenance and the diff; Publish and notify sends only the handoff id with an ordinary command key, and a resend reuses it', () => {
+  sessions = [sessionRow('lead', 'Export lead')]
   mount(detail())
+  expect(textOf(testId('task-handoff-h1'))).toContain('requested by Export lead (leads)')
   expect(textOf(testId('handoff-provenance'))).toBe(`Base contract none · base commit ${'b'.repeat(40)} · payload aaaaaaaaaaaa · evidence: src/export.ts`)
   expect(textOf(testId('handoff-diff-direction'))).toBe('DirectionCSVCSV with headers')
   expect(textOf(testId('handoff-publish'))).toBe('Publish and notify')

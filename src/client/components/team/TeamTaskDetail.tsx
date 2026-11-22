@@ -217,7 +217,7 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
     </Section>
 
     <Section teamPath={teamPath} name="Direction">
-      <TaskPublicationHandoffPanel task={task} handoffs={detail.handoffs} revisions={detail.revisions} draft={detail.draft} disabled={disabled} act={act} />
+      <TaskPublicationHandoffPanel task={task} handoffs={detail.handoffs} revisions={detail.revisions} draft={detail.draft} sessions={sessions} disabled={disabled} act={act} />
       <p className="mt-1 whitespace-pre-wrap text-chat-body" data-testid="task-direction">{task.direction}</p>
       <TaskDirectionEditor task={task} draft={detail.draft} connected={connected} disabled={disabled} act={act} error={view.error} />
     </Section>

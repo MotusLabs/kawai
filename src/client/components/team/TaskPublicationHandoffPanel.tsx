@@ -14,7 +14,9 @@ import { useState } from 'react'
 import type { TaskHandoff } from '@shared/taskHandoffs'
 import type { TaskDraft, TaskRevision, TeamTaskSummary } from '@shared/teamTasks'
 import { parseContract } from '@shared/implementationContract'
+import type { Session } from '@shared/types'
 import type { TaskActFn } from './TaskDirectionEditor'
+import { sessionLabel } from './teamTaskLabels'
 import TaskContractView from './TaskContractView'
 
 const short = (hash: string | null) => (hash ? hash.slice(0, 12) : 'none')
@@ -28,8 +30,8 @@ function FieldDiff({ label, base, prepared }: { label: string; base: string | nu
   </div>
 }
 
-function PendingHandoff({ task, handoff, base, draft, disabled, act }: {
-  task: TeamTaskSummary; handoff: TaskHandoff; base: TaskRevision | undefined; draft: TaskDraft | null | undefined; disabled: boolean; act: TaskActFn
+function PendingHandoff({ task, handoff, base, draft, sessions, disabled, act }: {
+  task: TeamTaskSummary; handoff: TaskHandoff; base: TaskRevision | undefined; draft: TaskDraft | null | undefined; sessions: Session[]; disabled: boolean; act: TaskActFn
 }) {
   const [reason, setReason] = useState('')
   const [confirmReplace, setConfirmReplace] = useState(false)
@@ -41,7 +43,7 @@ function PendingHandoff({ task, handoff, base, draft, disabled, act }: {
   }
   return <div className="flex flex-col gap-2" data-testid={`task-handoff-${handoff.id}`}>
     <p className="text-chat-body">
-      Prepared revision on revision {handoff.baseRevision} · {handoff.state} · requested by {handoff.requesterSession}
+      Prepared revision on revision {handoff.baseRevision} · {handoff.state} · requested by {sessionLabel(handoff.requesterSession, sessions)}
       {handoff.requesterGroup ? ` (${handoff.requesterGroup})` : ''}
     </p>
     <p className="text-chat-meta text-secondary" data-testid="handoff-provenance">
@@ -76,11 +78,12 @@ function PendingHandoff({ task, handoff, base, draft, disabled, act }: {
   </div>
 }
 
-export default function TaskPublicationHandoffPanel({ task, handoffs, revisions, draft, disabled, act }: {
+export default function TaskPublicationHandoffPanel({ task, handoffs, revisions, draft, sessions, disabled, act }: {
   task: TeamTaskSummary
   handoffs: TaskHandoff[] | undefined
   revisions: TaskRevision[]
   draft: TaskDraft | null | undefined
+  sessions: Session[]
   disabled: boolean
   act: TaskActFn
 }) {
@@ -89,10 +92,10 @@ export default function TaskPublicationHandoffPanel({ task, handoffs, revisions,
   const ended = handoffs.filter(handoff => handoff !== pending)
   return <section className="mb-3 rounded border border-default p-2" aria-label="Publication handoff" data-testid="task-handoff-panel">
     {pending && <PendingHandoff task={task} handoff={pending} base={revisions.find(revision => revision.revision === pending.baseRevision)}
-      draft={draft} disabled={disabled} act={act} />}
+      draft={draft} sessions={sessions} disabled={disabled} act={act} />}
     {ended.length > 0 && <ul className="mt-2 text-chat-meta text-secondary" data-testid="handoff-history">
       {ended.map(handoff => <li key={handoff.id} data-testid={`handoff-ended-${handoff.id}`}>
-        Prepared on revision {handoff.baseRevision} by {handoff.requesterSession} · {handoff.state}
+        Prepared on revision {handoff.baseRevision} by {sessionLabel(handoff.requesterSession, sessions)} · {handoff.state}
         {handoff.state === 'published' && handoff.publishedRevision !== null ? ` as revision ${handoff.publishedRevision}` : ''}
         {handoff.state === 'published' && handoff.publishedPayloadHash && handoff.publishedPayloadHash !== handoff.payloadHash
           ? ` (published as edited: prepared ${short(handoff.payloadHash)}, published ${short(handoff.publishedPayloadHash)})` : ''}
