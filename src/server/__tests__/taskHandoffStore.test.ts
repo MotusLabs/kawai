@@ -25,6 +25,7 @@ beforeEach(() => {
   store = new TaskHandoffStore(db)
 })
 
+// @covers: task-publication-handoffs › A handoff records its exact provenance › Provenance is shown with the handoff
 test('the payload hash changes with every prepared field and the notify choice, and with nothing else', () => {
   const fields = { direction: 'a', acceptance: 'b', contract: 'c', rationale: 'd', notify: true }
   const base = handoffPayloadHash(fields)

@@ -118,6 +118,7 @@ describe('the startup sweep over Table DF', () => {
     expect(snapshot()).toEqual(before)
   })
 
+  // @covers: task-publication-handoffs › A handoff is published at most once › A key is never proof of fulfillment after restart
   test('DF4b {U3, U6}: stale only because the task advanced, one wakeup; a second restart reads {U6} and writes nothing', () => {
     const { task, handoff } = seed({ revisions: 2, base: 1, orphan: 2 })
     expect(classify(H_RESTART, observeRestart(db, handoff.id))).toEqual({ kind: 'excluded', reasons: ['U3', 'U6'] })

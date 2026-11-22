@@ -56,6 +56,8 @@ function git(args: string[], cwd?: string) {
 // @covers: task-publication-handoffs › A request is validated before it is recorded › A stale base is refused
 // @covers: task-publication-handoffs › A handoff is published at most once › Surrounding whitespace does not hide a handoff key
 // @covers: task-publication-handoffs › A handoff is published at most once › A padded ordinary key works as before
+// @covers: task-publication-handoffs › A handoff is published at most once › A linked draft cannot take a handoff's key
+// @covers: task-publication-handoffs › A handoff is published at most once › An ordinary publication cannot take a handoff's key
 test('a Lead requests a publication, W2 asks the human, a reserved key is refused with and without a linked draft, the human publishes once with one delivered notice and wakeup, and resends replay', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-handoff-publish-')))
   const repo = path.join(root, 'repo')

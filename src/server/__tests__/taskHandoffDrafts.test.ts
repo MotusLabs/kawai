@@ -148,6 +148,7 @@ describe('H-DRAFT: save and rebase', () => {
   // @covers: task-publication-handoffs › A loaded draft stays linked only as the draft that was loaded › Saving the loaded draft keeps its link
   // @covers: task-publication-handoffs › A loaded draft stays linked only as the draft that was loaded › A resend after publishing returns the same revision
   // @covers: task-publication-handoffs › Editing before publishing still fulfills the handoff › Published as edited
+  // @covers: task-publication-handoffs › A handoff is published at most once › The two publish actions never replay each other
   test('trace: load, save at the same base (H41), publish (H17), resend after the discard and after a replacement load (H17r), prepared publish refused (H16b)', async () => {
     const task = kawaiTask()
     const h = await requestOn(task.id)

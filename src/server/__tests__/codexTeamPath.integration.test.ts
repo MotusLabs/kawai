@@ -341,7 +341,7 @@ test('a Codex thread registers the journal reader at start; its resume registers
   )
   // bounded-task-reads H8: every section argument, and the lossless diff reader.
   expect(Object.keys(tools.get('task_get')!.inputSchema.properties).sort()).toEqual(['acknowledgements_before', 'assignments_before', 'full_messages',
-    'journal_before', 'journal_limit', 'messages_before', 'publications_before', 'result_id', 'results_before', 'revision', 'revisions_before', 'subtasks_before', 'task_id'])
+    'handoff_id', 'journal_before', 'journal_limit', 'messages_before', 'publications_before', 'result_id', 'results_before', 'revision', 'revisions_before', 'subtasks_before', 'task_id'])
   expect(Object.keys(tools.get('task_journal_read')!.inputSchema.properties).sort()).toEqual(['entry_id', 'offset_bytes', 'task_id'])
   expect(Object.keys(tools.get('task_result_diff_read')!.inputSchema.properties).sort()).toEqual(['offset_bytes', 'result_id', 'task_id'])
   // The rollout Codex wrote, so the restarted manager may resume the thread.

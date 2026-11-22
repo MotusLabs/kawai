@@ -92,6 +92,7 @@ beforeEach(() => {
 
 describe('H-REQ: task_request_publication', () => {
   // @covers: task-publication-handoffs › Task authors may request an owner publication › A Lead prepares a correction for a Kawai task
+  // @covers: task-publication-handoffs › A handoff records its exact provenance › Provenance is shown with the handoff
   test('H1: an eligible requester records one open handoff and the task is unchanged', async () => {
     const task = kawaiTask()
     const { handoff, replay } = await service.handoffs.request(agent('lead'), task.id, request(task.id, { baseCommit: head, evidenceRefs: ['src/a.md', 'note-1'] }))
@@ -283,6 +284,7 @@ describe('H-PUB: publish prepared revision', () => {
     }
   })
 
+  // @covers: task-publication-handoffs › A handoff is published at most once › The two publish actions never replay each other
   test('H16b (R3): published through a linked revision under an ordinary key is refused naming it; R4 and R1 orphans are refused', async () => {
     const { task, handoff } = await openHandoff()
     const linked = await service.publish(human(), task.id, { direction: 'Edited', rationale: 'edit', requestKey: 'ordinary', baseRevision: 1 })
@@ -308,6 +310,7 @@ describe('H-PUB: publish prepared revision', () => {
 
 describe('H33: the ordinary entry refuses a reserved key first', () => {
   // @covers: task-publication-handoffs › A handoff is published at most once › Surrounding whitespace does not hide a handoff key
+  // @covers: task-publication-handoffs › A handoff is published at most once › An ordinary publication cannot take a handoff's key
   test('bare or padded, with a blank rationale, an unknown task, a stale base, or no right, the refusal is the reserved key', async () => {
     const { handoff } = await service.handoffs.request(agent('lead'), kawaiTask().id, request(''))
     const task = service.store.get(handoff.taskId)!
