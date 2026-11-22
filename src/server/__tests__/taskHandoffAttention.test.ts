@@ -170,6 +170,11 @@ describe('Table W through the real stores', () => {
     const messageId = b.notice(uncertain.taskId, uncertain.revision, 'uncertain')
     expect(row(uncertain.taskId)).toEqual([W_PUBLISHED.find(entry => entry.id === 'W9')!.expect])
     expect(itemsOf(uncertain.taskId)[0]!.link).toEqual({ kind: 'message', id: messageId })
+    // Every notice at or past the revision counts, not only the newest: a
+    // later failed notice leaves the uncertain one to resolve (W9, not W10).
+    b.notice(uncertain.taskId, uncertain.revision, 'failed')
+    expect(row(uncertain.taskId)).toEqual([W_PUBLISHED.find(entry => entry.id === 'W9')!.expect])
+    expect(itemsOf(uncertain.taskId)[0]!.link).toEqual({ kind: 'message', id: messageId })
     const queued = await published(true)
     expect(row(queued.taskId)).toEqual([W_PUBLISHED.find(entry => entry.id === 'W12')!.expect])
   })
