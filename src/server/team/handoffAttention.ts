@@ -23,6 +23,8 @@ export interface HandoffAttentionFact {
   liveOwner: { sessionId: string; name: string } | null
   /** Whether the requester session is live; a stale handoff's next actor reads it (W3/W4). */
   requesterLive: boolean
+  /** The task's current revision, which a stale item names. */
+  taskRevision: number
 }
 
 export interface HandoffFollowUpFact {
@@ -60,7 +62,7 @@ export function handoffAttentionItems(facts: readonly HandoffAttentionFact[]): A
       id: attentionItemId('publication-handoff', handoff.id),
       kind: 'publication-handoff',
       cause: stale
-        ? `Prepared revision on revision ${handoff.baseRevision} went stale: the task moved past its base (requested by ${requesterName})`
+        ? `Prepared revision on revision ${handoff.baseRevision} went stale: revision ${fact.taskRevision} was published since (requested by ${requesterName})`
         : `Prepared revision on revision ${handoff.baseRevision} awaits publication (requested by ${requesterName})`,
       owner: pendingOwner(actor, fact),
       impact: { taskId: handoff.taskId, taskTitle },
@@ -130,9 +132,10 @@ export function handoffAttentionFacts(manager: ChatSessionManager, teamId: strin
   const { store, handoffs: service } = manager.tasks
   const titleOf = (taskId: string) => store.get(taskId)?.title ?? taskId
   const handoffs = service.store.pendingForTeam(teamId).map(handoff => {
-    const ownerId = taskOwner(store.get(handoff.taskId)!)
+    const task = store.get(handoff.taskId)!
+    const ownerId = taskOwner(task)
     return {
-      handoff, taskTitle: titleOf(handoff.taskId), requesterName: nameOf(handoff.requesterSession),
+      handoff, taskTitle: titleOf(handoff.taskId), requesterName: nameOf(handoff.requesterSession), taskRevision: task.revision,
       liveOwner: ownerId && service.live(ownerId) ? { sessionId: ownerId, name: nameOf(ownerId) } : null,
       requesterLive: service.live(handoff.requesterSession),
     }

@@ -189,7 +189,7 @@ const stallItems = ({ plans, taskTitle }: AttentionInput) =>
         (change.supervision.stall!.kind === 'no-progress' ? 'no progress' : 'repeating failure') +
         // S5 (owner-publication-handoff D9): a gone holder is named archived.
         (change.supervision.stall!.kind === 'no-progress' && change.supervision.stall!.holderGone && change.supervision.holder
-          ? ` (holder ${change.supervision.holder.session} archived)` : ''),
+          ? ` (holder ${change.supervision.holder.session} archived; no session running ${change.supervision.change})` : ''),
       owner: fact.leadGroup === null ? humanOwner : groupOwner(fact.leadGroup),
       impact: taskImpact(change.taskId, taskTitle),
       nextAction: 'Unblock the holder',
