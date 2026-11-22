@@ -8,7 +8,9 @@
 // reason sets, and the U fact-to-observation table (each claim reads only
 // its partition's declared observations), and H-DRAFT's load, save and
 // rebase, and publish products with U7 kept whole over the stored linked
-// draft (the WS row tests in taskHandoffDrafts.test.ts drive each row).
+// draft and the publish command's submitted base observed apart from it
+// (the WS row tests in taskHandoffDrafts.test.ts drive each row; the paired
+// submitted-base witnesses are taskHandoffDraftBase.test.ts).
 import { describe, expect, test } from 'bun:test'
 import { schemaCopy } from './schemaDb'
 import {
@@ -135,16 +137,35 @@ describe('H-DRAFT', () => {
     expect(tally(H_DRAFT_SAVE)).toEqual({ H43: 96, H42: 24, H41: 24, 'excluded U7': 192 })
   })
 
-  test('publish: 8064 tuples, 3456 healthy and 4608 excluded {U7}, every row in check order', () => {
+  test('publish: 24192 tuples, 10368 healthy and 13824 excluded {U7}, the submitted base apart from the stored one, every row in check order', () => {
+    expect(product(H_DRAFT_PUBLISH)).toHaveLength(24192)
     expect(tally(H_DRAFT_PUBLISH)).toEqual({
-      H33d: 864, H33: 864, 'T-rationale': 864, 'T-right': 432, H17r: 72, 'T-replay': 72, H17m: 72, 'T-mismatch': 72,
-      H43: 48, H38s: 14, H17: 2, H38: 8, 'T-stale': 42, H44: 30, 'excluded U7': 4608,
+      H33d: 2592, H33: 2592, 'T-rationale': 2592, 'T-right': 1296, H17r: 216, 'T-replay': 216, H17m: 216, 'T-mismatch': 216,
+      H43: 144, H38m: 48, H38s: 14, H17: 2, H38: 8, 'T-stale': 144, H44: 72, 'excluded U7': 13824,
     })
+  })
+
+  test('the submitted base against the stored one: an ordinary write compares it with the task, a linked write with the stored draft, then the stored draft with the task', () => {
+    const write = { key: 'ordinary', raw: 'bare', rationale: 'given', right: 'ok', replay: 'new', observed: 'stored', draftBase: 'same', state: 'stale' }
+    // The paired snapshot: H stale, its linked draft at r1, the task at r2 — the same stored facts under every submitted base.
+    const at = (intent: string, submitted: string) => classify(H_DRAFT_PUBLISH, { ...write, draftRevision: 'behind', intent, submitted })
+    expect(['r1', 'r2', 'r3'].map(submitted => [submitted, at('ordinary', submitted), at('draft', submitted)])).toEqual([
+      ['r1', { kind: 'healthy', row: 'T-stale' }, { kind: 'healthy', row: 'H38s' }],
+      ['r2', { kind: 'healthy', row: 'H44' }, { kind: 'healthy', row: 'H38m' }],
+      ['r3', { kind: 'healthy', row: 'T-stale' }, { kind: 'healthy', row: 'H38m' }],
+    ])
+    // A current linked draft: matching both bases reaches the linked state; any other base is the stored-base mismatch.
+    const current = (submitted: string, state: string) => classify(H_DRAFT_PUBLISH, { ...write, draftRevision: 'current', intent: 'draft', submitted, state })
+    expect([current('r2', 'open'), current('r2', 'declined'), current('r1', 'open'), current('r3', 'declined')]).toEqual([
+      { kind: 'healthy', row: 'H17' }, { kind: 'healthy', row: 'H38' }, { kind: 'healthy', row: 'H38m' }, { kind: 'healthy', row: 'H38m' },
+    ])
+    // U7 reads the stored facts alone: no submitted base makes an excluded tuple a row.
+    for (const submitted of ['r1', 'r2', 'r3']) expect(current(submitted, 'stale')).toEqual({ kind: 'excluded', reasons: ['U7'] })
   })
 
   test('U7 witnesses: a linked draft off its handoff\'s base, or current while H is stale or published, is excluded under every command; the legal neighbours are rows', () => {
     const save = { command: 'save', observed: 'stored', base: 'unchanged' }
-    const publish = { key: 'ordinary', raw: 'bare', intent: 'draft', rationale: 'given', right: 'ok', replay: 'new', observed: 'stored' }
+    const publish = { key: 'ordinary', raw: 'bare', intent: 'draft', rationale: 'given', right: 'ok', replay: 'new', observed: 'stored', submitted: 'r2' }
     for (const link of [
       { draftBase: 'differs', draftRevision: 'current', state: 'open' }, { draftBase: 'same', draftRevision: 'current', state: 'stale' },
       { draftBase: 'same', draftRevision: 'current', state: 'published' }, { draftBase: 'differs', draftRevision: 'behind', state: 'published' },
@@ -155,18 +176,20 @@ describe('H-DRAFT', () => {
     }
     expect(classify(H_DRAFT_SAVE, { ...save, draftBase: 'same', draftRevision: 'behind', state: 'stale' })).toEqual({ kind: 'healthy', row: 'H41' })
     expect(classify(H_DRAFT_PUBLISH, { ...publish, draftBase: 'same', draftRevision: 'current', state: 'open' })).toEqual({ kind: 'healthy', row: 'H17' })
-    expect(classify(H_DRAFT_PUBLISH, { ...publish, draftBase: 'same', draftRevision: 'behind', state: 'published' })).toEqual({ kind: 'healthy', row: 'H38s' })
+    expect(classify(H_DRAFT_PUBLISH, { ...publish, draftBase: 'same', draftRevision: 'behind', state: 'published', submitted: 'r1' })).toEqual({ kind: 'healthy', row: 'H38s' })
     expect(classify(H_DRAFT_PUBLISH, { ...publish, draftBase: 'same', draftRevision: 'current', state: 'declined' })).toEqual({ kind: 'healthy', row: 'H38' })
   })
 
   test('precedence: the reserved prefix before the rationale and right checks, the replay before the identity, the identity before the base', () => {
-    const legal = { raw: 'padded', draftBase: 'same', draftRevision: 'behind', state: 'stale' }
+    const legal = { raw: 'padded', draftBase: 'same', draftRevision: 'behind', state: 'stale', submitted: 'r1' }
     const at = (axes: Tuple) => classify(H_DRAFT_PUBLISH, { ...legal, key: 'ordinary', intent: 'draft', rationale: 'given', right: 'ok', replay: 'new', observed: 'stored', ...axes })
     expect(at({ key: 'reserved', rationale: 'missing', right: 'missing', observed: 'other' })).toEqual({ kind: 'healthy', row: 'H33d' })
     expect(at({ rationale: 'missing', right: 'missing' })).toEqual({ kind: 'healthy', row: 'T-rationale' })
     expect(at({ replay: 'same', observed: 'none' })).toEqual({ kind: 'healthy', row: 'H17r' })
     expect(at({ replay: 'different', observed: 'other' })).toEqual({ kind: 'healthy', row: 'H17m' })
     expect(at({ observed: 'other' })).toEqual({ kind: 'healthy', row: 'H43' })
+    expect(at({ observed: 'other', submitted: 'r2' })).toEqual({ kind: 'healthy', row: 'H43' })
+    expect(at({ submitted: 'r2' })).toEqual({ kind: 'healthy', row: 'H38m' })
     expect(at({})).toEqual({ kind: 'healthy', row: 'H38s' })
     expect(at({ intent: 'ordinary', observed: 'other' })).toEqual({ kind: 'healthy', row: 'T-stale' })
     expect(classify(H_DRAFT_SAVE, { command: 'rebase', observed: 'none', base: 'moved', ...legal })).toEqual({ kind: 'healthy', row: 'H43' })

@@ -136,9 +136,13 @@ export const H_RESTART: Partition = {
 // the ordinary entry's publish against a stored linked draft. The save and
 // publish partitions observe the stored linked draft as U7 reads it: its base
 // against the handoff's base (`draftBase`), its base against the task's
-// revision (`draftRevision`) and the linked handoff's state. `T-*` rows are
-// the existing `team-task-publish` outcomes the table names but does not
-// number (rationale, right, ordinary replay and mismatch, stale base), as today.
+// revision (`draftRevision`) and the linked handoff's state. Publish also
+// observes the command's submitted base (`submitted`) apart from the stored
+// draft's: U7 reads only the stored facts, the ordinary intent compares the
+// submitted base with the task's revision, and the draft intent compares it
+// with the stored draft's base, then the stored base with the task's. `T-*`
+// rows are the existing `team-task-publish` outcomes the table names but does
+// not number (rationale, right, ordinary replay and mismatch, stale base), as today.
 const LINK_ENDED = ['declined', 'withdrawn', 'superseded', 'closed']
 const U7: Claim = {
   id: 'U7', reads: ['draftBase', 'draftRevision', 'state'],
@@ -173,12 +177,25 @@ export const H_DRAFT_SAVE: Partition = {
   ],
 }
 
+/**
+ * The submitted base as one of three representatives, with the task at r2 and
+ * the stored draft at r2 (`draftRevision` current) or r1 (behind): r2 is the
+ * task's revision, r1 the previous one, r3 another. Only two relations
+ * decide a row — the submitted base against the task's revision and against
+ * the stored draft's base — and the three values realise every pair a
+ * snapshot can show under each `draftRevision`.
+ */
+const SUBMITTED = ['r2', 'r1', 'r3'] as const
+/** The submitted base equals the stored draft's base. */
+function submittedIsStored(t: Tuple) { return t.submitted === (t.draftRevision === 'current' ? 'r2' : 'r1') }
+
 export const H_DRAFT_PUBLISH: Partition = {
   name: 'H-DRAFT publish',
   axes: {
     key: ['ordinary', 'reserved'], raw: ['bare', 'padded'], intent: ['draft', 'ordinary'],
     rationale: ['given', 'missing'], right: ['ok', 'missing'], replay: ['new', 'same', 'different'],
-    observed: ['stored', 'other', 'none'], draftBase: ['same', 'differs'], draftRevision: ['current', 'behind'], state: STATES,
+    observed: ['stored', 'other', 'none'], draftBase: ['same', 'differs'], draftRevision: ['current', 'behind'],
+    submitted: SUBMITTED, state: STATES,
   },
   claims: [U7],
   rows: [
@@ -191,11 +208,12 @@ export const H_DRAFT_PUBLISH: Partition = {
     { id: 'H17m', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'different' && t.intent === 'draft' },
     { id: 'T-mismatch', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'different' && t.intent === 'ordinary' },
     { id: 'H43', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed !== 'stored' },
-    { id: 'H38s', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && t.draftRevision === 'behind' },
-    { id: 'H17', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && t.draftRevision === 'current' && t.state === 'open' },
-    { id: 'H38', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && t.draftRevision === 'current' && LINK_ENDED.includes(t.state!) },
-    { id: 'T-stale', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'new' && t.intent === 'ordinary' && t.draftRevision === 'behind' },
-    { id: 'H44', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'new' && t.intent === 'ordinary' && t.draftRevision === 'current' },
+    { id: 'H38m', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && !submittedIsStored(t) },
+    { id: 'H38s', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && submittedIsStored(t) && t.draftRevision === 'behind' },
+    { id: 'H17', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && submittedIsStored(t) && t.draftRevision === 'current' && t.state === 'open' },
+    { id: 'H38', match: t => linkHealthy(t) && newDraftWrite(t) && t.observed === 'stored' && submittedIsStored(t) && t.draftRevision === 'current' && LINK_ENDED.includes(t.state!) },
+    { id: 'T-stale', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'new' && t.intent === 'ordinary' && t.submitted !== 'r2' },
+    { id: 'H44', match: t => linkHealthy(t) && ordinaryEntry(t) && t.replay === 'new' && t.intent === 'ordinary' && t.submitted === 'r2' },
   ],
 }
 /** Past the reserved prefix, the rationale guard and the right check. */
@@ -250,6 +268,28 @@ export function observePublish(db: Database, handoffId: string, caller: { right:
     .get(handoff.task_id, preparedKey(handoffId), handoffId)
   const facts = !associated ? (orphan ? 'R1' : 'R0') : associated.request_key === preparedKey(handoffId) ? 'R2' : orphan ? 'R4' : 'R3'
   return { revisionFacts: facts, ...caller, state: handoff.state }
+}
+
+/**
+ * The submitted base's representative for a snapshot (see SUBMITTED): r2 when
+ * it is the task's revision, r1 when it is the stored draft's base behind the
+ * task or (the stored draft current) any earlier revision, else r3.
+ */
+export function submittedOf(submitted: number, task: number, stored: number): string {
+  if (submitted === task) return 'r2'
+  if (stored !== task) return submitted === stored ? 'r1' : 'r3'
+  return submitted < task ? 'r1' : 'r3'
+}
+
+/** H-DRAFT publish's stored observations (`observeDraft`) and the command's submitted base, from one snapshot; null for an unlinked draft. */
+export function observeDraftPublish(db: Database, taskId: string, submitted: number): Tuple | null {
+  return db.transaction(() => {
+    const observed = observeDraft(db, taskId)
+    if (!observed) return null
+    const { base_revision: stored } = db.prepare('SELECT base_revision FROM team_task_drafts WHERE task_id = ?').get(taskId) as { base_revision: number }
+    const { revision } = db.prepare('SELECT revision FROM team_tasks WHERE id = ?').get(taskId) as { revision: number }
+    return { ...observed, submitted: submittedOf(submitted, revision, stored) }
+  })()
 }
 
 /** U7's observations of the task's stored linked draft and its handoff, read from one snapshot; null for an unlinked draft. */
