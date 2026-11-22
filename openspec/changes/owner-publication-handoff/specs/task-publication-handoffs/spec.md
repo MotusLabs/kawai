@@ -22,7 +22,7 @@ The `kawai-team` server SHALL offer `task_request_publication` to an agent sessi
 - **THEN** the tool returns an error naming `task_amend`, and no handoff is recorded
 
 ### Requirement: A request is validated before it is recorded
-A request SHALL name the task, the base revision, a rationale, and at least one of direction, acceptance, or contract. It SHALL be refused, recording nothing, when the task belongs to another team (without revealing it), the task is done or cancelled, the base revision is not the task's current revision, the contract does not parse, or a field exceeds its size limit.
+A request SHALL name the task, the base revision, a rationale, and at least one of direction, acceptance, or contract. It SHALL be refused, recording nothing, when the task belongs to another team (without revealing it), the task is done or cancelled, the base revision is not the task's current revision, a field exceeds its size limit, or the contract does not parse; size limits are checked before any field is parsed.
 
 #### Scenario: A stale base is refused
 - **WHEN** an agent requests a publication based on revision 1 of a task at revision 2
@@ -40,6 +40,10 @@ A request SHALL name the task, the base revision, a rationale, and at least one 
 - **WHEN** an agent requests a publication for a task of another team
 - **THEN** the tool returns the same not-found error as for an unknown task id, and nothing is recorded
 
+#### Scenario: An oversized field is named before a contract problem
+- **WHEN** a request carries a rationale over its size limit and a contract that does not parse
+- **THEN** the tool returns an error naming the size limit, and no handoff is recorded
+
 #### Scenario: A request without content is refused
 - **WHEN** a request carries a rationale but no direction, acceptance, or contract
 - **THEN** the tool returns an error, and no handoff is recorded
@@ -56,7 +60,7 @@ Each handoff SHALL record the task, its team, the base revision and that revisio
 - **THEN** the tool returns an error naming the commit, and no handoff is recorded
 
 ### Requirement: Requests are idempotent under a request key
-A request SHALL carry a request key. Replaying the same key and payload SHALL return the existing handoff and record nothing more; the same key with a different payload SHALL be refused naming the differing field.
+A request SHALL carry a request key, unique per task. The key is looked up only after the caller's right to request is confirmed. A replay by the original requester or a session of its group with the same payload SHALL return the existing handoff and record nothing more; a different payload SHALL be refused naming the differing field; any other session SHALL be refused without the earlier handoff being returned.
 
 #### Scenario: A resent request returns the same handoff
 - **WHEN** a request is resent with the same request key and payload after a reconnect
@@ -69,6 +73,14 @@ A request SHALL carry a request key. Replaying the same key and payload SHALL re
 #### Scenario: A replay after the task moved on returns the handoff
 - **WHEN** a request is resent with the same key and payload after its handoff became stale or its task closed
 - **THEN** the existing handoff is returned in its current state, and nothing is recorded or refused
+
+#### Scenario: Another requester side cannot use the key
+- **WHEN** a session of another group sends a request with an earlier handoff's request key and the same payload
+- **THEN** it is refused naming a different requester side for the key, the earlier handoff is not returned, and nothing is recorded
+
+#### Scenario: A replay after losing the right is refused
+- **WHEN** the original requester resends its request after it became the task's owner
+- **THEN** the tool returns an error naming `task_amend`, and the handoff is not returned
 
 ### Requirement: A task has at most one pending handoff
 A task SHALL have at most one handoff that is open or stale. A new request from the pending handoff's requester or from a session of the same group SHALL supersede it in the same transaction; a request from any other session SHALL be refused naming the pending handoff and its requester.
@@ -93,7 +105,7 @@ A pending handoff SHALL NOT change the task's direction, acceptance, contract, o
 - **THEN** the draft is unchanged
 
 ### Requirement: The publisher publishes a handoff with one action
-The human, and a live agent owner, SHALL be able to publish an open handoff as prepared with one action. It SHALL publish through the task's normal publication — same rights, parsing, findings re-map, revision-published fact, and notices when the handoff's notify choice is set — based on the handoff's base revision, and SHALL mark the handoff published with that revision in the same transaction.
+The human, and the task's current live agent owner, SHALL be able to publish an open handoff as prepared with one action, checked for that right before anything else; fields beside the handoff SHALL be refused. It SHALL publish through the task's normal publication — rights, parsing, findings re-map, revision-published fact, and notices when notify is set — on the handoff's base revision, marking the handoff published in the same transaction.
 
 #### Scenario: The human publishes a prepared correction
 - **WHEN** the human chooses **Publish prepared revision** on an open handoff based on revision 1 with notify set
@@ -106,6 +118,14 @@ The human, and a live agent owner, SHALL be able to publish an open handoff as p
 #### Scenario: No other party can publish it
 - **WHEN** an agent that is not the task's owner, or Kawai, tries to publish the handoff
 - **THEN** it is refused as any publication by them is, and the handoff stays open
+
+#### Scenario: A former owner's resend returns nothing
+- **WHEN** the owner published handoff H, ownership moved to another session, and the former owner resends the same publish
+- **THEN** it is refused, no revision is returned, and nothing is written
+
+#### Scenario: A resend with fields beside the handoff is refused
+- **WHEN** the owner resends `task_amend` naming published handoff H together with a rationale
+- **THEN** it is refused, the revision is not returned, and nothing is written
 
 ### Requirement: Editing before publishing still fulfills the handoff
 The human SHALL be able to load an open handoff into the task's draft and edit it before publishing. When a draft already exists, loading SHALL require confirming its replacement. Publishing that draft SHALL fulfill the handoff and record that it was published as edited, with the published payload's hash beside the prepared one.
@@ -126,8 +146,35 @@ The human SHALL be able to load an open handoff into the task's draft and edit i
 - **WHEN** the human publishes a draft loaded from handoff H after H was declined
 - **THEN** the revision is published as an ordinary revision, and H stays declined
 
+### Requirement: A loaded draft stays linked only as the draft that was loaded
+Saving the draft loaded from a handoff at the same base SHALL keep its link to the handoff; moving its base SHALL keep the text and drop the link. A save or publish from a form that did not load the stored linked draft SHALL be refused without change. A resend of a linked publish SHALL return its revision, and an explicit ordinary publication SHALL leave a loaded draft in place.
+
+#### Scenario: Saving the loaded draft keeps its link
+- **WHEN** the human loads handoff H into the draft, edits it, saves it, and publishes it
+- **THEN** H reads published with the new revision
+
+#### Scenario: Rebasing the loaded draft drops its link
+- **WHEN** another revision makes handoff H stale and the human rebases the draft loaded from H
+- **THEN** the draft keeps its text and is no longer linked to H, and publishing it records an ordinary revision while H stays stale
+
+#### Scenario: A stale form cannot write over a replacement draft
+- **WHEN** handoff H was loaded again into the draft from a second window, and the first window then saves or publishes
+- **THEN** it is refused until the first window refreshes, and the stored draft and H are unchanged
+
+#### Scenario: A resend after publishing returns the same revision
+- **WHEN** the human's publish of the draft loaded from H is resent with the same command key after the draft was discarded
+- **THEN** the same revision is returned, and nothing more is written
+
+#### Scenario: A reused key with another linked draft is refused
+- **WHEN** the human publishes a draft linked to a different handoff with a command key that already published a revision
+- **THEN** it is refused naming the difference, and nothing is written
+
+#### Scenario: An ordinary publication keeps a loaded draft
+- **WHEN** the task's owner publishes a revision with `task_amend` while the human's draft is loaded from handoff H
+- **THEN** H reads stale, and the draft is kept
+
 ### Requirement: A handoff is published at most once
-A handoff SHALL be fulfilled only by a revision recorded as published from it; a key or matching content SHALL never fulfill it. A replay or concurrent duplicate SHALL return the same revision and write nothing more. Publishing a handoff no longer open SHALL be refused naming its state. Every other publication, a linked draft's included, SHALL be refused a handoff-namespace key, and the two publish actions SHALL NOT replay each other.
+A handoff SHALL be fulfilled only by a revision recorded as published from it; a key or matching content SHALL never fulfill it. A replay or concurrent duplicate SHALL return the same revision and write nothing more. Publishing a handoff no longer open SHALL be refused naming its state. Every other publication, a linked draft's included, SHALL be refused a handoff-namespace key before any other check, and the two publish actions SHALL NOT replay each other.
 
 #### Scenario: Two clicks publish once
 - **WHEN** two **Publish prepared revision** requests for handoff H are processed at the same time
@@ -140,6 +187,10 @@ A handoff SHALL be fulfilled only by a revision recorded as published from it; a
 #### Scenario: An ordinary publication cannot take a handoff's key
 - **WHEN** the human publishes a draft with a command key in the handoff namespace while handoff H is open
 - **THEN** the publication is refused naming the reserved key, nothing is published, and H stays open
+
+#### Scenario: A handoff key is refused before other checks
+- **WHEN** the human publishes with a command key in the handoff namespace and an empty rationale
+- **THEN** the publication is refused naming the reserved key, not the rationale, and nothing is published
 
 #### Scenario: Surrounding whitespace does not hide a handoff key
 - **WHEN** the human publishes, with or without a draft loaded from handoff H, using a command key that is H's handoff-namespace key with a leading space, a tab and newline, or trailing spaces around it
@@ -203,7 +254,7 @@ A decision-card answer, decision, or override, a journal note, mail, elapsed tim
 - **THEN** H stays open and publishable
 
 ### Requirement: Each disposition wakes the next actor once
-On publication, decline, staleness, and task closure Kawai SHALL send one direct message about the handoff to its requester when that session is live, else one group message to the requester's group. Each message SHALL be keyed by the handoff and the transition, so a replay, retry, or restart sends no second message. A failed message SHALL NOT undo the transition.
+On publication, decline, staleness, and task closure Kawai SHALL queue, in the transition's transaction, one notification naming the task and handoff, without attaching task work: direct to the requester when live, else to its group. It SHALL be keyed by handoff and transition, so a replay, retry, or restart sends no second one. A failed delivery SHALL NOT undo the transition.
 
 #### Scenario: The requester learns of the publication
 - **WHEN** the human publishes handoff H as revision 2
@@ -217,12 +268,20 @@ On publication, decline, staleness, and task closure Kawai SHALL send one direct
 - **WHEN** the publication of H is replayed with the same command key
 - **THEN** no further message about H is sent
 
+#### Scenario: Closure reaches the requester's group
+- **WHEN** the task of open handoff H is cancelled while H's requester has exhausted its context
+- **THEN** one message naming H reaches a live member of the requester's group, and no task assignment is created for it
+
 ### Requirement: Handoffs survive restart and reconcile once
 Handoffs and their transitions SHALL persist. At startup Kawai SHALL mark stale, closed, or published every pending handoff whose task moved past its base revision, closed, or holds a revision published from it, once, sending the transition's message if it was not yet sent.
 
 #### Scenario: A crash after publication
 - **WHEN** Kawai restarts after a publication committed but before the requester's message was sent
 - **THEN** the handoff reads published, and exactly one message about it is sent after startup
+
+#### Scenario: A queued message is sent once after restart
+- **WHEN** Kawai restarts after a publication's message was queued but not yet sent, and restarts again
+- **THEN** that same message is sent once to the recipient chosen at publication, and no second message follows
 
 #### Scenario: A refused key changes nothing at restart
 - **WHEN** an ordinary publication with a key in H's handoff namespace was refused while H is open with a current base, and Kawai restarts

@@ -73,7 +73,9 @@ its version row in one transaction. Additive, no backfill:
 - `team_task_handoff_wakeups`: `(handoff_id, transition)` primary key and
   the mailbox `message_id`.
 - `team_task_drafts.handoff_id` (nullable column) links a draft loaded
-  from a handoff.
+  from a handoff, beside a nullable server-owned draft identity column
+  (the lineage marker of D3's draft provenance); both are set by a load
+  and cleared together.
 - `team_task_revisions.handoff_id` (nullable column, partial unique index
   `(handoff_id) WHERE handoff_id IS NOT NULL`): the server-written
   association between a revision and the handoff it fulfilled (D3). It is
@@ -94,13 +96,34 @@ it removes the human's publication authority (I1 of the contract below).
   `task_amend`). The right is "may author directions", the same right that
   lets a Lead write tasks; developers keep notes and mail.
 - **Publish / Decline:** exactly the parties `TaskService.publish`
-  accepts — the human, or the task's owner session. No new right.
+  accepts — the human, or the task's current live owner session. No new
+  right.
 - **Withdraw / supersede:** the requester, or a session of the
   requester's group (so a replacement Lead can continue after the
   original Lead is archived).
 
-Alternative: any team agent may request — rejected: it lets the reviewer
+Rights come before replay. `TaskService.publish` already checks ownership
+before a store-level key replay can return anything, and both handoff
+commands keep that order: a request key or a prepared key is never
+authority. A request checks team scope and identity, refuses the live
+owner (pointing to `task_amend`), then checks `canCreateTasks`; only an
+eligible requester reaches the replay lookup (H-REQ). A request-key match
+is a replay only for the original requester or a session of its recorded
+group (the requester side) with the same payload; another requester side
+using the key is refused without the earlier handoff being returned. A
+prepared publish checks scope, then the caller's current publication
+right, then refuses payload overrides, and only then reads replay and
+state (H-PUB): a former owner after an ownership transfer, an unrelated
+agent and Kawai are refused even when the handoff was already published,
+and never receive the revision. Task closure through an authorized
+status change and D7's reconciliation of already-persisted facts are the
+only other paths that end a handoff; decisions, archival, mail and time
+are not.
+
+Alternatives: any team agent may request — rejected: it lets the reviewer
 or developer whose work the correction judges prepare its own contract.
+Replay before rights — rejected: a guessed or leaked key would return a
+handoff or revision to a party with no right to it.
 
 ### D3. Publishing reuses `TaskService.publish`; fulfillment is a server-written association
 
@@ -122,22 +145,36 @@ server-internal `handoffId` and key, and exposes two entries over it:
   step computes the canonical key once, exactly as `TaskService.publish`
   does today: `k = input.requestKey?.trim() || undefined` (no case
   folding or other normalization; an empty or blank key stays "no key").
-  It refuses `k` when it starts with `handoff:`, before it reads the
-  task, the draft or any handoff, looks up a replay, or writes anything
-  (H33, H33d); so ` handoff:H`, `\thandoff:H\n` and `handoff:H  ` are
-  refused like `handoff:H`. The same `k` is then the only value used for
-  replay lookup and storage: the raw input is never classified, looked up
-  or stored. There is no exemption: a linked draft's association never
-  widens what key the caller may send. Only after that check does it read
-  the draft's `handoff_id` (never the client payload) and pass it as
-  `handoffId`, with `k`.
+  It refuses `k` when it starts with `handoff:`, after the connection's
+  normal team-scope resolution and before anything else: before the WS
+  handler's rationale guard (`taskConnections.ts` checks
+  `rationale.trim()` before calling the service, so the canonical check
+  moves ahead of it), before it reads the addressed task, the draft or any
+  handoff, looks up a replay, or writes anything (H33, H33d); so
+  ` handoff:H`, `\thandoff:H\n` and `handoff:H  ` are refused like
+  `handoff:H`, and a reserved key with a blank rationale, an unknown task
+  or a stale base reads the reserved-key refusal (mixed-error rows). The
+  same `k` is then the only value used for replay lookup and storage: the
+  raw input is never classified, looked up or stored. There is no
+  exemption: a linked draft's association never widens what key the
+  caller may send. After that check the existing checks run unchanged
+  (rationale, actor, team, owner, content, then the store's same-payload
+  replay or differing-field refusal); only then does it read the draft's
+  `handoff_id` (never the client payload) and pass it as `handoffId`,
+  with `k`.
 - the **prepared entry** `publishHandoff(handoffId, actor)` — human
   command `team-task-handoff-publish { handoffId }` and owner
   `task_amend { handoff_id }`. It takes no caller key: it builds
-  `handoff:<id>` itself, re-reads the handoff, and calls the routine with
-  the prepared fields, `baseRevision` = `base_revision`, `notify` = its
-  choice and `handoffId`. `task_amend` with `handoff_id` refuses any
-  direction, acceptance or contract argument beside it (H35).
+  `handoff:<id>` itself. Its order is: team scope and handoff identity
+  (H4, H16); the caller's current publication right — the human or the
+  task's current live owner (H13); prepared payload overrides refused —
+  on `task_amend` only `task_id` and `handoff_id` are accepted, so a
+  direction, acceptance, contract, rationale or notify argument beside
+  `handoff_id` is refused (H35; the transport's own addressing and command
+  key are not payload); then the replay and state checks. Only then does
+  it re-read the handoff and call the routine with the prepared fields,
+  `baseRevision` = `base_revision`, `notify` = its choice and
+  `handoffId`.
 
 Inside `within` the handoff row is re-read and must still be `open`; the
 revision row gets `handoff_id`, the handoff moves to `published` with the
@@ -149,7 +186,14 @@ Key namespaces are disjoint: every key the prepared entry writes starts
 with `handoff:`, and no key the ordinary entry accepts does, so neither
 command can replay the other's revision. A replay of the prepared command
 resolves through `resolveKey` to the revision whose `handoff_id` is this
-handoff (H14). Whether a handoff has an associated revision is one
+handoff (H14), and only for a caller that passed the right and override
+checks: the human and the current owner each receive the original
+revision with every row unchanged, while a former owner, an unrelated
+agent or an extra-field resend is refused (H13, H35). The store's
+unique-constraint catch path and every repeated call apply the same
+authorization and association rule: a key row is returned only when its
+`handoff_id` is this handoff (R2), never an orphan (R1, R4) and never an
+ordinary linked revision (R3, H16b). Whether a handoff has an associated revision is one
 task-scoped fact, read the same way by every reader (H-PUB, H-RESTART,
 U1): a revision of the task whose `handoff_id` is this handoff, whatever
 its request key. The prepared-key lookup is a separate fact used only as
@@ -167,11 +211,48 @@ fulfillment.
 
 **Edit before publishing** copies the handoff into the draft
 (`team-task-handoff-load-draft`, requiring `replace: true` when a draft
-exists) and sets the draft's `handoff_id`. Publishing that draft goes
+exists) and sets the draft's `handoff_id`, its base to the handoff's
+`base_revision`, and a fresh server-owned draft identity (the linked
+draft's lineage marker; the writer picks its representation, for example
+a random id column beside `handoff_id`). Publishing that draft goes
 through the ordinary entry with the human's ordinary key; the association
 is written as above, with `published_payload_hash` shown as "published as
-edited" when it differs. A replay of that ordinary key returns its
-revision, which already carries the association (H17r).
+edited" when it differs.
+
+Draft provenance (A10). The form captures the draft identity it loaded
+together with the fields it edits, and sends that observed identity (or
+none, for a form opened without a stored draft) with every save and
+publish. The marker is only a precondition and carries no publication
+authority; the server compares it with the stored draft:
+
+- a save whose observed identity is the stored linked draft's, at the
+  same base, keeps the text, the identity and the link (H41);
+- a save or `team-task-draft-rebase` that moves the base keeps the text
+  and detaches the link and identity, leaving the handoff as it was
+  (H42); `taskDrafts.ts`'s `INSERT OR REPLACE` save must carry the
+  columns over explicitly, so it never drops them by accident;
+- a save or linked publish whose observed identity is not the stored
+  linked draft's (an old form from before a re-load, or an unrelated form
+  that never observed it) is refused until the form refreshes; the stored
+  replacement draft, the handoff and the form's unsaved text are kept
+  (H43). Matching bases never attach a draft, and a mismatch never
+  silently detaches one;
+- an explicit ordinary publication (an owner's `task_amend`, or a form
+  publish that observed no linked draft) publishes as today, makes the
+  handoff stale by D4 and leaves a replacement linked draft in place
+  (H44); that draft's later publish meets the stale-base check (H38s);
+- the linked publish verifies the observed identity, the stored link and
+  the base inside the shared publish transaction, before the draft
+  discard, so a replacement that lands between read and write is refused,
+  not discarded (H43).
+
+Replay keeps today's store rule. A resend of the same linked publish
+(same ordinary key, same payload, same association) returns its revision
+even after its own draft was discarded (H17r): the replay lookup runs
+before the lineage check, after the ordinary right checks. The same
+ordinary key with a different payload or a different linked handoff is a
+mismatch and is refused naming the differing field (H17m). Concurrent
+ordinary editing beyond these linked-draft cases is unchanged.
 
 ### D4. Every publication path checks pending handoffs in its transaction
 
@@ -188,6 +269,17 @@ override path's cancellation of earlier fix tasks
 pending handoff to `closed` in that status transaction. A `published`
 handoff is not changed by closing; its follow-up item ends because the
 task is closed (D5).
+
+Both hooks live in the store (`TaskStore.publish` and
+`TaskStore.setStatus`, which `prepareStatus().commit` also calls), so the
+paths that bypass `TaskService.publish` share them: the pause
+resolution's Adapt (`pauseResolve.ts` publishes through
+`tasks.store.publish` under its `pause:` key) makes a pending handoff
+stale (H20), and the override's cancellation closes it (H28b). The two
+orders of a publication and a close are both rows: published then closed
+leaves the handoff `published` with its one wakeup (H40); closed then
+prepared publish is refused naming `closed` (H15), with only the
+`closed` wakeup.
 
 ### D5. States, and one derived follow-up phase
 
@@ -245,16 +337,36 @@ reconcile for it.
 
 ### D6. Wakeups are system mail written in the transition's transaction
 
-Each of `published`, `declined`, `stale`, `closed` inserts
-`team_task_handoff_wakeups (handoff_id, transition)` and enqueues one
-system message (as `convergenceNotice.ts` does) in the same transaction.
-The recipient is resolved at the transition: the requester session if it
-is live (not archived, killed, or context-exhausted), else the
+Each of `published`, `declined`, `stale`, `closed` (only these four)
+inserts `team_task_handoff_wakeups (handoff_id, transition, message_id)`
+and enqueues one system notification through `MailboxStore` (as
+`convergenceNotice.ts` does) in the same transaction as the state
+mutation. The message carries no task-work attachment (no `task_id` on
+the mailbox row): its body names the task, the handoff, the transition
+and the revision, and the wakeup row links the message id. This matters
+for closure: `memberRelease.ts` dead-letters a closed task's scoped group
+work mail, so a `closed` wakeup sent as task mail would be dropped even
+though the transition enqueued it atomically; as a plain notification it
+is routed like any other system mail, and member release and dispatch
+policy are unchanged.
+
+The recipient is resolved once, at the transition, by the existing
+direct/group routing: the requester session if it is live (its record is
+present and neither archived, killed nor context-exhausted), else the
 requester's group as group mail, so an archived session is not revived by
-direct mail. The primary key makes a replay or a second sweep a no-op.
-`superseded` and `withdrawn` are the requester side's own acts and wake
-nobody. A later dead-letter of that mail is the mailbox's ordinary
-failure, visible in the Mailbox tab; it never rolls back the transition.
+direct mail and no task assignment is created. A worktree-scoped group
+delivers it to an eligible live member (real-composition rows, including
+DF2 with an exhausted requester). The primary key makes a replay or a
+second sweep a no-op. `superseded` and `withdrawn` are the requester
+side's own acts and wake nobody.
+
+Atomicity: a fault after the attempted insert of the mutation, the wakeup
+row or the mailbox row rolls all three back. A later delivery failure
+(dead-letter) is the mailbox's ordinary failure, visible in the Mailbox
+tab, and never rolls back the transition. After a crash past the commit,
+boot dispatches the original queued mailbox row once by its message id,
+without reselecting its recipient, and a later boot sends no second
+message.
 
 Alternative: an after-commit outbox — rejected: it needs its own
 recovery, while the in-transaction write is the pattern the codebase
@@ -274,7 +386,13 @@ task is `done`/`cancelled` → `closed` (DF2, U5); the task's revision
 exceeds the base and the handoff is `open` → `stale` (DF3, U3). A revision
 that merely carries a `handoff:` key without the association is never
 fulfillment (DF4). Each applies with its wakeup row, so the sweep sends a
-message only for a transition it performs.
+message only for a transition it performs. The sweep reconciles only
+persisted facts that an authorized path already wrote (an association, a
+closed status, a newer revision); it never infers a publication or
+disposition from decisions, archival, mail or time. A `stale` handoff
+whose base reads current is tolerated as a no-op (H29): no legal history
+produces it, since `stale` is entered only by a revision past the base,
+and the sweep neither rewrites it nor sends a wakeup for it.
 
 Production hook: `SessionMailbox.start()` (`src/server/team/
 sessionMailbox.ts`) calls the sweep after `reconcileMailbox` and before
@@ -324,7 +442,9 @@ landing slot are untouched (P5 checks it).
   task revision published, use `task_request_publication`; a card answer
   publishes nothing.
 
-Limits: direction, acceptance, contract and rationale up to 64 KiB each;
+Limits (checked before any field is parsed, so an oversized field is
+named ahead of a contract parse error):
+direction, acceptance, contract and rationale up to 64 KiB each;
 up to 20 evidence references of up to 512 bytes, each a repository-
 relative path (no leading `/`, no `..`), a task, note, result or message
 id, or a commit id. A base commit must be 40 hex digits and pass
@@ -369,25 +489,48 @@ an unknown id (H4), and an unknown id is not found (H16). Each refused row
 writes nothing: no handoff, event, revision, notice, fact, draft change
 or mail.
 
-**H-REQ — `task_request_publication`.** Axes: key relation (new,
-replay-same, replay-different); requester right (ok, group cannot create
-tasks, caller is the live owner); task status (open, closed); base (current,
-behind); payload (valid, invalid); pending handoff on the task (none,
-open/stale by the requester side, open/stale by another group). Order:
-team/id, key, right, status, base, payload, pending.
+**H-REQ — `task_request_publication`.** Axes: requester right (ok, caller
+is the live owner, group cannot create tasks); key relation (new,
+replay by the requester side with the same payload, replay by the
+requester side with a different payload, key held by another requester
+side); task status (open, closed); base (current, behind); payload
+(valid, invalid); pending handoff on the task (none, open/stale by the
+requester side, open/stale by another group). The requester side of a
+handoff is its requester session or any session of its recorded group.
+Key uniqueness stays per task and key. Order: team/id, right (live owner
+first, then `canCreateTasks`), key, status, base, payload, pending; only
+an eligible requester reaches the key lookup, so a key is never
+authority.
 
 | Id | First failing check, or the accepted case | Result |
 | --- | --- | --- |
-| H10 | key replay-same | returns the existing handoff in its current state, even if the task moved past its base or closed since; nothing written |
-| H11 | key replay-different | refused naming the first differing field (direction, acceptance, contract, rationale, notify, base revision, base commit, evidence) |
-| H5 | right: group cannot create tasks | refused suggesting `task_note` or a message to the owner |
 | H6 | right: caller is the live owner | refused naming `task_amend` |
+| H5 | right: group cannot create tasks | refused suggesting `task_note` or a message to the owner |
+| H11s | key held by another requester side | refused naming a different requester side for the key; the earlier handoff is not returned; nothing written |
+| H10 | key replay by the requester side, same payload | returns the existing handoff in its current state, even if the task moved past its base, the handoff went stale, or the task closed since; nothing written |
+| H11 | key replay by the requester side, different payload | refused naming the first differing field (direction, acceptance, contract, rationale, notify, base revision, base commit, evidence) |
 | H3 | status: closed | refused naming the status |
 | H2 | base: behind | refused naming the current revision |
-| H7 | payload invalid | refused naming the first problem in field order: direction, acceptance, contract parse, rationale, size limits, evidence references, base commit |
+| H7 | payload invalid | refused naming the first problem in field order: size limits, direction, acceptance, contract parse, rationale, evidence references, base commit |
 | H9 | pending by another group | refused naming the pending handoff and its requester |
 | H8 | pending by the requester side, else accepted | old handoff `superseded` by the new one in one transaction; new `open`; no wakeup |
 | H1 | none pending, accepted | handoff `open`; task unchanged; no notice, fact or mail |
+
+Combined rulings (each a row of the table test; the first failing check
+wins):
+
+- the live owner whose group also cannot create tasks → H6;
+- new key, group cannot create tasks, task closed → H5;
+- the original requester replays its key after losing eligibility (it
+  became the task's owner by a transfer, or its group lost
+  `canCreateTasks`) → H6 or H5; the handoff is not returned;
+- the requester side replays the same key and payload after the task
+  closed or the handoff went stale → H10 with the current state;
+- another requester side sends the key with the identical payload on a
+  closed task → H11s;
+- authorized, new key, task closed, base behind → H3;
+- an oversized rationale together with a malformed contract → H7 naming
+  the size limit.
 
 **H-PUB — Publish prepared revision** (human `team-task-handoff-publish`
 or owner `task_amend { handoff_id }`, the prepared entry; it takes no
@@ -406,8 +549,11 @@ revisions and the handoff row:
   key, plus a separate orphan prepared-key row. These five cells are every
   consistent combination; the two facts are never inferred from each
   other;
-- publisher right (human or owner, other); extra fields beside
-  `handoff_id` on `task_amend` (none, some);
+- publisher right (the human or the task's current live owner; other:
+  an unrelated agent, a former owner after a transfer, or Kawai); extra
+  prepared-payload fields beside the handoff id (none, some: a direction,
+  acceptance, contract, rationale or notify argument on `task_amend`, or
+  payload fields on the human command);
 - handoff state (open, stale, published, declined, withdrawn, superseded,
   closed), every state kept.
 
@@ -416,7 +562,11 @@ Declared product 5 × 2 × 2 × 7 = 140. Reasons: U1 when (state is
 orphan prepared-key row exists (R1, R4). The empty-reason (R, state)
 pairs are R0 with each non-published state, R2 with `published` and R3
 with `published`: 8 × 4 = 32 healthy tuples, 108 excluded. Order for
-healthy tuples: team/id, key, extra fields, right, state.
+healthy tuples: team/id, right, extra fields, then replay and state.
+Row multiplicities over the 32: H13 = 16 (every pair, both extras
+values), H35 = 8 (every pair with the right), H14 = 1 (R2), H12 = 1 (R0
+`open`), H15 = 5 (R0 with each other non-published state), H16b = 1
+(R3).
 
 Paired witnesses (asserted on classification): R3, `published`, human,
 no extras → empty, H16b naming the linked revision; R0, `published`,
@@ -429,32 +579,71 @@ fulfilling revision. Every other tuple keeps all its reasons (R3 with
 
 | Id | First failing check, or the accepted case | Result |
 | --- | --- | --- |
-| H14 | R2 with `published`: the prepared-key row carries this handoff's association (replay, including concurrent duplicates) | that revision returned; no revision, notice, fact, event or mail written (snapshot of every handoff, revision, notice, wakeup and mailbox row identical before and after) |
-| H35 | extra fields on `task_amend` | refused; nothing written |
-| H13 | right: other agent or Kawai | refused as their publication is; handoff unchanged |
+| H13 | right: an unrelated agent, a former owner after a transfer, or Kawai | refused as their publication is; no revision returned, even when the handoff is already published; handoff unchanged |
+| H35 | extra prepared-payload fields beside the handoff id | refused; no revision returned; nothing written |
+| H14 | R2 with `published`: the prepared-key row carries this handoff's association (an authorized replay, including concurrent duplicates and the catch path) | that revision returned; no revision, notice, fact, event or mail written (snapshot of every handoff, revision, notice, wakeup and mailbox row identical before and after) |
 | H15 | R0 with state stale, declined, withdrawn, superseded or closed | refused naming the state |
 | H16b | R3 with state published (through its linked draft: associated revision under an ordinary key, no prepared-key row) | refused naming published and the linked revision; no cross-command replay |
 | H12 | R0 with state open, accepted | revision N+1 with the prepared fields and `handoff_id`; handoff `published` with N+1; notices iff notify; one fact; one wakeup `published` |
 
+Traces (each a sequence test over the rows above):
+
+- the owner publishes H (H12), ownership transfers, and the former owner
+  resends → H13, no revision returned;
+- an unrelated agent of the team sends the prepared publish for an open
+  and for a published H → H13 both times;
+- after H12, the human and the current owner each resend → H14, each
+  receives the original revision, and the snapshot of every handoff,
+  revision, notice, wakeup and mailbox row is identical before and after;
+- after H12, the owner resends `task_amend` with `handoff_id` and a
+  rationale → H35, not the revision;
+- ordinary publication is unchanged: the same ordinary key and payload
+  replays its revision, and the same key with a changed field is refused
+  naming it, as today (H39 rows).
+
 **H-DRAFT — load into draft and publish the linked draft** (human only).
 Load axes: caller (human, agent); handoff state; draft (none, exists);
 `replace` (false, true). Order: team/id, caller, state, draft/replace.
+Save and rebase axes: the form's observed draft identity (the stored
+linked draft's, another or none); base (unchanged, moved). Order: team/id,
+observed identity, base.
 Publish (the ordinary entry) axes: the canonical key `k` (ordinary,
-reserved prefix; raw input bare or padded); the existing `team-task-publish` checks (ordinary key replay,
-rationale, stale base); the linked handoff's state. Order: reserved
-prefix, then the existing checks unchanged, then the linked state.
+reserved prefix; raw input bare or padded); the existing
+`team-task-publish` checks (rationale, rights, ordinary key replay or
+mismatch, stale base); the observed draft identity against the stored
+linked draft; the linked handoff's state. Order: reserved prefix (after
+team scope, before the WS rationale guard), then the existing rationale
+and right checks, then the key replay or mismatch, then the observed
+identity, stored link and base (inside the publish transaction, before
+the draft discard), then the linked state.
 
 | Id | First failing check, or the accepted case | Result |
 | --- | --- | --- |
 | H36 | load by an agent | refused: drafts are the human's |
 | H37 | load of a handoff not `open` (stale or ended) | refused naming the state; draft unchanged |
 | H18 | load with a draft and `replace` false | refused; draft and handoff unchanged |
-| H19 | load accepted | draft holds the prepared fields with `handoff_id`; handoff `open` |
-| H33d | publish linked draft whose canonical key `k` starts with `handoff:` (bare or padded raw input) | refused before the draft or handoff is read; no revision; draft and handoff unchanged (H stays `open`) |
-| H17r | publish linked draft, ordinary key already names a revision | that revision returned as today; nothing written; handoff unchanged |
+| H19 | load accepted | draft holds the prepared fields with `handoff_id`, base = the handoff's base revision and a fresh server-owned draft identity; handoff `open` |
+| H43 | save, rebase or linked publish whose observed identity is not the stored linked draft's (an old form from before a re-load, or an unrelated form) | refused until the form refreshes; the stored replacement draft, its link and the handoff unchanged; the form keeps its unsaved text |
+| H42 | save or rebase by the observed linked draft that moves its base | saved; text kept; link and identity detached; handoff unchanged |
+| H41 | save by the observed linked draft at the same base | saved; identity and link kept; handoff unchanged |
+| H33d | publish linked draft whose canonical key `k` starts with `handoff:` (bare or padded raw input) | refused before the rationale guard and before the draft or handoff is read; no revision; draft and handoff unchanged (H stays `open`) |
+| H17r | publish linked draft, the same ordinary key and payload already name its revision (a resend, also after its own draft was discarded) | that revision returned as today; nothing written; handoff unchanged |
+| H17m | publish linked draft, the ordinary key names a revision with a different payload or a different linked handoff | refused naming the first differing field, as today; nothing written |
 | H38s | publish linked draft, draft base no longer current (including after a prepared publish of the same handoff) | refused by the existing stale-base check; no second revision; handoff unchanged |
-| H17 | publish linked draft, handoff `open` | revision N+1 with the edited fields and `handoff_id`; handoff `published` as edited with both hashes; one wakeup |
+| H17 | publish linked draft, observed identity, link and base verified, handoff `open` | revision N+1 with the edited fields and `handoff_id`; handoff `published` as edited with both hashes; one wakeup |
 | H38 | publish linked draft, base current, handoff declined, withdrawn, superseded or closed | published as an ordinary revision with no association; the ended handoff is unchanged (a superseding `open` handoff turns `stale` by D4) |
+| H44 | explicit ordinary publication (owner `task_amend`, or a form publish that observed no linked draft) while a replacement linked draft exists | published as today; the pending handoff turns `stale` (H20); the replacement draft is kept, not discarded |
+
+Readouts and controls: each H-DRAFT row is driven through the real WS
+commands (`team-task-draft` save and rebase, `team-task-handoff-load-draft`,
+`team-task-publish`) and read back as the stored draft (text, base,
+identity, link), the handoff row and the revisions; the client test drives
+the form so that it sends the observed identity it loaded. Traces: load,
+edit, save (H41), publish (H17), resend after the discard (H17r); load,
+another revision makes H `stale` (H20), rebase (H42), publish → an
+ordinary revision with no association, H stays `stale` (H21);
+form A loads H, H is re-loaded with `replace` in form B, form A saves or
+publishes → H43; form B's linked publish → H17.
 
 **H-OTHER — a publication not from this handoff** (any author, the
 ordinary entry with no linked draft, or another handoff's publication).
@@ -464,10 +653,16 @@ newline); the task's pending handoff state.
 
 | Id | Case | Result |
 | --- | --- | --- |
-| H33 | canonical key `k` starts with `handoff:` (bare or padded raw input) | refused before any read; nothing written; after a restart the handoff is as before (H29: an `open` one stays `open`) |
+| H33 | canonical key `k` starts with `handoff:` (bare or padded raw input) | refused after team scope and before the WS rationale guard or any addressed read; nothing written; after a restart the handoff is as before (H29: an `open` one stays `open`) |
 | H20 | ordinary, pending handoff `open` | revision published as today; handoff `stale` naming it; one wakeup `stale` |
 | H21 | ordinary, pending handoff `stale` | revision published; handoff stays `stale`, newest revision shown; no second wakeup |
 | H39 | ordinary, no pending handoff | revision published as today (a padded key is stored trimmed, as today); no handoff row changes |
+
+Mixed-error rows: a reserved key together with a blank rationale, an
+unknown or foreign task id, a stale base, or a caller without the
+publication right reads H33 (H33d with a linked draft), never the other
+refusal. Other paths: the pause resolution's Adapt, which publishes
+through the store under its `pause:` key, reads H20 or H21.
 
 **H-SETTLE — decline and withdraw.** Axes: action; right (decline: human
 or owner; withdraw: requester or its group); reason (given, empty);
@@ -489,6 +684,11 @@ of an earlier fix task (`prepareOverrideFix`).
 | --- | --- | --- |
 | H27 | open or stale | `closed` in the status transaction; one wakeup `closed` |
 | H40 | published or ended | unchanged (a published handoff's follow-up ends by W5) |
+
+Both orders are traces: publish then close → `published` (H12, then H40),
+one `published` wakeup only; close then prepared publish → `closed` (H27),
+then H15 naming `closed`, one `closed` wakeup only. The close rows run
+through `setStatus`, `prepareStatus().commit` and the real override path.
 
 **H-NEUTRAL — events that grant nothing.** A decision answer, own call,
 or an override that does not close the handoff's task; a journal note;
@@ -524,6 +724,15 @@ never proves publication.
 | --- | --- | --- |
 | H29 | `associationPresent` false, `unassociatedReservedKeyPresent` false, task open, and `open` with current base or `stale` | unchanged; no mail |
 
+H29 holds three tuples: (`open`, current), (`stale`, behind) and
+(`stale`, current). The first two are what legal histories produce. The
+third is a tolerated no-op that no legal history produces (`stale` is
+entered only by a revision past the base, and revisions never go back);
+its reason set is empty because no U-claim names it, and the sweep
+neither rewrites it nor sends a wakeup for it. The completeness test
+marks it apart from the two produced tuples, and P4's generated histories
+never reach it.
+
 Paired witnesses (asserted on the classification before the restart
 runs, since both restarts are no-ops): (1) both revision facts false,
 task open, base current, `open` → reason set empty, exactly H29; (2) the
@@ -548,9 +757,14 @@ Unreachable, with reasons:
   axis) — the ordinary entry refuses the prefix (H33, H33d), the
   prepared entry writes the association with its key, and before this
   change no handoff id existed to collide with (ids are server-generated).
-- U7: a linked draft whose base is current while its handoff is `stale` or
-  `published` — each state is entered only by a revision past that base
-  (D4, D3), so H38s catches every such publish first.
+- U7: a linked draft (link present) whose base differs from its
+  handoff's base revision, or is current while its handoff is `stale` or
+  `published` — a load writes the handoff's base (H19), only a same-base
+  save of the observed linked draft keeps the link (H41), any base change
+  or rebase detaches it (H42), a foreign form cannot write over it (H43),
+  and `stale` and `published` are entered only by a revision past that
+  base (D4, D3); so H38s catches every linked publish of such a handoff
+  first.
 
 Each U predicate reads only declared observations of the partitions that
 evaluate it, so no reason is read from undeclared state or dropped by a
@@ -564,7 +778,7 @@ prefilter:
 | U4 | none enumerated | an ended state is a declared value whose commands have rows (H26, H40, H15, H37); the claim that its row never changes is proved by task 2.2's guarded-`UPDATE` rows |
 | U5 | H-RESTART, table W (W-U1) | state (pending) × task status |
 | U6 | H-PUB, H-RESTART | the prepared-key row without H's association: H-PUB's R (R1, R4) and H-RESTART's `unassociatedReservedKeyPresent` |
-| U7 | H-DRAFT | draft base relation × linked handoff state |
+| U7 | H-DRAFT | link present × draft base against the handoff's base and the task's revision × linked handoff state, over the load, save, rebase and publish rows (H19, H41–H43) |
 
 Completeness claim (findings-7c473fea F4: exclusion is one
 classification with a set of reasons). The completeness test enumerates
@@ -593,12 +807,12 @@ then task closed, then base advanced.
 | Id | Seeded state | U_reasons | Command | Result |
 | --- | --- | --- | --- | --- |
 | DF1 | pending handoff with an associated revision | {U1} | startup sweep | `published` with that revision; its wakeup if unsent |
-| DF2 | pending handoff on a closed task | {U5} | startup sweep | `closed`; its wakeup |
+| DF2 | `open` handoff on a closed task, its requester context-exhausted, its group worktree-scoped | {U5} | startup sweep through the real composition | `closed`; one `closed` wakeup as group mail delivered to an eligible live member of the group despite task-close filtering; no task assignment created; the exhausted requester not restored |
 | DF3 | `open` handoff, task revision past its base | {U3} | startup sweep | `stale` naming the newest revision; its wakeup |
 | DF4a | orphan reserved key (`unassociatedReservedKeyPresent` true), no association, task open, base current, `open` — witness (1)'s snapshot plus the orphan row | {U6} | startup sweep | never `published`; stays `open`; no mail; the orphan revision is kept |
 | DF4b | orphan reserved key, no association, task open, base behind (the task advanced), `open` | {U3, U6} | startup sweep, then a second restart | first: never `published`, `stale` only because the task advanced, one `stale` wakeup; second: still excluded as `{U6}` (now `stale`), writes and sends nothing, the orphan revision is kept |
-| DF5 | associated revision on a closed task, base behind | {U1, U3, U5} | startup sweep | `published` once (association first), one `published` wakeup, no `closed` or `stale` |
-| DF5o | DF5's snapshot plus a separate orphan reserved-key revision | {U1, U3, U5, U6} | startup sweep | as DF5: `published` with the associated revision (never the orphan), one `published` wakeup; the orphan revision is kept |
+| DF5 | `open` handoff with an associated revision on a closed task, base behind | {U1, U3, U5} | startup sweep | `published` once (association first), one `published` wakeup, no `closed` or `stale` |
+| DF5o | DF5's snapshot plus a separate orphan reserved-key revision | {U1, U3, U5, U6} | startup sweep, seeded twice: with the requester live, and through the real composition with the requester archived | as DF5: `published` with the associated revision (never the orphan), one `published` wakeup; the orphan revision is kept; with the requester archived the wakeup is group mail to a live member of its group, none to the archived session |
 | DF6 | revision holding `handoff:<id>` with no association (R1), handoff `open` | {U6} | Publish prepared revision | refused naming that revision; handoff unchanged; never `published` |
 | DF6p | R4: the handoff `published` through its linked revision, plus an orphan `handoff:<id>` row | {U6} | Publish prepared revision | refused; the orphan is never returned as the fulfilling revision; nothing written |
 
@@ -663,7 +877,7 @@ dispatched mail):
 | Id | From | Event | Result |
 | --- | --- | --- | --- |
 | S7 | S1 | the handoff is published | no owner-publication wait; the publication is not meaningful progress; no stall alert raised by the transition |
-| S8 | S3 | the handoff is published as revision N | the diagnosis closes, one fix attempt naming revision N is dispatched, the backstop reads zero, and no **Publish a task revision** item appears |
+| S8 | S3 | the handoff is published as revision N | the diagnosis closes, exactly one fix attempt is dispatched against revision N, the revision actually published (as the diagnosis stage reads it), the backstop reads zero, and no **Publish a task revision** item appears |
 | S9 | S1 | the handoff becomes stale | still owner-publication, next actor the requester side (W3/W4) |
 | S10 | S1 | the handoff ends (declined, withdrawn, closed) | no owner-publication wait; the change's other waits or stall rules apply as today |
 
@@ -675,9 +889,11 @@ generators use the existing `mulberry32` helper (`src/shared/__tests__/contractF
 
 - **P1 exactly once.** Seeded command sequences over request, re-request,
   publish-prepared (1–3 duplicates, some concurrent through
-  `Promise.all`), edit-and-publish, other publication, decline, withdraw,
-  close, neutral events, ordinary publications (including plain and
-  linked-draft ones that try the reserved prefix), and restart. Invariant: per handoff at most one
+  `Promise.all`), edit-and-publish (with same-base saves, rebases and
+  stale-form saves of the linked draft), other publication (including the
+  Adapt path), decline, withdraw, close (before and after a publication),
+  ownership transfer, neutral events, ordinary publications (including
+  plain and linked-draft ones that try the reserved prefix), and restart. Invariant: per handoff at most one
   revision whose `handoff_id` is it; `published` iff exactly one such
   revision; no revision outside the handoff path holds a `handoff:` key;
   at most one wakeup row and one mailbox row per (handoff, transition); at
@@ -738,7 +954,10 @@ generators use the existing `mulberry32` helper (`src/shared/__tests__/contractF
     exactly when that count is at least one; confirmed delivery reads
     `delivered-awaiting-ack`, an uncertain notice reads
     `notice-uncertain`, a queued one `notice-queued`, and none of them
-    offers either action.
+    offers either action. The generated histories include a confirmed
+    delivery, a queued notice or an uncertain notice at or above the
+    published revision followed by a later failed notice: the real
+    `notify` writes nothing there, and nothing is offered.
   Seed `0x0A11CE07`, 200 cases.
 
 ### Mutation controls
@@ -762,7 +981,8 @@ which.
 - MU4 the publisher check accepts any agent of the team (H13).
 - MU5 deciding a card that mentions a handoff publishes it (H28, P3).
 - MU6 the attention source keeps only `open` (W3, W4).
-- MU7 liveness always reads live (W2, F2–F5, D6 recipient row).
+- MU7 liveness always reads live (W2, F2–F5, D6 recipient rows, DF2's
+  exhausted-requester route).
 - MU8 `owner-publication` is not appended in `stageWaits` (S1).
 - MU9 the request tool is not registered in the team tool server, and
   separately the publish command is missing from the WS whitelist (CP1).
@@ -808,6 +1028,19 @@ which.
   rows (H10/H14 snapshot rows; oracle hazard "An idempotence oracle
   observing only the uniquely constrained row").
 
+Further controls without their own id (each applied once in the task that
+names it, with the oracle it must fail): replay looked up before the
+publisher right (the H13 former-owner trace returns the revision); request
+replay before the requester right or ignoring the requester side (H11s,
+the loss-of-eligibility ruling); the reserved-prefix check placed after the
+WS rationale guard (the blank-rationale mixed-error row reads the
+rationale refusal); size limits checked after the contract parse (H7's
+combined ruling); a same-base save dropping the link (H41); a rebase
+keeping it (H42, U7); the lineage check skipped or run outside the publish
+transaction (H43); an ordinary publication discarding a replacement
+linked draft (H44); the wakeup carrying a task attachment (DF2's closure route);
+the recipient reselected at boot (CP3's queued wakeup).
+
 ### Production-composition checkpoints
 
 - **CP1** (before expanding beyond the request and publish path): through
@@ -831,8 +1064,19 @@ which.
   as an older build or a manual edit could leave it) beside a healthy
   `open` handoff with a current base on another task; after start the
   first reads `stale` and one wakeup mail is queued and dispatched, and
-  the second stays `open` with no mail (H29). Mutant: MU17 (the sweep's
-  call removed) leaves the first `open` with no mail.
+  the second stays `open` with no mail (H29). The same boot also carries
+  a `published` wakeup that was committed and queued before a crash, with
+  its requester's chat record restored live: it is dispatched once by its
+  original message id, without reselecting the recipient, and a second
+  boot sends no further message. A DF5o fixture whose requester is
+  archived reads `published` with one group wakeup through the current
+  group routing, and DF2 with a context-exhausted requester in a
+  worktree-scoped group delivers its `closed` wakeup to an eligible live
+  member, with no task assignment and no restore of the requester.
+  Mutants: MU17 (the sweep's call removed) leaves the first `open` with no
+  mail; attaching the wakeup to the task as task mail makes DF2's closure
+  wakeup dead-letter; reselecting the recipient at boot fails the queued
+  wakeup row.
 - **CP2** (before attention and supervision polish): through the real
   supervision monitor and loader, a change whose holder is archived and
   whose task has an open handoff reads `owner-publication`, raises no
@@ -884,18 +1128,19 @@ states. There is no in-place downgrade.
 ## Implementation contract
 
 ### Acceptance
-- A1: `task_request_publication` records one `open` handoff per partition H-REQ (H1–H11, in its check order), with exact provenance (task, base revision and contract identity, requester, payload hash, base commit, evidence) and no revision, notice, fact or mail.
-- A2: **Publish prepared revision** (human command and owner `task_amend { handoff_id }`) publishes exactly one revision through the prepared entry with the prepared fields, notices per notify, the server-written `handoff_id` association and the handoff `published`, per H-PUB and H-DRAFT (H12–H19, H33d, H35–H38s). Association is the task-scoped any-key fact in every reader, over H-PUB's revision facts R0–R4 (140 tuples, 32 healthy); fulfillment is read only from it. The ordinary entry trims the request key once (as today), refuses a reserved `handoff:` key before any draft read, replay lookup or write, and uses only that key for lookup and storage, with no linked-draft exemption (H33, H33d); only the prepared entry builds `handoff:<id>`, so neither command replays the other's revision (H16b, H38s); DF6/DF6p refuse an orphan prepared key without returning it.
+- A1: `task_request_publication` records one `open` handoff per H-REQ (H1–H11) with exact task, base revision and contract identity, requester, payload hash, base commit and evidence, and no revision, notice, publication fact or mail. Scope and current requester rights precede replay. Keep per-task key uniqueness and return exact replays only to the still-eligible original requester or its recorded group. Preserve their replay after a stale or closed transition. Refuse a different requester side or payload without returning the earlier handoff or writing.
+- A2: **Publish prepared revision** publishes exactly one revision with the prepared fields, notices per notify, and a server-written `handoff_id`. Scope and current publisher rights precede rejection of prepared payload overrides, replay and state checks (H-PUB, 140 tuples, 32 admitted). Fulfillment is the task-scoped any-key association, independent of prepared-key lookup. Only an authorized associated prepared replay returns that revision. DF6/DF6p refuse an orphan key. Ordinary publication trims its key once and refuses the reserved `handoff:` prefix before the WS rationale guard, addressed task/draft reads, lookups or writes, with no linked-draft exemption. Its key namespace stays disjoint from prepared publication. Keep ordinary same-payload replay and differing-field refusal.
 - A3: Every publication not from a pending handoff makes it `stale`, every task close (including `prepareStatus` and override cancellations) makes it `closed`, decline and withdraw end it with reason and actor, and neutral events change nothing, per H-OTHER, H-SETTLE, H-CLOSE and H-NEUTRAL (H20–H28b, H39, H40).
 - A4: The schema is one numbered migration appended to `MIGRATIONS` (never the baseline or a constructor), and startup reconciliation runs from `SessionMailbox.start()` before dispatch release, changing nothing in the healthy domain (H29, which requires neither an associated revision nor an orphan reserved key in one pre-sweep snapshot) and applying DF1–DF5o once to seeded defensive fixtures (CP3), with its row in `docs/recovery-matrix.md`.
-- A5: Each `published`, `declined`, `stale` and `closed` transition enqueues exactly one system message to the live requester, else its group, in the transition's transaction.
+- A5: Each `published`, `declined`, `stale` and `closed` transition enqueues exactly one system notification in its transaction, to the live requester or its group. It carries task and handoff identity without attaching task work. The real scoped-group route delivers closure mail despite task-close filtering. A committed queued wakeup is dispatched after restart by its original identity, and a failed delivery does not undo the transition.
 - A6: The workspace attention snapshot matches tables W (W1–W13 with W12d, in `handoffPhase`'s order: closed, acknowledged, no holder, delivered awaiting acknowledgement, uncertain, queued, failed, not notified) and F; a closed task or the current claimant's acknowledgement of the published revision suppresses every follow-up item and notice action even where `notify` could still write (P7a), and only for an open task with a live claimant below that acknowledgement are **Retry notification** and **Notify** offered exactly when `TaskNotices.notify` with a fresh key writes a new notice (P7b); and the post-Amend item is suppressed per S3.
 - A7: Supervision lists `owner-publication` per S1–S2, keeps S6's precedence, names a gone holder per S5, and follows transitions S7–S10, with parallel counts, dependencies and landing slot unchanged (P5).
 - A8: `task_get` shows handoff rows and one handoff whole, team-scoped; delivered task context names a pending handoff without using its text as the direction.
 - A9: The task detail shows the handoff panel with diff, provenance and the three actions; the agent guidance names `task_request_publication` and states that a card answer publishes nothing.
+- A10: Saving the same observed linked draft at the same base preserves its server-owned association; moving the base keeps the text and detaches it. For a new save or publication using the linked draft, verify the observed draft identity, stored link and base before writing or discarding. A stale form encountering a replacement linked draft is refused without mutation. A legitimate edit publishes the linked revision once, a matching resend works after draft discard, and a reused key for a different linked intent is refused. Explicit ordinary publication leaves a replacement draft intact and retains existing stale, ended-handoff and replay behavior.
 
 ### Invariants
-- I1: Only the human or the task's owner session publishes or declines; Kawai, other agents, a card answer, mail, a note, elapsed time, a restart or an archival never publish or settle a handoff.
+- I1: Only the human or the current live task owner publishes or declines. Withdraw and supersede keep requester-side rights. Task closure and D7 reconciliation reflect authorized persisted facts. A card answer, mail, note, elapsed time, ordinary restart or archival never publishes or settles a handoff.
 - I2: A handoff is published at most once, and each transition sends at most one wakeup, across replays, concurrency and crashes (P1, P4).
 - I3: No existing task, revision, card, decision, plan, receipt or publication gate is backfilled or changed; plan validation reads no handoff.
 - I4: Execution ownership, Stop/Retry, acceptance, max-parallel, dependency and landing-slot behavior are unchanged (P5).
@@ -948,7 +1193,7 @@ states. There is no in-place downgrade.
 - V2: P1–P7 run with the stated seeds and case counts through `propertyCases`; P4 runs the H table as the reference model with a crash at each named transaction boundary.
 - V3: Each mutant MU1–MU21 (with MU1b–MU1f, MU15b, MU15c, MU16b) is applied once and makes its cited oracle fail; the result maps each oracle id to a test title and a killed mutant.
 - V4: CP1, CP2 and CP3 pass through the production composition before the work expands past them, with their failure paths and omission mutants.
-- V5: The blind oracle reading (inputs-only commit, a cross-model advisor's outputs, author's outputs, resolved diff) is journaled and bound by the Lead before production code.
+- V5: The inputs-only commit, cross-model blind output, sealed author outputs and comparisons are journaled. The Lead binds the exact resolved OpenSpec artifact commit before any production code.
 - V6: `bun run check` passes on the clean committed head with the pinned Bun, and `scripts/verify-result.ts` runs on the submitted commit; UI changes are verified in a real browser against a disposable server and database. The migration is covered by `src/server/__tests__/schemaMigrations.test.ts` and a new migration test (fresh database, a database at the previous version, a failing `up` rolling back with its backup).
 
 ### Excluded
