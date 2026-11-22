@@ -147,7 +147,7 @@ The human SHALL be able to load an open handoff into the task's draft and edit i
 - **THEN** the revision is published as an ordinary revision, and H stays declined
 
 ### Requirement: A loaded draft stays linked only as the draft that was loaded
-Saving the draft loaded from a handoff at the same base SHALL keep its link to the handoff; moving its base SHALL keep the text and drop the link. A save or publish from a form that did not load the stored linked draft SHALL be refused without change. A resend of a linked publish SHALL return its revision, and an explicit ordinary publication SHALL leave a loaded draft in place.
+Saving the draft loaded from a handoff at the same base SHALL keep its link to the handoff; moving its base SHALL keep the text and drop the link. A save or draft publish from a form that did not load the stored linked draft SHALL be refused without change; ordinary intent SHALL never be inferred from that. A resend of a committed publish SHALL return its revision, and only an explicit ordinary publication SHALL pass a loaded draft, leaving it in place.
 
 #### Scenario: Saving the loaded draft keeps its link
 - **WHEN** the human loads handoff H into the draft, edits it, saves it, and publishes it
@@ -160,6 +160,14 @@ Saving the draft loaded from a handoff at the same base SHALL keep its link to t
 #### Scenario: A stale form cannot write over a replacement draft
 - **WHEN** handoff H was loaded again into the draft from a second window, and the first window then saves or publishes
 - **THEN** it is refused until the first window refreshes, and the stored draft and H are unchanged
+
+#### Scenario: An older form keeps its draft intent
+- **WHEN** a window editing an earlier ordinary draft publishes it as a draft after another window loaded handoff H into the draft
+- **THEN** it is refused until the window refreshes, nothing is published, and the loaded draft and H are unchanged
+
+#### Scenario: An explicit ordinary publication passes a loaded draft
+- **WHEN** the same window, with the same fields, instead chooses an ordinary publication
+- **THEN** the revision is published with no link to H, H reads stale, and the loaded draft is kept
 
 #### Scenario: A resend after publishing returns the same revision
 - **WHEN** the human's publish of the draft loaded from H is resent with the same command key after the draft was discarded

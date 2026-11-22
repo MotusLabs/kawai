@@ -222,7 +222,13 @@ edited" when it differs.
 Draft provenance (A10). The form captures the draft identity it loaded
 together with the fields it edits, and sends that observed identity (or
 none, for a form opened without a stored draft) with every save and
-publish. The marker is only a precondition and carries no publication
+publish. With its edited values it also captures its publish intent:
+a draft publish (the existing `team-task-publish` discriminator
+`fromDraft: true`, set from the draft the form was editing when the edit
+began, never re-read from a later draft snapshot) or an explicit ordinary
+publication (`fromDraft: false`, chosen by the operator; an owner's
+`task_amend` is always ordinary). Intent is never inferred from a missing
+identity. The marker is only a precondition and carries no publication
 authority; the server compares it with the stored draft:
 
 - a save whose observed identity is the stored linked draft's, at the
@@ -231,16 +237,19 @@ authority; the server compares it with the stored draft:
   and detaches the link and identity, leaving the handoff as it was
   (H42); `taskDrafts.ts`'s `INSERT OR REPLACE` save must carry the
   columns over explicitly, so it never drops them by accident;
-- a save or linked publish whose observed identity is not the stored
-  linked draft's (an old form from before a re-load, or an unrelated form
-  that never observed it) is refused until the form refreshes; the stored
+- a save, rebase or draft publish (`fromDraft: true`) whose observed
+  identity does not match the stored linked draft's is refused until the
+  form refreshes, whatever the form was editing: an old form from before
+  a re-load, or a form editing an earlier ordinary draft that another
+  window replaced by loading H (it sends no identity). The stored
   replacement draft, the handoff and the form's unsaved text are kept
   (H43). Matching bases never attach a draft, and a mismatch never
   silently detaches one;
-- an explicit ordinary publication (an owner's `task_amend`, or a form
-  publish that observed no linked draft) publishes as today, makes the
-  handoff stale by D4 and leaves a replacement linked draft in place
-  (H44); that draft's later publish meets the stale-base check (H38s);
+- only an explicit ordinary publication (`fromDraft: false`, or an
+  owner's `task_amend`) publishes past a replacement linked draft: as
+  today, with no association, making the handoff stale by D4 and leaving
+  the replacement in place (H44); that draft's later publish meets the
+  stale-base check (H38s);
 - the linked publish verifies the observed identity, the stored link and
   the base inside the shared publish transaction, before the draft
   discard, so a replacement that lands between read and write is refused,
@@ -607,8 +616,13 @@ Load axes: caller (human, agent); handoff state; draft (none, exists);
 Save and rebase axes: the form's observed draft identity (the stored
 linked draft's, another or none); base (unchanged, moved). Order: team/id,
 observed identity, base.
+Publish adds the form's publish intent (draft: `fromDraft: true`;
+ordinary: `fromDraft: false` or `task_amend`), captured with the form's
+values. Against a stored linked draft, a draft publish needs the matching
+observed identity (else H43) and an ordinary publish ignores the draft
+(H44); without a stored linked draft both behave as today.
 Publish (the ordinary entry) axes: the canonical key `k` (ordinary,
-reserved prefix; raw input bare or padded); the existing
+reserved prefix; raw input bare or padded); the publish intent; the existing
 `team-task-publish` checks (rationale, rights, ordinary key replay or
 mismatch, stale base); the observed draft identity against the stored
 linked draft; the linked handoff's state. Order: reserved prefix (after
@@ -623,7 +637,7 @@ the draft discard), then the linked state.
 | H37 | load of a handoff not `open` (stale or ended) | refused naming the state; draft unchanged |
 | H18 | load with a draft and `replace` false | refused; draft and handoff unchanged |
 | H19 | load accepted | draft holds the prepared fields with `handoff_id`, base = the handoff's base revision and a fresh server-owned draft identity; handoff `open` |
-| H43 | save, rebase or linked publish whose observed identity is not the stored linked draft's (an old form from before a re-load, or an unrelated form) | refused until the form refreshes; the stored replacement draft, its link and the handoff unchanged; the form keeps its unsaved text |
+| H43 | save, rebase or draft publish (`fromDraft: true`) whose observed identity does not match the stored linked draft's (an old form from before a re-load, or a form editing an earlier ordinary draft, sending no identity) | refused until the form refreshes; the stored replacement draft, its link and the handoff unchanged; the form keeps its unsaved text |
 | H42 | save or rebase by the observed linked draft that moves its base | saved; text kept; link and identity detached; handoff unchanged |
 | H41 | save by the observed linked draft at the same base | saved; identity and link kept; handoff unchanged |
 | H33d | publish linked draft whose canonical key `k` starts with `handoff:` (bare or padded raw input) | refused before the rationale guard and before the draft or handoff is read; no revision; draft and handoff unchanged (H stays `open`) |
@@ -632,7 +646,7 @@ the draft discard), then the linked state.
 | H38s | publish linked draft, draft base no longer current (including after a prepared publish of the same handoff) | refused by the existing stale-base check; no second revision; handoff unchanged |
 | H17 | publish linked draft, observed identity, link and base verified, handoff `open` | revision N+1 with the edited fields and `handoff_id`; handoff `published` as edited with both hashes; one wakeup |
 | H38 | publish linked draft, base current, handoff declined, withdrawn, superseded or closed | published as an ordinary revision with no association; the ended handoff is unchanged (a superseding `open` handoff turns `stale` by D4) |
-| H44 | explicit ordinary publication (owner `task_amend`, or a form publish that observed no linked draft) while a replacement linked draft exists | published as today; the pending handoff turns `stale` (H20); the replacement draft is kept, not discarded |
+| H44 | explicit ordinary publication (`fromDraft: false` chosen by the operator, or an owner's `task_amend`) while a replacement linked draft exists | published as today; the pending handoff turns `stale` (H20); the replacement draft is kept, not discarded |
 
 Readouts and controls: each H-DRAFT row is driven through the real WS
 commands (`team-task-draft` save and rebase, `team-task-handoff-load-draft`,
@@ -643,7 +657,19 @@ edit, save (H41), publish (H17), resend after the discard (H17r); load,
 another revision makes H `stale` (H20), rebase (H42), publish → an
 ordinary revision with no association, H stays `stale` (H21);
 form A loads H, H is re-loaded with `replace` in form B, form A saves or
-publishes → H43; form B's linked publish → H17.
+publishes → H43; form B's linked publish → H17. Paired WS witnesses on
+one snapshot (same task, stored linked draft, base and fields; form A was
+editing an earlier ordinary draft and sends no identity): A's draft
+publish (`fromDraft: true`) → H43, nothing written; the same values sent
+as an explicit ordinary publication (`fromDraft: false`) → H44. Client
+trace: form A starts editing the ordinary draft, the replacement draft
+snapshot arrives, and A's publish still carries `fromDraft: true` and no
+identity (its original intent), so the server answers H43 and the form
+keeps its text.
+
+The replay of an already committed linked or ordinary publication (H17r)
+is decided before these new-write checks, after the right checks, so it
+is never refused by H43.
 
 **H-OTHER — a publication not from this handoff** (any author, the
 ordinary entry with no linked draft, or another handoff's publication).
@@ -1037,8 +1063,10 @@ WS rationale guard (the blank-rationale mixed-error row reads the
 rationale refusal); size limits checked after the contract parse (H7's
 combined ruling); a same-base save dropping the link (H41); a rebase
 keeping it (H42, U7); the lineage check skipped or run outside the publish
-transaction (H43); an ordinary publication discarding a replacement
-linked draft (H44); the wakeup carrying a task attachment (DF2's closure route);
+transaction (H43); the publish intent re-read from the latest draft
+snapshot or inferred from a missing identity (the paired H43/H44
+witnesses and the client intent trace); an ordinary publication
+discarding a replacement linked draft (H44); the wakeup carrying a task attachment (DF2's closure route);
 the recipient reselected at boot (CP3's queued wakeup).
 
 ### Production-composition checkpoints
