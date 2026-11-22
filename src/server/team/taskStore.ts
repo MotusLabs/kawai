@@ -404,7 +404,8 @@ export class TaskStore {
       .get(id, input.requestKey) as { revision: number } | null
     if (!row) return null
     const revision = this.revisions(id).find(entry => entry.revision === row.revision)!
-    const diff = publishPayloadDiff(revision, input)
+    // The payload first, then a linked draft's intent (owner-publication-handoff H17m).
+    const diff = publishPayloadDiff(revision, input) ?? (input.linkedHandoffDiffers?.(revision.revision) ? 'linked handoff' : null)
     if (diff) throw new Error(`Request key already used with a different ${diff}; nothing was published`)
     return { replay: true, task: this.get(id)!, revision }
   }

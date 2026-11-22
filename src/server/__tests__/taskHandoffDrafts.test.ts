@@ -148,7 +148,7 @@ describe('H-DRAFT: save and rebase', () => {
   // @covers: task-publication-handoffs › A loaded draft stays linked only as the draft that was loaded › Saving the loaded draft keeps its link
   // @covers: task-publication-handoffs › A loaded draft stays linked only as the draft that was loaded › A resend after publishing returns the same revision
   // @covers: task-publication-handoffs › Editing before publishing still fulfills the handoff › Published as edited
-  test('trace: load, save at the same base (H41), publish (H17), resend after the discard (H17r)', async () => {
+  test('trace: load, save at the same base (H41), publish (H17), resend after the discard and after a replacement load (H17r), prepared publish refused (H16b)', async () => {
     const task = kawaiTask()
     const h = await requestOn(task.id)
     await load(task.id, h.id)
@@ -170,6 +170,15 @@ describe('H-DRAFT: save and rebase', () => {
     expect(await publish(task.id, fields)).toBeNull()
     expect((sent.at(-1) as { replay: boolean; revision: number })).toMatchObject({ replay: true, revision: 2 })
     expect(snapshot()).toEqual(before)
+    // H16b: the prepared publish of H now reads its linked revision and is refused.
+    await refused(() => command({ type: 'team-task-handoff-publish', taskId: task.id, handoffId: h.id, requestKey: 'prep' } as Command), /published as revision 2 through its linked draft/)
+    // The committed replay is decided before the new-write checks: a replacement linked draft never makes it H43.
+    const next = await requestOn(task.id)
+    await load(task.id, next.id)
+    const again = snapshot()
+    expect(await publish(task.id, fields)).toBeNull()
+    expect((sent.at(-1) as { replay: boolean; revision: number })).toMatchObject({ replay: true, revision: 2 })
+    expect(snapshot()).toEqual(again)
   })
 
   // @covers: task-publication-handoffs › A loaded draft stays linked only as the draft that was loaded › Rebasing the loaded draft drops its link
