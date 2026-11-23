@@ -11,26 +11,27 @@
 import { implementTaskText } from './taskText'
 import { createHash } from 'node:crypto'
 import type { TeamIdentity } from '../../team/teamIdentity'
-import type { TaskCaller, TaskService } from '../../team/TaskService'
+import type { TaskService } from '../../team/TaskService'
+import type { SystemCaller } from '../../team/systemCaller'
 import type { AssignmentService } from '../../team/AssignmentService'
 import type { TaskResultService } from '../../team/TaskResultService'
 import { runGitAsync } from '../../git/gitCommand'
 import { manifestHashInput, type AttemptManifest } from '../../../shared/planExecution'
-import { dispatchOwedFix } from './owedFix'
+import { dispatchOwedFix, dispatchOwedUpdate } from './owedFix'
 import { attemptStatus } from './attemptStatus'
 import type { AttemptRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { fixInstruction, implementInstruction, instructionContract, updateInstruction } from './instructions'
 import { fixFindings, type FixFindings } from './fixFindings'
-import { refusable } from './stepRefusal'
+import { refusable, refusalOf, StepRefusal } from './stepRefusal'
 import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 import { renderContract } from '../../../shared/implementationContract'
 import { gitShowFile, snapshotContract, type ShowFile } from './contractSnapshot'
 import { currentOwedRow } from './owedSuccessor'
 
 /** The system caller (D2): minted only inside this module. */
-function kawaiCaller(team: TeamIdentity, executionId: string): TaskCaller {
+function kawaiCaller(team: TeamIdentity, executionId: string): SystemCaller {
   return { kind: 'system', team, origin: { kind: 'execution', executionId } }
 }
 
@@ -59,7 +60,13 @@ async function artifactsAt(cwd: string, startCommit: string, files: string[]): P
 /**
  * Create Kawai's task for the change and dispatch the implement attempt
  * (D7, D8). Idempotent per piece: an existing task or attempt row is kept,
- * and the dispatch replays under its request key.
+ * and the dispatch replays under its request key. The execution's revision
+ * is read once and re-checked after each await: an Apply that commits while
+ * the contract or git reads run moves the execution on, so this pass writes
+ * nothing more and the next tick starts again from the stored rows (review
+ * F1). The attempt, its dispatch, and the stamp commit in one transaction
+ * that checks the revision first, so a manifest always names the revision
+ * current when its assignment commits (A7, P4).
  */
 export async function dispatchImplementAttempt(deps: DispatchDeps, input: { executionId: string; change: string; group: string }): Promise<void> {
   const execution = deps.executions.execution(input.executionId)
@@ -71,12 +78,17 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
   const entry = revision.content.changes.find(candidate => candidate.change === input.change)
   if (!entry) return
   const roleProfiles = revision.content.roles.find(role => role.group === input.group)?.profiles ?? []
+  const moved = (): boolean => {
+    const fresh = deps.executions.execution(input.executionId)
+    return fresh === null || fresh.state !== 'running' || fresh.revision !== execution.revision || fresh.contentHash !== execution.contentHash
+  }
 
   // The task (D7): title, direction, acceptance, worktree, openspec link, plan link.
   let taskId = changeRow.taskId
   if (taskId === null) {
     // The contract at the baseline, read once (implementation-contract D4, E1–E5); never re-derived.
     const snapshot = await snapshotContract(deps.showFile ?? gitShowFile, changeRow.worktree, changeRow.baselineCommit, input.change)
+    if (moved()) return
     const task = await refusable('implement', () => deps.tasks.create(kawaiCaller(deps.team, input.executionId), {
       title: `${input.change} — ${deps.plans.get(execution.planId)?.title ?? execution.planId}`,
       ...implementTaskText(entry, revision.content),
@@ -115,36 +127,49 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
     roleProfiles,
   }
   const manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
-  const attempt = deps.executions.insertAttempt({
-    executionId: input.executionId, change: input.change, kind: 'implement', assignmentId: null,
-    manifest, manifestHash,
-  })
-
-  const change = deps.executions.change(input.executionId, input.change)!
-  const requestKey = `exec:${input.executionId}:${input.change}:attempt:${attempt.number}:${change.generation}`
-  const outcome = await refusable('implement', () => deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
-    taskId,
-    target: { kind: 'group', id: input.group },
-    instruction: implementInstruction({
-      planTitle: deps.plans.get(execution.planId)?.title ?? execution.planId,
-      revision: execution.revision,
-      change: input.change,
-      worktree: changeRow.worktree!,
-      branch: changeRow.branch!,
-      baseline: changeRow.baselineCommit!,
-      head: headSha,
-      acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
-      extraChecks: effectiveExtraChecks(revision.content, entry).map(check => check.name),
-      guidance: entry.guidance,
-      taskId,
-      manifestHash,
-      integrationBranch: integrationBranchOf(execution),
-      contract: instructionContract(deps.tasks.store.get(taskId)),
-    }),
-    requestKey,
-    ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-  }))
-  deps.executions.setAttemptAssignment(attempt.id, outcome.assignment.id)
+  const dispatchTask = taskId
+  // A refused send keeps its row (owed, the Retry's); the refusal surfaces after commit.
+  let refusal: StepRefusal | null = null
+  deps.executions.db.transaction(() => {
+    if (moved() || deps.executions.attempts(input.executionId, input.change).length > 0) return
+    if ((deps.tasks.store.get(dispatchTask)?.revision ?? 1) !== manifest.task.revision) return
+    const attempt = deps.executions.insertAttempt({
+      executionId: input.executionId, change: input.change, kind: 'implement', assignmentId: null,
+      manifest, manifestHash,
+    })
+    const change = deps.executions.change(input.executionId, input.change)!
+    const requestKey = `exec:${input.executionId}:${input.change}:attempt:${attempt.number}:${change.generation}`
+    let assignmentId: string
+    try {
+      assignmentId = deps.assignments.dispatchWithin(kawaiCaller(deps.team, input.executionId), {
+        taskId: dispatchTask,
+        target: { kind: 'group', id: input.group },
+        instruction: implementInstruction({
+          planTitle: deps.plans.get(execution.planId)?.title ?? execution.planId,
+          revision: execution.revision,
+          change: input.change,
+          worktree: changeRow.worktree!,
+          branch: changeRow.branch!,
+          baseline: changeRow.baselineCommit!,
+          head: headSha,
+          acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
+          extraChecks: effectiveExtraChecks(revision.content, entry).map(check => check.name),
+          guidance: entry.guidance,
+          taskId: dispatchTask,
+          manifestHash,
+          integrationBranch: integrationBranchOf(execution),
+          contract: instructionContract(deps.tasks.store.get(dispatchTask)),
+        }),
+        requestKey,
+        ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+      }).assignment.id
+    } catch (error) {
+      refusal = refusalOf('implement', error)
+      return
+    }
+    deps.executions.setAttemptAssignment(attempt.id, assignmentId)
+  })()
+  if (refusal !== null) throw refusal
 }
 
 /** What a fix attempt names: the failed round's checks and findings, and where to continue. */
@@ -397,17 +422,6 @@ async function dispatchOwedImplement(deps: DispatchDeps, input: { executionId: s
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
   }))
   deps.executions.setAttemptAssignment(newest.id, outcome.assignment.id)
-}
-
-/** The update attempt's re-send (A1): the failed update's facts live in the manifest. */
-async function dispatchOwedUpdate(deps: DispatchDeps, input: { executionId: string; change: string; group: string }, newest: AttemptRow): Promise<void> {
-  const roundId = newest.manifest.answers?.roundId ?? null
-  const round = roundId === null ? null : deps.executions.round(roundId) ?? null
-  if (round === null) return
-  await dispatchUpdateAttempt(deps, {
-    executionId: input.executionId, change: input.change, round,
-    update: newest.manifest.update ?? { base: '', files: [] },
-  })
 }
 
 /**

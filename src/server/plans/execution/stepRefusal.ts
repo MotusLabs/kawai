@@ -14,6 +14,13 @@ export class StepRefusal extends Error {
   }
 }
 
+/** A thrown service refusal as a StepRefusal; a database error is rethrown (synchronous calls inside a step's transaction). */
+export function refusalOf(stage: string, error: unknown): StepRefusal {
+  if (error instanceof StepRefusal) return error
+  if (error instanceof Error && error.name !== 'SQLiteError') return new StepRefusal(stage, error.message)
+  throw error
+}
+
 /** Run one service call of a step; its refusal becomes a StepRefusal. */
 export async function refusable<T>(stage: string, call: () => Promise<T>): Promise<T> {
   try {

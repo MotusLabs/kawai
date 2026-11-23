@@ -1,9 +1,10 @@
-// Deferred fix handoffs: rebuild the failed round's findings and the applied
-// diagnosis decision from stored rows after a hold or restart.
+// Deferred fix and update handoffs: rebuild the failed round's findings and
+// the applied diagnosis decision, or the failed update, from stored rows
+// after a hold or restart.
 import { DecisionStore } from '../decisions/decisionStore'
 import { diagnosisRationale } from '../decisions/diagnosisCards'
 import { DiagnosisStore } from './diagnosisStore'
-import { dispatchFix, type DispatchDeps, type FixAttemptInput } from './executionDispatch'
+import { dispatchFix, dispatchUpdateAttempt, type DispatchDeps, type FixAttemptInput } from './executionDispatch'
 import type { AttemptRow } from './executionRows'
 import { fixFindings } from './fixFindings'
 
@@ -55,3 +56,13 @@ export async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: 
   }, { id: newest.id, number: newest.number, manifestHash: newest.manifestHash })
 }
 
+/** The update attempt's re-send (A1): the failed update's facts live in the manifest. */
+export async function dispatchOwedUpdate(deps: DispatchDeps, input: { executionId: string; change: string; group: string }, newest: AttemptRow): Promise<void> {
+  const roundId = newest.manifest.answers?.roundId ?? null
+  const round = roundId === null ? null : deps.executions.round(roundId) ?? null
+  if (round === null) return
+  await dispatchUpdateAttempt(deps, {
+    executionId: input.executionId, change: input.change, round,
+    update: newest.manifest.update ?? { base: '', files: [] },
+  })
+}
