@@ -18,15 +18,9 @@ Approving another revision of the plan SHALL NOT change a running execution. It 
 - **THEN** the execution's current revision is 4, and its history lists revisions 3 and 4
 
 ### Requirement: An execution records what it started from
-An execution SHALL record its inputs at Start, and they SHALL never change afterwards:
-- the plan, the revision, and the content hash;
-- the validation report and input hash;
-- the base branch and its commit;
-- the floor checks with their CI mapping and the floor version;
-- the landing mode, the parallel limit, and the merge method;
-- who started it, and when.
+An execution SHALL record at Start, never to change: the plan, revision, and content hash; the validation report and input hash; the base branch and commit; the floor checks, CI mapping, and floor version; the landing mode, parallel limit, and merge method; who started it, and when.
 
-The revision, content hash, report, and input hash recorded at Start SHALL stay as the first entry of the execution's revision history. Apply SHALL only append later entries and advance the execution's current revision; it SHALL change no other Start input. A later edit of the team's settings SHALL apply only to later executions.
+Start's revision, hash, report, and input hash SHALL stay the history's first entry; Apply SHALL only append entries and advance the current revision. Later settings edits SHALL apply only to later executions.
 
 #### Scenario: Settings edited during an execution
 - **WHEN** the operator changes the team's parallel limit while an execution runs
