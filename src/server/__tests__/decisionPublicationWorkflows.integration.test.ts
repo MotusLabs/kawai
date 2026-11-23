@@ -127,8 +127,7 @@ test.each(['archived', 'killed'] as const)('W05 %s claimant retains the committe
   } finally { await runtime.teardown() }
 })
 
-// @covers: task-revision-publication › An approved handoff publishes as the human with its original notices › Delivery and acknowledgement remain distinct
-test.each(['delivered', 'dead', 'uncertain'] as const)('W06 %s notice and owner Notify or Retry retain the original publication and receipt', async (state) => {
+async function noticeOutcome(state: 'delivered' | 'dead' | 'uncertain') {
   const runtime = await publicationRuntime()
   try {
     const { manager, holder, task, teamPath, routed, route, db } = runtime
@@ -163,7 +162,12 @@ test.each(['delivered', 'dead', 'uncertain'] as const)('W06 %s notice and owner 
     expect((await read()).publication?.receipt).toEqual(receipt)
     expect(manager.tasks.store.acknowledgements.highest(task.id, holder)).toBeNull()
   } finally { await runtime.teardown() }
-})
+}
+
+// @covers: task-revision-publication › An approved handoff publishes as the human with its original notices › Delivery and acknowledgement remain distinct
+test('W06 delivered notice and owner Notify or Retry retain the original publication and receipt', () => noticeOutcome('delivered'))
+test('W06 dead notice and owner Notify or Retry retain the original publication and receipt', () => noticeOutcome('dead'))
+test('W06 uncertain notice and owner Notify or Retry retain the original publication and receipt', () => noticeOutcome('uncertain'))
 
 // @covers: plan-decisions › Questions go to the Lead role, else to the owner › A dev's question reaches the Lead
 // @covers: plan-decisions › Questions go to the Lead role, else to the owner › The Lead's question reaches the owner
@@ -173,7 +177,7 @@ test.each(['delivered', 'dead', 'uncertain'] as const)('W06 %s notice and owner 
 test('W09 ordinary owner answers keep routed mail while approval-like bound answers leave focus and publication untouched', async () => {
   const runtime = await publicationRuntime()
   try {
-    const { manager, lead, task, plan, teamPath, holderTool, leadTool, routed, db } = runtime
+    const { manager, lead, task, plan, holderTool, leadTool, routed, db } = runtime
     const { other } = await runtime.sendFocus('unlinked')
     const { answer, approve, read } = await bind(runtime, await prepare(runtime))
     await runtime.pauseDelivery()

@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createChat, git, initPlanRepository } from './fixtures/planWalkthrough'
+import { createChat } from './fixtures/planWalkthrough'
 import type { ClientMessage, ServerMessage } from '../../src/shared/types'
+import { cleanGitEnv } from '../../src/server/git/gitCommand'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -25,8 +26,11 @@ function seed(repo: string, lead: string): Seed {
 
 test('W10 Plans reviews the bound edit and recovers a committed approval after its reply is lost', async ({ page }) => {
   const repo = mkdtempSync(join(tmpdir(), 'kawai-browser-decision-publication-'))
-  initPlanRepository(repo, ['walk-api'], { leads: '---\nlabel: Leads\ncanCreateTasks: true\n---\nPrepare export directions' })
-  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'base'], repo)
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, env: cleanGitEnv() })
+  git(['init', '-q'])
+  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'base'])
+  mkdirSync(join(repo, '.kawai/groups'), { recursive: true })
+  writeFileSync(join(repo, '.kawai/groups/leads.md'), '---\nlabel: Leads\ncanCreateTasks: true\n---\nPrepare export directions')
   let suppressReceipt = false
   let lostResult = false
   let approvals = 0

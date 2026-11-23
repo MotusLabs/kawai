@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderContract } from '../../shared/implementationContract'
+import type { PlanDecisionCardView } from '../../shared/planDecisions'
 import { preparedKey } from '../../shared/taskHandoffs'
 import type { ServerMessage } from '../../shared/types'
 import { PREPARED } from './helpers/decisionPublicationBench'
@@ -108,11 +109,23 @@ test('W08 boot recovers a lost original ask after focus moves and refuses every 
   try {
     const handoff = await prepare(runtime)
     const ask = askInput(handoff)
+    const { teamPath, plan, task, frames, route } = runtime
+    route({ type: 'team-plan-open', teamPath, planId: plan.planId })
+    route({ type: 'team-task-open', teamPath, taskId: task.id })
+    route({ type: 'team-mailbox-open', teamPath })
+    const subscribed = ['team-plan-detail', 'team-task-detail', 'team-mailbox-snapshot']
+    await waitFor(() => subscribed.every(kind => frames.some(frame => frame.type === kind)), 'the bind subscribers')
+    await runtime.settleDelivery()
+    const observedFrom = frames.length
     const before = runtime.snapshot()
     runtime.db.db.exec(`CREATE TEMP TRIGGER lost_bind AFTER INSERT ON plan_decision_publications
       BEGIN SELECT RAISE(ABORT, 'binding rolls back here'); END`)
     await expect(runtime.leadTool('decision_ask', ask)).rejects.toThrow('binding rolls back here')
     expect(runtime.snapshot()).toEqual(before)
+    for (const frame of frames.slice(observedFrom)) {
+      if (frame.type === 'team-plan-detail') expect(frame.detail.decisions ?? []).toEqual([])
+      if (frame.type === 'team-task-detail') expect(frame.detail.task.revision).toBe(1)
+    }
     await runtime.reopen()
     expect(runtime.snapshot()).toEqual(before)
     // Ignore the response and recover the binding identity independently from the committed row.
@@ -123,16 +136,31 @@ test('W08 boot recovers a lost original ask after focus moves and refuses every 
     await runtime.startHolder()
     for (const focus of ['unlinked', 'sibling', 'other-plan'] as const) {
       const moved = await runtime.sendFocus(focus)
+      await runtime.settleDelivery()
       const settled = runtime.snapshot()
       const replayed = await runtime.leadTool<BindingAnswer>('decision_ask', ask)
       expect(replayed).toMatchObject({ card_id: original.card_id, replayed: true, publication: { handoff_id: handoff.id, task_id: runtime.task.id } })
       expect(runtime.db.getChatSession(runtime.lead)?.taskId).toBe(moved.other.id)
       expect(runtime.snapshot()).toEqual(settled)
     }
+    const checkOriginalBinding = async () => {
+      const { decisions } = await runtime.leadTool<{ decisions: PlanDecisionCardView[] }>('plan_get', { plan_id: plan.planId })
+      expect(decisions).toEqual([expect.objectContaining({
+        card: expect.objectContaining({ id: original.card_id, taskId: task.id, planId: plan.planId, change: 'api' }),
+        publication: expect.objectContaining({ handoffId: handoff.id, bindingHash: original.binding_hash, receipt: null }),
+      })])
+    }
+    await runtime.settleDelivery()
+    const bound = runtime.snapshot()
+    await runtime.reopen()
+    expect(await runtime.leadTool('decision_ask', ask)).toMatchObject({ card_id: original.card_id, replayed: true })
+    await checkOriginalBinding()
+    expect(runtime.snapshot()).toEqual(bound)
     await runtime.leadTool('task_settle_publication', { handoff_id: handoff.id, action: 'withdraw', reason: 'End after asking' })
     const ended = runtime.snapshot()
     await runtime.reopen()
     expect(await runtime.leadTool('decision_ask', ask)).toMatchObject({ card_id: original.card_id, replayed: true })
+    await checkOriginalBinding()
     expect(runtime.snapshot()).toEqual(ended)
     const decisions = runtime.manager.decisions!
     const record = decisions.deps.getSession(runtime.lead)!
@@ -148,14 +176,14 @@ test('W08 boot recovers a lost original ask after focus moves and refuses every 
     await expect(runtime.leadTool('decision_ask', ask)).rejects.toThrow('routes to the Lead')
     decisions.deps.getSession = originalRead
     const db = runtime.db.db
-    const route = db.query<{ content_json: string }, [string, number]>('SELECT content_json FROM plan_revisions WHERE plan_id = ? AND revision = ?')
+    const routing = db.query<{ content_json: string }, [string, number]>('SELECT content_json FROM plan_revisions WHERE plan_id = ? AND revision = ?')
       .get(runtime.plan.planId, runtime.approved.revision)!
     const writeRoute = db.prepare('UPDATE plan_revisions SET content_json = ? WHERE plan_id = ? AND revision = ?')
     writeRoute.run('unreadable current role', runtime.plan.planId, runtime.approved.revision)
     const dirty = runtime.snapshot()
     await expect(runtime.leadTool('decision_ask', ask)).rejects.toThrow('missing or unreadable')
     expect(runtime.snapshot()).toEqual(dirty)
-    writeRoute.run(route.content_json, runtime.plan.planId, runtime.approved.revision)
+    writeRoute.run(routing.content_json, runtime.plan.planId, runtime.approved.revision)
     expect(runtime.snapshot()).toEqual(ended)
   } finally { await runtime.teardown() }
 })
