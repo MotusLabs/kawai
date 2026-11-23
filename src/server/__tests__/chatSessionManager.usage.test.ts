@@ -70,6 +70,9 @@ describe('ChatSessionManager usage', () => {
     },
   }
 
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Report with both plan windows
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Report without window data
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Sessions share a profile
   test('pushed reports are stored per provider, shared by its sessions, and snapshotted', async () => {
     const { manager, handles, usage } = await createHarness(db)
     const first = manager.createSession({ projectPath: '/tmp/proj' })
@@ -93,6 +96,9 @@ describe('ChatSessionManager usage', () => {
       'five_hour',
       'seven_day',
     ])
+    // The held report carries its receipt time beside the windows and status.
+    expect(typeof usage[1].report?.receivedAt).toBe('string')
+    expect(Number.isNaN(Date.parse(usage[1]!.report!.receivedAt))).toBe(false)
     // The second session of the same profile sees the same report.
     expect(manager.getSnapshot(first.session.id)!.usage).toBe(usage[1].report)
     expect(manager.getSnapshot(second.session.id)!.usage).toBe(usage[1].report)
@@ -262,6 +268,7 @@ describe('ChatSessionManager usage', () => {
     expect(manager.getSnapshot(created.session.id)!.usage).toBe(usage[1].report)
   })
 
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › One pull per provider
   test('the pull fallback fills usage before any push and only once per provider', async () => {
     const { manager, handles, usage } = await createHarness(
       db,
@@ -286,6 +293,7 @@ describe('ChatSessionManager usage', () => {
     expect(calls).toHaveLength(1)
   })
 
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › Session without plan limits
   test('a no-data pull suppresses later pulls until a push replaces the verdict', async () => {
     const { manager, handles, usage } = await createHarness(
       db,

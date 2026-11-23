@@ -272,6 +272,29 @@ describe('Claude profile resolution', () => {
     expect(minimax.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
     expect(lan.env?.HOME).toBe('/test/home')
   })
+
+  // @covers: claude-session-profiles › Catalogs may cap the output reservation › Provider caps output tokens
+  test('provider caps output tokens: the provider value wins over the inherited environment', () => {
+    const dir = path.join(tempHome, '.kawai')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, 'providers.json'),
+      JSON.stringify({
+        capped: {
+          label: 'Capped',
+          env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000' },
+          models: { capped: {} },
+        },
+      })
+    )
+    const launch = resolveClaudeLaunch(
+      'capped',
+      { CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000' },
+      { homeDir: tempHome }
+    )
+    // The provider's cap wins; the inherited value never rides along.
+    expect(launch.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('8000')
+  })
 })
 
 describe('executable-backed profiles', () => {

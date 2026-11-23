@@ -168,6 +168,8 @@ describe('ChatSessionManager provider usage pull', () => {
     return created.session.id
   }
 
+  // @covers: chat-usage-limits › OpenRouter providers are pulled from the OpenRouter key endpoint › OpenRouter session starts
+  // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › Own usage endpoint is never probed
   test('an OpenRouter session start pulls /api/v1/key with the session key, never the quota endpoint', async () => {
     const { manager, handles, usage, fetchCalls } = await createOpenRouterHarness({
       '/api/v1/key': jsonResponse(OR_KEY_BODY),
@@ -194,6 +196,8 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(snapshot.status).toBe('waiting')
   })
 
+  // @covers: chat-usage-limits › OpenRouter providers are pulled from the OpenRouter key endpoint › Key refused
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › Own usage endpoint never falls back to the host login
   test.each([401, 403])('a key pull refused with %s records no data and never shows the host plan', async status => {
     const { manager, handles, usage, fetchCalls } = await createOpenRouterHarness({
       '/api/v1/key': jsonResponse({ error: 'bad key' }, status),
@@ -212,12 +216,16 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(handles[0]!.usageCalls).toEqual([])
   })
 
-  test.each([
+  // A const table keeps parentheses out of the each-form's table, so the
+  // literal-title extractor resolves the title for coverage citations.
+  const FAILING_KEY_RESPONSES: Array<[string, Response | Error]> = [
     ['a 404', jsonResponse({ error: 'no route' }, 404)],
     ['a server error', jsonResponse({ error: 'boom' }, 500)],
     ['a foreign body', jsonResponse({ hello: true })],
     ['a transport error', new Error('offline')],
-  ])('a failing key endpoint (%s) records no data and keeps the host-login pull suppressed', async (_name, response) => {
+  ]
+  // @covers: chat-usage-limits › OpenRouter providers are pulled from the OpenRouter key endpoint › Key endpoint missing or failing
+  test.each(FAILING_KEY_RESPONSES)('a failing key endpoint (%s) records no data and keeps the host-login pull suppressed', async (_name, response) => {
     const warnings: Array<{ event: string; data?: Record<string, unknown> }> = []
     logger.warn = (event: string, data?: Record<string, unknown>) => {
       warnings.push({ event, data })
@@ -245,6 +253,7 @@ describe('ChatSessionManager provider usage pull', () => {
     }
   })
 
+  // @covers: chat-usage-limits › Account credits render when a balance key is configured › Management key configured
   test('a balance key pulls credits with the management value and merges the credits meter', async () => {
     const { manager, usage, fetchCalls } = await createOpenRouterHarness(
       {
@@ -268,6 +277,7 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(usage[0]!.report?.windows[1]).toMatchObject({ label: 'Credits · $24.43 left' })
   })
 
+  // @covers: chat-usage-limits › Account credits render when a balance key is configured › Balance key is not a management key
   test('a credits refusal drops only the credits meter and logs once per value, never the key', async () => {
     const warnings: Array<{ event: string; data?: Record<string, unknown> }> = []
     logger.warn = (event: string, data?: Record<string, unknown>) => {
@@ -301,6 +311,7 @@ describe('ChatSessionManager provider usage pull', () => {
     }
   })
 
+  // @covers: profile-limit-handling › A credit cooldown is bounded and ends early when credit returns › The first pull only sets the baseline
   test('a pulled remaining amount feeds the credit-cooldown overlay (openrouter-provider D8)', async () => {
     let remaining = 0.04
     const keyBody = () =>
@@ -333,6 +344,7 @@ describe('ChatSessionManager provider usage pull', () => {
     )
   })
 
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Agent report in an own-endpoint session
   test('agent reports are not kept for an own-endpoint provider', async () => {
     const { manager, handles, usage } = await createOpenRouterHarness({
       '/api/v1/key': jsonResponse(OR_KEY_BODY),
@@ -372,6 +384,7 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(manager.getSnapshot(id)!.usage?.windows[0]).toMatchObject({ key: 'openrouter:key_limit' })
   })
 
+  // @covers: chat-usage-limits › OpenRouter usage refreshes while sessions are live and after a costed turn › Balance change appears without a turn
   test('a topped-up balance appears through the scheduled pull without a turn', async () => {
     jest.useFakeTimers()
     try {

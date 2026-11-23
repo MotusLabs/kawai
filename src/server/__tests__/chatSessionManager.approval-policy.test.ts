@@ -66,6 +66,7 @@ describe('ChatSessionManager', () => {
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
+  // @covers: claude-session-profiles › Profiles preserve chat permissions and credential privacy › User-chosen policy sources
   test('approval policy: starts manual, switches live, refuses invalid changes', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const { manager, registry, events } = await createHarness(db)
@@ -186,6 +187,61 @@ describe('ChatSessionManager', () => {
     expect(policyResolutions).toHaveLength(2)
     expect(manager.getSnapshot(id)?.pendingRequests).toEqual([])
     manager.kill(id)
+  })
+
+  // @covers: claude-session-profiles › Profiles preserve chat permissions and credential privacy › User-chosen auto policy applies to any profile
+  test('a named-profile session switched to auto grants tools without cards, like a Default session', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(tempDir, '.kawai', 'profiles.json'),
+      JSON.stringify({ named: { label: 'Named', env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292' } } })
+    )
+    const { manager, handles, events } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'named' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    // The user's switch is the only source of auto: the profile starts manual.
+    expect(created.session.approvalPolicy).toBe('manual')
+    expect(manager.setApprovalPolicy(id, 'auto')).toEqual({ ok: true })
+    await manager.send(id, 'go')
+    await flush()
+    const granted = handles[0]!.options.canUseTool!(
+      'Bash',
+      { command: 'ls' },
+      { signal: new AbortController().signal, toolUseID: 'toolu_named', requestId: 'sdk-req-named' }
+    )
+    expect(await granted).toStrictEqual({ behavior: 'allow', updatedInput: { command: 'ls' } })
+    expect(events.filter(({ event }) => event.type === 'approval_request')).toHaveLength(0)
+    manager.kill(id)
+  })
+
+  // @covers: claude-session-profiles › Profiles preserve chat permissions and credential privacy › Wrapper permission flag is not imported
+  test('a wrapper profile contributes no approval policy: the session starts manual', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    // The entry stands for one launching Claude with a permission-skipping
+    // flag; kawai never imports it. The gate verifies the operator's own
+    // executable (a real temp file — verification stats it), and the profile
+    // contributes nothing to the policy.
+    fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
+    const wrapper = path.join(tempDir, 'claude-wrap')
+    fs.writeFileSync(wrapper, '#!/bin/sh\nexec "$@"\n')
+    fs.chmodSync(wrapper, 0o755)
+    fs.writeFileSync(
+      path.join(tempDir, '.kawai', 'profiles.json'),
+      JSON.stringify({ wrap: { label: 'Wrap', executable: wrapper } })
+    )
+    const manager = await managedManager({
+      isDirectory: anyDirectory,
+      db, registry: new SessionRegistry(), onEvent: () => {},
+      // The SDK handshake itself is out of scope here: the file gate and the
+      // launch resolution stay real.
+      availabilityProbe: async () => {},
+    })
+    const created = await manager.createAvailableSession({ projectPath: '/tmp/proj', claudeProfileId: 'wrap' })
+    if (!created.ok) throw new Error(created.error)
+    expect(created.session.approvalPolicy).toBe('manual')
+    manager.kill(created.session.id)
   })
 
 })

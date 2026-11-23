@@ -157,6 +157,7 @@ test('urgent mail to a profile of a cooling provider is refused naming profile a
   expect(store.teamsWithQueuedMail()).toEqual([])
 })
 
+// @covers: profile-limit-handling › Credit limits never park work › Urgent mail to a member out of credit
 test('Urgent mail to a member out of credit is refused saying so and when the cooldown ends at the latest (openrouter-provider D8)', async () => {
   records.get('dev')!.claudeProfileId = 'openrouter-opus'
   const at = Date.parse('2026-10-12T12:00:00.000Z')

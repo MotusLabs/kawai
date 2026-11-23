@@ -72,6 +72,7 @@ describe('grouped shipped default on a fresh HOME', () => {
     expect(profiles.get('kimi')?.model).toBe('kimi-k3[1m]')
   })
 
+  // @covers: claude-session-profiles › The shipped catalog includes OpenRouter › OpenRouter configuration
   test('the three tier OpenRouter models resolve to provider openrouter with its key names and mappings', () => {
     const { profiles, providers, errors } = resolveProfileCatalog(freshHomeCtx())
     expect(errors).toEqual([])
