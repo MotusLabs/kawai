@@ -1,21 +1,28 @@
 import type { Database } from 'bun:sqlite'
 import type { ServerMessage } from '../../../shared/types'
+import { initDatabase } from '../../db'
 import { DecisionService } from '../../plans/decisions/DecisionService'
 import { handleDecisionCommand, type DecisionClientMessage } from '../../plans/decisions/decisionConnections'
 import { ExecutionStore } from '../../plans/execution/executionStore'
 import { ExecutionRevisionStore } from '../../plans/revisionControl/executionRevisionStore'
 import type { ChatSessionManager } from '../../chat/ChatSessionManager'
+import { PlanService } from '../../plans/PlanService'
+import { PlanStore } from '../../plans/planStore'
+import { StrategyStore } from '../../strategy/strategyStore'
+import { AssignmentStore } from '../../team/assignmentStore'
+import { MailboxStore } from '../../team/mailboxStore'
+import { TaskStore } from '../../team/taskStore'
 import { createDecisionBench } from '../decisionHarness'
-import { createPlanBench, writeGroup, type PlanWorld } from '../planHarness'
+import { createPlanBench, writeGroup, type PlanBench, type PlanWorld } from '../planHarness'
 
 export const LEAD = { kind: 'agent', sessionId: 'lead' } as const
 export const HUMAN = { kind: 'human', sessionId: null } as const
 export const PREPARED = { direction: 'Write headers first', acceptance: 'First row is headers', rationale: 'Prepared evidence', requestKey: 'prepared', baseRevision: 1, notify: true }
 export const QUESTION = { question: 'Publish the headers?', options: ['Publish', 'Wait'], context: 'Headers review' }
 
-export function publicationBench(world: PlanWorld) {
+export function publicationBench(world: PlanWorld, base?: PlanBench) {
   writeGroup(world, 'leads', '---\ncanCreatePlans: true\ncanCreateTasks: true\n---\nLead.')
-  const bench = createDecisionBench(world, createPlanBench(world, {}, { database: 'template' }))
+  const bench = createDecisionBench(world, base ?? createPlanBench(world, {}, { database: 'template' }))
   const { db } = bench.db
   const decide = new DecisionService({
     ...bench.decide.deps,
@@ -39,6 +46,22 @@ export function publicationBench(world: PlanWorld) {
   return { ...bench, decide, wire }
 }
 export type PublicationBench = ReturnType<typeof publicationBench>
+
+/** Rebuild the stores and human route against a file opened through normal database startup. */
+export function reopenPublicationBench(world: PlanWorld, bench: PublicationBench, file: string): PublicationBench {
+  if (bench.db.db.filename !== file) bench.db.db.prepare('VACUUM INTO ?').run(file)
+  bench.db.close()
+  const db = initDatabase({ path: file })
+  const mail = new MailboxStore(db.db)
+  const assignmentStore = new AssignmentStore(db.db, mail)
+  const tasks = new TaskStore(db.db, mail, assignmentStore)
+  const plans = new PlanStore(db.db)
+  const strategies = new StrategyStore(db.db)
+  const service = new PlanService(plans, { getSession: id => bench.records.get(id), strategies, homeDir: world.home })
+  const reopened = publicationBench(world, { ...bench, db, mail, assignmentStore, tasks, plans, strategies, service })
+  reopened.taskService.handoffs.reconcile()
+  return reopened
+}
 
 export async function prepareManual(bench: PublicationBench, input: { leadRole?: boolean; notify?: boolean } = {}) {
   const planId = await bench.approvedPlan(input.leadRole ?? true)

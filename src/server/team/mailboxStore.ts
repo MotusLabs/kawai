@@ -69,6 +69,7 @@ export class MailboxStore {
 
   private readonly observers: MailboxCommitObservers
   writeWithCommittedObservations<T>(write: () => T): T { return this.observers.write(write) }
+  get deferringCommitObservations(): boolean { return this.observers.deferring }
 
   private readonly statements: Record<keyof typeof mailboxSql, ReturnType<Database['prepare']>>
   private readonly dynamicStatements = new Map<string, ReturnType<Database['prepare']>>()

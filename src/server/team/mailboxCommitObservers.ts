@@ -8,6 +8,8 @@ export class MailboxCommitObservers {
 
   constructor(private readonly db: Database, private readonly emit: (id: string, kind: Observation, committed: boolean) => void) {}
 
+  get deferring(): boolean { return this.pending !== null }
+
   observe(id: string, kind: Observation): void {
     if (!this.pending) return this.emit(id, kind, false)
     const kinds = this.pending.get(id) ?? new Set<Observation>()

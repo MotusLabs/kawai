@@ -198,8 +198,9 @@ export async function approvePublication(service: DecisionService, caller: Decis
       deps.tasks.store.mail !== deps.mailbox.store || !deps.tasks.store.notices) {
     throw new DecisionRefusal('state', 'The prepared publication and its transaction are unavailable.')
   }
+  let preparedReplay: boolean
   try {
-    await deps.tasks.handoffs.publish({ kind: 'human', team }, link.taskId, link.handoffId, [], {
+    const outcome = await deps.tasks.handoffs.publish({ kind: 'human', team }, link.taskId, link.handoffId, [], {
       guard: () => {
         if (recover()) throw new DecisionRefusal('state', 'The approval was already recorded.')
         fresh()
@@ -215,6 +216,7 @@ export async function approvePublication(service: DecisionService, caller: Decis
         })
       },
     })
+    preparedReplay = outcome.replay
   } catch (error) {
     const recovered = recover()
     if (recovered) return recovered
@@ -229,6 +231,7 @@ export async function approvePublication(service: DecisionService, caller: Decis
     fresh()
     throw new DecisionRefusal('state', 'The prepared publisher returned without a combined approval receipt.')
   }
+  if (preparedReplay) return committed
   deps.onChange?.(card.planId)
   service.decided(card, committed.decision)
   return { ...committed, replayed: false }

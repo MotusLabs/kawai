@@ -15,6 +15,7 @@ import type { SendClientMessage, Session } from '@shared/types'
 import type { PlanDecisionCardView } from '@shared/planDecisions'
 import { FIX_PHASE_LABELS } from '@shared/planDecisions'
 import PlanDecisionDialog from './PlanDecisionDialog'
+import PlanDecisionPublication from './PlanDecisionPublication'
 import { CARD_STATE_LABELS, DECISION_KIND_LABELS, decisionPartyLabel } from './planLabels'
 
 export default function PlanDecisionCard({ teamPath, planId, cardView, sessions, connected, busy, onSend, onOpenTask, revealed = false }: {
@@ -29,7 +30,7 @@ export default function PlanDecisionCard({ teamPath, planId, cardView, sessions,
   /** The attention link named this card: scroll into view and take focus (plan-supervision D15). */
   revealed?: boolean
 }) {
-  const { card, state, decisions, current, fixes, commits } = cardView
+  const { card, state, decisions, current, fixes, commits, publication } = cardView
   const answered = state !== 'open'
   const shortId = (taskId: string) => taskId.slice(0, 13)
   const cardRef = useRef<HTMLLIElement | null>(null)
@@ -84,9 +85,12 @@ export default function PlanDecisionCard({ teamPath, planId, cardView, sessions,
         </li>
       })}
     </ul>}
+    {publication && <PlanDecisionPublication key={JSON.stringify([teamPath, planId, card.id])}
+      teamPath={teamPath} planId={planId} cardId={card.id} publication={publication} answered={answered}
+      connected={connected} busy={busy} onSend={onSend} onOpenTask={onOpenTask} />}
     <div className="mt-2">
       {!answered && <PlanDecisionDialog teamPath={teamPath} planId={planId} card={card} mode="answer" current={null}
-        sessions={sessions} connected={connected} busy={busy} onSend={onSend} />}
+        sessions={sessions} connected={connected} busy={busy} onSend={onSend} withoutPublication={!!publication} />}
       {answered && <PlanDecisionDialog teamPath={teamPath} planId={planId} card={card} mode="override" current={current}
         sessions={sessions} connected={connected} busy={busy} onSend={onSend} />}
     </div>

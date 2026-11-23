@@ -15,7 +15,7 @@ import { useTeamPlanStore } from '../../stores/teamPlanStore'
 import { sendPlanCommand } from './PlanCommandDialog'
 import { decisionPartyLabel } from './planLabels'
 
-export default function PlanDecisionDialog({ teamPath, planId, card, mode, current, sessions, connected, busy, onSend }: {
+export default function PlanDecisionDialog({ teamPath, planId, card, mode, current, sessions, connected, busy, onSend, withoutPublication = false }: {
   teamPath: string
   planId: string
   card: DecisionCard
@@ -26,6 +26,7 @@ export default function PlanDecisionDialog({ teamPath, planId, card, mode, curre
   connected: boolean
   busy: boolean
   onSend: SendClientMessage
+  withoutPublication?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [sent, setSent] = useState(false)
@@ -35,6 +36,7 @@ export default function PlanDecisionDialog({ teamPath, planId, card, mode, curre
   const slot = `${mode === 'answer' ? 'decide' : 'override'}:${planId}:${card.id}`
   const armed = useTeamPlanStore(state => state.views[teamPath]?.commands[slot])
   const error = useTeamPlanStore(state => state.views[teamPath]?.error)
+  const answerLabel = withoutPublication ? 'Answer without publishing' : 'Answer'
   useEffect(() => {
     if (open && sent && !armed) {
       setOpen(false); setSent(false); setChoiceIndex(null); setCustom(''); setRationale('')
@@ -45,7 +47,7 @@ export default function PlanDecisionDialog({ teamPath, planId, card, mode, curre
     return <button type="button" className="btn text-chat-meta" data-testid={`plan-decision-${mode}`}
       disabled={!connected || busy}
       onClick={() => { useTeamPlanStore.getState().arm(teamPath, slot); setOpen(true) }}>
-      {mode === 'answer' ? 'Answer…' : 'Override…'}
+      {mode === 'answer' ? `${answerLabel}…` : 'Override…'}
     </button>
   }
   const refused = armed?.refused === true
@@ -58,7 +60,9 @@ export default function PlanDecisionDialog({ teamPath, planId, card, mode, curre
   const rationaleTrimmed = rationale.trim()
   const blocked = !connected || busy || refused || choice === null
     || (mode === 'override' && (rationaleTrimmed === '' || current === null))
-  const openLabel = mode === 'answer' ? 'Answer the question' : `Override ${decisionPartyLabel(current!.decidedBy, sessions)}'s decision`
+  const openLabel = mode === 'answer'
+    ? (withoutPublication ? answerLabel : 'Answer the question')
+    : `Override ${decisionPartyLabel(current!.decidedBy, sessions)}'s decision`
   const confirm = () => {
     setSent(true)
     // The payload names exactly the fields the server compares on replay.
@@ -95,7 +99,7 @@ export default function PlanDecisionDialog({ teamPath, planId, card, mode, curre
     </p>}
     <div className="mt-2 flex gap-2">
       <button type="button" className="btn text-chat-meta" data-testid={`plan-decision-${mode}-confirm`}
-        disabled={blocked} onClick={confirm}>{mode === 'answer' ? 'Answer' : 'Override'}</button>
+        disabled={blocked} onClick={confirm}>{mode === 'answer' ? answerLabel : 'Override'}</button>
       <button type="button" className="btn text-chat-meta" onClick={dismiss}>Cancel</button>
     </div>
   </div>

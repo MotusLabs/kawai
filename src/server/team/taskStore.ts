@@ -210,6 +210,9 @@ export class TaskStore {
 
   private changed(id: string): TeamTask {
     const task = this.get(id)!
+    // Finding remaps append journal notes inside a combined publication.
+    // Its outer writer emits this task after commit with the final revision.
+    if (this.mail?.deferringCommitObservations) return task
     for (const listener of this.listeners) listener(task)
     return task
   }

@@ -9,6 +9,7 @@ import { SYSTEM_ACTOR } from '../../../shared/team'
 import { planInput } from '../../../shared/__tests__/planFixtures'
 import type { ClientMessage, ServerMessage } from '../../../shared/types'
 import { SessionRegistry } from '../../SessionRegistry'
+import { initDatabase, type SessionDatabase } from '../../db'
 import { ChatConnections } from '../../chat/ChatConnections'
 import { ChatSessionManager } from '../../chat/ChatSessionManager'
 import { fixtureQueryFactory } from '../../chat/developmentFixture'
@@ -50,15 +51,19 @@ export async function publicationRuntime() {
   writeGroup(world, 'leads', '---\ncanCreatePlans: true\ncanCreateTasks: true\n---\nLead work.')
   writeGroup(world, 'middle-devs', '---\nprofiles: [sonnet]\nmax: 3\n---\nBuild features.')
   const pinnedCommit = git(['rev-parse', 'HEAD'], feature).trim()
+  const origin = path.join(root, 'origin.git')
+  git(['clone', '-q', '--bare', repo, origin], repo)
+  git(['remote', 'add', 'origin', origin], repo)
   const priorConfig = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude')
   const transcriptDir = path.join(root, 'claude', 'projects', 'fixture')
   fs.mkdirSync(transcriptDir, { recursive: true })
-  const db = freshTestDatabase(path.join(root, 'state.db'))
+  const filename = path.join(root, 'state.db')
+  let db = freshTestDatabase(filename)
   const servers = new Map<string, Options['mcpServers']>()
   const filesByWorktree = new Map<string, Set<string>>()
   let connections: ChatConnections | null = null
-  const manager = new ChatSessionManager({
+  const boot = (db: SessionDatabase) => new ChatSessionManager({
     onMailboxChange: (teamId, message) => connections?.publishMailbox(teamId, message),
     onWaitingReasonsChange: teamId => connections?.publishMailbox(teamId),
     onTaskChange: teamId => connections?.publishTasks(teamId),
@@ -83,16 +88,25 @@ export async function publicationRuntime() {
       const fixture = fixtureQueryFactory({ ...params, prompt })
       const stream = (async function* () {
         yield { type: 'system', subtype: 'init', session_id: sdkId } as SDKMessage
-        yield* fixture
+        for await (const message of fixture) {
+          if (message.type !== 'system' || message.subtype !== 'init') yield message
+        }
       })()
       return Object.assign(stream, { interrupt: () => fixture.interrupt(), close: () => fixture.close() }) as Query
     },
   })
   const frames: ServerMessage[] = []
+  const lostReplies = new Set<string>()
+  const connection = { send: (frame: ServerMessage) => {
+    if ('requestId' in frame && frame.requestId && lostReplies.delete(frame.requestId)) return
+    frames.push(frame)
+  } }
+  let manager = boot(db)
   connections = new ChatConnections(manager)
-  const connection = { send: (frame: ServerMessage) => { frames.push(frame) } }
-  const router = { hub: { send: () => {} }, chatConnections: connections, chatPeer: () => connection } as unknown as MessageRouterContext
-  const route = (message: ClientMessage) => handleMessage(router, {} as ServerWebSocket<never>, JSON.stringify(message))
+  const route = (message: ClientMessage) => {
+    const router = { hub: { send: () => {} }, chatConnections: connections, chatPeer: () => connection } as unknown as MessageRouterContext
+    handleMessage(router, {} as ServerWebSocket<never>, JSON.stringify(message))
+  }
   const routed = async <T extends WireType>(type: T, message: Extract<ClientMessage, { requestId: string }>) => {
     const start = frames.length
     route(message)
@@ -115,11 +129,14 @@ export async function publicationRuntime() {
     const cwd = db.getChatSession(sessionId)?.projectPath
     return [...(filesByWorktree.get(cwd ?? '') ?? [])].map(file => fs.readFileSync(file, 'utf8')).join('\n')
   }
-  const teardown = async () => {
+  const stop = async () => {
     manager.shutdown()
     await manager['executionRuntime']?.idle()
     await manager.retiredSettled()
     db.close()
+  }
+  const teardown = async () => {
+    await stop()
     if (priorConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = priorConfig
     fs.rmSync(root, { recursive: true, force: true })
@@ -129,10 +146,10 @@ export async function publicationRuntime() {
     const created = await manager.createAvailableSession({ projectPath: repo, groupId: 'leads' })
     if (!created.ok) throw new Error(created.error)
     const lead = created.session.id
-    const planStore = manager.plans.store
     // Fixture genesis only: write ordinary approved plan records and a consistent Start/attempt pin
     // through their stores. Dispatch and everything after it use the running manager and router.
     const addRevision = (planId: string, old: number | null) => {
+      const planStore = manager.plans.store
       const content = normalizePlanContent(planInput({ ...LEAD_ROLES, approach: old ? 'Reviewed second revision' : 'Original approved revision' }))
       const contentHash = hashPlanRevision(content, null)
       const revision = planStore.insertRevision(planId, { content, contentHash, pin: null, author: HUMAN })
@@ -142,7 +159,7 @@ export async function publicationRuntime() {
       return { revision, contentHash }
     }
     const addPlan = (title: string) => {
-      const planId = planStore.insertPlan({ teamId: team.teamId, title, creator: HUMAN })
+      const planId = manager.plans.store.insertPlan({ teamId: team.teamId, title, creator: HUMAN })
       return { planId, ...addRevision(planId, null) }
     }
     const plan = addPlan('Export plan')
@@ -196,9 +213,39 @@ export async function publicationRuntime() {
         `task mail to change the Lead's focus to ${focus}`)
       return { other, messageId: sent.id }
     }
+    const startHolder = async () => {
+      const restored = manager.restore(holder)
+      if (!restored.ok) throw new Error(restored.error)
+      const started = await manager.start(holder)
+      if (!started.ok) throw new Error(started.error)
+      await waitFor(() => servers.has(feature), 'the holder MCP registry')
+    }
+    const reopen = async () => {
+      await stop()
+      servers.clear()
+      frames.length = 0
+      db = initDatabase({ path: filename })
+      manager = boot(db)
+      connections = new ChatConnections(manager)
+      await manager.whenRestored()
+      if (!(await manager.start(lead)).ok) throw new Error('The restored Lead did not start')
+      await waitFor(() => servers.has(repo), 'the restored Lead MCP registry')
+    }
+    const settleDelivery = async () => {
+      await manager['dispatcher'].settled()
+      // Claim-time git reads finish independently of the dispatcher pass.
+      await waitFor(() => !db.db.prepare("SELECT 1 FROM team_messages WHERE state = 'delivered' AND claim_commit IS NULL LIMIT 1").get(),
+        'claim-time revision pins')
+    }
     return {
-      db, manager, frames, route, routed, teamPath, lead, holder, task, plan, approved, attempt, execution, initialMessageId: messageId,
-      transcript, sendFocus, snapshot: () => decisionWriteSnapshot(db.db), teardown,
+      get db() { return db }, get manager() { return manager }, frames, route, routed, teamPath, lead, holder, task, plan, approved, attempt,
+      execution, initialMessageId: messageId, team, feature, repo,
+      transcript, sendFocus, snapshot: () => decisionWriteSnapshot(db.db), teardown, reopen,
+      startHolder,
+      advanceApproval: () => addRevision(plan.planId, manager.plans.store.get(plan.planId)!.currentApprovedRevision!),
+      loseReply: (requestId: string) => { lostReplies.add(requestId) },
+      pauseDelivery: async () => { await manager['dispatcher'].settled(); manager['dispatcher'].close() },
+      settleDelivery,
       tools: () => Object.keys(registry(repo)),
       leadTool: <T>(name: string, input: unknown) => tool<T>(repo, name, input),
       holderTool: <T>(name: string, input: unknown) => tool<T>(feature, name, input),
