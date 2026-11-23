@@ -16,6 +16,7 @@ import { agentHeldStage, type AttemptKind, type AttemptStatus, type ChangeState,
 import { ciClass, flakyChecks, runsByName } from './planExecutionGates'
 import type { DiagnosisSignal } from './reviewConvergence'
 import type { HoldScope, PausingCause } from './planRevisionControl'
+import type { HandoffNextActor } from './taskHandoffs'
 
 export type SupervisionOutcome = 'landed' | 'running' | 'waiting' | 'stalled' | 'stopped' | 'cancelled' | 'not-started'
 export const SUPERVISION_OUTCOMES: readonly SupervisionOutcome[] = ['landed', 'running', 'waiting', 'stalled', 'stopped', 'cancelled', 'not-started']
@@ -43,12 +44,15 @@ export type SupervisionWait =
   | { kind: 'landing-slot'; holderKind: string | null; holderId: string | null }
   /** review-convergence decision 8: after Amend, the owner publishes this task revision. */
   | { kind: 'contract-revision'; taskId: string; revision: number }
+  /** owner-publication-handoff D9: the task's pending handoff awaits its next actor (W1–W4); appended last, never read by the scheduler. */
+  | { kind: 'owner-publication'; handoffId: string; state: 'open' | 'stale'; baseRevision: number; nextActor: HandoffNextActor }
 
 /** The agent-held stages (D11) and the steps Kawai holds between ticks. */
 export type SupervisionStage = AttemptKind | 'review' | 'kawai'
 
 export type SupervisionStall =
-  | { kind: 'no-progress'; episodeKey: string; anchorAt: string; deadlineAt: string; idle: boolean }
+  /** `holderGone` (owner-publication-handoff D9): the holder is archived or killed (S5); absent otherwise. */
+  | { kind: 'no-progress'; episodeKey: string; anchorAt: string; deadlineAt: string; idle: boolean; holderGone?: true }
   | { kind: 'repeating-failure'; episodeKey: string; signature: string; rounds: [string, string] }
   /** An open diagnosis (review-convergence decision 8): its id is the episode; `awaitingRevision` is the task revision the owner is asked to publish after Amend. */
   | { kind: 'convergence'; episodeKey: string; signals: DiagnosisSignal[]; cardId: string; awaitingRevision: number | null }
@@ -137,6 +141,8 @@ export interface SupervisionInput {
   holds?: Array<{ id: string; scope: HoldScope; deadline: string }>
   /** revision-control D13: the change's undecided pause target — Paused only from a recorded `paused_at` (I2); absent or null when none. */
   pause?: { pauseId: string; state: 'paused' } | { pauseId: string; state: 'pausing'; causes: PausingCause[] } | null
+  /** owner-publication-handoff D9: the change's task's pending handoff with its next actor; absent or null when none. */
+  handoff?: { id: string; state: 'open' | 'stale'; baseRevision: number; nextActor: HandoffNextActor } | null
 }
 
 export interface ChangeSupervision {
@@ -260,6 +266,9 @@ function stageWaits(input: SupervisionInput, now: Date): SupervisionWait[] {
   if (input.step === 'releasing' && input.memberRelease) waits.push({ kind: 'member-release', ...input.memberRelease })
   if (input.step === 'conditions' && input.conditions.length > 0) waits.push({ kind: 'condition', conditions: input.conditions })
   if (input.step === 'awaiting-slot') waits.push({ kind: 'landing-slot', holderKind: input.slotHolder?.kind ?? null, holderId: input.slotHolder?.id ?? null })
+  // Appended last (owner-publication-handoff D9): an earlier wait stays the cause.
+  const handoff = input.handoff ?? null
+  if (handoff !== null) waits.push({ kind: 'owner-publication', handoffId: handoff.id, state: handoff.state, baseRevision: handoff.baseRevision, nextActor: handoff.nextActor })
   return waits
 }
 
@@ -278,7 +287,7 @@ function noProgress(input: SupervisionInput, stage: SupervisionStage, progressAt
   const idle = holder !== null && holderIdle(holder)
   if (idle) deadline = Math.min(deadline, Date.parse(later(anchorAt, holder.lastTurnEndAt)!) + NO_PROGRESS_IDLE_MS)
   if (now.getTime() < deadline) return null
-  return { kind: 'no-progress', episodeKey, anchorAt, deadlineAt: new Date(deadline).toISOString(), idle }
+  return { kind: 'no-progress', episodeKey, anchorAt, deadlineAt: new Date(deadline).toISOString(), idle, ...(holder?.gone ? { holderGone: true as const } : {}) }
 }
 
 function stageOf(input: SupervisionInput): SupervisionStage {
@@ -331,7 +340,7 @@ export function changeSupervision(input: SupervisionInput, now: Date): ChangeSup
       waits.push({ kind: 'dependency', changes: unlanded.map(entry => entry.change), stopped: unlanded.filter(entry => entry.outcome === 'stopped').map(entry => entry.change) })
     }
     // A waiting change reads only its effect here; the revision-control waits are running-stage (D13).
-    const effect = stageWaits({ ...input, instruction: null, openCards: [], step: null, holds: [], pause: null }, now)[0]
+    const effect = stageWaits({ ...input, instruction: null, openCards: [], step: null, holds: [], pause: null, handoff: null }, now)[0]
     if (effect) waits.push(effect)
     if (waits.length === 0) waits.push({ kind: 'parallel-limit', limit: input.parallelLimit })
     return { ...base, outcome: 'waiting', cause: waits[0]!, alsoApplying: waits.slice(1) }
@@ -404,7 +413,18 @@ export function causeLabel(cause: SupervisionCause | { kind: string }): string {
     case 'member-release': return `Waiting for ${known.member} to be released: ${known.reason}`
     case 'condition': return `Waiting for acceptance conditions: ${list(known.conditions)}`
     case 'contract-revision': return `Waiting for the owner to publish revision ${known.revision} of task ${known.taskId}`
+    case 'owner-publication': return ownerPublicationLabel(known)
     case 'landing-slot': return known.holderId ? `Waiting for the landing slot, held by ${known.holderKind ?? 'holder'} ${known.holderId}` : 'Waiting for the landing slot'
     default: return String((cause as { kind: string }).kind)
   }
+}
+
+/** The owner-publication wait's line, naming its next actor (W1–W4). */
+function ownerPublicationLabel(wait: Extract<SupervisionWait, { kind: 'owner-publication' }>): string {
+  const actor = wait.nextActor
+  const who = actor.kind === 'owner' ? `the task owner ${actor.sessionId}` : actor.kind === 'requester' ? `the requester ${actor.sessionId}`
+    : actor.kind === 'requester-group' ? `the requester's group ${actor.group}` : 'the human'
+  return wait.state === 'open'
+    ? `Waiting for ${who} to publish prepared revision ${wait.handoffId} (base revision ${wait.baseRevision})`
+    : `Waiting for ${who} to ${actor.kind === 'human' ? 'decline' : 're-prepare or withdraw'} stale handoff ${wait.handoffId} (base revision ${wait.baseRevision})`
 }

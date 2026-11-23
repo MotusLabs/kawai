@@ -317,7 +317,7 @@ describe('planAttentionFacts over the real stores', () => {
   const readsFor = (db: Database): PlanAttentionReads => ({
     // Never reached on these paths: the plans hold no execution, so the
     // derivation stops before the runtime and mailbox facts.
-    db, mail: {} as never, runtime: { holder: () => null, blocker: () => null }, conditionsOf: () => [],
+    db, mail: {} as never, runtime: { holder: () => null, blocker: () => null, live: () => false }, conditionsOf: () => [],
     tasks: { get: () => null },
     executions: new ExecutionStore(db), plans: new PlanStore(db), decisions: new DecisionStore(db),
   })

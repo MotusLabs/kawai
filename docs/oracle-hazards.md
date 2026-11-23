@@ -650,3 +650,117 @@ or property that would have caught it, and the source finding.
   (thinking-only-content-resumes-wait); a type/id/text projection fails it.
 - **Source finding.** task-73ecea50 findings-55a68ce4 (F3), creator
   note-229f71ee; findings-040f141e (F3/A2, F5/A3); findings-14bde0ed (F5).
+
+## Model-based properties and their controls
+
+### A completeness enumeration that silently omits a declared partition (findings-c3e4ff8d F6)
+
+- **Hazard.** The completeness test enumerates every partition it lists, so
+  a partition the design declares but the classifier never names (H-DRAFT
+  and its claim U7) has no gap, no overlap and no failure: the test is
+  complete over the wrong set.
+- **Oracle that catches it.** Each declared partition is an entry of the
+  classifier with its full axis product, its claims and its rows, and the
+  test pins each product's size and row multiplicities from the design
+  (H-DRAFT load 56, save and rebase 336 with U7 192, publish 24192 with U7
+  13824), plus paired U7 witnesses whose excluded tuples match no row even
+  where the first check (the reserved prefix) would
+  (`src/server/__tests__/taskHandoffCompleteness.test.ts` › "publish: 24192
+  tuples, 10368 healthy and 13824 excluded {U7}, the submitted base apart
+  from the stored one, every row in check order").
+- **Source finding.** findings-c3e4ff8d F6 (owner-publication-handoff).
+
+### One observation standing for two inputs (findings-6ab63b52 F6)
+
+- **Hazard.** A classifier that reads a stored fact as the command's own
+  input (the stored draft's base as the publish command's base) has no
+  tuple for a lawful command that differs from it, so the product is
+  complete and every row matches while the service takes another path:
+  an ordinary publish at the current base, beside a draft left behind, is
+  called stale and the service publishes it.
+- **Oracle that catches it.** The command input is its own axis beside
+  the stored facts it is compared with, and paired witnesses on one
+  snapshot vary only that input through the real command, asserting the
+  classification equals the observed outcome and that the conflated
+  reading disagrees
+  (`src/server/__tests__/taskHandoffDraftBase.test.ts` › "paired
+  witnesses on one snapshot: ordinary r1 T-stale, linked r1 H38s, linked
+  r2 H38m write nothing; ordinary r2 is H44 with r3, the r1 draft and
+  stale H kept; the conflation misreads H44 and H38m").
+- **Source finding.** findings-6ab63b52 F6 (owner-publication-handoff).
+
+### Properties sharing a name but not a generator (findings-c3e4ff8d F7)
+
+- **Hazard.** Two properties the design gives "the same generator" each
+  keep their own smaller command list, so histories one claims (linked
+  drafts, the pause resolution's Adapt) never run, and a model that reads
+  the same rows the source writes agrees with any transition the source
+  gets wrong (a skipped stale hook on the `pause:` path survived P2).
+- **Oracle that catches it.** One seeded command family
+  (`src/server/__tests__/helpers/handoffFamily.ts`) drives both properties
+  through the real paths, with opening histories that make the rare
+  sequences reachable at the reduced case profile, and the end of each run
+  asserts the paths it reached from the rows. P2 judges each command's
+  side effect with its own transition model from the command's outcome
+  (`src/server/__tests__/taskHandoffAttentionProperties.test.ts` › "P2:
+  seed 0x0A11CE02, 400 cases — after every command the items are exactly
+  Table W's prediction from the rows"); P1 adds the unreachable U3 and U5
+  states as per-step invariants.
+- **Source finding.** findings-c3e4ff8d F7 (owner-publication-handoff).
+
+### A crash model blind to durable side rows and to the sweep boundary (findings-c3e4ff8d F7)
+
+- **Hazard.** A restart model that holds only states and the revision
+  passes when a transition loses its durable wakeup row (the stale wakeup
+  removed survived P4), and a boundary table without the sweep never
+  checks that a healthy boot writes nothing.
+- **Oracle that catches it.** An independent model of each handoff's
+  event history, the revisions by key and association, the wakeup rows
+  with their one mail and the linked draft, checked after every command;
+  every named boundary (including the draft load and the sweep) crashes by
+  rollback and after commit on a command that writes, and every reopen
+  compares the handoff rows before and after
+  (`src/server/__tests__/taskHandoffRestart.integration.test.ts` › "P4:
+  seed 0x0A11CE04, 200 cases — a crash at any transaction boundary, then
+  SessionMailbox.start(), leaves exactly the model state"). The sweep's own
+  write faults run on seeded DF fixtures apart from the healthy generator
+  (`src/server/__tests__/taskHandoffSweepFaults.integration.test.ts`).
+- **Source finding.** findings-c3e4ff8d F7 (owner-publication-handoff).
+
+### A parity property over one half of the projection (findings-c3e4ff8d F8)
+
+- **Hazard.** "Every reader derives the same phase" is checked only for
+  pending rows, so a reader that answers a constant phase for published
+  rows (or a loader that keeps a published handoff as a wait) passes.
+- **Oracle that catches it.** The property draws both halves: pending rows
+  compared on state and next actor across all three readers, published
+  rows on each reader's own projection against an independently matched
+  table row, and the loader's absence of the wait in both its cause and the
+  waits also applying
+  (`src/server/__tests__/supervisionOwnerPublicationProperties.test.ts` ›
+  "P6: seed 0x0A11CE06, 200 cases — attention, the supervision loader and
+  task_get derive pending next actors and published phases alike").
+- **Source finding.** findings-c3e4ff8d F8 (owner-publication-handoff).
+
+### A delivery seam observed only through its reader (findings-c3e4ff8d F9)
+
+- **Hazard.** The context a delivery carries is tested by calling the
+  context builder, so dropping the field in the real delivery callback
+  survives every test.
+- **Oracle that catches it.** Real task mail delivered through the
+  production mailbox while the handoff is pending, with the received
+  header read from the transcript the driver wrote
+  (`src/server/__tests__/taskHandoffPublish.integration.test.ts`, CP1).
+- **Source finding.** findings-c3e4ff8d F9 (owner-publication-handoff).
+
+### Mutation evidence as pass counts (findings-c3e4ff8d F10)
+
+- **Hazard.** "The suite passes and the mutants were tried" names no
+  mutant, no edit and no failing oracle, so a mutant that survives, or one
+  killed only by an unrelated test, is indistinguishable from a kill.
+- **Oracle that catches it.** A ledger with one row per named mutant: the
+  exact edit, the source pin, the literal failing test titles, the
+  observed failure and the restored blob; an equivalent probe is recorded
+  as equivalent with the reason, never counted as a kill
+  (`openspec/changes/owner-publication-handoff/mutation-ledger.md`).
+- **Source finding.** findings-c3e4ff8d F10 (owner-publication-handoff).

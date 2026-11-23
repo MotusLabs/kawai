@@ -24,6 +24,7 @@ import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
 import type { ChatLimitSignal } from '../limitSignals'
 import type { Measurement } from '../../../shared/processObservations'
 import type { WorkspaceMessageContext } from '../../../shared/planWorkspace'
+import type { TrustedChatImage } from '../images/ChatImageStore'
 
 /**
  * A contextual submit's outcome (plan-workspace §4): a refusal names why
@@ -153,7 +154,7 @@ export interface ChatAgentDriver {
   /** The agent's project directory moved (worktree tracking). */
   setProjectPath(path: string): void
   /** Submit a user turn. */
-  send(text: string): void
+  send(text: string, images?: TrustedChatImage[]): void | Promise<ChatSendOutcome>
   /**
    * Submit a user turn carrying a plan-workspace context (PR D §4): the
    * driver mints the message uuid, records the context row, and only then
@@ -162,7 +163,7 @@ export interface ChatAgentDriver {
    * package adapter answers once the runtime admitted or refused the send
    * (its pre-submit record runs at that commit), so the caller awaits it.
    */
-  sendWorkspaceContext?(text: string, context: WorkspaceMessageContext): ChatSendOutcome | Promise<ChatSendOutcome>
+  sendWorkspaceContext?(text: string, context: WorkspaceMessageContext, images?: TrustedChatImage[]): ChatSendOutcome | Promise<ChatSendOutcome>
   /** Deliver a peer envelope as a turn (team mail), carrying its message id. */
   deliver(envelope: ChatPeerMessage): void
   /** Stop the in-flight turn and cancel its pending cards. */

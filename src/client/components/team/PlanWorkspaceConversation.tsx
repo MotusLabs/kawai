@@ -40,6 +40,7 @@ import { shortHash } from '../chat/strategyLabels'
 import { teamKeyOf } from '../../utils/teamKey'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useChatImageDrafts } from '../../stores/chatImageDrafts'
 import { useTeamPlanWorkspaceStore } from '../../stores/teamPlanWorkspaceStore'
 import {
   sameEnvelope, usePlanWorkspaceScopeStore,
@@ -275,7 +276,9 @@ function ConversationHost({ teamPath, session, role, connected, connectionEpoch,
   // text and sends unscoped, per §6.3).
   const draftText = useChatStore(state => state.drafts[session.id] ?? '')
   const scope = usePlanWorkspaceScopeStore(state => state.scopes[session.id] ?? null)
-  const previousText = useRef('')
+  const imageCount = useChatImageDrafts(state => state.drafts[session.id]?.length ?? 0)
+  const hasContent = draftText !== '' || imageCount > 0
+  const previousText = useRef(false)
   const selectionId = selection === null ? null : selectionKey(selection)
   // buildCapture freezes the selection; memoized so a re-render does not
   // mint a fresh capture object every time (the chip compares by value).
@@ -283,23 +286,23 @@ function ConversationHost({ teamPath, session, role, connected, connectionEpoch,
   useEffect(() => {
     const store = usePlanWorkspaceScopeStore.getState()
     const previous = previousText.current
-    previousText.current = draftText
-    if (draftText === '') {
+    previousText.current = hasContent
+    if (!hasContent) {
       store.setScope(session.id, null)
       return
     }
     // Capture once, when the draft first becomes nonempty under this panel;
     // a draft that is already nonempty keeps whatever it captured. A draft
     // with nothing buildable to attach (no plan selected) stays unscoped.
-    if (previous !== '' || store.scopes[session.id] || capture === null) return
+    if (previous || store.scopes[session.id] || capture === null) return
     store.setScope(session.id, capture)
-  }, [draftText, session.id, capture])
+  }, [hasContent, session.id, capture])
   return <ChatSurface session={session} sendMessage={sendMessage} subscribe={subscribe}
     connectionStatus={connected ? 'connected' : 'disconnected'} connectionEpoch={connectionEpoch}
     revealEnabled={false}
     onResetCreated={(newSessionId, previousSessionId) => transferBindingsOnReset(sendMessage, newSessionId, previousSessionId)}
     onSubmitContext={() => usePlanWorkspaceScopeStore.getState().scopes[session.id] ?? null}
-    composerAttachment={<ScopeAttachment scope={scope} capture={capture} hasText={draftText.trim() !== ''}
+    composerAttachment={<ScopeAttachment scope={scope} capture={capture} hasText={draftText.trim() !== '' || imageCount > 0}
       connected={connected} onReplace={next => usePlanWorkspaceScopeStore.getState().setScope(session.id, next)} />
     } />
 }

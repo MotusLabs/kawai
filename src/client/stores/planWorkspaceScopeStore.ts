@@ -14,6 +14,7 @@
 // final results — a committed bind re-pushes the snapshot that proves it.
 import { create } from 'zustand'
 import type { WorkspaceMessageEnvelope } from '@shared/planWorkspace'
+import { useChatImageDrafts } from './chatImageDrafts'
 
 /** A draft's captured send context, frozen when captured. */
 export interface CapturedWorkspaceScope {
@@ -59,6 +60,9 @@ export const usePlanWorkspaceScopeStore = create<PlanWorkspaceScopeState>(set =>
     const current = state.scopes[sessionId] ?? null
     if (current === scope || (current !== null && scope !== null
       && JSON.stringify(current.envelope) === JSON.stringify(scope.envelope))) return state
+    // Replacing a captured context is a draft edit too: a late image-send
+    // acceptance must not clear a newly selected context and its images.
+    useChatImageDrafts.getState().touch(sessionId)
     const scopes = { ...state.scopes }
     if (scope === null) delete scopes[sessionId]
     else scopes[sessionId] = scope

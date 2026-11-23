@@ -5,7 +5,8 @@
 // a direction draft published as a new revision (TaskDirectionEditor), the
 // results with acceptance and handoffs (TaskResultsSection), release-and-
 // hand-off (TaskReleaseDialog), the publication detail per revision
-// (TaskPublications), add a note, and set any status including reopening. The human may do all of this whoever created the task, even a
+// (TaskPublications), a pending publication handoff's panel with its
+// publish, edit and decline actions (TaskPublicationHandoffPanel), add a note, and set any status including reopening. The human may do all of this whoever created the task, even a
 // killed agent. Controls disable while disconnected.
 // Assignment (task-assignment): the outstanding assignment with its target,
 // role, state, and claimed agent, the assignment history, and **Assign /
@@ -26,6 +27,7 @@ import { useTeamGroups } from '../chat/useTeamGroups'
 import { assignmentLabel } from './assignmentLabel'
 import { actorLabel, journalAuthorLabel, sessionLabel } from './teamTaskLabels'
 import TaskDirectionEditor, { type TaskActFn } from './TaskDirectionEditor'
+import TaskPublicationHandoffPanel from './TaskPublicationHandoffPanel'
 import TaskPublications from './TaskPublications'
 import TaskContractView from './TaskContractView'
 import TaskResultsSection from './TaskResultsSection'
@@ -215,8 +217,9 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
     </Section>
 
     <Section teamPath={teamPath} name="Direction">
+      <TaskPublicationHandoffPanel task={task} handoffs={detail.handoffs} revisions={detail.revisions} draft={detail.draft} sessions={sessions} disabled={disabled} act={act} />
       <p className="mt-1 whitespace-pre-wrap text-chat-body" data-testid="task-direction">{task.direction}</p>
-      <TaskDirectionEditor task={task} draft={detail.draft} connected={connected} disabled={disabled} act={act} />
+      <TaskDirectionEditor task={task} draft={detail.draft} connected={connected} disabled={disabled} act={act} error={view.error} />
     </Section>
 
     {task.acceptance && <Section teamPath={teamPath} name="Acceptance">

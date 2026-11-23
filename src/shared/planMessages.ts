@@ -13,7 +13,7 @@
 import type { PlanDetail, PlanEvent, PlanSummary } from './plans'
 import type { PromotionPreview } from './planIntegration'
 import type { ImpactGate, PlanImpact } from './strategyImpact'
-import type { DecisionCard, PlanDecision } from './planDecisions'
+import type { DecisionCard, DecisionPublicationReceipt, PlanDecision, PublicationReview } from './planDecisions'
 import type { ApplyPreview, ExecutionRevisionView, HoldCites, HoldScope, HoldView, PauseView } from './planRevisionControl'
 import type { AlignmentAssessment, AssessmentFinding, PlanRevisionValidation, PlanValidationReport, Question } from './planValidation'
 
@@ -54,6 +54,8 @@ export type PlanServerMessage =
       promotion?: { id: string; number: number; promotionBranch: string; state: 'running' | 'finished'; outcome: string | null }
       /** plan-supervision D15: the owner's answer or override, with the fix task an override created. */
       decision?: { card: DecisionCard; decision: PlanDecision; fixTaskId?: string | null }
+      publicationReview?: PublicationReview
+      publication?: DecisionPublicationReceipt
       /** revision-control D14: the hold a place, extend, or release wrote (on a replay, the stored hold the first command wrote). */
       hold?: HoldView
       /** revision-control D4: the changes-scoped hold a narrowing release placed over `retain`. */
@@ -113,6 +115,8 @@ export type PlanClientMessage =
   // by its command id, and `team-plan-result` answers with `decision`.
   | { type: 'team-plan-decide'; teamPath: string; requestId: string; planId: string; cardId: string; choice?: string | null; optionIndex?: number | null; rationale?: string | null; commandId: string }
   | { type: 'team-plan-override'; teamPath: string; requestId: string; planId: string; cardId: string; expectedDecisionId: string; choice?: string | null; optionIndex?: number | null; rationale: string; commandId: string }
+  | { type: 'team-plan-publication-review'; teamPath: string; requestId: string; planId: string; cardId: string }
+  | { type: 'team-plan-approve-publication'; teamPath: string; requestId: string; planId: string; cardId: string; expectedHandoffId: string; expectedBindingHash: string; rationale?: string | null; commandId: string }
   // revision-control D14: the owner's hold and pause commands. Each replays
   // by its command id; `team-plan-result` answers with `hold` (and
   // `narrowed`), `pause`, or `resolution`, or `error` with every failing check.

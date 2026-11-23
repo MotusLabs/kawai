@@ -28,7 +28,7 @@ describe('header update chip', () => {
     act(() => {
       renderer = TestRenderer.create(
         <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}}
-          tailscaleIp={null} version="1.0.0-3" />)
+          tailscaleIp={null} version="1.0.0-3" contextLabel="KAWAI" />)
     })
     return renderer
   }

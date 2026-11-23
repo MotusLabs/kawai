@@ -24,6 +24,8 @@ const KIND_LABELS: Record<string, string> = {
   'plan-fix': 'Plan fix',
   'plan-condition': 'Plan condition',
   'plan-promotion': 'Plan promotion',
+  'publication-handoff': 'Publication handoff',
+  'publication-follow-up': 'Publication follow-up',
 }
 
 /** A known kind's label; an unrecognized kind reads as itself. */

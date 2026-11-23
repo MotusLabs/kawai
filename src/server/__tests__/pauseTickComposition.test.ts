@@ -99,7 +99,7 @@ async function compose(): Promise<void> {
       records: () => bench.records.values(),
       identityOf: id => (id === world.team.teamId ? world.team : undefined),
       teamOfSession: teamOf,
-      supervision: { holder: () => null, blocker: () => null },
+      supervision: { holder: () => null, blocker: () => null, live: () => false },
       // The pause tick's holder facts (revision-control D8): bench records,
       // nothing pending or busy, no provider limit.
       pauseFacts: pauseHolderFacts({

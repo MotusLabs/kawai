@@ -1,4 +1,4 @@
-// @reads: .kawai/groups, .kawai/groups/**
+// @reads: config/groups, config/groups/**
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -120,7 +120,8 @@ describe('grouped shipped default on a fresh HOME', () => {
     const { profiles, errors } = resolveProfileCatalog(freshHomeCtx())
     expect(errors).toEqual([])
     for (const [id, label, model] of [
-      ['codex-sol', 'Codex Sol', 'gpt-6.1-sol'],
+      ['codex-sol', 'Codex Sol', 'gpt-6.2-sol'],
+      ['codex-astra', 'Codex Astra', 'gpt-6.2-astra'],
       ['codex-luna', 'Codex Luna', 'gpt-6-luna'],
     ]) {
       // Codex entries sit outside every provider: the provider id is the
@@ -173,8 +174,8 @@ describe('grouped shipped default on a fresh HOME', () => {
     expect([...profiles.keys()]).toEqual(['only', 'default'])
   })
 
-  test('the tracked group files name profile ids the shipped catalog resolves', () => {
-    const groupsDir = path.resolve(process.cwd(), '.kawai', 'groups')
+  test('the shipped group templates name profile ids the shipped catalog resolves', () => {
+    const groupsDir = path.resolve(process.cwd(), 'config', 'groups')
     const files = fs.readdirSync(groupsDir).filter(name => name.endsWith('.md'))
     expect(files.length).toBeGreaterThan(0)
     const { profiles, errors } = resolveProfileCatalog(freshHomeCtx())

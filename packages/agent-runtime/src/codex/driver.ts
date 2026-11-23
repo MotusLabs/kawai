@@ -23,7 +23,7 @@ export function createCodexDriver(options: CodexDriverOptions): CodexAgentDriver
   return createCodexDriverWith(options, {})
 }
 
-export function createCodexDriverWith(options: CodexDriverOptions, internal: Pick<CodexSessionOptions, 'spawn' | 'requestTimeoutsMs'>): CodexAgentDriver {
+export function createCodexDriverWith(options: CodexDriverOptions, internal: Pick<CodexSessionOptions, 'spawn' | 'requestTimeoutsMs' | 'capacityClock'>): CodexAgentDriver {
   if (!options || typeof options !== 'object') throw configurationError('driver options are required')
   const logger = options.logger as unknown as Record<string, unknown> | undefined
   if (!logger || LOGGER_METHODS.some((method) => typeof logger[method] !== 'function')) throw configurationError('logger must have debug, info, warn and error methods')
@@ -60,5 +60,8 @@ export function createCodexDriverWith(options: CodexDriverOptions, internal: Pic
     ...(options.onThreadOpened ? { onThreadOpened: options.onThreadOpened } : {}),
     ...(internal.spawn ? { spawn: internal.spawn } : {}),
     ...(internal.requestTimeoutsMs ? { requestTimeoutsMs: internal.requestTimeoutsMs } : {}),
+    // Only the exact value enables recovery; anything else reads as 'off' (table O8).
+    ...((options.capacityRecovery as unknown) === 'bounded' ? { capacityRecovery: 'bounded' as const } : {}),
+    ...(internal.capacityClock ? { capacityClock: internal.capacityClock } : {}),
   })
 }

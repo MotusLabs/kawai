@@ -39,6 +39,8 @@ const codexRetryLimitSignal = (notification: { willRetry?: unknown; error?: unkn
 }
 
 describe('codexTurnLimitSignal', () => {
+  // @covers: profile-limit-handling › Codex limit failures are recorded as limit events › Usage limit ends the turn
+  // @covers: profile-limit-handling › Codex limit failures are recorded as limit events › Multiple exhausted windows
   test('usage limit ends the turn: a final signal with the latest exhausted reset', () => {
     // Both windows exhausted (spec: multiple exhausted windows) — the weekly
     // 2-day reset wins over the five-hour 1-hour one.
@@ -53,6 +55,7 @@ describe('codexTurnLimitSignal', () => {
     expect(codexTurnLimitSignal(failedTurn('serverOverloaded'), snap)?.final).toBe(true)
   })
 
+  // @covers: profile-limit-handling › Codex limit failures are recorded as limit events › Only one exhausted window
   test('only one exhausted window: a non-exhausted weekly never extends the reset', () => {
     // The spec's one-exhausted-window case: the weekly window sits below its
     // limit and resets later, so the five-hour reset decides.
@@ -65,6 +68,7 @@ describe('codexTurnLimitSignal', () => {
     expect(codexExhaustedReset(snapshot({ usedPercent: 100, windowDurationMins: 300, resetsAt: null }))).toBeNull()
   })
 
+  // @covers: profile-limit-handling › Codex limit failures are recorded as limit events › Unrelated failure
   test('an unrelated failure records nothing', () => {
     expect(codexTurnLimitSignal(failedTurn('contextWindowExceeded'), null)).toBeNull()
     expect(codexTurnLimitSignal(failedTurn('other'), null)).toBeNull()

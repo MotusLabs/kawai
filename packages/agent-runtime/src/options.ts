@@ -310,6 +310,15 @@ export interface CodexDriverOptions extends BaseDriverOptions {
    * promise changes nothing and is reported by the stop.
    */
   onThreadOpened?: (info: CodexThreadOpened) => void
+  /**
+   * Model capacity recovery (codex-capacity-retry). `'bounded'`: a turn whose
+   * attempt fails with the structured error `serverOverloaded` stays open and
+   * is retried on the same thread, with jittered backoff capped at sixty
+   * seconds, inside a ten-minute window from the first such failure; that
+   * error then produces no limit event, retrying or terminal. Omitted, `'off'`
+   * or any other value: today's behavior (overload limit events, the turn ends).
+   */
+  capacityRecovery?: 'bounded' | 'off'
 }
 
 /** One opened Codex thread (R3 `onThreadOpened`). */

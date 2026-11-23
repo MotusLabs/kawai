@@ -48,6 +48,19 @@ export function installManifest(runtime: string, stub: string, claude: boolean) 
   }
 }
 
+// Bun 1.4 writes one bookkeeping marker into each package directory it
+// installs from an override: exactly `sha512-` plus the base64 of a 64-byte
+// digest, 95 bytes with no trailing newline. It is dependency-manager
+// metadata, never shipped package content; the oracle recognizes exactly
+// that form and treats anything else named .bun-tag (malformed, truncated,
+// trailing bytes, or a payload disguised as the marker) as a violation.
+const BUN_INSTALL_MARKER = /^sha512-[A-Za-z0-9+/]{86}==$/
+
+function isBunInstallMarker(path: string): boolean {
+  const bytes = readFileSync(path)
+  return bytes.length === 95 && BUN_INSTALL_MARKER.test(bytes.toString('latin1'))
+}
+
 /** Examine actual installed platform-package contents, not just manifest intent. */
 export function nativeContent(project: string): string[] {
   const violations: string[] = []
@@ -62,7 +75,8 @@ export function nativeContent(project: string): string[] {
       if (stat.isDirectory()) visit(path)
       else if (stat.isFile() && path.includes('/claude-agent-sdk-')) {
         const allowed = ['package.json', 'README.md', 'LICENSE']
-        if (!allowed.includes(entry.name)) violations.push(path.slice(project.length + 1))
+        const installMarker = entry.name === '.bun-tag' && isBunInstallMarker(path)
+        if (!allowed.includes(entry.name) && !installMarker) violations.push(path.slice(project.length + 1))
         if (entry.name === 'package.json') {
           const manifest = JSON.parse(readFileSync(path, 'utf8'))
           if (manifest.name !== '@motuslabs/claude-agent-sdk-no-cli' || manifest.version !== '0.1.1' || manifest.scripts || manifest.bin || manifest.dependencies || manifest.optionalDependencies) {

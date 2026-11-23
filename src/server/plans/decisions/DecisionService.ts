@@ -23,6 +23,9 @@ import { answerBody, askInput, deciderName, DecisionRefusal, questionBody, ratio
 import { cardScope, leadOf, taskScope, teamPlan } from './decisionScope'
 import { QUESTION_TAG } from './decisionReplyGuard'
 import { answerAsOwner, overrideAsOwner, type OwnerAnswerInput, type OwnerOverrideInput } from './ownerDecisions'
+import { askPublication, type BoundAskOutcome } from './decisionPublicationAsk'
+import type { PublicationExecutionReads } from './decisionPublicationExecution'
+import { approvePublication, reviewPublication, type PublicationApprovalInput, type PublicationReviewInput } from './decisionPublicationApproval'
 
 export type DecisionCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
 
@@ -38,9 +41,10 @@ export interface DecisionServiceDeps {
   getSession: (id: string) => ChatSessionRecord | null | undefined
   homeDir?: string
   onChange?: (planId: string) => void
+  publication?: PublicationExecutionReads
 }
 
-export interface AskInput { question: string; options?: string[]; context?: string | null; plan_id?: string }
+export interface AskInput { question: string; options?: string[]; context?: string | null; plan_id?: string; publication_handoff_id?: string }
 export interface RecordInput {
   plan_id: string
   card_id?: string
@@ -53,6 +57,7 @@ export interface RecordInput {
 }
 
 export interface DecisionOutcome { card: DecisionCard; decision: PlanDecision; replayed: boolean; message: TeamMessage | null }
+export type DecisionMail = Omit<PreparedMail, 'commit'> & { commit: () => TeamMessage | null }
 
 export const ASK_GUIDANCE = 'The answer arrives as mail in this thread. Continue other work or end your turn; do not wait in a loop.'
 
@@ -111,15 +116,17 @@ export class DecisionService {
   private async agent(sessionId: string) {
     const session = this.deps.getSession(sessionId)
     if (!session) throw new DecisionRefusal('not-found', `Unknown session: ${sessionId}`)
-    const { team } = await loadTeamGroups(session.projectPath, this.deps.homeDir)
+    const projectPath = session.projectPath
+    const { team } = await loadTeamGroups(projectPath, this.deps.homeDir)
     const party: DecisionParty = { kind: 'agent', session: session.sessionId, group: session.groupId ?? null, profile: session.claudeProfileId ?? 'default' }
-    return { session, team, party }
+    return { session, team, party, projectPath }
   }
 
   /** D4: a card, and for a Lead-addressed one its task-less question mail, in one transaction. */
-  async ask(caller: { kind: 'agent'; sessionId: string }, input: AskInput): Promise<{ card: DecisionCard; message: TeamMessage | null; guidance: string }> {
+  async ask(caller: { kind: 'agent'; sessionId: string }, input: AskInput): Promise<BoundAskOutcome | { card: DecisionCard; message: TeamMessage | null; guidance: string }> {
     const fields = askInput(input)
-    const { session, team, party } = await this.agent(caller.sessionId)
+    const { session, team, party, projectPath } = await this.agent(caller.sessionId)
+    if (Object.hasOwn(input, 'publication_handoff_id')) return askPublication(this.deps, { sessionId: caller.sessionId, projectPath }, team, input)
     const scope = cardScope(this.deps, team.teamId, session, input.plan_id?.trim() || undefined)
     const lead = leadOf(this.deps.plans, scope.plan.id)
     const toLead = lead !== null && session.groupId !== lead
@@ -185,15 +192,24 @@ export class DecisionService {
     return overrideAsOwner(this, caller, input)
   }
 
+  reviewPublication(caller: DecisionCaller, input: PublicationReviewInput) {
+    return reviewPublication(this, caller, input)
+  }
+
+  approvePublication(caller: DecisionCaller, input: PublicationApprovalInput) {
+    return approvePublication(this, caller, input)
+  }
+
   /** Insert, write the mail, and link it, in one transaction; then announce. */
-  async commitDecision(prepared: PreparedMail | null, card: DecisionCard, insert: () => PlanDecision, within?: () => void): Promise<DecisionOutcome> {
-    const { decision, message } = this.deps.decisions.atomically(() => {
+  async commitDecision(prepared: DecisionMail | null, card: DecisionCard, insert: () => PlanDecision, within?: () => void, bound = false): Promise<DecisionOutcome> {
+    const write = () => {
       const decision = insert()
       within?.()
       const message = prepared?.commit() ?? null
       if (message) this.deps.decisions.setReplyMessage(card.teamId, decision.id, message.id)
       return { decision: this.deps.decisions.decision(card.teamId, decision.id)!, message }
-    })
+    }
+    const { decision, message } = bound ? this.deps.mailbox.store.writeWithCommittedObservations(write) : this.deps.decisions.atomically(write)
     const published = message && prepared ? await prepared.after(message) : null
     this.deps.onChange?.(card.planId)
     this.decided(card, decision)

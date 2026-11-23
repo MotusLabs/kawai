@@ -34,7 +34,8 @@
 // dialog (plan-revision-apply D5, D6) asks its preview into `revisionPreviews`,
 // keyed `<executionId>:<revision>`, and arms `apply:<executionId>:<revision>`.
 import { create } from 'zustand'
-import type { ServerMessage } from '@shared/types'
+import type { ClientMessage, ServerMessage } from '@shared/types'
+import type { DecisionPublicationReceipt, PublicationBindingRef, PublicationReview } from '@shared/planDecisions'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
 import type { ImpactGate, PlanImpact } from '@shared/strategyImpact'
 import type { PlanRevisionValidation } from '@shared/planValidation'
@@ -42,7 +43,25 @@ import type { PlanIntegrationView, PromotionPreview } from '@shared/planIntegrat
 import type { ApplyPreview, HoldView, PauseView } from '@shared/planRevisionControl'
 
 export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide' | 'override' | 'start' | 'stop' | 'retry' | 'preview' | 'promote' | 'cancel-promotion'
-  | 'hold-place' | 'hold-release' | 'hold-extend' | 'pause' | 'pause-resolve' | 'apply'
+  | 'hold-place' | 'hold-release' | 'hold-extend' | 'pause' | 'pause-resolve' | 'apply' | 'approve-publication'
+
+type PublicationReviewRequest = Extract<ClientMessage, { type: 'team-plan-publication-review' }>
+type PublicationApprovalRequest = Extract<ClientMessage, { type: 'team-plan-approve-publication' }>
+type PublicationApprovalIntent = Omit<PublicationApprovalRequest, 'requestId'>
+type PublicationReviewState = {
+  request: PublicationReviewRequest
+  link: PublicationBindingRef
+  result?: { review: PublicationReview } | { error: string }
+}
+type PublicationApprovalState = {
+  intent: PublicationApprovalIntent
+  requestId: string | null
+  result?: { receipt: DecisionPublicationReceipt } | { error: string; reason: string | undefined }
+}
+
+const sameBinding = (a: PublicationBindingRef, b: PublicationBindingRef) =>
+  a.handoffId === b.handoffId && a.bindingHash === b.bindingHash && a.taskId === b.taskId &&
+  a.baseRevision === b.baseRevision && a.payloadHash === b.payloadHash
 
 /** The Start dialog's server standing for one plan revision (plan-execution D17). */
 export type PlanStanding =
@@ -126,6 +145,8 @@ export interface PlanView {
   revisionPreviews: Record<string, ApplyPreviewStanding>
   /** Which preview key each Apply preview request was sent for. */
   revisionPreviewRequests: Record<string, string>
+  publicationReview: PublicationReviewState | null
+  publicationApprovals: Record<string, PublicationApprovalState>
 }
 
 export const closedPlanView = (): PlanView => ({
@@ -133,6 +154,7 @@ export const closedPlanView = (): PlanView => ({
   refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null, detailExecutions: undefined,
   standings: {}, previewRequests: {}, detailIntegration: undefined, promotionPreviews: {}, promotionPreviewRequests: {},
   detailHolds: undefined, detailPauses: undefined, revisionPreviews: {}, revisionPreviewRequests: {},
+  publicationReview: null, publicationApprovals: {},
 })
 
 interface PlanState {
@@ -159,6 +181,9 @@ interface PlanState {
   beginPromotionPreview: (teamKey: string, requestId: string, previewKey: string) => void
   /** The Apply dialog opened for `<executionId>:<revision>`: its preview request is pending (plan-revision-apply D5). */
   beginApplyPreview: (teamKey: string, requestId: string, previewKey: string) => void
+  beginPublicationReview: (request: PublicationReviewRequest, link: PublicationBindingRef) => void
+  closePublicationReview: (request: PublicationReviewRequest) => void
+  confirmPublication: (teamKey: string, planId: string, cardId: string, rationale: string) => PublicationApprovalRequest | null
   /** The connection came back: results of pending requests are lost, so stop waiting for them. */
   reconnected: (teamKey: string) => void
   applySnapshot: (message: Extract<ServerMessage, { type: 'team-plans-snapshot' }>) => void
@@ -180,6 +205,7 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     return { views: { ...state.views, [teamKey]: {
       ...view, open: true, loading: view.plans === null, error: null, failures: [], refusalImpact: null,
       ...(planId !== undefined ? {
+        publicationReview: view.selected === planId ? view.publicationReview : null,
         selected: planId, detail: view.detail?.plan.id === planId ? view.detail : null,
         detailImpact: view.detail?.plan.id === planId ? view.detailImpact : null,
         detailValidation: view.detail?.plan.id === planId ? view.detailValidation : null,
@@ -203,13 +229,17 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     if (!view) return reveal === state.reveal ? state : { reveal }
     const views = { ...state.views }
     delete views[from]
-    if (!views[to]) views[to] = view
+    if (!views[to]) views[to] = {
+      ...view, publicationReview: null, publicationApprovals: {},
+      pending: Object.fromEntries(Object.entries(view.pending).filter(([, action]) => action !== 'approve-publication')),
+    }
     return { views, reveal }
   }),
   requestReveal: (teamKey, planId, anchor) => set({ reveal: { teamKey, planId, anchor } }),
   consumeReveal: teamKey => set(state => (state.reveal?.teamKey === teamKey ? { reveal: null } : state)),
   select: (teamKey, planId) => set(state => update(state, teamKey, {
     selected: planId,
+    publicationReview: state.views[teamKey]?.selected === planId ? state.views[teamKey].publicationReview : null,
     detail: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detail : null,
     detailImpact: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailImpact : null,
     detailValidation: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailValidation : null,
@@ -255,15 +285,56 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     revisionPreviewRequests: { ...state.views[teamKey]?.revisionPreviewRequests, [requestId]: previewKey },
     revisionPreviews: { ...state.views[teamKey]?.revisionPreviews, [previewKey]: { state: 'pending' } },
   })),
+  beginPublicationReview: (request, link) => set(state =>
+    state.views[request.teamPath]?.selected === request.planId
+      ? update(state, request.teamPath, { publicationReview: { request, link } })
+      : state),
+  closePublicationReview: request => set(state =>
+    state.views[request.teamPath]?.publicationReview?.request.requestId === request.requestId
+      ? update(state, request.teamPath, { publicationReview: null })
+      : state),
+  confirmPublication: (teamPath, planId, cardId, rationale) => {
+    let command: PublicationApprovalRequest | null = null
+    set(state => {
+      const view = state.views[teamPath]
+      const standing = view?.publicationReview
+      const review = standing?.result && 'review' in standing.result ? standing.result.review : null
+      const previous = view?.publicationApprovals[cardId]
+      if (!view?.open || view.selected !== planId || standing?.request.cardId !== cardId ||
+          review?.availability !== 'ready' || previous?.requestId || previous?.result) return state
+      const intent = previous?.intent ?? {
+        type: 'team-plan-approve-publication', teamPath, planId, cardId,
+        expectedHandoffId: review.link.handoffId, expectedBindingHash: review.link.bindingHash,
+        rationale: rationale.trim() || null, commandId: crypto.randomUUID(),
+      }
+      if (intent.teamPath !== teamPath || intent.planId !== planId || intent.expectedHandoffId !== review.link.handoffId ||
+          intent.expectedBindingHash !== review.link.bindingHash) return state
+      const requestId = crypto.randomUUID()
+      command = { ...intent, requestId }
+      return update(state, teamPath, {
+        pending: { ...view.pending, [requestId]: 'approve-publication' },
+        publicationApprovals: { ...view.publicationApprovals, [cardId]: { intent, requestId } },
+      })
+    })
+    return command
+  },
   reconnected: teamKey => set(state => {
     const view = state.views[teamKey]
-    if (!view?.open || Object.keys(view.pending).length === 0) return state
+    if (!view?.open) return state
+    const review = view.publicationReview
+    const publicationReview = review && !review.result
+      ? { ...review, result: { error: 'Connection interrupted. Request the review again.' } }
+      : review
+    if (Object.keys(view.pending).length === 0 && publicationReview === review) return state
     // A preview whose answer was lost leaves no pending standing behind: the
     // open Start dialog asks again (N4); settled standings stay.
     const standings = Object.fromEntries(Object.entries(view.standings).filter(([, standing]) => standing.state !== 'pending'))
     const promotionPreviews = Object.fromEntries(Object.entries(view.promotionPreviews).filter(([, preview]) => preview.state !== 'pending'))
     const revisionPreviews = Object.fromEntries(Object.entries(view.revisionPreviews).filter(([, preview]) => preview.state !== 'pending'))
-    return update(state, teamKey, { pending: {}, commandRequests: {}, previewRequests: {}, standings, promotionPreviewRequests: {}, promotionPreviews, revisionPreviewRequests: {}, revisionPreviews })
+    const publicationApprovals = Object.fromEntries(Object.entries(view.publicationApprovals).map(([cardId, approval]) =>
+      [cardId, approval.requestId ? { ...approval, requestId: null } : approval]))
+    return update(state, teamKey, { pending: {}, commandRequests: {}, previewRequests: {}, standings, promotionPreviewRequests: {}, promotionPreviews,
+      publicationReview, publicationApprovals, revisionPreviewRequests: {}, revisionPreviews })
   }),
   applySnapshot: message => set(state => update(state, message.teamPath, { loading: false, plans: message.plans, impact: message.impact ?? {} })),
   applyDetail: message => set(state => {
@@ -277,9 +348,40 @@ export const useTeamPlanStore = create<PlanState>(set => ({
   }),
   applyResult: message => set(state => {
     const view = state.views[message.teamPath]
-    if (!view?.open || !(message.requestId in view.pending)) return state
+    if (!view?.open) return state
+    const standing = view.publicationReview
+    if (standing && !standing.result && standing.request.requestId === message.requestId && view.selected === standing.request.planId) {
+      const review = message.publicationReview
+      const result = review && review.planId === standing.request.planId && sameBinding(review.link, standing.link)
+        ? { review }
+        : { error: message.error ?? 'The review could not be matched to this card.' }
+      const { cardId } = standing.request
+      const prior = view.publicationApprovals[cardId]
+      // A fresh read can rearm the same intent after a transient write refusal.
+      // Stale or mismatched confirmations stay refused.
+      const canRetry = result.review?.availability === 'ready' &&
+        prior?.result && 'reason' in prior.result && prior.result.reason === 'state'
+      return update(state, message.teamPath, {
+        publicationReview: { ...standing, result },
+        ...(canRetry ? { publicationApprovals: { ...view.publicationApprovals, [cardId]: { intent: prior.intent, requestId: null } } } : {}),
+      })
+    }
+    if (!(message.requestId in view.pending)) return state
     const pending = { ...view.pending }
     delete pending[message.requestId]
+    if (view.pending[message.requestId] === 'approve-publication') {
+      const approval = Object.values(view.publicationApprovals).find(entry => entry.requestId === message.requestId)
+      if (!approval) return update(state, message.teamPath, { pending })
+      const { intent } = approval
+      const receipt = message.publication
+      const result = receipt && receipt.planId === intent.planId && receipt.cardId === intent.cardId &&
+        receipt.handoffId === intent.expectedHandoffId && receipt.bindingHash === intent.expectedBindingHash && receipt.commandId === intent.commandId
+        ? { receipt }
+        : { error: message.error ?? 'The response did not include the receipt for this approval.', reason: message.reason }
+      return update(state, message.teamPath, { pending, publicationApprovals: {
+        ...view.publicationApprovals, [intent.cardId]: { intent, requestId: null, result },
+      } })
+    }
     const commandRequests = { ...view.commandRequests }
     const slot = commandRequests[message.requestId]
     delete commandRequests[message.requestId]

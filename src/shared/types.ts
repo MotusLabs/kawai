@@ -25,6 +25,7 @@ import type { TeamWorkspaceSnapshot } from './teamWorkspace'
 import type { TeamCapacityAnswer } from './teamCapacity'
 import type { PlanClientMessage, PlanServerMessage } from './planMessages'
 import type { WorkspaceMessageEnvelope } from './planWorkspace'
+import type { ChatImageReference } from './chatImages'
 import type { PlanWorkspaceClientMessage, PlanWorkspaceServerMessage } from './planWorkspaceMessages'
 import type { OutboundAuditClientMessage, OutboundAuditServerMessage } from './outbound'
 import type { MetricsClientMessage, MetricsServerMessage } from './metricsMessages'
@@ -713,7 +714,7 @@ export type ClientMessage =
   // oldest held event, widened back to throughId when a search reveal needs
   // an older entry (an event id or a tool:<callId> anchor).
   | { type: 'chat-history-page'; sessionId: string; beforeId: string; throughId?: string }
-  | { type: 'chat-send'; sessionId: string; text: string; /** Plan-workspace context (§4): validated server-side before anything is stored. */ workspaceContext?: WorkspaceMessageEnvelope; /** Client-minted correlation (§6.3, Q2): echoed on every refusal, absent on acceptance. */ requestId?: string }
+  | { type: 'chat-send'; sessionId: string; text: string; images?: ChatImageReference[]; /** Plan-workspace context (§4): validated server-side before anything is stored. */ workspaceContext?: WorkspaceMessageEnvelope; /** Client-minted send correlation, echoed on acceptance and refusal. */ requestId?: string }
   | { type: 'chat-interrupt'; sessionId: string }
   // Archive stops the agent process but keeps the record, conversation, and
   // protocol log; restore clears the archived state (chat-archive design D2).
@@ -793,6 +794,8 @@ export type ClientMessage =
       rationale?: string
       /** Raw contract text, saved unparsed. */
       contract?: string
+      /** The draft lineage identity the form loaded (owner-publication-handoff H41–H43); omitted when it loaded none. */
+      observedDraft?: string
     }
   | {
       type: 'team-task-publish'
@@ -808,10 +811,19 @@ export type ClientMessage =
       contract?: string
       rationale: string
       notify: boolean
-      /** Published from the human's saved draft, which is discarded with it. */
+      /** Published from the human's saved draft, which is discarded with it. Fixed when the edit began, never re-read. */
       fromDraft?: boolean
+      /** The draft lineage identity the form loaded (owner-publication-handoff H43); omitted when it loaded none. */
+      observedDraft?: string
     }
   | { type: 'team-task-notify'; teamPath: string; requestId: string; taskId: string; revision: number; requestKey: string }
+  // Publish prepared revision (owner-publication-handoff D3, D11): the
+  // handoff's own fields, base and notify choice; no payload is accepted, and
+  // a resend replays its revision.
+  | { type: 'team-task-handoff-publish'; teamPath: string; requestId: string; taskId: string; handoffId: string; requestKey: string }
+  | { type: 'team-task-handoff-decline'; teamPath: string; requestId: string; taskId: string; handoffId: string; reason: string; requestKey: string }
+  // Edit before publishing (D3, H-DRAFT): copy an open handoff into the draft; `replace` confirms overwriting one.
+  | { type: 'team-task-handoff-load-draft'; teamPath: string; requestId: string; taskId: string; handoffId: string; replace: boolean }
   // Task results (task-results-handoffs D5): accept one result and close the
   // task under the existing closing rights; a reason when it is flagged or
   // child work is open.

@@ -477,7 +477,7 @@ describe('system callers and the shared catalogue', () => {
     expect(taskNames(claudeNames)).toEqual([...TASK_TOOL_NAMES].sort())
     expect(taskNames(codexTools.map(tool => tool.name))).toEqual([...TASK_TOOL_NAMES].sort())
     const shape = (name: string) => Object.keys(table.find(tool => tool.name === name)!.schema.shape).sort()
-    expect(shape('task_get')).toEqual(['acknowledgements_before', 'assignments_before', 'full_messages', 'journal_before', 'journal_limit', 'messages_before',
+    expect(shape('task_get')).toEqual(['acknowledgements_before', 'assignments_before', 'full_messages', 'handoff_id', 'journal_before', 'journal_limit', 'messages_before',
       'publications_before', 'result_id', 'results_before', 'revision', 'revisions_before', 'subtasks_before', 'task_id'])
     expect(shape('task_journal_read')).toEqual(['entry_id', 'offset_bytes', 'task_id'])
     expect(shape('task_result_diff_read')).toEqual(['offset_bytes', 'result_id', 'task_id'])

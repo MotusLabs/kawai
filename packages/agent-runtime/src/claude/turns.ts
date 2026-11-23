@@ -6,7 +6,7 @@
 // requests' observed tokens) are its own: a result of any outcome reports
 // what is known and null for the rest.
 import type { SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { TurnOutcome, TurnResult } from '../contract.js'
+import type { ImageInput, TurnOutcome, TurnResult } from '../contract.js'
 import { AgentRuntimeError, type AgentErrorInfo } from '../errors.js'
 import type { BeforeSubmit, SubmitContext } from '../options.js'
 import type { TokenUsage } from '../usage/types.js'
@@ -17,6 +17,7 @@ export interface Turn {
   /** The opening message, or null for an agent-started turn. */
   messageUuid: string | null
   text: string
+  images?: readonly ImageInput[]
   /** Opened: turn_started was emitted (queued turns open later, L21). */
   opened: boolean
   settled: boolean
@@ -64,8 +65,8 @@ export function turnResult(turn: Turn, outcome: TurnOutcome, error: AgentErrorIn
  * when the host composed one (R4), its own copy of that prompt's pasted
  * content and peer origin. Without an envelope the frame is unchanged.
  */
-export function promptMessage(text: string, uuid: string, envelope?: ComposedEnvelope | null): SDKUserMessage {
-  return { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, ...envelopeFields(envelope), uuid, session_id: '' } as SDKUserMessage
+export function promptMessage(text: string, uuid: string, envelope?: ComposedEnvelope | null, images: readonly ImageInput[] = []): SDKUserMessage {
+  return { type: 'user', message: { role: 'user', content: images.length ? [...(text ? [{ type: 'text', text }] : []), ...images.map(image => { if (image.type !== 'base64') throw Error('Expected a Claude image'); return { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } } })] : text }, parent_tool_use_id: null, ...envelopeFields(envelope), uuid, session_id: '' } as SDKUserMessage
 }
 
 /** The client UUIDs a result echoes (`user_message_uuids`, else `user_message_uuid`). */

@@ -121,7 +121,7 @@ beforeAll(async () => {
       tasks, assignments, results, taskStore: bench.tasks, mailbox: mail, teamMailbox, releases,
       pendingSpawns: () => [], records: () => bench.records.values(),
       identityOf: id => (id === world.team.teamId ? world.team : undefined), teamOfSession: teamOf,
-      supervision: { holder: () => null, blocker: () => null },
+      supervision: { holder: () => null, blocker: () => null, live: () => false },
       pauseFacts: pauseHolderFacts({
         getRecord: id => bench.records.get(id), pendingRequest: () => false, hasLiveWorkers: () => false,
         hasRunningBackgroundTasks: () => false, parkedResumes: () => [], cooldownUntil: () => null,
