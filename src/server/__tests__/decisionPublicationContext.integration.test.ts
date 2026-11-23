@@ -123,34 +123,8 @@ function moveChange(runtime: PublicationRuntime, state: 'stopped' | 'landing' | 
 
 const STAGE_REFUSAL = 'The execution or change is no longer in a publication stage.'
 const ATTEMPT_REFUSAL = 'The change baseline or latest attempt manifest is missing or inconsistent.'
-const FRESH_BIND_FAILURES: Array<[string, string, (runtime: PublicationRuntime) => void | Promise<void>]> = [
-  ['an instruction-failed stopped change', STAGE_REFUSAL, runtime => moveChange(runtime, 'stopped', 'instruction-failed')],
-  ['a landing change', STAGE_REFUSAL, runtime => moveChange(runtime, 'landing')],
-  ['a finished execution', STAGE_REFUSAL, ({ db, execution }) => {
-    // Retain the owning, implementing change to isolate the execution-state check.
-    expect(db.db.prepare(`UPDATE plan_executions SET state = 'finished', outcome = 'stopped', finished_at = ?
-      WHERE id = ? AND state = 'running'`).run(execution.startedAt, execution.id).changes).toBe(1)
-  }],
-  ['an affected undecided pause', 'affects this change and is undecided.', async runtime => {
-    const paused = await pause(runtime)
-    expect(new PauseStore(runtime.db.db).target(paused.id, 'api')).toMatchObject({ decision: null })
-  }],
-  ['a missing latest attempt', ATTEMPT_REFUSAL, ({ db, attempt }) => {
-    expect(db.db.prepare('DELETE FROM plan_execution_attempts WHERE id = ?').run(attempt.id).changes).toBe(1)
-  }],
-  ['an inconsistent latest attempt manifest', ATTEMPT_REFUSAL, ({ db, attempt }) => {
-    expect(db.db.prepare('UPDATE plan_execution_attempts SET manifest_hash = ? WHERE id = ?').run('0'.repeat(64), attempt.id).changes).toBe(1)
-  }],
-  ['a missing change baseline', ATTEMPT_REFUSAL, ({ db, execution }) => {
-    expect(db.db.prepare("UPDATE plan_execution_changes SET baseline_commit = NULL WHERE execution_id = ? AND change = 'api'").run(execution.id).changes).toBe(1)
-  }],
-  ['an invalid change baseline', ATTEMPT_REFUSAL, ({ db, execution }) => {
-    expect(db.db.prepare("UPDATE plan_execution_changes SET baseline_commit = 'bad-sha' WHERE execution_id = ? AND change = 'api'").run(execution.id).changes).toBe(1)
-  }],
-]
 
-// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
-test.each(FRESH_BIND_FAILURES)('B06 fresh bind refuses %s with a still-open task', async (_fact, reason, arrange) => {
+async function refuseFreshBind(reason: string, arrange: (runtime: PublicationRuntime) => void | Promise<void>) {
   const runtime = await publicationRuntime()
   try {
     const { manager, task } = runtime
@@ -167,10 +141,54 @@ test.each(FRESH_BIND_FAILURES)('B06 fresh bind refuses %s with a still-open task
     await runtime.settleDelivery()
     expect(runtime.snapshot()).toEqual(before)
   } finally { await runtime.teardown() }
+}
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
+test('B06 fresh bind refuses an instruction-failed stopped change with a still-open task', () =>
+  refuseFreshBind(STAGE_REFUSAL, runtime => moveChange(runtime, 'stopped', 'instruction-failed')))
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
+test('B06 fresh bind refuses a landing change with a still-open task', () =>
+  refuseFreshBind(STAGE_REFUSAL, runtime => moveChange(runtime, 'landing')))
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
+test('B06 fresh bind refuses a finished execution with a still-open task', () => refuseFreshBind(STAGE_REFUSAL, ({ db, execution }) => {
+  // Retain the owning, implementing change to isolate the execution-state check.
+  expect(db.db.prepare(`UPDATE plan_executions SET state = 'finished', outcome = 'stopped', finished_at = ?
+    WHERE id = ? AND state = 'running'`).run(execution.startedAt, execution.id).changes).toBe(1)
+}))
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
+test('B06 fresh bind refuses an affected undecided pause with a still-open task', () => {
+  return refuseFreshBind('affects this change and is undecided.', async runtime => {
+    const paused = await pause(runtime)
+    expect(new PauseStore(runtime.db.db).target(paused.id, 'api')).toMatchObject({ decision: null })
+  })
 })
 
-// @covers: plan-decisions › A publication question binds one prepared handoff › A requester binds a handoff for review
-test.each(['implementing', 'gating'] as const)('B07 fresh bind records only an owner card and link for a running %s change', async stage => {
+// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
+test('B06 fresh bind refuses a missing latest attempt with a still-open task', () => refuseFreshBind(ATTEMPT_REFUSAL, ({ db, attempt }) => {
+  expect(db.db.prepare('DELETE FROM plan_execution_attempts WHERE id = ?').run(attempt.id).changes).toBe(1)
+}))
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
+test('B06 fresh bind refuses an inconsistent latest attempt manifest with a still-open task', () => {
+  return refuseFreshBind(ATTEMPT_REFUSAL, ({ db, attempt }) => {
+    expect(db.db.prepare('UPDATE plan_execution_attempts SET manifest_hash = ? WHERE id = ?').run('0'.repeat(64), attempt.id).changes).toBe(1)
+  })
+})
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
+test('B06 fresh bind refuses a missing change baseline with a still-open task', () => refuseFreshBind(ATTEMPT_REFUSAL, ({ db, execution }) => {
+  expect(db.db.prepare("UPDATE plan_execution_changes SET baseline_commit = NULL WHERE execution_id = ? AND change = 'api'").run(execution.id).changes).toBe(1)
+}))
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
+test('B06 fresh bind refuses an invalid change baseline with a still-open task', () => refuseFreshBind(ATTEMPT_REFUSAL, ({ db, execution }) => {
+  expect(db.db.prepare("UPDATE plan_execution_changes SET baseline_commit = 'bad-sha' WHERE execution_id = ? AND change = 'api'").run(execution.id).changes).toBe(1)
+}))
+
+async function verifyFreshBind(stage: 'implementing' | 'gating') {
   const runtime = await publicationRuntime()
   try {
     const { task, attempt, execution, plan, db } = runtime
@@ -195,7 +213,13 @@ test.each(['implementing', 'gating'] as const)('B07 fresh bind records only an o
     expect(after.plan_decision_publications).toHaveLength(1)
     expect<Record<string, unknown[]>>({ ...after, plan_decision_cards: [], plan_decision_publications: [] }).toEqual(before)
   } finally { await runtime.teardown() }
-})
+}
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › A requester binds a handoff for review
+test('B07 fresh bind records only an owner card and link for a running implementing change', () => verifyFreshBind('implementing'))
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › A requester binds a handoff for review
+test('B07 fresh bind records only an owner card and link for a running gating change', () => verifyFreshBind('gating'))
 
 async function resolve(runtime: PublicationRuntime, pauseId: string, choice: 'continue' | 'adapt') {
   // The fixture records the settled checkpoint observation, then runs the real resolve command.
