@@ -38,7 +38,7 @@ The human SHALL answer any open card from the Plans view under a command id, wit
 
 #### Scenario: Answering a bound card publishes nothing
 - **WHEN** the human answers a bound card with ordinary choice text, including `Approve and publish`, or answers one whose handoff became stale
-- **THEN** an answer is recorded and its answer mail carries no task attachment, the handoff disposition and task revision do not change, and further fresh approval of the card is refused
+- **THEN** an answer is recorded and its answer mail carries no task attachment, the handoff disposition and task revision do not change, and further fresh approval of the card returns `state` because it is already decided
 
 ## ADDED Requirements
 
@@ -46,17 +46,19 @@ The human SHALL answer any open card from the Plans view under a command id, wit
 `decision_ask` SHALL accept an optional `publication_handoff_id`. It SHALL derive scope from the handoff's persisted task, plan and change in the caller's team, regardless of session task focus. The original requester SHALL qualify for the plan's current owner route. A nonblank `plan_id` SHALL match the target plan. A new binding SHALL require a current, open handoff prepared with notification, record the card and immutable link together, and publish nothing.
 
 #### Scenario: A requester binds a handoff for review
-- **GIVEN** an eligible handoff created with `task_request_publication` and readable with `task_get`
+- **GIVEN** an eligible handoff created with `task_request_publication` and readable with `task_get`, and a readable current routing revision, including one with no configured Lead
 - **WHEN** its eligible requester supplies the handoff id in `decision_ask`, including after task mail moves the requester's focus to an unrelated task
 - **THEN** the tool returns the owner card id, task id, handoff id, base revision and full prepared hash, and no revision, notice or question mail is written
 
 #### Scenario: Foreign, borrowed and malformed bindings are refused
-- **WHEN** a requester supplies an unknown, foreign or malformed handoff id, a group peer's handoff, a nonnotifying handoff, or a `plan_id` different from the handoff's plan, or loses eligibility for its owner route before bind or replay
-- **THEN** the tool refuses with no card, binding or fallback ordinary question, and foreign records are indistinguishable from missing ones
+- **WHEN** a requester supplies an unknown, foreign or malformed handoff id, a group peer's handoff or a differing nonblank `plan_id`, tries to newly bind a nonnotifying handoff, names a handoff whose same-team task lacks persisted plan/change scope, or lacks readable current owner-route authorization before bind or replay
+- **THEN** the tool refuses with no card, binding or fallback ordinary question
+- **AND** missing and foreign resolved records get the same not-found result, malformed ids are invalid, and borrowed handoffs, missing task scope, differing plans and current routing failures are forbidden
+- **AND** a differing `plan_id` is refused without looking up the supplied plan, and fresh eligibility failures give their base, context or handoff reason after authorization
 
 #### Scenario: A retry recovers the same binding
-- **WHEN** the original requester still qualifies for the target plan's owner route and retries the same normalized question, options, context and binding, including after unrelated task mail moves the session's focus or the handoff ends
-- **THEN** the same card and link are returned as a replay, and changing the question, options or context under that handoff id is refused
+- **WHEN** the original requester still qualifies for the target plan's current owner route and retries the same binding and normalized question, options and context for the resolved plan, including after unrelated task mail moves the session's focus, the handoff ends or other freshness facts change
+- **THEN** the same card and link are returned as a replay, and a mismatch against the stored question, options, context, resolved plan or original asker after authorization is refused naming the differing field
 
 ### Requirement: The human reviews the exact bound edit
 The Plans view SHALL let the human read the named handoff and exact published base from its card. It SHALL show the task, base, complete before/after direction, acceptance and contract, prepared rationale, notification choice and available evidence. The owner SHALL confirm with an explicit **Approve and publish** action using the review's identity. Ordinary plan detail and `plan_get` SHALL expose the binding and any receipt without expanding the prepared text.
@@ -67,25 +69,25 @@ The Plans view SHALL let the human read the named handoff and exact published ba
 
 #### Scenario: Ordinary cards remain decision only
 - **WHEN** a card has no typed handoff binding, including a diagnosis, dispute, old card or a question containing a handoff id in its text
-- **THEN** the card retains its existing controls and behavior, and attempts to approve a publication through that card are refused without effect
+- **THEN** the card retains its existing controls and behavior, and a fresh approval returns `state` with a missing binding error and zero writes
 
 ### Requirement: Fresh approval publishes only the reviewed handoff
-**Approve and publish** SHALL be human-only and SHALL resolve the plan, task, card and handoff from trusted records in the same team. A fresh approval SHALL require an open card, an exact reviewed link and still-current task base, plan and execution context. It SHALL use only the stored prepared edit and SHALL atomically record the first decision and prepared publication. A refusal SHALL leave both unchanged.
+**Approve and publish** SHALL be human-only and resolve the plan, task, card and handoff from trusted same-team records. A fresh approval SHALL require an open card, exact reviewed link and current task base, plan and execution context. It SHALL atomically record the first decision and publish only the stored prepared edit. A refusal SHALL leave both unchanged. An observable write rollback SHALL return `state` with the key unused and retry guidance for a transient failure.
 
 #### Scenario: The owner approves the prepared revision
 - **WHEN** the human confirms a current exact handoff review
 - **THEN** the human is recorded as decider and revision author, the exact prepared edit becomes the next task revision with the prepared rationale, and the response and plan history identify the decision, handoff and revision together
 
 #### Scenario: A moved base or scope refuses approval
-- **WHEN** the review's identity differs, the handoff ends, the task base moves even with an unchanged contract, or the approved plan, execution pin, ownership, change generation or attempt changes before publication
-- **THEN** approval is refused with the reason and no decision, receipt, revision, disposition change, notice or wakeup is written by that command
+- **WHEN** a fresh approval of an open bound card echoes a well-formed review identity that differs, the handoff ends, the task base moves even with an unchanged contract, or the approved plan, execution pin, ownership, change generation or attempt changes before publication
+- **THEN** approval returns `stale` with the reason and no decision, receipt, revision, disposition change, notice or wakeup is written by that command
 
 #### Scenario: An unauthorized or malformed approval writes nothing
-- **WHEN** an agent attempts the human action, an owner action names another team's plan or card, or it supplies replacement content or invalid addressing or review fields
-- **THEN** the attempt is refused with no writes and no foreign receipt or review content
+- **WHEN** an agent attempts the human action, an owner action names another team's plan or card, or it supplies replacement content or invalid addressing or review fields, including malformed echoes
+- **THEN** a malformed request returns `invalid`, an agent attempt is forbidden, and another team's plan or card returns not found, with zero writes and no foreign receipt or review content
 
 ### Requirement: One approval intent has one durable receipt
-The combined action SHALL use a stable plan command id bound to the action, card, reviewed handoff, binding identity and normalized owner rationale. An exact replay SHALL return its original decision and receipt before fresh eligibility is checked. A different action or payload using that key SHALL be refused. The receipt SHALL identify the associated task revision and original notice and wakeup ids independently of later delivery and task state.
+The combined action SHALL bind a stable plan command id to the action, card, reviewed handoff, binding identity and normalized owner rationale. An exact replay SHALL return its original decision and complete receipt before fresh eligibility. A different action or payload under that key SHALL be refused, and inconsistent receipt evidence SHALL return `state`. The receipt SHALL identify the associated task revision and original notice and wakeup ids independently of later delivery and task state.
 
 #### Scenario: Competing actions have only their own effects
 - **WHEN** two approvals compete with the same or different keys, or an approval competes with an answer, standalone prepared publication, edited draft publication or intervening ordinary revision
