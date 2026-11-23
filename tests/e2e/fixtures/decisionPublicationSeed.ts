@@ -1,6 +1,6 @@
 // Run by Bun from the fixture spec against Playwright's disposable database.
 import { realpathSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 import { initDatabase } from '../../../src/server/db'
 import { renderContract } from '../../../src/shared/implementationContract'
 import { normalizePlanContent } from '../../../src/shared/plans'
@@ -24,9 +24,13 @@ import { retryOnSqliteBusy } from '../../../src/server/__tests__/sqliteBusyRetry
 interface SeedRequest { repo: string; lead: string }
 
 async function main({ repo, lead }: SeedRequest) {
-  const file = realpathSync(process.env.AGENTBOARD_DB_PATH!)
-  if (process.env.AGENTBOARD_CHAT_FIXTURE !== '1' || dirname(file) !== realpathSync(process.env.E2E_TMUX_TMPDIR!)) {
-    throw new Error('Decision publication seed requires the isolated Playwright fixture database')
+  const database = process.env.AGENTBOARD_DB_PATH
+  const fixtureRoot = process.env.E2E_TMUX_TMPDIR
+  const refusal = 'Decision publication seed requires the isolated Playwright fixture database'
+  if (!database || !fixtureRoot) throw new Error(refusal)
+  const file = realpathSync(database)
+  if (basename(file) !== 'agentboard.db' || dirname(file) !== realpathSync(fixtureRoot)) {
+    throw new Error(refusal)
   }
   const team = await resolveTeam(repo)
   const sessions = initDatabase({ path: file })
