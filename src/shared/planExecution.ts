@@ -7,6 +7,7 @@
 // `manifestHashInput`.
 import { canonicalJson } from './productStrategy'
 import { PLAN_CHECK_FLOOR } from './plans'
+import type { ExecutionRevisionView } from './planRevisionControl'
 
 /** The floor-map version an execution records with its snapshot (D16). */
 export const FLOOR_VERSION = 1
@@ -315,4 +316,10 @@ export interface PlanExecutionView {
   startedAt: string
   finishedAt: string | null
   changes: ExecutionChangeView[]
+  /**
+   * Every revision the execution held, seq 1 (Start's record) first, each with
+   * its publication rows (plan-revision-apply D4, D6); absent from a server
+   * that predates Apply.
+   */
+  revisions?: ExecutionRevisionView[]
 }

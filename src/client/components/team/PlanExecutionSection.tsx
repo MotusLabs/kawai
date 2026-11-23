@@ -8,11 +8,14 @@
 // execution's pauses, Pause…, and Hold… follow its rows (`PlanPauseSection`,
 // revision-control D14); a checkpoint decision's Stop link lands on Stop.
 // While the run holds an older revision than the plan's approved one, Apply
-// revision… opens `PlanApplyRevisionDialog` (plan-revision-apply D6).
+// revision… opens `PlanApplyRevisionDialog` (plan-revision-apply D6), and
+// the revisions the run held list beneath its state, seq 1 (Start's record)
+// first, each Apply with its rationale and its per-change publication rows.
 // Every control disables while disconnected.
 import { Fragment } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
+import type { ExecutionRevisionView } from '@shared/planRevisionControl'
 import { promotedChanges } from '@shared/planIntegration'
 import PlanIntegrationPanel from './PlanIntegrationPanel'
 import PlanExecutionChangeRow from './PlanExecutionChangeRow'
@@ -21,6 +24,26 @@ import PlanExecutionStopDialog from './PlanExecutionStopDialog'
 import PlanDecisionCard from './PlanDecisionCard'
 import PlanPauseSection from './PlanPauseSection'
 import PlanApplyRevisionDialog from './PlanApplyRevisionDialog'
+
+/** The execution's revision history (plan-revision-apply D4, D6); nothing from a server that sends none. */
+function RevisionHistory({ revisions }: { revisions: ExecutionRevisionView[] }) {
+  return <div className="mt-1" data-testid="plan-execution-history">
+    <p className="text-chat-meta font-medium">Revision history</p>
+    <ol className="mt-1 text-chat-meta">
+      {revisions.map(row => <li key={row.seq} data-testid={`plan-execution-history-${row.seq}`}>
+        <p>{row.seq === 1 ? `Started on revision ${row.revision}` : `Applied revision ${row.revision}`} · {row.appliedAt}</p>
+        {row.rationale !== null && <p className="text-secondary">{row.rationale}</p>}
+        {row.changes.length > 0 && <ul className="pl-4">
+          {row.changes.map(change => <li key={change.change} data-testid={`plan-execution-history-${row.seq}-${change.change}`}>
+            <code>{change.change}</code>: {change.class}{change.fields.length > 0 ? ` (${change.fields.join(', ')})` : ''}
+            {change.choice !== null ? ` · ${change.choice}` : ''}
+            {change.taskRevision !== null ? ` · task revision ${change.taskRevision}` : ''}
+          </li>)}
+        </ul>}
+      </li>)}
+    </ol>
+  </div>
+}
 
 export default function PlanExecutionSection({ teamPath, plan, detail, connected, onSend, onOpenTask, sessions = [], busy = false, revealAnchor = null }: {
   teamPath: string
@@ -63,6 +86,7 @@ export default function PlanExecutionSection({ teamPath, plan, detail, connected
           {' · revision '}{newest.revision}
           {newest.outcome === 'stopped' && newest.stopReason !== null ? ` · stopped: ${newest.stopReason}` : ''}
         </p>
+        {newest.revisions !== undefined && newest.revisions.length > 0 && <RevisionHistory revisions={newest.revisions} />}
         <ul className="mt-1">
           {newest.changes.map(row => <Fragment key={row.change}>
             <PlanExecutionChangeRow teamPath={teamPath} connected={connected} onSend={onSend} row={row} execution={newest} promoted={promoted.has(row.change)} onOpenTask={openTask}

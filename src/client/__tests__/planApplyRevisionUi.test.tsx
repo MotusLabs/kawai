@@ -225,6 +225,42 @@ describe('the Apply dialog (A8)', () => {
   })
 })
 
+describe('the execution\'s revision history (A7)', () => {
+  const history: NonNullable<PlanExecutionView['revisions']> = [
+    { seq: 1, revision: 1, contentHash: 'h1', rationale: null, appliedAt: '2026-11-18T10:00:00.000Z', changes: [] },
+    { seq: 2, revision: 2, contentHash: 'h2', rationale: 'the store moved', appliedAt: '2026-11-18T12:00:00.000Z', changes: [
+      { executionId: 'exec-1', seq: 2, change: 'api', class: 'changed', choice: 'continue', fields: ['guidance'], taskId: null, taskRevision: null },
+      { executionId: 'exec-1', seq: 2, change: 'ui', class: 'changed', choice: 'adapt', fields: ['acceptance'], taskId: 'task-ui', taskRevision: 2 },
+      { executionId: 'exec-1', seq: 2, change: 'old', class: 'removed', choice: null, fields: [], taskId: null, taskRevision: null },
+    ] },
+  ]
+  const withHistory = (revisions: PlanExecutionView['revisions']): PlanDetail => {
+    const detail = detailOf(2)
+    return { ...detail, executions: [{ ...detail.executions![0]!, ...(revisions === undefined ? {} : { revisions }) }] }
+  }
+  const mountDetail = (detail: PlanDetail) => {
+    act(() => useTeamPlanStore.getState().open(TEAM, 'plan-1'))
+    act(() => { renderer = TestRenderer.create(host(true, detail)) })
+  }
+
+  test('the history lists Start\'s revision first, then each Apply with its rationale and every change\'s publication row', () => {
+    mountDetail(withHistory(history))
+    expect(textOf(byTestId('plan-execution-history-1'))).toContain('Started on revision 1 · 2026-11-18T10:00:00.000Z')
+    const applied = textOf(byTestId('plan-execution-history-2'))
+    expect(applied).toContain('Applied revision 2 · 2026-11-18T12:00:00.000Z')
+    expect(applied).toContain('the store moved')
+    expect(textOf(byTestId('plan-execution-history-2-api'))).toBe('api: changed (guidance) · continue')
+    expect(textOf(byTestId('plan-execution-history-2-ui'))).toBe('ui: changed (acceptance) · adapt · task revision 2')
+    expect(textOf(byTestId('plan-execution-history-2-old'))).toBe('old: removed')
+  })
+
+  test('an execution without revisions (a server that predates Apply) renders no history', () => {
+    mountDetail(withHistory(undefined))
+    expect(present('plan-execution-history')).toBe(false)
+    expect(present('plan-execution-state')).toBe(true)
+  })
+})
+
 describe('the store\'s Apply preview slot', () => {
   test('beginApplyPreview marks the preview pending; its answer settles the preview without touching any command; a reconnect drops only a pending preview', () => {
     act(() => useTeamPlanStore.getState().open(TEAM, 'plan-1'))
