@@ -41,7 +41,6 @@ describe('limit signals', () => {
     expect(retryLimitSignal({}, null)).toBeNull()
   })
 
-  // @covers: profile-limit-handling › A payment-required failure is a final credit limit › 402 under another error class
   test('failed assistant messages read the status from the error text', () => {
     expect(assistantLimitSignal('billing_error', 'API Error: 402 pay up', null))
       .toEqual({ kind: 'billing_error', final: true, status: 402, message: 'API Error: 402 pay up', resetsAt: null, window: 'credit' })
@@ -51,7 +50,6 @@ describe('limit signals', () => {
     expect(assistantLimitSignal(undefined, 'API Error: 429', null)).toBeNull()
   })
 
-  // @covers: profile-limit-handling › A payment-required failure is a final credit limit › OpenRouter balance cannot cover the request
   test("a 402 is a final credit limit whatever the class: OpenRouter's frame through Claude Code", () => {
     // The spike's assistant frame: Claude Code wraps OpenRouter's 402 as
     // error "unknown" with no api_retry before it.

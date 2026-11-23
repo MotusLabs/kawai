@@ -1008,6 +1008,10 @@ describe('ChatSessionDriver', () => {
     expect('usage' in completions()[2]!).toBe(false)
   })
 
+  // A client that never reads providerCostUsd (the "Older client" scenario)
+  // receives the estimate beside the charge: the field is additive, so the
+  // estimate stays on every completed turn, this one included.
+  // @covers: chat-sessions › A turn's cost is the provider-reported charge when streamed › Older client
   test("turn_completed carries the provider-reported cost summed over the turn's stream, beside the SDK estimate", async () => {
     const harness = createHarness()
     const fake = () => harness.fakes.at(-1)!

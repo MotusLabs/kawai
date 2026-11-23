@@ -94,14 +94,32 @@ describe('trusted providers may name their credential variables', () => {
     expect(profiles.has('leaky')).toBe(false)
   })
 
-  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Malformed variable name
-  test.each(['my key', 'lower_case', '1LEADING_DIGIT', ''])('malformed variable name %p is rejected naming provider and field', name => {
+  // Separate literal-title tests per malformed name: bun's JUnit records
+  // each-case titles substituted, so a %p title cannot carry a coverage
+  // citation.
+  const rejectsMalformedVariableName = (name: string): void => {
     const file = writeProviders(homeDir, { or2: { authTokenEnv: name, models: { 'or2-a': {} } } })
     const { errors } = resolveProfileCatalog({ homeDir })
     expect(errors).toHaveLength(1)
     expect(errors[0]).toContain(file)
     expect(errors[0]).toContain('"or2"')
     expect(errors[0]).toContain('authTokenEnv')
+  }
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Malformed variable name
+  test('malformed variable name "my key" is rejected naming provider and field', () => {
+    rejectsMalformedVariableName('my key')
+  })
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Malformed variable name
+  test('malformed variable name "lower_case" is rejected naming provider and field', () => {
+    rejectsMalformedVariableName('lower_case')
+  })
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Malformed variable name
+  test('malformed variable name "1LEADING_DIGIT" is rejected naming provider and field', () => {
+    rejectsMalformedVariableName('1LEADING_DIGIT')
+  })
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Malformed variable name
+  test('malformed variable name "" is rejected naming provider and field', () => {
+    rejectsMalformedVariableName('')
   })
 
   test('a user-level overlay of a credentialed provider keeps its credential names', () => {

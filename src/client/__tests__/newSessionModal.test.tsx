@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { useLayoutEffect } from 'react'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
 import NewSessionModal from '../components/NewSessionModal'
 import { DEFAULT_PRESETS, useSettingsStore } from '../stores/settingsStore'
+import { claudeProfileCatalog } from '../../server/chat/ClaudeProfiles'
 
 const globalAny = globalThis as typeof globalThis & {
   window?: Window & typeof globalThis
@@ -2031,6 +2035,30 @@ describe('profile picker groups by provider', () => {
     const options = select.findAllByType('option')
     expect(options.map(option => option.props.value)).toEqual(['default', 'opus', 'glm', 'glm-flash', 'mimo', 'codex', 'work-codex'])
     act(() => { renderer.unmount() })
+  })
+
+  // @covers: claude-session-profiles › The shipped catalog includes OpenRouter › Listed in the picker
+  test('the shipped catalog response offers the OpenRouter models grouped under OpenRouter', async () => {
+    // The exact payload the profiles route serves with no user-level
+    // overrides: the shipped catalog resolved against an empty home.
+    const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-picker-home-'))
+    try {
+      const renderer = await openWith(claudeProfileCatalog({ homeDir: emptyHome }).profiles)
+      const select = renderer.root.findByProps({ 'aria-label': 'Profile' })
+      const openrouter = select.findAllByType('optgroup').find(group => group.props.label === 'OpenRouter')
+      expect(openrouter).toBeTruthy()
+      expect(openrouter!.findAllByType('option').map(option => option.props.value))
+        .toEqual(expect.arrayContaining(['openrouter-opus', 'openrouter-sonnet', 'openrouter-haiku']))
+      // Every OpenRouter model sits inside its provider's group, beside the
+      // shipped default's other providers.
+      const grouped = select.findAllByType('optgroup').flatMap(group => group.findAllByType('option').map(option => option.props.value))
+      for (const id of ['openrouter-opus', 'openrouter-sonnet', 'openrouter-haiku']) {
+        expect(grouped).toContain(id)
+      }
+      act(() => { renderer.unmount() })
+    } finally {
+      fs.rmSync(emptyHome, { recursive: true, force: true })
+    }
   })
 })
 

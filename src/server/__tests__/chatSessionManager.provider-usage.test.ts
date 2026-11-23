@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatUsageReport } from '../../shared/chat'
 import { type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
@@ -167,7 +168,6 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(manager.getSnapshot(created.session.id)!.status).toBe('waiting')
   })
 
-  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Profiles share a provider
   // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › Shared plan pulled once
   test('profiles share a provider: one pull serves sibling models', async () => {
     // glm and glm-flash are models of zai in this pinned catalog; the
@@ -215,6 +215,51 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(handles[1]!.usageCalls).toEqual([])
     expect(manager.getSnapshot(second.session.id)!.usage?.source).toBe('provider')
     expect(manager.getSnapshot(second.session.id)!.usage?.windows[0]).toMatchObject({ key: 'zai:time_limit', percentUsed: 2 })
+  })
+
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Profiles share a provider
+  test("a pushed SDK report reaches its provider's live sibling sessions", async () => {
+    // Sibling profiles of one provider with no quota endpoint (plain
+    // profiles): a rate_limit_event pushed into one live sibling is held
+    // per provider, so the other sibling's snapshot carries the same
+    // report whatever profile emitted it.
+    const catalog = path.join(tempDir, 'catalog')
+    fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'providers.json'),
+      JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {}, 'glm-flash': {} } } })
+    )
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness({}, [], catalog)
+    const first = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!first.ok) throw new Error(first.error)
+    const second = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm-flash' })
+    if (!second.ok) throw new Error(second.error)
+    expect(await manager.start(first.session.id)).toEqual({ ok: true })
+    expect(await manager.start(second.session.id)).toEqual({ ok: true })
+    await flush()
+    // No quota endpoint: nothing is probed; the SDK pulls answer the spawns.
+    expect(fetchCalls).toEqual([])
+
+    const pushAt = Math.floor(Date.now() / 1000) + 2400
+    handles[0]!.push({
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'allowed',
+        unifiedWindows: {
+          five_hour: { utilization: 0.2237, resetsAt: pushAt },
+          seven_day: { utilization: 0.1712, resetsAt: pushAt },
+        },
+      },
+    } as unknown as SDKMessage)
+    await flush()
+    const held = manager.getSnapshot(first.session.id)!.usage!
+    expect(held.source).toBe('push')
+    expect(held.windows.map(window => window.key)).toEqual(['five_hour', 'seven_day'])
+    // The sibling sees the same held report, not a per-profile copy.
+    expect(manager.getSnapshot(second.session.id)!.usage).toBe(held)
+    // One broadcast per report; the push's carries the pushed data.
+    expect(usage.at(-1)!.providerId).toBe('zai')
+    expect(usage.at(-1)!.report).toBe(held)
   })
 
   // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › Non-matching response records no data

@@ -289,11 +289,17 @@ describe('Claude profile resolution', () => {
     )
     const launch = resolveClaudeLaunch(
       'capped',
+      // The inherited value stands for a conflicting project setting in the
+      // effective server environment the launch starts from.
       { CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000' },
       { homeDir: tempHome }
     )
     // The provider's cap wins; the inherited value never rides along.
     expect(launch.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('8000')
+    // The flag settings layer carries the cap too: a blank there would let a
+    // lower-priority project setting win under it.
+    const settings = launch.settings as { env: Record<string, string> }
+    expect(settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('8000')
   })
 })
 
