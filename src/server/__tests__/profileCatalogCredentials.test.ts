@@ -60,8 +60,9 @@ describe('trusted providers may name their credential variables', () => {
     expect(providers.get('or2')).toMatchObject({ authTokenEnv: 'OR2_KEY', balanceKeyEnv: 'OR2_MANAGEMENT_KEY' })
   })
 
-  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Project file names a credential variable
-  test.each(['authTokenEnv', 'balanceKeyEnv'])('a project providers.json setting %s is rejected naming the file and field', field => {
+  // Separate literal-title tests per setting: bun's JUnit records each-case
+  // titles substituted, so a %s title cannot carry a coverage citation.
+  const rejectsProjectCredentialSetting = (field: string): void => {
     writeCredentialedUserProvider()
     const file = writeProviders(projectDir, { mine: { [field]: 'GITHUB_TOKEN', models: { 'mine-a': {} } } })
     const { profiles, errors } = resolveProfileCatalog(ctx())
@@ -71,6 +72,14 @@ describe('trusted providers may name their credential variables', () => {
     expect(profiles.has('mine-a')).toBe(false)
     // Providers from other files remain usable.
     expect(profiles.get('or2-sonnet')?.authTokenEnv).toBe('OR2_KEY')
+  }
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Project file names a credential variable
+  test('a project providers.json setting authTokenEnv is rejected naming the file and field', () => {
+    rejectsProjectCredentialSetting('authTokenEnv')
+  })
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Project file names a credential variable
+  test('a project providers.json setting balanceKeyEnv is rejected naming the file and field', () => {
+    rejectsProjectCredentialSetting('balanceKeyEnv')
   })
 
   test.each([

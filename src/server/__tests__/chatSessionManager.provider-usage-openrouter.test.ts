@@ -216,16 +216,16 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(handles[0]!.usageCalls).toEqual([])
   })
 
-  // A const table keeps parentheses out of the each-form's table, so the
-  // literal-title extractor resolves the title for coverage citations.
+  // Separate literal-title tests per failure shape: bun's JUnit records
+  // each-case titles substituted, so a %s title cannot carry a coverage
+  // citation.
   const FAILING_KEY_RESPONSES: Array<[string, Response | Error]> = [
     ['a 404', jsonResponse({ error: 'no route' }, 404)],
     ['a server error', jsonResponse({ error: 'boom' }, 500)],
     ['a foreign body', jsonResponse({ hello: true })],
     ['a transport error', new Error('offline')],
   ]
-  // @covers: chat-usage-limits › OpenRouter providers are pulled from the OpenRouter key endpoint › Key endpoint missing or failing
-  test.each(FAILING_KEY_RESPONSES)('a failing key endpoint (%s) records no data and keeps the host-login pull suppressed', async (_name, response) => {
+  const failingKeyRecordsNoData = async (response: Response | Error): Promise<void> => {
     const warnings: Array<{ event: string; data?: Record<string, unknown> }> = []
     logger.warn = (event: string, data?: Record<string, unknown>) => {
       warnings.push({ event, data })
@@ -251,6 +251,22 @@ describe('ChatSessionManager provider usage pull', () => {
     } finally {
       logger.warn = orOriginalWarn
     }
+  }
+  // @covers: chat-usage-limits › OpenRouter providers are pulled from the OpenRouter key endpoint › Key endpoint missing or failing
+  test('a failing key endpoint (a 404) records no data and keeps the host-login pull suppressed', async () => {
+    await failingKeyRecordsNoData(FAILING_KEY_RESPONSES[0]![1])
+  })
+  // @covers: chat-usage-limits › OpenRouter providers are pulled from the OpenRouter key endpoint › Key endpoint missing or failing
+  test('a failing key endpoint (a server error) records no data and keeps the host-login pull suppressed', async () => {
+    await failingKeyRecordsNoData(FAILING_KEY_RESPONSES[1]![1])
+  })
+  // @covers: chat-usage-limits › OpenRouter providers are pulled from the OpenRouter key endpoint › Key endpoint missing or failing
+  test('a failing key endpoint (a foreign body) records no data and keeps the host-login pull suppressed', async () => {
+    await failingKeyRecordsNoData(FAILING_KEY_RESPONSES[2]![1])
+  })
+  // @covers: chat-usage-limits › OpenRouter providers are pulled from the OpenRouter key endpoint › Key endpoint missing or failing
+  test('a failing key endpoint (a transport error) records no data and keeps the host-login pull suppressed', async () => {
+    await failingKeyRecordsNoData(FAILING_KEY_RESPONSES[3]![1])
   })
 
   // @covers: chat-usage-limits › Account credits render when a balance key is configured › Management key configured
