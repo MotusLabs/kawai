@@ -158,6 +158,12 @@ test('revision-apply walkthrough: start revision 1, approve revision 2, apply it
 
     // The execution holds revision 2, with its history.
     await expect(section.getByTestId('plan-execution-state')).toContainText('revision 2', { timeout: 20_000 })
+    // The pushed detail's history, as the execution section shows it.
+    await expect(section.getByTestId('plan-execution-history-1')).toContainText('Started on revision 1')
+    const applied = section.getByTestId('plan-execution-history-2')
+    await expect(applied).toContainText('Applied revision 2')
+    await expect(applied).toContainText('The API moves under /v2.')
+    await expect(section.getByTestId('plan-execution-history-2-walk-api')).toHaveText('walk-api: changed (guidance) · adapt · task revision 2')
     const state = appliedState(planId, taskId)
     expect(state.history).toEqual([{ seq: 1, revision: 1, rationale: null }, { seq: 2, revision: 2, rationale: 'The API moves under /v2.' }])
     expect(state.taskRevision).toBe(2)
