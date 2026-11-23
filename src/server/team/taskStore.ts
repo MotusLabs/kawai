@@ -141,6 +141,8 @@ export interface PublishInput {
   discardDraft?: boolean
   /** The prepared handoff this publication fulfills, exempt from the stale hook (owner-publication-handoff D4). */
   handoffId?: string
+  /** Checks the human decision binding after replay lookup, before writing any publication rows. */
+  freshGuard?: () => void
   /** On a key replay (H17m): a stored linked draft names another handoff than the key's revision is associated with. */
   linkedHandoffDiffers?: (revision: number) => boolean
   /**
@@ -208,6 +210,9 @@ export class TaskStore {
 
   private changed(id: string): TeamTask {
     const task = this.get(id)!
+    // Finding remaps append journal notes inside a combined publication.
+    // Its outer writer emits this task after commit with the final revision.
+    if (this.mail?.deferringCommitObservations) return task
     for (const listener of this.listeners) listener(task)
     return task
   }
@@ -358,9 +363,10 @@ export class TaskStore {
   publish(id: string, input: PublishInput, author: TaskActor, now = nowIso()): PublishOutcome | null {
     let outcome: PublishOutcome | null
     try {
-      outcome = this.db.transaction((): PublishOutcome | null => {
+      const write = (): PublishOutcome | null => {
         const prior = this.resolveKey(id, input)
         if (prior) return prior
+        input.freshGuard?.()
         const current = this.get(id)
         if (!current) return null
         const claimed = input.claim?.(current) ?? null
@@ -384,7 +390,13 @@ export class TaskStore {
         input.within?.(revision, this.get(id)!)
         claimed?.within(revision, this.get(id)!)
         return { replay: false, task: this.get(id)!, revision }
-      })()
+      }
+      if (input.freshGuard) {
+        if (!this.mail) throw new Error('Mailbox commit observers are unavailable')
+        outcome = this.mail.writeWithCommittedObservations(write)
+      } else {
+        outcome = this.db.transaction(write)()
+      }
     } catch (error) {
       // The arbiter (D2): a same-key publication committed between this
       // request's read and its write — the unique key rejected the insert, or

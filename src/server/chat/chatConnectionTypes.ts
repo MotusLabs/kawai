@@ -105,6 +105,8 @@ export const CHAT_CONNECTION_TYPES = [
   'team-plan-assess',
   'team-plan-validation-decide',
   'team-plan-decide',
+  'team-plan-publication-review',
+  'team-plan-approve-publication',
   'team-plan-override',
   'team-plan-hold-place',
   'team-plan-hold-release',

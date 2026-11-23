@@ -87,6 +87,15 @@ function commitProblem(commit: string, roots: string[]): string | null {
 
 /** Throw the first problem in H7's field order; nothing is written. */
 export function validateHandoffRequest(request: NormalizedHandoffRequest, commitRoots: string[]): void {
+  validatePreparedHandoffFields(request)
+  if (request.baseCommit !== null) {
+    const bad = commitProblem(request.baseCommit, commitRoots)
+    if (bad) throw new Error(`${bad}; nothing was recorded`)
+  }
+}
+
+/** Validate stored evidence as recorded, without resolving Git during a write transaction. */
+export function validatePreparedHandoffFields(request: NormalizedHandoffRequest): void {
   const problem = sizeProblem(request)
     ?? (request.direction === null && request.acceptance === null && request.contract === null
       ? 'A publication request needs a direction, acceptance criteria, or a contract' : null)
@@ -97,8 +106,7 @@ export function validateHandoffRequest(request: NormalizedHandoffRequest, commit
     const bad = evidenceProblem(ref)
     if (bad) throw new Error(`${bad}; nothing was recorded`)
   }
-  if (request.baseCommit !== null) {
-    const bad = commitProblem(request.baseCommit, commitRoots)
-    if (bad) throw new Error(`${bad}; nothing was recorded`)
+  if (request.baseCommit !== null && !/^[0-9a-f]{40}$/.test(request.baseCommit)) {
+    throw new Error(`The base commit must be a full 40-hex commit id: ${request.baseCommit}; nothing was recorded`)
   }
 }

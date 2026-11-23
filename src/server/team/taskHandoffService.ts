@@ -41,7 +41,14 @@ export interface PublicationLink {
   requestKey: string
   /** Exempts this handoff from the store's stale hook (D4). */
   handoffId: string
-  within: (revision: TaskRevision, current: TeamTask) => void
+  within: (revision: TaskRevision, current: TeamTask) => string | null
+  approval?: PreparedPublicationApproval
+}
+
+/** Internal extension of prepared publication. Both hooks run inside its writer transaction. */
+export interface PreparedPublicationApproval {
+  guard: () => void
+  complete: (revision: TaskRevision, ids: { wakeupMessageId: string | null; noticeMessageIds: string[] }) => void
 }
 
 export const RESERVED_KEY_REFUSAL = 'Request keys starting with "handoff:" are reserved for prepared publications; nothing was published. Publish a prepared revision with its handoff id.'
@@ -131,8 +138,9 @@ export class TaskHandoffService {
    * owner `task_amend { handoff_id }`. `extras` names prepared-payload fields
    * the caller sent beside the handoff id (H35).
    */
-  async publish(caller: TaskCaller, taskId: string, handoffId: string, extras: readonly string[]): Promise<PublishOutcome & { handoff: TaskHandoff }> {
+  async publish(caller: TaskCaller, taskId: string, handoffId: string, extras: readonly string[], approval?: PreparedPublicationApproval): Promise<PublishOutcome & { handoff: TaskHandoff }> {
     const { team, actor } = await this.tasks.context(caller)
+    if (approval && actor.kind !== 'human') throw new Error('Only the human approves a publication from a decision.')
     const task = this.tasks.sameTeamTask(team, taskId)
     const found = this.store.get(handoffId)
     if (!found || found.taskId !== task.id || found.teamId !== team.teamId) throw new Error(`Publication handoff not found for this task: ${handoffId}`)
@@ -155,6 +163,16 @@ export class TaskHandoffService {
     }, {
       requestKey: key,
       handoffId: found.id,
+      approval: approval && {
+        ...approval,
+        guard: () => {
+          approval.guard()
+          const current = this.store.forTeam(team.teamId, found.id)
+          if (!current || firstDifference(storedRequest(found), storedRequest(current)) || current.payloadHash !== found.payloadHash) {
+            throw new Error('The prepared payload changed while publication was being prepared')
+          }
+        },
+      },
       within: (revision: TaskRevision, current: TeamTask) => this.fulfill(found.id, actor, team.groupsRoot, revision, current, handoffPayloadHash(found), now),
     })
     // A concurrent duplicate resolved through the store's catch path: it is
@@ -171,14 +189,15 @@ export class TaskHandoffService {
    * association, the `published` transition with the published payload's
    * hash, and its wakeup — committed or rolled back with the revision.
    */
-  fulfill(handoffId: string, actor: HandoffActor, originPath: string, revision: TaskRevision, current: TeamTask, publishedPayloadHash: string, now: string): void {
+  fulfill(handoffId: string, actor: HandoffActor, originPath: string, revision: TaskRevision, current: TeamTask, publishedPayloadHash: string, now: string): string | null {
     const fresh = this.store.get(handoffId)
     if (fresh?.state !== 'open') throw new Error(`The publication handoff is ${fresh?.state ?? 'gone'}; nothing was published`)
     this.store.associate(current.id, revision.revision, handoffId)
-    this.store.transition(handoffId, 'published', {
+    const moved = this.store.transition(handoffId, 'published', {
       actor: { kind: actor.kind, sessionId: actor.sessionId }, revision: revision.revision, publishedPayloadHash,
     }, now)
-    writeHandoffWakeup(this.tasks.store.db, this.tasks.store.mail, this.store.get(handoffId)!, 'published', {
+    if (!moved) throw new Error('The prepared handoff could not be fulfilled')
+    return writeHandoffWakeup(this.tasks.store.db, this.tasks.store.mail, this.store.get(handoffId)!, 'published', {
       taskTitle: current.title, revision: revision.revision, originPath, live: this.live,
     }, now)
   }

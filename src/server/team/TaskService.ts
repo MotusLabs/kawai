@@ -282,6 +282,7 @@ export class TaskService {
       ...(input.baseRevision !== undefined ? { baseRevision: input.baseRevision } : {}),
       ...(requestKey ? { requestKey } : {}),
       ...(link ? { handoffId: link.handoffId } : {}),
+      ...(link?.approval ? { freshGuard: link.approval.guard } : {}),
       notify: input.notify === true,
       // Only the publication that came from the draft discards it (D2); a
       // linked draft's publish fulfills its handoff (owner-publication-handoff D3).
@@ -296,7 +297,10 @@ export class TaskService {
             sender, requestKey: requestKey ?? `publish-r${revision.revision}`, sessionExists: id => !!this.options.getSession(id),
           })
         }
-        link?.within(revision, current)
+        if (link) {
+          const wakeupMessageId = link.within(revision, current)
+          link.approval?.complete(revision, { wakeupMessageId, noticeMessageIds: sent.map(notice => notice.messageId) })
+        }
       },
     }, actor)
     if (!outcome) throw new Error(`Task not found in this team: ${taskId}`)
