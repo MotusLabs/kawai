@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
 import { mulberry32 } from '../../shared/__tests__/contractFixtures'
+import type { StopReason } from '../../shared/planExecution'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
 import { PauseStore } from '../plans/revisionControl/pauseStore'
 import { HUMAN } from './helpers/decisionPublicationBench'
-import { beginAfterCheck, bind, ordinary, prepare, prepared, type ApprovalCommand, type PublicationRuntime } from './helpers/decisionPublicationCommands'
+import { askInput, beginAfterCheck, bind, ordinary, prepare, prepared, type ApprovalCommand, type PublicationRuntime } from './helpers/decisionPublicationCommands'
 import { publicationRuntime } from './helpers/decisionPublicationRuntime'
 import { propertyCases } from './helpers/propertyCases'
 
@@ -112,6 +113,89 @@ async function pause(runtime: PublicationRuntime) {
   if (!paused.pause) throw new Error(paused.error ?? 'No pause opened')
   return paused.pause
 }
+
+function moveChange(runtime: PublicationRuntime, state: 'stopped' | 'landing' | 'gating', stopReason?: StopReason) {
+  const { db, execution, task } = runtime
+  const store = new ExecutionStore(db.db)
+  const before = store.change(execution.id, 'api')!
+  expect(store.transition(execution.id, 'api', before, { state, stopReason })).toMatchObject({ state, taskId: task.id })
+}
+
+const STAGE_REFUSAL = 'The execution or change is no longer in a publication stage.'
+const ATTEMPT_REFUSAL = 'The change baseline or latest attempt manifest is missing or inconsistent.'
+const FRESH_BIND_FAILURES: Array<[string, string, (runtime: PublicationRuntime) => void | Promise<void>]> = [
+  ['an instruction-failed stopped change', STAGE_REFUSAL, runtime => moveChange(runtime, 'stopped', 'instruction-failed')],
+  ['a landing change', STAGE_REFUSAL, runtime => moveChange(runtime, 'landing')],
+  ['a finished execution', STAGE_REFUSAL, ({ db, execution }) => {
+    // Retain the owning, implementing change to isolate the execution-state check.
+    expect(db.db.prepare(`UPDATE plan_executions SET state = 'finished', outcome = 'stopped', finished_at = ?
+      WHERE id = ? AND state = 'running'`).run(execution.startedAt, execution.id).changes).toBe(1)
+  }],
+  ['an affected undecided pause', 'affects this change and is undecided.', async runtime => {
+    const paused = await pause(runtime)
+    expect(new PauseStore(runtime.db.db).target(paused.id, 'api')).toMatchObject({ decision: null })
+  }],
+  ['a missing latest attempt', ATTEMPT_REFUSAL, ({ db, attempt }) => {
+    expect(db.db.prepare('DELETE FROM plan_execution_attempts WHERE id = ?').run(attempt.id).changes).toBe(1)
+  }],
+  ['an inconsistent latest attempt manifest', ATTEMPT_REFUSAL, ({ db, attempt }) => {
+    expect(db.db.prepare('UPDATE plan_execution_attempts SET manifest_hash = ? WHERE id = ?').run('0'.repeat(64), attempt.id).changes).toBe(1)
+  }],
+  ['a missing change baseline', ATTEMPT_REFUSAL, ({ db, execution }) => {
+    expect(db.db.prepare("UPDATE plan_execution_changes SET baseline_commit = NULL WHERE execution_id = ? AND change = 'api'").run(execution.id).changes).toBe(1)
+  }],
+  ['an invalid change baseline', ATTEMPT_REFUSAL, ({ db, execution }) => {
+    expect(db.db.prepare("UPDATE plan_execution_changes SET baseline_commit = 'bad-sha' WHERE execution_id = ? AND change = 'api'").run(execution.id).changes).toBe(1)
+  }],
+]
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › Foreign, borrowed and malformed bindings are refused
+test.each(FRESH_BIND_FAILURES)('B06 fresh bind refuses %s with a still-open task', async (_fact, reason, arrange) => {
+  const runtime = await publicationRuntime()
+  try {
+    const { manager, task } = runtime
+    const handoff = await prepare(runtime)
+    await arrange(runtime)
+    await runtime.settleDelivery()
+    expect(manager.tasks.store.get(task.id)).toMatchObject({ status: 'open', revision: 1 })
+    expect(manager.tasks.handoffs.store.get(handoff.id)).toMatchObject({ state: 'open', notify: true, baseRevision: 1 })
+    const before = runtime.snapshot()
+    expect(before.plan_decision_cards).toEqual([])
+    expect(before.plan_decision_publications).toEqual([])
+
+    await expect(runtime.leadTool('decision_ask', askInput(handoff))).rejects.toThrow(reason)
+    await runtime.settleDelivery()
+    expect(runtime.snapshot()).toEqual(before)
+  } finally { await runtime.teardown() }
+})
+
+// @covers: plan-decisions › A publication question binds one prepared handoff › A requester binds a handoff for review
+test.each(['implementing', 'gating'] as const)('B07 fresh bind records only an owner card and link for a running %s change', async stage => {
+  const runtime = await publicationRuntime()
+  try {
+    const { task, attempt, execution, plan, db } = runtime
+    const handoff = await prepare(runtime)
+    if (stage === 'gating') moveChange(runtime, stage)
+    expect(new ExecutionStore(db.db).change(execution.id, 'api')).toMatchObject({ state: stage })
+    await runtime.settleDelivery()
+    const before = runtime.snapshot()
+
+    const { asked, review, read } = await bind(runtime, handoff)
+    expect(asked).toMatchObject({ addressed_to: 'owner', replayed: false, publication: {
+      handoff_id: handoff.id, task_id: task.id, base_revision: 1, payload_hash: handoff.payloadHash,
+    } })
+    expect(review.execution).toMatchObject({ id: execution.id, revision: plan.revision, attemptId: attempt.id })
+    expect(await read()).toMatchObject({
+      card: { id: asked.card_id, taskId: task.id, addressedTo: 'owner', messageId: null },
+      publication: { handoffId: handoff.id, receipt: null },
+    })
+    await runtime.settleDelivery()
+    const after = runtime.snapshot()
+    expect(after.plan_decision_cards).toHaveLength(1)
+    expect(after.plan_decision_publications).toHaveLength(1)
+    expect<Record<string, unknown[]>>({ ...after, plan_decision_cards: [], plan_decision_publications: [] }).toEqual(before)
+  } finally { await runtime.teardown() }
+})
 
 async function resolve(runtime: PublicationRuntime, pauseId: string, choice: 'continue' | 'adapt') {
   // The fixture records the settled checkpoint observation, then runs the real resolve command.

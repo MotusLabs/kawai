@@ -85,6 +85,6 @@ export async function bindManual(bench: PublicationBench) {
 /** Durable state for both the winner and the zero-effects controls, independent of public projections. */
 export function decisionWriteSnapshot(db: Database): Record<string, unknown[]> {
   const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all()
-    .filter(({ name }) => /^(team_(task|message)|plan_(decision|fix_task|execution|pause|hold))/.test(name) || name === 'plans' || name === 'plan_revisions' || name === 'plan_events')
+    .filter(({ name }) => /^(team_(task|message)|plan_(decision|fix_task|execution|landing_slots|pause|hold))/.test(name) || name === 'plans' || name === 'plan_revisions' || name === 'plan_events')
   return Object.fromEntries(tables.map(({ name }) => [name, db.query(`SELECT * FROM "${name}" ORDER BY rowid`).all()]))
 }
