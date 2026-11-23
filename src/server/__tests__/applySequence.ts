@@ -3,8 +3,8 @@
 // fresh plan approved at revision 1 running api, ui, and docs, each in flight
 // with a task Kawai created, then 4–9 steps drawn from one seeded stream:
 // - approve: the next revision from an edit of the current approved one (a
-//   reworded, added, or dropped unlanded change; landed changes stay — P3
-//   covers their refusal);
+//   reworded, added — sometimes a name this run removed — or dropped
+//   unlanded change; landed changes stay — P3 covers their refusal);
 // - apply: usually after a fresh approval, a fresh command id with a random
 //   choice per needed change and a
 //   crash at none or one of B0–B4, followed by the owner's retry under the
@@ -57,6 +57,9 @@ export interface SequenceModel {
   claimed: Set<string>
   commands: Map<string, { input: ApplyInput; seq: number }>
   holds: Map<string, string>
+  /** Names an Apply removed and a later Apply added back (CH7's restore), and how many restores ran. */
+  restored: Set<string>
+  restores: number
   serial: number
 }
 
@@ -102,6 +105,14 @@ function commit(model: SequenceModel, input: ApplyInput, seq: number): void {
   const target = model.contents.get(input.revision)!
   for (const [name, kind] of classes(model, execContent(model), target)) {
     if (kind === 'removed' && !model.landed.has(name)) model.cancelled.add(name)
+    // A re-added name is fresh work: its cancelled row restored with no task, nobody holding it.
+    if (kind === 'added' && model.cancelled.has(name)) {
+      model.cancelled.delete(name)
+      model.tasks.delete(name)
+      model.claimed.delete(name)
+      model.restored.add(name)
+      model.restores += 1
+    }
     if (kind === 'changed' && input.choices[name] === 'adapt') {
       const taskId = model.tasks.get(name)!
       const notified = model.claimed.has(name)
@@ -141,6 +152,13 @@ export function check(wired: ApplyBench, model: SequenceModel, label: string): v
   for (const pair of model.published) expect({ label, ...publishedOnce(wired, pair) }).toEqual({ label, ...pair, revisions: 1, notices: pair.notified ? 1 : 0 })
   for (const name of model.cancelled) expect({ label, name, state: wired.executions.change(model.executionId, name)?.state }).toEqual({ label, name, state: 'cancelled' })
   for (const name of model.landed) expect({ label, name, state: wired.executions.change(model.executionId, name)?.state }).toEqual({ label, name, state: 'landed' })
+  // A restored name is owned, current work again, none of its retired task's attempts current.
+  for (const name of model.restored) {
+    if (model.cancelled.has(name) || model.landed.has(name)) continue
+    const row = wired.executions.change(model.executionId, name)!
+    const stale = wired.executions.attempts(model.executionId, name).filter(attempt => attempt.manifest.task.id !== row.taskId)
+    expect({ label, name, cancelled: row.state === 'cancelled', owns: row.owns, stale: stale.length }).toEqual({ label, name, cancelled: false, owns: true, stale: 0 })
+  }
 }
 
 /** A fresh case: the plan, the execution with its seq-1 row, and three in-flight changes. */
@@ -153,7 +171,7 @@ export async function startCase(wired: ApplyBench): Promise<SequenceModel> {
     planId, executionId, running: true, history: [{ seq: 1, revision: revision.revision, commandId: null }],
     contents: new Map([[revision.revision, revision.content]]), approved: { revision: revision.revision, hash: revision.contentHash },
     landed: new Set(), cancelled: new Set(), tasks: new Map(), adapts: new Map(), notices: new Map(), published: [], claimed: new Set(['api', 'ui', 'docs']),
-    commands: new Map(), holds: new Map(), serial: 0,
+    commands: new Map(), holds: new Map(), restored: new Set(), restores: 0, serial: 0,
   }
   for (const change of ['api', 'ui', 'docs']) {
     const flight = await wired.inFlightByKawai(executionId, change, 'dev')
@@ -174,7 +192,10 @@ async function approve(wired: ApplyBench, model: SequenceModel, next: () => numb
     const target = open[Math.floor(next() * open.length)]!.change
     edited = { ...content, changes: content.changes.map(entry => (entry.change === target ? { ...entry, guidance: `revised ${n}` } : entry)) }
   } else if (roll < 0.75 || open.length === 0) {
-    edited = { ...content, changes: [...content.changes, { ...base, change: `x${model.executionId.slice(5, 11)}${n}` } as PlanChange] }
+    // Half the additions bring back a name an earlier Apply of this run removed (CH7's restore, review F2).
+    const removed = [...model.cancelled].filter(name => !content.changes.some(entry => entry.change === name))
+    const name = removed.length > 0 && next() < 0.5 ? removed[Math.floor(next() * removed.length)]! : `x${model.executionId.slice(5, 11)}${n}`
+    edited = { ...content, changes: [...content.changes, { ...base, change: name } as PlanChange] }
   } else {
     const target = open[Math.floor(next() * open.length)]!.change
     edited = { ...content, changes: content.changes.filter(entry => entry.change !== target) }
@@ -206,7 +227,14 @@ async function apply(wired: ApplyBench, model: SequenceModel, next: () => number
       const spy = spyOn(wired.bench.service, 'recordRevisionControlEvent').mockImplementationOnce(() => { throw new Error('crash at B1') })
       try { crashed = await wired.apply.apply(wired.bench.human, input).catch((error: Error) => error.message) } finally { spy.mockRestore() }
     } else if (boundary === 'B2') {
-      const spy = spyOn(wired.revisions, 'recordAt').mockImplementationOnce(() => { throw new Error('crash at B2') })
+      // Alternately the history row's insert and the revision-applied event's, the transaction's last write (CR2, review F5).
+      const original = wired.bench.plans.insertEvent.bind(wired.bench.plans)
+      const spy = model.serial % 2 === 0
+        ? spyOn(wired.revisions, 'recordAt').mockImplementationOnce(() => { throw new Error('crash at B2') })
+        : spyOn(wired.bench.plans, 'insertEvent').mockImplementation((planId, event, now) => {
+          if (event.kind === 'revision-applied') throw new Error('crash at B2')
+          return original(planId, event, now)
+        })
       try { crashed = await wired.apply.apply(wired.bench.human, input).catch((error: Error) => error.message) } finally { spy.mockRestore() }
     } else if (boundary === 'B3') {
       wired.useWake(() => { throw new Error('crash at B3') })

@@ -78,6 +78,7 @@ describe('Apply properties over command sequences (P1, P2, CR/CH model)', () => 
   test('the CR/CH model: the crash and choice tables as the reference model over P1\'s sequences, compared after every step (seed 0x4A99, 200 cases)', async () => {
     const next = mulberry32(SEED)
     const stats = emptyStats()
+    let restores = 0
     for (let index = 0; index < propertyCases(CASES); index++) {
       const model = await startCase(wired)
       const steps = 4 + Math.floor(next() * 6)
@@ -85,7 +86,10 @@ describe('Apply properties over command sequences (P1, P2, CR/CH model)', () => 
         const kind = await step(wired, model, next, stats)
         check(wired, model, `case ${index} step ${at} ${kind}`)
       }
+      restores += model.restores
     }
+    // Non-vacuous for CH7's restore too: some sequences added a removed name back.
+    expect(restores).toBeGreaterThan(0)
     expect(stats.replays).toBeGreaterThan(0)
     expect(stats.races).toBeGreaterThan(0)
     for (const boundary of ['none', 'B0', 'B1', 'B2', 'B3', 'B4'] as const) expect({ boundary, seen: stats.crashes[boundary] > 0 }).toEqual({ boundary, seen: true })

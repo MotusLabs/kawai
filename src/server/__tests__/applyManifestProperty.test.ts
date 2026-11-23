@@ -24,12 +24,17 @@ afterAll(() => wired.close())
 
 type Seen = Map<string, { manifest: string; assignmentId: string | null; revision: number }>
 
-/** Every attempt row of the execution: its manifest as stored, its assignment, and the revision it names. */
+/**
+ * Every stored attempt row of the execution: its manifest as stored, its assignment, and the revision it names —
+ * read from the table, so a restored re-add's retired rows (no longer current, changeIncarnation.ts) are judged too.
+ */
 function attemptsOf(executionId: string): Seen {
   const seen: Seen = new Map()
+  const rows = wired.bench.db.db.prepare('SELECT id, assignment_id, manifest_json FROM plan_execution_attempts WHERE execution_id = ? AND change = ? ORDER BY number')
   for (const change of wired.executions.changes(executionId)) {
-    for (const row of wired.executions.attempts(executionId, change.change)) {
-      seen.set(row.id, { manifest: JSON.stringify(row.manifest), assignmentId: row.assignmentId, revision: row.manifest.plan.revision })
+    for (const row of rows.all(executionId, change.change) as Array<{ id: string; assignment_id: string | null; manifest_json: string }>) {
+      const manifest = JSON.parse(row.manifest_json) as { plan: { revision: number } }
+      seen.set(row.id, { manifest: JSON.stringify(manifest), assignmentId: row.assignment_id, revision: manifest.plan.revision })
     }
   }
   return seen

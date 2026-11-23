@@ -3,7 +3,7 @@
 // boundary — B0 before the prepare phase (the command never ran), B1 after
 // it and before the transaction (the plan command's entry throws), B2 inside
 // the transaction (the history row's insert throws after the per-change
-// writes), B3 after commit and before the wake (the wake throws), B4 after it
+// writes, or the revision-applied event's insert, its last write), B3 after commit and before the wake (the wake throws), B4 after it
 // — followed by the owner's retry under the same command id. ApplyService
 // keeps no state between calls, so the retry through the same instance is
 // the restarted server's; the executor is a fresh one over the same stores.
@@ -108,6 +108,35 @@ describe('Apply crash and replay (CR)', () => {
     const retry = await wired.applyAs(input(world, 'cr2'))
     expect(retry).toMatchObject({ ok: true, replayed: false })
     committedOnce(world, 'cr2')
+  })
+
+  // @covers: plan-revision-apply › The publication commits atomically › Crash before commit
+  test('CR2 a crash at the revision-applied event write, the transaction\'s last write, rolls back every write before it: no revision row, publication, task revision, notice, cancellation, or execution pin; the retry runs as a first Apply', async () => {
+    const world = await crashWorld()
+    const before = wired.counts()
+    const original = wired.bench.plans.insertEvent.bind(wired.bench.plans)
+    const kinds: string[] = []
+    const insert = spyOn(wired.bench.plans, 'insertEvent').mockImplementation((planId, event, now) => {
+      kinds.push(event.kind)
+      if (event.kind === 'revision-applied') {
+        // The event is written after every other write of the Apply, inside its transaction.
+        expect({ seq: wired.revisions.history(world.executionId).length, revision: wired.executions.execution(world.executionId)!.revision })
+          .toEqual({ seq: 2, revision: world.next.revision })
+        throw new Error('crash at the event write')
+      }
+      return original(planId, event, now)
+    })
+    try {
+      await expect(wired.applyAs(input(world, 'cr2-event'))).rejects.toThrow('crash at the event write')
+    } finally {
+      insert.mockRestore()
+    }
+    expect(kinds).toEqual(['revision-applied'])
+    nothingFrom(world, before)
+    expect(wired.revisions.history(world.executionId).map(row => row.seq)).toEqual([1])
+    const retry = await wired.applyAs(input(world, 'cr2-event'))
+    expect(retry).toMatchObject({ ok: true, replayed: false })
+    committedOnce(world, 'cr2-event')
   })
 
   // @covers: plan-revision-apply › The publication commits atomically › Retry after commit
