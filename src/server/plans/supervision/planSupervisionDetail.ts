@@ -6,6 +6,7 @@
 // decision store, results, and `readPlanUsage`); nothing is stored.
 import { cardState, currentDecision, fixStatus, type PlanDecisionCardView } from '../../../shared/planDecisions'
 import { fixPlanFacts } from '../decisions/fixFacts'
+import { DecisionPublicationStore } from '../decisions/decisionPublicationStore'
 import { planReport, type PlanSupervisionDetail } from '../../../shared/planReport'
 import type { PlanImpact } from '../../../shared/strategyImpact'
 import type { TeamTask } from '../../../shared/teamTasks'
@@ -26,6 +27,7 @@ export function decisionCardViews(reads: SupervisionDetailReads, teamId: string,
   const plan = reads.plans.forTeam(teamId, planId)
   if (plan === null) return []
   const facts = fixPlanFacts(reads, teamId, plan)
+  const publications = new DecisionPublicationStore(reads.db).views(teamId, planId)
   const results = new TaskResultStore(reads.db)
   return reads.decisions.cardsOfPlan(teamId, planId).map(card => {
     const decisions = reads.decisions.decisionsOfCard(teamId, card.id)
@@ -44,7 +46,8 @@ export function decisionCardViews(reads: SupervisionDetailReads, teamId: string,
         commits: results.listByTask(taskId).filter(result => result.createdAt > current.createdAt && result.commit !== null).map(result => result.commit!),
       }))
       .filter(entry => entry.commits.length > 0)
-    return { card, state: cardState(decisions), decisions, current, fixes, commits }
+    const publication = publications.get(card.id)
+    return { card, state: cardState(decisions), decisions, current, fixes, commits, ...(publication ? { publication } : {}) }
   })
 }
 

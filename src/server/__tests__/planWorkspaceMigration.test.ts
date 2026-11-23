@@ -71,9 +71,10 @@ test('a database at version 18 with plan and session rows upgrades, twice, keepi
   for (const [table, rows] of Object.entries(before)) {
     if (table !== 'process_observation_teams') expect(after[table]).toEqual(rows)
   }
-  // Migrations 20 (result-checks), 22 (team-approval-defaults), 24 (review-findings), 25 (review-convergence), and 29 (task-publication-handoffs) also land in this upgrade.
+  // Migrations 20 (result-checks), 22 (team-approval-defaults), 24 (review-findings), 25 (review-convergence),
+  // 29 (task-publication-handoffs), and 30 (decision-bound-task-publication) also land in this upgrade.
   expect(Object.keys(after).filter(table => !(table in before)).sort())
-    .toEqual([...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', 'team_task_finding_cards', 'team_task_finding_events', 'team_task_finding_items', 'plan_execution_diagnoses', 'team_task_convergence_notices', 'team_task_stall_notices', 'team_task_handoffs', 'team_task_handoff_events', 'team_task_handoff_wakeups'].sort())
+    .toEqual([...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', 'team_task_finding_cards', 'team_task_finding_events', 'team_task_finding_items', 'plan_execution_diagnoses', 'team_task_convergence_notices', 'team_task_stall_notices', 'team_task_handoffs', 'team_task_handoff_events', 'team_task_handoff_wakeups', 'plan_decision_publications'].sort())
   expect(versions(dbPath).filter(row => row.version === 19)).toHaveLength(1)
 })
 

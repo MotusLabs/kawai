@@ -39,7 +39,8 @@
 // `team_tasks`; migration 28 (`result-author-profile`) the nullable
 // `submitted_by_profile` on `team_task_results`; migration 29
 // (`task-publication-handoffs`) the handoff, event, and wakeup tables and the
-// nullable `handoff_id` on drafts and revisions (with `lineage_id` on drafts).
+// nullable `handoff_id` on drafts and revisions (with `lineage_id` on drafts);
+// migration 30 (`decision-bound-task-publication`) adds the decision publication link and receipt table.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -605,9 +606,20 @@ const migration29: SchemaShape['tables'] = {
   },
 }
 
+const migration30: SchemaShape['tables'] = {
+  plan_decision_publications: {
+    columns: [
+      keyPart('card_id', 1), column('team_id'), column('plan_id'), column('task_id'), column('handoff_id'),
+      integer('base_revision'), column('payload_hash'), column('binding_hash'), column('snapshot_json'),
+      optional('decision_id'), optional('receipt_json'), optional('receipt_hash'),
+    ],
+    indexes: [{ name: 'plan_decision_publications_plan', unique: 0, columns: ['team_id', 'plan_id'] }],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25, ...migration26, ...migration29 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25, ...migration26, ...migration29, ...migration30 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   // Migration 20's: the submitter's nullable coverage map (independent-
   // verification D4), appended after the baseline columns.

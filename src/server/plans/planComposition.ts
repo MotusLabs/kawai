@@ -475,6 +475,7 @@ export function composePlanServices(options: PlanServicesOptions): {
   const decisionStore = new DecisionStore(options.db)
   const decisions = team ? new DecisionService({
     db: options.db, decisions: decisionStore, plans: options.plans, planService: plans,
+    publication: { executions: executionStore, revisions: new ExecutionRevisionStore(options.db) },
     tasks: team.tasks, taskStore: team.taskStore, assignments: team.assignments, mailbox: team.teamMailbox, getSession: options.getSession,
     ...(options.homeDir ? { homeDir: options.homeDir } : {}), onChange: planId => options.plans.announce(planId),
   }) : null

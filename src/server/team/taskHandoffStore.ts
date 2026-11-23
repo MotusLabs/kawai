@@ -62,6 +62,11 @@ export class TaskHandoffStore {
     return row ? handoffOf(row) : null
   }
 
+  forTeam(teamId: string, id: string): TaskHandoff | null {
+    const row = this.db.prepare('SELECT * FROM team_task_handoffs WHERE id = ? AND team_id = ?').get(id, teamId) as Record<string, unknown> | null
+    return row ? handoffOf(row) : null
+  }
+
   byKey(taskId: string, requestKey: string): TaskHandoff | null {
     const row = this.db.prepare('SELECT * FROM team_task_handoffs WHERE task_id = ? AND request_key = ?').get(taskId, requestKey) as Record<string, unknown> | null
     return row ? handoffOf(row) : null

@@ -46,6 +46,7 @@ import { taskStallMigration } from '../team/taskStallSchema'
 import { CREATE_TEAM_APPROVAL_DEFAULTS_SQL } from '../team/teamApprovalDefaults'
 import { resultAuthorMigration } from '../team/resultAuthorMigration'
 import { taskHandoffMigration } from '../team/taskHandoffSchema'
+import { decisionPublicationMigration } from '../plans/decisions/decisionPublicationSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -142,6 +143,7 @@ export const MIGRATIONS: readonly Migration[] = [
   // the draft's handoff link and lineage, and the revision's handoff
   // association. Additive, nullable, no backfill.
   taskHandoffMigration,
+  decisionPublicationMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

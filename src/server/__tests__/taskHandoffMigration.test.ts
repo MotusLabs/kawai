@@ -36,7 +36,7 @@ const insertHandoff = (db: Database, id: string, taskId: string, key: string, st
     .run(id, taskId, key, state)
 
 test('the migration follows result-author-profile and is never part of the baseline', () => {
-  expect(AT).toBe(MIGRATIONS.length - 1)
+  expect(AT).toBeGreaterThan(0)
   expect(MIGRATIONS[AT]!.version).toBe(TASK_HANDOFF_MIGRATION_VERSION)
   expect(MIGRATIONS[AT - 1]!.name).toBe('result-author-profile')
   expect(MIGRATIONS[AT]!.version).toBe(MIGRATIONS[AT - 1]!.version + 1)
@@ -51,7 +51,7 @@ test('the migration follows result-author-profile and is never part of the basel
 test('a fresh database reaches the version with the handoff tables and columns', () => {
   const session = initDatabase({ path: dbPath })
   try {
-    expect(session.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: TASK_HANDOFF_MIGRATION_VERSION })
+    expect(session.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: MIGRATIONS.at(-1)!.version })
     expect(tablesOf(session.db)).toEqual(expect.arrayContaining(['team_task_handoffs', 'team_task_handoff_events', 'team_task_handoff_wakeups']))
     expect(columnsOf(session.db, 'team_task_drafts')).toEqual(expect.arrayContaining(['handoff_id', 'lineage_id']))
     expect(columnsOf(session.db, 'team_task_revisions')).toContain('handoff_id')
@@ -68,7 +68,7 @@ test('a database at the previous version upgrades keeping its rows, with no hand
   expect(before.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: TASK_HANDOFF_MIGRATION_VERSION - 1 })
   before.close()
 
-  const after = initDatabase({ path: dbPath })
+  const after = initDatabase({ path: dbPath, migrations: MIGRATIONS.slice(0, AT + 1) })
   try {
     expect(after.db.prepare('PRAGMA user_version').get()).toEqual({ user_version: TASK_HANDOFF_MIGRATION_VERSION })
     const backup = after.db.prepare('SELECT backup_path FROM schema_migrations WHERE version = ?').get(TASK_HANDOFF_MIGRATION_VERSION) as { backup_path: string }
