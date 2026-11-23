@@ -18,7 +18,7 @@ An ordinary card asked by an agent outside the plan's Lead role SHALL be sent as
 - **THEN** the card is addressed to the owner and no mail is sent
 
 #### Scenario: A handoff ask cannot redirect a Lead question
-- **WHEN** a requester outside the plan's Lead role supplies a publication handoff id on that plan
+- **WHEN** a requester supplies a handoff id whose target plan currently names a Lead group different from the requester's group
 - **THEN** the ask is refused and no card, binding or question mail is recorded
 
 ### Requirement: The owner answers open cards
@@ -43,19 +43,19 @@ The human SHALL answer any open card from the Plans view under a command id, wit
 ## ADDED Requirements
 
 ### Requirement: A publication question binds one prepared handoff
-`decision_ask` SHALL accept an optional `publication_handoff_id` for an owner-addressed question by the originating requester. The handoff SHALL be current, open, prepared with notification, and for a task of an authorized plan change. A task-scoped session SHALL use its own task. A plan-only Lead SHALL use a verified task of that plan. Binding SHALL record the card and immutable link together and SHALL publish nothing.
+`decision_ask` SHALL accept an optional `publication_handoff_id`. It SHALL derive scope from the handoff's persisted task, plan and change in the caller's team, regardless of session task focus. The original requester SHALL qualify for the plan's current owner route. A nonblank `plan_id` SHALL match the target plan. A new binding SHALL require a current, open handoff prepared with notification, record the card and immutable link together, and publish nothing.
 
 #### Scenario: A requester binds a handoff for review
 - **GIVEN** an eligible handoff created with `task_request_publication` and readable with `task_get`
-- **WHEN** its requester supplies the handoff id in `decision_ask` from the task's eligible session or its plan-only Lead session
+- **WHEN** its eligible requester supplies the handoff id in `decision_ask`, including after task mail moves the requester's focus to an unrelated task
 - **THEN** the tool returns the owner card id, task id, handoff id, base revision and full prepared hash, and no revision, notice or question mail is written
 
 #### Scenario: Foreign, borrowed and malformed bindings are refused
-- **WHEN** a requester supplies an unknown or foreign id, a handoff of a different task from its resolved scope, a group peer's handoff, a nonnotifying handoff, or a malformed id
+- **WHEN** a requester supplies an unknown, foreign or malformed handoff id, a group peer's handoff, a nonnotifying handoff, or a `plan_id` different from the handoff's plan, or loses eligibility for its owner route before bind or replay
 - **THEN** the tool refuses with no card, binding or fallback ordinary question, and foreign records are indistinguishable from missing ones
 
 #### Scenario: A retry recovers the same binding
-- **WHEN** the original requester retries the typed ask with the same normalized question, options, context and scope, including after the handoff ends
+- **WHEN** the original requester still qualifies for the target plan's owner route and retries the same normalized question, options, context and binding, including after unrelated task mail moves the session's focus or the handoff ends
 - **THEN** the same card and link are returned as a replay, and changing the question, options or context under that handoff id is refused
 
 ### Requirement: The human reviews the exact bound edit

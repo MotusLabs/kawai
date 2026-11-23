@@ -6,7 +6,7 @@ An agent can prepare an exact task revision for publication, and a human can ans
 
 ## What Changes
 
-- Keep `task_request_publication` and `task_get { task_id, handoff_id }` for preparing and reading handoffs. Add the optional `publication_handoff_id` to `decision_ask` so the requester can bind a handoff to a card already eligible for human routing on the same plan change.
+- Keep `task_request_publication` and `task_get { task_id, handoff_id }` for preparing and reading handoffs. Add the optional `publication_handoff_id` to `decision_ask`. The handoff's persisted task determines the card's plan and change. The original requester can bind or replay it when the target plan currently routes their question to the human, regardless of the session's task focus.
 - Show the task, handoff, published base, complete before and after content, and prepared rationale from the card. The human selects **Approve and publish** to record a decision and publish those exact fields through the existing prepared publication path. An **Answer without publishing** still records a decision independently of the handoff.
 - Record the human decision, task revision, handoff disposition, and original notice references together. A stale review or a competing action can refuse with no partial writes. An exact retry returns the recorded receipt.
 - Use the existing direct revision notice for the current assignment holder and the existing handoff wakeup for the requester. The writer still explicitly acknowledges the revision when working from it.
