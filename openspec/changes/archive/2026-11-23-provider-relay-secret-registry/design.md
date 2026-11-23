@@ -145,7 +145,8 @@ Scenario → evidence map (the closeout result cites these literally):
 2. Mutant checkpoint: A3's mutants run in a disposable checkout; the result
    records them. No production-path checkpoint is needed — the cited wiring
    tests (R-RF, R-MW) already drive the real `ChatSessionManager`.
-3. Archive: after review passes, sync and archive in one commit.
+3. Archive: sync and archive in one commit, before the complete
+   replacement result and its final review.
 
 ## Dependencies and serialization
 
