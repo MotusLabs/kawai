@@ -147,7 +147,8 @@ describe('Apply choices, the remaining rows (CH)', () => {
     const effect = wired.executions.insertEffect({ executionId, change: 'docs', roundId: null, kind: 'push', effectKey: `${executionId}:docs:push`, command: { branch: 'docs-branch' } })
     await wired.approveNext(planId, drop('docs'))
     const outcome = ok(await wired.applyAs({ executionId }))
-    expect(publication(outcome, 'docs')).toMatchObject({ class: 'removed', choice: null, taskId: null })
+    // The publication row records the task the removal retired (changeIncarnation.ts).
+    expect(publication(outcome, 'docs')).toMatchObject({ class: 'removed', choice: null, taskId: docs.taskId })
     expect(wired.executions.change(executionId, 'docs')).toMatchObject({ state: 'cancelled', owns: false })
     expect(wired.executions.effectsOf(executionId).find(entry => entry.id === effect.id)!.state).toBe('cancelled')
     expect(wired.executions.slot(wired.teamId)).toBeNull()

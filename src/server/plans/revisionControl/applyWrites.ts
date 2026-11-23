@@ -8,18 +8,20 @@
 // - adapt (CH4): the task's next revision with notify under
 //   `apply:<commandId>:<change>`, its notices inside the publication. With
 //   an open or passed round, plan-execution D9 supersedes it after commit;
-//   with no such round and a dispatched newest attempt, the held assignment
+//   with no such round and a newest attempt, the held assignment
 //   is superseded through the stop branch (after the notice) and one owed
-//   `fix` row naming the new revisions is minted for the owed step; an owed
-//   newest row is re-minted at dispatch (DC1);
+//   `fix` row naming the new revisions is minted for the owed step — also
+//   over an owed newest row, an owed fix keeping its answers;
 // - restart (CH5): no task revision; the standing assignment and an open or
 //   passed round superseded, the change back to `implementing`, and one owed
 //   attempt row of the newest attempt's kind (an update restarts as `fix`);
 // - added (CH7, CH8): a row `waiting`, or `landed` without ownership when a
-//   landing fact exists;
+//   landing fact exists; a name this run removed earlier restores its
+//   cancelled row as fresh work;
 // - removed, unlanded (CH9, CH10): `cancelled`, disowned, its pending
 //   effects cancelled, the slot given up by the transition, and the prepared
-//   task cancel committed — a task already closed keeps its status.
+//   task cancel committed — a task already closed keeps its status; the
+//   publication row records the task the row carried, retired from then on.
 // Nothing here dispatches: the executor acts on stored state after commit.
 import { createHash } from 'node:crypto'
 import type { TeamIdentity } from '../../team/teamIdentity'
@@ -34,7 +36,7 @@ import type { DeltaChange, RevisionDelta } from '../../../shared/planRevisionCon
 import type { ExecutionStore } from '../execution/executionStore'
 import type { ChangeRow, ExecutionRow } from '../execution/executionRows'
 import { attemptStatus } from '../execution/attemptStatus'
-import { cancelChangeEffects, disownChange, insertAddedChange, reorderChanges, type ExecutionRevisionColumns } from '../execution/executionApplyStore'
+import { cancelChangeEffects, disownChange, insertAddedChange, ownChange, reorderChanges, type ExecutionRevisionColumns } from '../execution/executionApplyStore'
 import { implementTaskText } from '../execution/taskText'
 import { PlanRefusal } from '../planCommands'
 import type { NewPublicationChange } from './executionRevisionStore'
@@ -83,7 +85,7 @@ export function applyWrites(deps: ApplyWritesDeps, input: ApplyWritesInput): New
       if (row.choice === 'restart') restart(deps, input, entry)
     }
     if (entry.class === 'added') add(deps, input, entry)
-    if (entry.class === 'removed') remove(deps, input, entry)
+    if (entry.class === 'removed') row.taskId = remove(deps, input, entry)
     publications.push(row)
   }
   reorderChanges(deps.store.db, input.execution.id, input.target.content.changes.map(change => change.change))
@@ -120,15 +122,17 @@ function adapt(deps: ApplyWritesDeps, input: ApplyWritesInput, entry: DeltaChang
   }, { kind: 'human', sessionId: null })
   if (publication === null) throw new PlanRefusal('state', `The task of change ${entry.change} is missing; nothing was applied.`)
   const taskRevision = publication.revision.revision
-  // The fix attempt: an open or passed round is D9's after commit; an owed
-  // newest row is DC1's at dispatch; a dispatched newest attempt with no such
-  // round is re-issued here, after the notice.
+  // The fix attempt: an open or passed round is D9's after commit; with no
+  // such round, the newest attempt — dispatched or still owed — is re-issued
+  // here as one owed fix row, after the notice, so a fix follows in every
+  // state (review F3). An owed fix keeps the answers it owed.
   const latest = deps.store.rounds(input.execution.id, entry.change).at(-1) ?? null
   const answeredByRound = latest !== null && (latest.outcome === null || latest.outcome === 'pass')
   const newest = deps.store.attempts(input.execution.id, entry.change).at(-1) ?? null
-  if (!answeredByRound && newest !== null && !owed(deps, changeRow, newest)) {
+  if (!answeredByRound && newest !== null) {
     supersedeStanding(deps, taskId, `apply:${input.commandId}`)
-    reissue(deps, input, changeRow, 'fix', { id: taskId, revision: taskRevision })
+    const answers = newest.kind === 'fix' && owed(deps, changeRow, newest) ? newest.manifest.answers : undefined
+    reissue(deps, input, changeRow, 'fix', { id: taskId, revision: taskRevision }, answers)
   }
   return { taskId, taskRevision }
 }
@@ -179,7 +183,8 @@ function supersedeStanding(deps: ApplyWritesDeps, taskId: string, by: string): v
  * slot up). The branch head was read before the transaction; an unreadable
  * head refuses, retryable, with nothing written.
  */
-function reissue(deps: ApplyWritesDeps, input: ApplyWritesInput, changeRow: ChangeRow, kind: AttemptKind, task: { id: string; revision: number }): void {
+function reissue(deps: ApplyWritesDeps, input: ApplyWritesInput, changeRow: ChangeRow, kind: AttemptKind, task: { id: string; revision: number },
+  answers?: AttemptManifest['answers']): void {
   const fresh = deps.store.change(input.execution.id, changeRow.change)!
   if (fresh.state !== 'implementing' || fresh.step !== null) {
     if (!deps.store.transition(input.execution.id, changeRow.change, fresh, { state: 'implementing', step: null })) {
@@ -204,25 +209,45 @@ function reissue(deps: ApplyWritesDeps, input: ApplyWritesInput, changeRow: Chan
     startCommit,
     artifacts: facts !== null && facts.ok ? facts.artifacts : {},
     roleProfiles: input.target.content.roles.find(role => role.group === (changeRow.groupOverride ?? entry.group))?.profiles ?? [],
+    ...(answers !== undefined ? { answers } : {}),
   }
   const manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
   deps.store.insertAttempt({ executionId: input.execution.id, change: changeRow.change, kind, assignmentId: null, manifest, manifestHash })
 }
 
-/** CH7, CH8: the added change's row at its content position. */
+const unclaimed = (change: string): PlanRefusal => new PlanRefusal('precondition', `Change ${change} is owned by another running execution; nothing was applied.`,
+  [{ name: 'changes-unclaimed', message: `Change ${change} is owned by another running execution.` }])
+
+/**
+ * CH7, CH8: the added change's row at its content position. A name an
+ * earlier Apply of this run removed still has its cancelled row: it is
+ * restored as fresh work — no task, PR, stop, or fix count, its generation
+ * bumped — and owned again, the owner index refusing it while another
+ * running execution owns the name. Its attempts and rounds stay as history
+ * of the retired task (changeIncarnation.ts).
+ */
 function add(deps: ApplyWritesDeps, input: ApplyWritesInput, entry: DeltaChange): void {
   const landed = deps.store.landings(input.execution.planId).some(landing => landing.change === entry.change)
   const position = input.target.content.changes.findIndex(candidate => candidate.change === entry.change)
+  const prior = deps.store.change(input.execution.id, entry.change)
+  if (prior !== null && prior.state === 'cancelled') {
+    const restored = deps.store.transition(input.execution.id, entry.change, prior, {
+      state: landed ? 'landed' : 'waiting', step: null, stopReason: null, stopDetail: null, taskId: null, worktree: null, branch: null,
+      baselineCommit: null, prNumber: null, prUrl: null, prOpenedByKawai: null, fixRounds: 0, passedAt: null, groupOverride: null,
+    })
+    if (restored === null) throw new PlanRefusal('state', `Change ${entry.change} moved while Apply ran; nothing was applied.`)
+    if (!landed && !ownChange(deps.store.db, input.execution.id, entry.change)) throw unclaimed(entry.change)
+    return
+  }
   if (!insertAddedChange(deps.store.db, { executionId: input.execution.id, teamId: input.execution.teamId, change: entry.change, position, landed })) {
-    throw new PlanRefusal('precondition', `Change ${entry.change} is owned by another running execution; nothing was applied.`,
-      [{ name: 'changes-unclaimed', message: `Change ${entry.change} is owned by another running execution.` }])
+    throw unclaimed(entry.change)
   }
 }
 
-/** CH9, CH10: the removed, unlanded change cancelled with its open task. */
-function remove(deps: ApplyWritesDeps, input: ApplyWritesInput, entry: DeltaChange): void {
+/** CH9, CH10: the removed, unlanded change cancelled with its open task; the task its row carried, which the publication row records as retired. */
+function remove(deps: ApplyWritesDeps, input: ApplyWritesInput, entry: DeltaChange): string | null {
   const row = deps.store.change(input.execution.id, entry.change)
-  if (row === null || row.state === 'landed' || row.state === 'cancelled') return
+  if (row === null || row.state === 'landed' || row.state === 'cancelled') return null
   const cancel = () => {
     const current = deps.store.change(input.execution.id, entry.change)!
     if (!deps.store.transition(input.execution.id, entry.change, current, { state: 'cancelled', step: null })) {
@@ -234,10 +259,11 @@ function remove(deps: ApplyWritesDeps, input: ApplyWritesInput, entry: DeltaChan
   const status = row.taskId === null ? undefined : deps.tasks.store.get(row.taskId)?.status
   if (row.taskId === null || status === undefined || closed(status)) {
     cancel()
-    return
+    return row.taskId
   }
   const prepared = input.prepared.get(row.taskId)
   // An open task the prepare phase did not prepare: it reopened meanwhile.
   if (prepared === undefined) throw new StaleTaskStatus(row.taskId, status)
   prepared.commit(cancel)
+  return row.taskId
 }

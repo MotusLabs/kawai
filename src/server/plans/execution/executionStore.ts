@@ -23,6 +23,7 @@ import {
 import { ExecutionConflict, mapConstraint, patchAssignments, type ChangeGuard, type ChangePatch, type NewExecution } from './executionPatch'
 import { ExecutionEffectStore } from './executionEffectStore'
 import { DEFAULT_MAX_FAILED_FIX_ROUNDS } from '../../../shared/planExecutionProgress'
+import { currentAttempts, currentRounds } from './changeIncarnation'
 
 // The write vocabulary lives in `executionPatch.ts` and the effect rows in
 // `executionEffectStore.ts` (the base class), so this file stays under 500
@@ -294,9 +295,19 @@ export class ExecutionStore extends ExecutionEffectStore {
     return mapAttempt(this.db.prepare('SELECT * FROM plan_execution_attempts WHERE id = ?').get(id) as Record<string, unknown>)
   }
 
+  /** The change's current incarnation's attempts (changeIncarnation.ts): a restored re-add's history stays, never current. */
   attempts(executionId: string, change: string): AttemptRow[] {
-    return (this.db.prepare('SELECT * FROM plan_execution_attempts WHERE execution_id = ? AND change = ? ORDER BY number').all(executionId, change) as Array<Record<string, unknown>>)
-      .map(mapAttempt)
+    return currentAttempts(this.allAttempts(executionId, change), this.change(executionId, change)?.taskId ?? null, this.retiredTasks(executionId, change))
+  }
+
+  private allAttempts(executionId: string, change: string): AttemptRow[] {
+    return (this.db.prepare('SELECT * FROM plan_execution_attempts WHERE execution_id = ? AND change = ? ORDER BY number').all(executionId, change) as Array<Record<string, unknown>>).map(mapAttempt)
+  }
+
+  /** The tasks an Apply's removal of the change retired (its publication rows, CH9/CH10). */
+  private retiredTasks(executionId: string, change: string): Set<string> {
+    return new Set((this.db.prepare("SELECT task_id FROM plan_execution_publication_changes WHERE execution_id = ? AND change = ? AND class = 'removed' AND task_id IS NOT NULL")
+      .all(executionId, change) as Array<{ task_id: string }>).map(row => row.task_id))
   }
 
   /** The execution's newest attempt across its changes. */
@@ -307,8 +318,7 @@ export class ExecutionStore extends ExecutionEffectStore {
 
   /** One change's newest attempt — the document pin's manifest, worktree-scoped (plan-workspace 2.4, O1). */
   latestAttemptForChange(executionId: string, change: string): AttemptRow | null {
-    const row = this.db.prepare('SELECT * FROM plan_execution_attempts WHERE execution_id = ? AND change = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(executionId, change) as Record<string, unknown> | null
-    return row ? mapAttempt(row) : null
+    return this.attempts(executionId, change).at(-1) ?? null
   }
 
   /**
@@ -391,8 +401,8 @@ export class ExecutionStore extends ExecutionEffectStore {
   }
 
   rounds(executionId: string, change: string): RoundRow[] {
-    return (this.db.prepare('SELECT * FROM plan_execution_rounds WHERE execution_id = ? AND change = ? ORDER BY number').all(executionId, change) as Array<Record<string, unknown>>)
-      .map(mapRound)
+    return currentRounds((this.db.prepare('SELECT * FROM plan_execution_rounds WHERE execution_id = ? AND change = ? ORDER BY number').all(executionId, change) as Array<Record<string, unknown>>)
+      .map(mapRound), this.allAttempts(executionId, change), this.attempts(executionId, change))
   }
 
   /** Record the push and open the CI window (D10). */

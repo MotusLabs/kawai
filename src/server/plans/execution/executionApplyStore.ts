@@ -55,6 +55,17 @@ export function disownChange(db: Database, executionId: string, change: string):
   db.prepare('UPDATE plan_execution_changes SET owns = 0 WHERE execution_id = ? AND change = ?').run(executionId, change)
 }
 
+/** A restored re-add owns its name again (CH7); false when another running execution owns it (the owner index). */
+export function ownChange(db: Database, executionId: string, change: string): boolean {
+  try {
+    db.prepare('UPDATE plan_execution_changes SET owns = 1 WHERE execution_id = ? AND change = ?').run(executionId, change)
+    return true
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('UNIQUE constraint failed')) return false
+    throw error
+  }
+}
+
 /** A removed change's pending effects are cancelled (CH9); running ones settle and are dropped by the open guard. */
 export function cancelChangeEffects(db: Database, executionId: string, change: string): void {
   db.prepare("UPDATE plan_execution_effects SET state = 'cancelled', finished_at = ? WHERE execution_id = ? AND change = ? AND state = 'pending'")

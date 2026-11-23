@@ -152,8 +152,9 @@ export async function pauseTargetsBench(prefix: string, fixture: PlanBenchFixtur
     return { planId: draft.planId, executionId: execution.id }
   }
 
-  const manifest = (): AttemptManifest => ({
-    version: 1, plan: { id: 'p', revision: 1, contentHash: 'h' }, execution: 'e', task: { id: 't', revision: 1 },
+  // inFlight's attempt names its task, as every minted manifest does (changeIncarnation.ts reads it).
+  const manifest = (taskId = 't'): AttemptManifest => ({
+    version: 1, plan: { id: 'p', revision: 1, contentHash: 'h' }, execution: 'e', task: { id: taskId, revision: 1 },
     validation: { reportId: 'r', inputHash: 'i' }, baseline: 'b', startCommit: 's', artifacts: {}, roleProfiles: [],
   })
 
@@ -171,7 +172,7 @@ export async function pauseTargetsBench(prefix: string, fixture: PlanBenchFixtur
     })
     if (claim === 'claim') bench.mail.claim(message.id, holder)
     else if (claim === 'spawning') bench.mail.reserveForSpawn(message.id)
-    if (mintAttempt) executions.insertAttempt({ executionId, change, kind: 'implement', assignmentId: inserted.assignment.id, manifest: manifest(), manifestHash: 'mh' })
+    if (mintAttempt) executions.insertAttempt({ executionId, change, kind: 'implement', assignmentId: inserted.assignment.id, manifest: manifest(task.id), manifestHash: 'mh' })
     const row = executions.change(executionId, change)!
     const updated = executions.transition(executionId, change, row, { state: 'implementing', worktree: world.repo, branch: `${change}-branch`, taskId: task.id })
     if (!updated) throw new Error('the transition to implementing failed')
