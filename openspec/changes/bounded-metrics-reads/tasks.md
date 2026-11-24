@@ -20,6 +20,6 @@ Planned work only; nothing below is implemented. Existing tests named here
 
 ## 3. Integration and closeout
 
-- [ ] 3.1 On the clean committed head: citation preflight with zero unresolved literal titles, `bun run check --full-properties` under pinned Bun 1.4.3, `scripts/verify-result.ts`, and `openspec validate bounded-metrics-reads --strict`. Record the T1/T7 fixture sizes. Map every oracle id (T1–T18 with lettered rows, P1, P2, P4) to its literal test title and killed mutant in the result.
+- [ ] 3.1 On the clean committed head: citation preflight with zero unresolved literal titles, `bun run check --full-properties` using the Bun version declared by `.bun-version` at that commit, `scripts/verify-result.ts`, and `openspec validate bounded-metrics-reads --strict`. Record the T1/T7 fixture sizes. Map every oracle id (T1–T18 with lettered rows, P1, P2, P4) to its literal test title and killed mutant in the result.
 - [ ] 3.2 Owner-gated, optional: measure the four agent reads on a copy of the live database only with the owner's explicit consent; otherwise record "not measured" (no fabricated figures).
 - [ ] 3.3 At archive: add `@covers` annotations for every ADDED and MODIFIED scenario (this change is not in `openspec/coverage.json`'s `exempt` list), then sync and archive. Reconciliation of `bounded-metrics-and-task-get` and its held lineage is an owner decision (design "Scope inventory"), not part of this task.

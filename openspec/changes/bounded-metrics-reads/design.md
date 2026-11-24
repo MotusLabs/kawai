@@ -284,7 +284,7 @@ lineage (`8011e25e`, `result-d18090f6`, tasks `931742d5`, `49405e3d`,
 ### Verification
 - V1: Table T rows are committed as literal table-driven tests next to the code, at least one per guarded seam through `teamToolTable`, each with the named mutant shown failing.
 - V2: Properties P1 and P2 run through `propertyCases` with seeds `0xD811` and `0xC0DE` at 300 declared cases.
-- V3: A citation preflight resolves every cited literal test title, then `bun run check --full-properties` passes on the clean committed head under pinned Bun 1.4.3, and `scripts/verify-result.ts` reports its exit code.
+- V3: A citation preflight resolves every cited literal test title, then `bun run check --full-properties` passes on the clean committed head using the Bun version declared by `.bun-version` at that commit, and `scripts/verify-result.ts` reports its exit code.
 - V4: `openspec validate bounded-metrics-reads --strict` passes.
 ### Excluded
 - X1: No `task_get` change; it is delivered by PR #396 and `bounded-task-reads`.
