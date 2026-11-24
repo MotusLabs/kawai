@@ -2,7 +2,7 @@
 // committed verbatim (design "Acceptance oracles", tasks 1.2, 2.1, 2.2), over
 // the real package session, a scripted app-server and the fake capacity
 // clock. The cancellation rows L11-L20 are in codexCapacityCancellation.test.ts.
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { capacityRetryDelay, capacitySchedule, capacityWake } from '../src/codex/capacityRetry.js'
 import { CODEX_CAPACITY_CONTINUATION } from '../src/codex/continuation.js'
 import { frames, THREAD } from './helpers/scriptedCodex.js'
@@ -163,8 +163,38 @@ describe('codex-capacity-retry lifecycle rows L1-L10, L17', () => {
     expect(recovery(s)).toEqual({ timers: 1, retries: 1, continuations: 0, terminals: 0, state: 'active' })
     expect(s.types()).toEqual(['turn_started', 'user_message', 'capacity_retry'])
     expect(s.events.at(-1)).toMatchObject({ type: 'capacity_retry', turnId: handle.turnId, ordinal: 1, nextRetryAt: new Date(s.clock.epoch() + 1000).toISOString(), deadline: new Date(s.clock.epoch() + 600_000).toISOString(), expiring: false })
-    expect(s.activities.at(-1)).toEqual({ phase: 'retrying', attempt: 1, owner: 'capacity', ordinal: 1, nextRetryAt: s.clock.epoch() + 1000, deadline: s.clock.epoch() + 600_000, elapsedMs: 0 })
+    // reduceActivity and projectActivity each default to an independent
+    // Date.now (common/activity.ts) and the fake capacity clock does not
+    // freeze the wall clock, so only a finite nonnegative elapsed is guaranteed.
+    const activity = s.activities.at(-1)!
+    expect(activity).toEqual({ phase: 'retrying', attempt: 1, owner: 'capacity', ordinal: 1, nextRetryAt: s.clock.epoch() + 1000, deadline: s.clock.epoch() + 600_000, elapsedMs: expect.any(Number) })
+    expect(Number.isFinite(activity.elapsedMs)).toBe(true)
+    expect(activity.elapsedMs).toBeGreaterThanOrEqual(0)
     expect(settled).toBe(false)
+  })
+
+  // Regression for the CI 45423279103 flake class: reduceActivity and
+  // projectActivity (common/activity.ts) each default to an independent
+  // Date.now, so a wall tick between the two reads is a legitimate elapsed
+  // value, not a broken zero. With the wall clock advancing 1 ms per read,
+  // the retrying activity must still carry the L2 shape and a positive
+  // finite elapsed. The stub restores even on failure so it never leaks.
+  test('L2: a 1 ms tick per Date.now read leaves the retrying activity positive and finite', async () => {
+    const s = scripted('bounded')
+    await opened(s)
+    let ticks = 0
+    const base = Date.now()
+    const now = spyOn(Date, 'now').mockImplementation(() => base + ++ticks)
+    try {
+      await failAttempt(s, 'a1')
+    } finally {
+      now.mockRestore()
+    }
+    expect(recovery(s)).toEqual({ timers: 1, retries: 1, continuations: 0, terminals: 0, state: 'active' })
+    const activity = s.activities.at(-1)!
+    expect(activity).toEqual({ phase: 'retrying', attempt: 1, owner: 'capacity', ordinal: 1, nextRetryAt: s.clock.epoch() + 1000, deadline: s.clock.epoch() + 600_000, elapsedMs: expect.any(Number) })
+    expect(Number.isFinite(activity.elapsedMs)).toBe(true)
+    expect(activity.elapsedMs).toBeGreaterThan(0)
   })
 
   test('L3: a capacity completion whose next due reaches the deadline publishes expiring recovery and sends no further attempt', async () => {
@@ -294,7 +324,13 @@ describe('codex-capacity-retry lifecycle rows L1-L10, L17', () => {
     expect(clientUserMessageId).not.toBe(originalId)
     expect(recovery(s)).toEqual({ timers: 0, retries: 1, continuations: 1, terminals: 0, state: 'active' })
     expect(s.events.at(-1)).toMatchObject({ type: 'notice', kind: 'capacity_recovery' })
-    expect(s.activities.at(-1)).toEqual({ phase: 'requesting', elapsedMs: 0 })
+    // reduceActivity and projectActivity each default to an independent
+    // Date.now (common/activity.ts) and the fake capacity clock does not
+    // freeze the wall clock, so only a finite nonnegative elapsed is guaranteed.
+    const activity = s.activities.at(-1)!
+    expect(activity).toEqual({ phase: 'requesting', elapsedMs: expect.any(Number) })
+    expect(Number.isFinite(activity.elapsedMs)).toBe(true)
+    expect(activity.elapsedMs).toBeGreaterThanOrEqual(0)
   })
 
   test('L9: after a turn with native images the continuation sends only its text, never the images again', async () => {
