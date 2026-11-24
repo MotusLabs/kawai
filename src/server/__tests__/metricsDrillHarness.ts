@@ -3,7 +3,8 @@
 // `MetricsReader` and `ProcessReportService` over a seeded database, given to
 // `teamToolTable` in the `metrics`/`reports` service shape ChatSessionManager
 // passes, and called through both runtimes' registrations — the Claude team
-// MCP server's registered tools and the Codex dynamic-tool dispatch — plus
+// MCP server's tools/call request path (its input validation included) and
+// the Codex dynamic-tool dispatch — plus
 // the table's own handler with the runtimes' `JSON.stringify` round trip for
 // the seeded properties. `big()` seeds the 300-task 7d fixture whose
 // `mail_share` list holds 2,595 messages and whose window holds 120
@@ -23,7 +24,9 @@ import { END, HOUR, Seed, TEAM } from './metricsSeed'
 export const OTHER = '/other/.git'
 export type Outcome = { error: string; value: null } | { error: null; value: any }
 export type ToolCall = (sessionId: string, name: string, args: unknown) => Promise<Outcome>
-type Registered = Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>
+type ToolResult = { isError?: boolean; content: Array<{ text: string }> }
+type Registered = Record<string, { handler: (args: unknown, extra: unknown) => Promise<ToolResult> }>
+type CallHandler = (request: { method: 'tools/call'; params: { name: string; arguments: unknown } }, extra: unknown) => Promise<ToolResult>
 
 const TEAMS: Record<string, string> = { 'chat-lead': TEAM, 'chat-dev': TEAM, 'chat-other': OTHER }
 const GROUPS = new Set(['lead', 'devs'])
@@ -76,9 +79,10 @@ export function useMetricsTools(): () => MetricsToolFixture {
     const viaClaude: ToolCall = async (sessionId, name, args) => {
       const server = await createMailboxServer(mailbox, sessionId, services)
       servers.push(server as unknown as { instance: { close: () => Promise<void> } })
-      const tool = (server.instance as unknown as { _registeredTools: Registered })._registeredTools[name]
-      if (!tool) throw new Error(`Claude registration lacks ${name}`)
-      const result = await tool.handler(args, {})
+      const instance = server.instance as unknown as { _registeredTools: Registered; server: { _requestHandlers: Map<string, CallHandler> } }
+      if (!instance._registeredTools[name]) throw new Error(`Claude registration lacks ${name}`)
+      // The MCP server's own tools/call path: its input validation runs before the handler.
+      const result = await instance.server._requestHandlers.get('tools/call')!({ method: 'tools/call', params: { name, arguments: args } }, {})
       const text = result.content[0]!.text
       return result.isError ? { error: text, value: null } : { error: null, value: JSON.parse(text) }
     }

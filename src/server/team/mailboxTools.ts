@@ -211,10 +211,15 @@ export function teamToolTable(
   }))
 }
 
+/** True for a `z.strictObject` (catchall never), whose unknown keys must be refused. */
+const isStrict = (schema: z.ZodObject) => (schema._zod.def.catchall as { _zod?: { def: { type: string } } } | undefined)?._zod?.def.type === 'never'
+
 export async function createMailboxServer(mailbox: TeamMailbox, sessionId: string, services: MailboxServerServices = {}) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk')
   return createSdkMcpServer({ name: TEAM_MCP_SERVER, version: '1.0.0', tools: teamToolTable(mailbox, sessionId, services).map(({ name, description, schema, handler }) =>
-    tool(name, description, schema.shape, async (input) => {
+    // A strict schema is registered whole so the MCP validation refuses
+    // unknown keys; a shape would be rebuilt as a stripping object.
+    tool(name, description, (isStrict(schema) ? schema : schema.shape) as typeof schema.shape, async (input) => {
       try {
         const result = await handler(input)
         return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }

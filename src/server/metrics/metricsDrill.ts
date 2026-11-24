@@ -65,7 +65,30 @@ export interface DrillRequest {
 
 const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 const exactKeys = (v: Record<string, unknown>, expected: string[]) => Object.keys(v).sort().join(',') === [...expected].sort().join(',')
+/** A cursor's end: the canonical `toISOString` form this module mints. */
 const iso = (v: unknown): v is string => typeof v === 'string' && Number.isFinite(Date.parse(v)) && new Date(v).toISOString() === v
+const INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/
+
+/**
+ * A request's end: an ISO 8601 instant with seconds, an optional fraction
+ * (kept to the millisecond), and `Z` or a `±hh:mm` offset, every field in its
+ * calendar range (no rollover of 2026-02-30); null otherwise.
+ */
+export function parseInstant(v: string): number | null {
+  const m = INSTANT.exec(v)
+  if (!m) return null
+  const [y, mo, d, h, mi, s] = m.slice(1, 7).map(Number) as [number, number, number, number, number, number]
+  const days = new Date(Date.UTC(y, mo, 0)).getUTCDate()
+  if (mo < 1 || mo > 12 || d < 1 || d > days || h > 23 || mi > 59 || s > 59) return null
+  let offset = 0
+  if (m[8] !== 'Z') {
+    const oh = Number(m[10]), om = Number(m[11])
+    if (oh > 23 || om > 59) return null
+    offset = (m[9] === '-' ? -1 : 1) * (oh * 60 + om) * 60_000
+  }
+  const ms = Date.UTC(y, mo - 1, d, h, mi, s, Number((m[7] ?? '').padEnd(3, '0').slice(0, 3))) - offset
+  return Number.isFinite(ms) ? ms : null
+}
 const isList = (v: unknown): v is DrillList => typeof v === 'string' && (DRILL_LISTS as readonly string[]).includes(v)
 
 function limitRange(list: DrillList) {
@@ -173,10 +196,11 @@ export function readDrillPage(deps: DrillDeps, teamId: string, request: DrillReq
       if (request.window === undefined) throw new Error(`Name a window (${METRIC_WINDOWS.join(', ')}) or a report_id.`)
       if (!isMetricWindow(request.window)) throw new Error(`Unknown window "${request.window}". Allowed windows: ${METRIC_WINDOWS.join(', ')}.`)
       const now = deps.reader.clock()
-      if (request.end !== undefined && (!iso(request.end) || Date.parse(request.end) > now)) {
-        throw new Error('end must be an ISO instant (e.g. 2026-10-16T12:00:00.000Z) no later than now; pass the compact read\'s periodEnd.')
+      const end = request.end === undefined ? now : parseInstant(request.end)
+      if (end === null || end > now) {
+        throw new Error('end must be an ISO instant (e.g. 2026-10-16T12:00:00Z) no later than now; pass the compact read\'s periodEnd.')
       }
-      src = { kind: 'live', window: request.window, slice: request.slice ?? null, end: request.end ?? new Date(now).toISOString() }
+      src = { kind: 'live', window: request.window, slice: request.slice ?? null, end: new Date(end).toISOString() }
     }
     cursor = { v: 1, team: teamId, src, metric, list, limit, after: '' }
   }

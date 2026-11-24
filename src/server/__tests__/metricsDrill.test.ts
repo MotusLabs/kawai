@@ -5,7 +5,7 @@
 // dynamic tools), on the seeded 300-task 7d fixture (`metricsDrillHarness`).
 // Rows: T2 paging 2,595 messages to the end, T3 unknown metric/list, T4
 // slices, T5 a short list, T9/T10 the end-keyed cache, T11 limits, T12
-// cursors, T14 another team's cursor, T15 tool streaks under later commits,
+// cursors, T12a a tool-streak cursor's two ends, T14 another team's cursor, T15 tool streaks under later commits,
 // T17 `end`. Every refusal carries the tool-error envelope and no entries.
 import { expect, test } from 'bun:test'
 import { readMetrics } from '../metrics/computeMetrics'
@@ -183,10 +183,30 @@ test('T12: a cursor not base64url, v 2, an unknown field, a missing after, or a 
         [{ cursor: encode(noAfter) }, 'Invalid drill cursor'],
         [{ cursor: encode({ ...raw, src: { ...raw.src, slice: undefined, reportId: 'x' } }) }, 'Invalid drill cursor'],
         [{ cursor: encode({ ...raw, src: { ...raw.src, end: new Date(END + 1).toISOString() } }) }, 'Invalid drill cursor'],
-        [{ cursor: first.value.next, metric: 'mail_share' }, 'A cursor carries its request'],
-        [{ cursor: first.value.next, limit: 20 }, 'A cursor carries its request'],
+        // Every first-page argument beside a cursor, and an unknown one.
+        ...([['metric', 'mail_share'], ['list', 'messages'], ['limit', 20], ['window', '7d'], ['end', new Date(END).toISOString()],
+          ['report_id', 'report-x'], ['slice', { kind: 'group' }]] as const)
+          .map(([key, value]): [unknown, string] => [{ cursor: first.value.next, [key]: value }, 'A cursor carries its request']),
+        [{ cursor: first.value.next, extra: true }, 'Unrecognized key'],
+        [{ window: '7d', metric: 'mail_share', list: 'messages', fresh: true }, 'Unrecognized key'],
       ]
       for (const [args, reason] of rows) refused(await call('chat-lead', DRILL, args), reason)
+    }
+  } finally { f.close() }
+})
+
+// @covers: team-process-metrics › Agents page metric drill lists › Cursor bound to its request
+test('T12a: a live toolStreaks cursor whose end differs from its inner pager cursor\'s window end is refused with no entries', async () => {
+  const f = make()
+  try {
+    big(f)
+    for (const { runtime, call } of f.runtimes) {
+      const first = await call('chat-lead', DRILL, { window: '7d', end: new Date(END).toISOString(), metric: 'tool_abandoned_streaks', list: 'toolStreaks', limit: 10 })
+      expect(first.error, runtime).toBeNull()
+      const raw = cursorOf(first.value.next)
+      // The untouched cursor serves; moving only the outer end (earlier, so not in the future) is refused.
+      expect((await call('chat-lead', DRILL, { cursor: encode(raw) })).value.entries, runtime).toHaveLength(10)
+      refused(await call('chat-lead', DRILL, { cursor: encode({ ...raw, src: { ...raw.src, end: new Date(END - 1000).toISOString() } }) }), 'Invalid drill cursor')
     }
   } finally { f.close() }
 })
@@ -224,13 +244,24 @@ test('T15: a live toolStreaks walk while three later streaks commit keeps the fi
   }
 })
 
-test('T17: an end later than now or not an ISO instant is refused naming end', async () => {
+test('T17: an end later than now or not an ISO instant is refused naming end; ISO instants without a fraction or with an offset are read at their instant', async () => {
   const f = make()
   try {
     big(f)
-    for (const { call } of f.runtimes) {
-      for (const end of [new Date(END + 1).toISOString(), '2026-10-16', 'yesterday', '2026-10-16T12:00:00Z']) {
+    for (const { runtime, call } of f.runtimes) {
+      for (const end of [new Date(END + 1).toISOString(), '2026-10-16T12:00:01Z', '2026-10-16T13:00:00+00:59', '2026-10-16',
+        'yesterday', '2026-10-16T12:00Z', '2026-02-30T00:00:00Z', '2026-10-16T24:00:00Z', '2026-10-16T12:00:00', '2026-10-16T12:00:00+24:00']) {
         refused(await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages' }), 'end must be an ISO instant')
+      }
+      // Now itself, an offset form of an earlier instant, and a sub-second fraction.
+      for (const [end, canonical] of [['2026-10-16T12:00:00Z', '2026-10-16T12:00:00.000Z'], ['2026-10-16T13:59:59+02:00', '2026-10-16T11:59:59.000Z'],
+        ['2026-10-16T11:59:59.5Z', '2026-10-16T11:59:59.500Z'], ['2026-10-16T07:29:59.123456-04:30', '2026-10-16T11:59:59.123Z']] as const) {
+        const page = await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages', limit: 5 })
+        expect(page.error, `${runtime} ${end}`).toBeNull()
+        expect(page.value.source).toEqual({ kind: 'live', window: '7d', end: canonical })
+        expect(cursorOf(page.value.next).src.end).toBe(canonical)
+        const expected = readMetrics(f.seed.db, TEAM, '7d', null, Date.parse(canonical)).metrics.find(m => m.id === 'mail_share')!.drill.messages
+        expect(page.value.total).toBe(expected.length)
       }
     }
   } finally { f.close() }
