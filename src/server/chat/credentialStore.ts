@@ -1,7 +1,7 @@
 // Credential store: one user-level file holding imported provider credential
-// values as versioned entries — design D1 of the provider-relay-setup change
-// (openspec/changes/provider-relay-setup/design.md). Deliberately dormant:
-// nothing imports this module yet, and importing it performs no I/O. Stored
+// values as versioned entries — design D1 of the provider-relay-setup change,
+// wired by provider-credential-store (credentialComposition.ts builds the one
+// production instance; importing this module performs no I/O). Stored
 // values are readable only through resolve(); every other surface is
 // value-free, and every failure reports a fixed safe reason that never
 // carries a value, prefix, length, parser message, or cause.
@@ -53,6 +53,9 @@ export interface CredentialSetOutcome {
   applied: boolean
   durable: boolean
 }
+
+/** importLaunchEnv's outcome plus the skipped legacy names (store wins), sorted. */
+export interface CredentialImportOutcome extends CredentialSetOutcome { skipped: string[] }
 
 /// Called with the NAME (never a value) before a secret-source set changes
 /// the credential file; a missing or throwing collaborator refuses first.
@@ -363,6 +366,29 @@ export class CredentialStore {
       entries[name] = { kind, value: old.value }
       return this.atomicWrite(entries)
     })
+  }
+
+  /** The Settings-map migration's one write (provider-credential-store S6),
+   * on this file's queue: an entry the fresh bytes lack becomes launch-env, an
+   * equal value absorbs, a different one stays (store wins) and is skipped.
+   * Always rewritten, so the outcome confirms the durability of the bytes the
+   * caller relies on; a malformed or unsafe store refuses, prior bytes stand. */
+  async importLaunchEnv(legacy: Readonly<Record<string, string>>): Promise<CredentialImportOutcome> {
+    for (const [name, value] of Object.entries(legacy)) {
+      if (!STORE_NAME.test(name)) throw new CredentialStoreError('invalid-name')
+      if (typeof value !== 'string') throw new CredentialStoreError('invalid-value')
+      if (value.includes('\0')) throw new CredentialStoreError('value-nul')
+    }
+    const skipped: string[] = []
+    const owner = ownerFor(this.deps, this.ensureParent(), this.storePath)
+    const outcome = await this.mutate(owner, async (entries) => {
+      for (const [name, value] of Object.entries(legacy)) {
+        if (!Object.hasOwn(entries, name)) entries[name] = { kind: 'launch-env', value }
+        else if (entries[name].value !== value) skipped.push(name)
+      }
+      return this.atomicWrite(entries)
+    })
+    return { ...outcome, skipped: skipped.sort() }
   }
 
   /** Shared mutation spine: one enqueue on the operation's own owner, then

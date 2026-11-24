@@ -80,7 +80,7 @@ import {
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
 } from './ClaudeProfiles'
-import { RegisteredNameRefusal } from './secretNameRegistry'
+import { RegisteredNameRefusal, type RegistryContext } from './secretNameRegistry'
 import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
@@ -287,6 +287,12 @@ export interface ChatSessionManagerOptions {
    * getter, so a Settings change reaches the next spawn without a restart.
    */
   getProviderEnv?: () => ChatProviderEnv
+  /**
+   * The credential store's secret-source keys (provider-credential-store
+   * S3), read at every registry observation so a stored key withholds at the
+   * next launch. Production passes the composition's; tests may omit it.
+   */
+  getSecretSourceKeys?: () => Iterable<string>
   /** Per-session protocol capture for the chat debug view (always on). */
   wireLogs?: ChatWireLogs
   /** Project-directory check; injected in tests that use fictitious paths. */
@@ -2985,7 +2991,7 @@ export class ChatSessionManager {
               // per-spawn provider, so a respawn re-derives the catalog's
               // names plus the retained ones (correction A) — a name
               // registered after this driver's creation still withholds.
-              withheldCredentials: () => withheldCredentialNamesAt(this.catalogCtx(record.projectPath), this.options.db),
+              withheldCredentials: () => withheldCredentialNamesAt(this.catalogCtx(record.projectPath), this.registryContext()),
               teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               // Codex fills a home holding no report with one read (PR E
               // 7.1); the store claims it once per home.
@@ -3014,7 +3020,7 @@ export class ChatSessionManager {
               // The secret-name registry observes and persists at every
               // Claude spawn (provider-relay-setup D2), so a name once seen
               // survives its catalog entry's removal.
-              retainedNamesDb: this.options.db,
+              retainedNamesDb: this.registryContext(),
               claudeProfileId: record.claudeProfileId,
               ...(this.options.profileCatalogHome
                 ? { profileCatalogHome: this.options.profileCatalogHome }
@@ -3119,6 +3125,21 @@ export class ChatSessionManager {
     return this.options.getProviderEnv?.() ?? {}
   }
 
+  /** The registry's collaborators for one observation: the retained names
+   * in the db plus the store's secret-source keys (provider-credential-store S3). */
+  private registryContext(): RegistryContext | undefined {
+    // Some harnesses construct the manager without a db: no persistence then,
+    // but the store's keys still withhold.
+    const db = this.options.db as SessionDatabase | undefined
+    const keys = this.options.getSecretSourceKeys
+    if (!db) return keys ? { getAppSetting: () => null, setAppSetting: () => {}, secretSourceKeys: keys } : undefined
+    return {
+      getAppSetting: key => db.getAppSetting(key),
+      setAppSetting: (key, value) => db.setAppSetting(key, value),
+      ...(keys ? { secretSourceKeys: keys } : {}),
+    }
+  }
+
   /** Catalog lookup context for a session's project path. */
   private catalogCtx(projectPath?: string): ProfileCatalogContext {
     return {
@@ -3165,7 +3186,7 @@ export class ChatSessionManager {
     // The registry observes here too (provider-relay-setup D2): a name is
     // registered by the first catalog read that names it, launch or not —
     // an entry removed before any spawn stays withheld.
-    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report, this.options.db)
+    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report, this.registryContext())
   }
 
   /**

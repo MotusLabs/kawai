@@ -112,7 +112,7 @@ export function createChatProviderEnvStore(
 }
 
 /** A corrupt stored row is ignored (with a warning) rather than fatal. */
-function loadOverride(db: SettingsDb): ChatProviderEnv | null {
+export function loadOverride(db: Pick<SessionDatabase, 'getAppSetting'>): ChatProviderEnv | null {
   const stored = db.getAppSetting(CHAT_PROVIDER_ENV_KEY)
   if (stored === null) return null
   let parsed: unknown

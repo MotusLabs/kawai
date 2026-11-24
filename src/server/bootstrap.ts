@@ -46,7 +46,8 @@ import { createArchivedChatRoutes } from './routes/archivedChats'
 import { createChatSearchRoutes } from './routes/chatSearch'
 import { createPlanWorkspaceAssetRoutes } from './routes/planWorkspaceAsset'
 import { createPasteFileRoutes } from './routes/pasteFile'
-import { createChatProviderEnvStore } from './routes/chatProviderEnv'
+import { createChatProviderEnvStore, loadOverride } from './routes/chatProviderEnv'
+import { createServerCredentials, credentialManagerOptions } from './chat/credentialComposition'
 import { createSettingsRoutes, loadStoredSettings } from './routes/settings'
 import { createSessionPreviewRoutes } from './routes/sessionPreview'
 import { createDirectoryRoutes } from './routes/directories'
@@ -89,6 +90,15 @@ export function startServer(): void {
   // Chat provider environment: the Settings override wins over
   // AGENTBOARD_CHAT_ENV; read live by the chat manager at each SDK spawn.
   const chatProviderEnv = createChatProviderEnvStore(db, config.chatProviderEnv)
+  // Credentials (provider-credential-store S1-S3): the one store at
+  // <HOME>/.kawai/credentials.json with the SQLite retain collaborator, and
+  // the composition every chat consumer reads — per variable, process env <
+  // seed < legacy Settings map (until migrated) < store.
+  const credentials = createServerCredentials({
+    db,
+    seed: config.chatProviderEnv,
+    legacy: () => loadOverride(db),
+  })
 
   const sessionManager = new SessionManager(undefined, {
     displayNameExists: (name, excludeSessionId) => db.displayNameExists(name, excludeSessionId),
@@ -184,7 +194,7 @@ export function startServer(): void {
     onBackgroundTasks: (sessionId, tasks) => chatConnections.publishBackgroundTasks(sessionId, tasks),
     onNotifications: (sessionId, notifications) =>
       chatConnections.publishNotifications(sessionId, notifications),
-    getProviderEnv: chatProviderEnv.current,
+    ...credentialManagerOptions(credentials.composition),
     wireLogs: chatWireLogs,
     workerStore: chatWorkerStore,
     imageStore: chatImageStore,

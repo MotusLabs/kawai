@@ -14,7 +14,7 @@ import {
   withoutCredentials,
   type ChatProviderEnv,
 } from './chatProviderEnv'
-import { catalogRegisteredNames, RegisteredNameRefusal, type RetainedNamesDb } from './secretNameRegistry'
+import { catalogRegisteredNames, RegisteredNameRefusal, type RegistryContext } from './secretNameRegistry'
 import { CODEX_PROVIDER_LABEL, resolveCodexHome, type CodexLaunchConfiguration } from './codexProfiles'
 import {
   PROFILE_CONTROLLED_ENV,
@@ -82,12 +82,13 @@ export function claudeProfileMetadata(
 /**
  * The registered secret names at `ctx`'s catalog (provider-relay-setup D2):
  * the set every launch withholds — parsed-layer catalog names in any entry
- * state plus the persisted retained names when a store is supplied. The Codex
+ * state, plus the credential store's secret-source keys and the persisted
+ * retained names when a registry context is supplied. The Codex
  * launch path reads it here, since its configuration carries no env.
  */
 export function withheldCredentialNamesAt(
   ctx: ProfileCatalogContext = {},
-  retainedNamesDb?: RetainedNamesDb
+  retainedNamesDb?: RegistryContext
 ): Set<string> {
   return catalogRegisteredNames(retainedNamesDb, resolveProfileCatalog(ctx))
 }
@@ -97,7 +98,7 @@ export function resolveClaudeProfile(
   globalEnv: ChatProviderEnv = {},
   ctx: ProfileCatalogContext = {},
   onCatalogErrors?: (errors: string[]) => void,
-  retainedNamesDb?: RetainedNamesDb
+  retainedNamesDb?: RegistryContext
 ): ChatLaunchConfiguration {
   return resolveClaudeProfileDetail(id, globalEnv, ctx, onCatalogErrors, retainedNamesDb).launch
 }
@@ -121,7 +122,7 @@ export function resolveClaudeProfileDetail(
   globalEnv: ChatProviderEnv = {},
   ctx: ProfileCatalogContext = {},
   onCatalogErrors?: (errors: string[]) => void,
-  retainedNamesDb?: RetainedNamesDb
+  retainedNamesDb?: RegistryContext
 ): ResolvedClaudeProfile {
   const catalog = resolveProfileCatalog(ctx)
   // A failed file skips silently otherwise; report it (the rest resolves).

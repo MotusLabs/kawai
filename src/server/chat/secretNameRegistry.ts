@@ -3,7 +3,8 @@
 // variables named at any parsed catalog layer (any entry state — removal,
 // disabling, or clearing never stops withholding), every header variable
 // (§4's source, empty until headers land), every secret-source store key
-// (§2's source, empty until the store lands), and the retained names — every
+// (the credential store's listing, read at each observation), and the
+// retained names — every
 // name ever registered, persisted as names only in app_settings. Names are
 // not secrets: the persisted row never holds a value.
 import type { ProfileCatalog } from './profileCatalog'
@@ -126,13 +127,40 @@ export class RegisteredNameRefusal extends Error {
   }
 }
 
-/** The registered set for a resolved catalog: its parsed-layer names plus
- * whatever the persisted retained set holds (headers and store keys remain
- * explicit, empty sources until §4/§2 plug in — the filter is unchanged). */
+/**
+ * The registry's collaborators at a launch site: the retained-names
+ * persistence plus, in production, the credential store's secret-source keys
+ * (provider-credential-store S3), read afresh at every observation so a key
+ * stored after a driver's creation withholds at its next spawn.
+ */
+export interface RegistryContext extends RetainedNamesDb {
+  secretSourceKeys?: () => Iterable<string>
+}
+
+/** The registered set for a resolved catalog: its parsed-layer names, the
+ * context's secret-source store keys, and whatever the persisted retained
+ * set holds (header variables remain an explicit, empty source until §4). */
 export function catalogRegisteredNames(
-  db: RetainedNamesDb | undefined,
+  db: RegistryContext | undefined,
   catalog: Pick<ProfileCatalog, 'credentialNames'>
 ): Set<string> {
   if (db === undefined) return registeredSecretNames({ catalogNames: catalog.credentialNames })
-  return observeRegisteredNames(db, { catalogNames: catalog.credentialNames })
+  return observeRegisteredNames(db, {
+    catalogNames: catalog.credentialNames,
+    secretSourceKeys: db.secretSourceKeys?.() ?? [],
+  })
+}
+
+/**
+ * The credential store's retain collaborator (D1 "Retained names before
+ * secret-mutation success"): persist one NAME into the retained set before
+ * the store changes a secret-source entry. Unlike observeRegisteredNames it
+ * throws when the write fails, so the store refuses the mutation with its
+ * prior bytes standing — over-withholding is safe, a lost name is not.
+ */
+export function retainSecretName(db: RetainedNamesDb, name: string): void {
+  const retained = readRetainedNames(db)
+  if (retained.has(name)) return
+  retained.add(name)
+  db.setAppSetting(RETAINED_SECRET_NAMES_KEY, JSON.stringify([...retained]))
 }
