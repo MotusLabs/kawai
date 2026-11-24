@@ -17,10 +17,14 @@
 // With no usable pin, or a pin equal to the running Bun, every verdict is
 // the one before the pin existed. Hidden index entries (skip-worktree,
 // assume-unchanged) refuse every non-deletion ref: they hide edits from the
-// status and the key alike (CP1 F1). When any ref is refused, nothing is
-// checked: the eligible refs are listed as not checked (Q1). Otherwise at
-// most one fallback runs — every eligible ref is HEAD's commit, so they
-// share HEAD's tree.
+// status and the key alike (CP1 F1). Every path a line lists (a dirty path,
+// or one that changed during the check) prints with its whitespace and
+// control characters escaped as `\xHH`, so a filename can never spell a
+// network error Kawai's effect classifier would retry on ("build timed
+// out.log" once read as transient, F1); every other path prints unchanged.
+// When any ref is refused, nothing is checked: the eligible refs are listed
+// as not checked (Q1). Otherwise at most one fallback runs — every eligible
+// ref is HEAD's commit, so they share HEAD's tree.
 
 import { describeHidden, type HiddenEntry } from '../../src/server/checks/checkKey'
 
@@ -90,8 +94,27 @@ export function parseBunPin(content: string | null): string | null {
 }
 const MAX_LISTED = 10
 
+/** One path as a hook line prints it. Whitespace and control characters
+ * become explicit `\xHH` escapes (or `\u{HHHH}` above the Latin-1 range) —
+ * never an invisible or look-alike character — so the joined stderr of a
+ * refusal cannot carry network wording and the reader sees exactly which
+ * characters the name holds. A path with neither prints unchanged (A5), so
+ * every refusal line keeps its wording before this existed. */
+export function renderPath(path: string): string {
+  let out = ''
+  for (const ch of path) {
+    const code = ch.codePointAt(0)!
+    if (code < 0x20 || code === 0x7f || /\s/u.test(ch)) {
+      out += code <= 0xff ? `\\x${code.toString(16).padStart(2, '0')}` : `\\u{${code.toString(16)}}`
+    } else {
+      out += ch
+    }
+  }
+  return out
+}
+
 function listPaths(paths: string[]): string {
-  const shown = paths.slice(0, MAX_LISTED).join(', ')
+  const shown = paths.slice(0, MAX_LISTED).map(renderPath).join(', ')
   return paths.length > MAX_LISTED ? `${shown}, … (${paths.length} in all)` : shown
 }
 

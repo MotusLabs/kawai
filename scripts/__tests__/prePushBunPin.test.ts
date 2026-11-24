@@ -13,7 +13,7 @@ import path from 'node:path'
 import { describeHidden, type HiddenEntry } from '../../src/server/checks/checkKey'
 import { writeRecord } from '../../src/server/checks/checkRecords'
 import { classifyEffectFailure } from '../../src/server/plans/landing/effectOutcome'
-import { decidePush, parseBunPin, settleFallback, type RefFacts } from '../lib/pushCheck'
+import { decidePush, parseBunPin, renderPath, settleFallback, type RefFacts } from '../lib/pushCheck'
 import { treeRecordKey } from '../lib/treeRecord'
 import { recordedBunFor } from '../pre-push'
 
@@ -274,5 +274,103 @@ describe('A6/V4: every missing-pass refusal is permanent for Kawai', () => {
       expect(settled.code).toBe(1)
       expect(permanent(settled.line)).toBe('permanent')
     }
+  })
+})
+
+// The phrases Kawai's effect classifier reads as transient (the source of
+// truth is effectOutcome's NETWORK_STDERR, which this change only reads, X1).
+// Every one of them contains a space, so a path rendered with its whitespace
+// escaped can never spell one (V9).
+const NETWORK_PHRASES = [
+  'could not resolve host',
+  'connection timed out',
+  'connection refused',
+  'connection reset',
+  'network is unreachable',
+  'connection was closed',
+  'unexpected disconnect',
+  'timed out',
+]
+
+// V9: every transient phrase, embedded in the two path slots a hook line can
+// carry — a refusal's dirty list and a settlement's changed-during-the-check
+// list. The dirty rows cover the mismatch, no-pin and equal-pin cases; a
+// mismatch never runs a check (A4 refuses first), so the settlement line is
+// reached only from the fallback verdicts, and both shapes that produce one
+// (no pin, equal pin) are exercised.
+describe('V9: adversarial paths render classifier-safe', () => {
+  const permanent = (stderr: string) => classifyEffectFailure({ argv: ['git', 'push'], exitCode: 1, stderr })
+  const pathWith = (phrase: string) => `build ${phrase}.log`
+
+  // @covers: dev-checks › Pushes require a full check of the pushed tree › Paths in refusals print escaped
+  test('the phrase list is live transient wording, synced with the classifier', () => {
+    for (const phrase of NETWORK_PHRASES) {
+      expect(permanent(phrase)).toBe('transient')
+    }
+  })
+
+  // @covers: dev-checks › Pushes require a full check of the pushed tree › Paths in refusals print escaped
+  test('F1: a dirty mismatch whose path spells "timed out" refuses permanently', () => {
+    // The reviewer's reproduction: these facts printed the raw path and
+    // classified as refuse/transient, so Kawai scheduled retries for a
+    // refusal that cannot succeed on retry.
+    const verdict = decidePush([commit({ pin: PIN, dirtyPaths: ['build timed out.log'] })], [])
+    expect(verdict.kind).toBe('refuse')
+    expect(verdict.lines.join('\n')).toContain('build\\x20timed\\x20out.log')
+    expect(verdict.lines.join('\n')).not.toContain('timed out')
+    expect(permanent(verdict.lines.join('\n'))).toBe('permanent')
+  })
+
+  const dirtyRows: [string, string | null, string][] = NETWORK_PHRASES.flatMap((phrase) => [
+    ['mismatch', PIN, phrase],
+    ['no pin', null, phrase],
+    ['equal pin', RUNNING, phrase],
+  ])
+  test.each(dirtyRows)('a dirty path with "%s" refuses permanently (%s)', (_phrase, pin, phrase) => {
+    const verdict = decidePush([commit({ pin, dirtyPaths: [pathWith(phrase)] })], [])
+    expect(verdict.kind).toBe('refuse')
+    const stderr = verdict.lines.join('\n')
+    expect(stderr).not.toContain(phrase)
+    expect(permanent(stderr)).toBe('permanent')
+  })
+
+  test.each(NETWORK_PHRASES.flatMap((phrase): [string, string | null, string][] => [
+    ['no pin', null, phrase],
+    ['equal pin', RUNNING, phrase],
+  ]))('a path that changed during the check with "%s" refuses permanently (%s)', (_phrase, pin, phrase) => {
+    const verdict = decidePush([commit({ pin })], [])
+    expect(verdict.kind).toBe('fallback')
+    const settled = settleFallback(verdict, 0, false, [pathWith(phrase)])
+    expect(settled.code).toBe(1)
+    expect(settled.line).not.toContain(phrase)
+    expect(permanent(settled.line)).toBe('permanent')
+  })
+
+  test('a dirty list longer than ten still escapes every shown path', () => {
+    const paths = NETWORK_PHRASES.concat(NETWORK_PHRASES).map(pathWith)
+    const verdict = decidePush([commit({ dirtyPaths: paths })], [])
+    expect(verdict.kind).toBe('refuse')
+    const stderr = verdict.lines.join('\n')
+    for (const phrase of NETWORK_PHRASES) expect(stderr).not.toContain(phrase)
+    expect(permanent(stderr)).toBe('permanent')
+  })
+
+  test('a rendered path never carries a network phrase, and ordinary names are untouched', () => {
+    for (const phrase of NETWORK_PHRASES) expect(renderPath(pathWith(phrase))).not.toContain(phrase)
+    for (const ordinary of ['scratch.txt', 'src/shared/lone.ts', 'a-b_c.d', 'über-file.md', 'a\\x20b']) {
+      expect(renderPath(ordinary)).toBe(ordinary)
+    }
+  })
+
+  test.each([
+    ['a space', 'build timed out.log', 'build\\x20timed\\x20out.log'],
+    ['every whitespace', 'a b\tc', 'a\\x20b\\x09c'],
+    ['a carriage return', 'a\rb', 'a\\x0db'],
+    ['a control byte', 'a\x01b', 'a\\x01b'],
+    ['DEL', 'a\x7fb', 'a\\x7fb'],
+    ['a non-breaking space', 'a b', 'a\\xa0b'],
+    ['a line separator', 'a b', 'a\\u{2028}b'],
+  ])('renderPath escapes %s', (_name, raw, shown) => {
+    expect(renderPath(raw)).toBe(shown)
   })
 })

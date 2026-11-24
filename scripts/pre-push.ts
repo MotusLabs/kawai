@@ -38,7 +38,8 @@ function git(root: string, args: string[]): string | null {
 
 /** Porcelain paths of the working tree, untracked included; null on failure.
  * In -z format a rename or copy carries its old path as the token after the
- * entry, with no XY prefix; both paths are listed unmangled. */
+ * entry, with no XY prefix; both names come back intact, and pushCheck
+ * escapes them when a line lists them. */
 export function dirtyPaths(root: string): string[] | null {
   const result = runGit(['status', '--porcelain', '-z', '--untracked-files=all'], { cwd: root })
   if (!result.ok) return null

@@ -88,7 +88,10 @@ version). With no such pass and a pin that differs from the running Bun,
 the push is refused at once, naming both and `bun run check` under the
 pinned Bun, and no check runs. Otherwise HEAD at that commit and a clean
 working tree let it run `bun run check` itself; anything else is refused,
-naming the commit and the command (deletions run nothing). `bun run check`
+naming the commit and the command (deletions run nothing). Every path a
+refusal lists prints with its whitespace and control characters escaped, so
+a filename can never read as the network error wording Kawai's push effect
+retries on. `bun run check`
 and the push refuse an index with skip-worktree or assume-unchanged entries,
 which hide edits from the key. So commit freely,
 and run `bun run check` on the clean committed tree before every result and

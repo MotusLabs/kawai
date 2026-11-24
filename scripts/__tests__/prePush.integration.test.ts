@@ -334,4 +334,35 @@ describe('the push hook with a pinned Bun other than the running one', () => {
     expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
     expect(remoteRef('refs/heads/main')).toBe(head)
   })
+
+  // @covers: dev-checks › Pushes require a full check of the pushed tree › Recorded pass
+  test('V7 a pass recorded only under the running Bun pushes a pinned commit without a check (F3)', () => {
+    // M3 (gatherFacts consulting only the pinned key when the pin differs)
+    // must fail this: the hook would refuse a valid running-Bun record.
+    const head = setUpCommit('.bun-version', `${PIN}\n`)
+    seedPass(Bun.version)
+    const result = fixture.push(['origin', 'main'])
+    expect(result.code).toBe(0)
+    expect(fixture.takeLog()).toEqual([])
+    expect(result.output).toContain('recorded full pass for tree')
+    expect(result.output).toContain(`under Bun ${Bun.version}`)
+    expect(remoteRef('refs/heads/main')).toBe(head)
+  })
+
+  test.each([
+    ['two parts', '1.4'],
+    ['a word', 'latest'],
+  ])('V8 a malformed committed pin (%s) keeps the clean-HEAD fallback (F4)', (_name, content) => {
+    // M4 (the production call site treating any nonempty trimmed content as
+    // the pin, bypassing parseBunPin) must fail this: the hook would refuse
+    // this clean checkout instead of running the check.
+    const head = setUpCommit('.bun-version', `${content}\n`)
+    const result = fixture.push(['origin', 'main'])
+    expect(result.code).toBe(0)
+    expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
+    expect(result.output).not.toContain('pinned Bun')
+    expect(result.output).toContain('running `bun run check` on the clean tree')
+    expect(fixture.records()).toHaveLength(1)
+    expect(remoteRef('refs/heads/main')).toBe(head)
+  })
 })
