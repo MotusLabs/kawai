@@ -53,6 +53,7 @@ export async function sendRoundFix(deps: FixStepDeps, row: ChangeRow, round: Rou
   const findings = round.verdictFindingsId !== null ? all.filter(entry => entry.id === round.verdictFindingsId) : all
   const input = {
     executionId: row.executionId, change: row.change, group,
+    ...(options.patch?.groupOverride ? { reassign: options.patch.groupOverride } : {}),
     failingChecks: failing,
     findingsIds: findings.map(entry => entry.id),
     findings: fixFindings(deps.tasks.store, row.taskId, round),

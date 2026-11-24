@@ -16,20 +16,18 @@ import type { SystemCaller } from '../../team/systemCaller'
 import type { AssignmentService } from '../../team/AssignmentService'
 import type { TaskResultService } from '../../team/TaskResultService'
 import { runGitAsync } from '../../git/gitCommand'
-import { manifestHashInput, type AttemptManifest } from '../../../shared/planExecution'
 import { dispatchOwedFix, dispatchOwedUpdate } from './owedFix'
 import { attemptStatus } from './attemptStatus'
-import type { AttemptRow, RoundRow } from './executionRows'
+import type { RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
-import { fixInstruction, implementInstruction, instructionContract, updateInstruction } from './instructions'
+import { fixInstruction, implementInstruction, updateInstruction } from './instructions'
 import { fixFindings, type FixFindings } from './fixFindings'
 import { refusable, refusalOf, StepRefusal } from './stepRefusal'
-import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 import { renderContract } from '../../../shared/implementationContract'
 import { gitShowFile, snapshotContract, type ShowFile } from './contractSnapshot'
 import { currentOwedRow } from './owedSuccessor'
-import { commitAttemptInsert, commitAttemptSend, fixHandoffWithin } from './attemptSend'
+import { commitAttemptInsert, commitAttemptSend, fixHandoffWithin, routeOf, type SendContext } from './attemptSend'
 
 /** The system caller (D2): minted only inside this module. */
 function kawaiCaller(team: TeamIdentity, executionId: string): SystemCaller {
@@ -78,7 +76,6 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
   if (revision === null) return
   const entry = revision.content.changes.find(candidate => candidate.change === input.change)
   if (!entry) return
-  const roleProfiles = revision.content.roles.find(role => role.group === input.group)?.profiles ?? []
   const moved = (): boolean => {
     const fresh = deps.executions.execution(input.executionId)
     return fresh === null || fresh.state !== 'running' || fresh.revision !== execution.revision || fresh.contentHash !== execution.contentHash
@@ -111,73 +108,53 @@ export async function dispatchImplementAttempt(deps: DispatchDeps, input: { exec
   // step, and a human Retry re-sends through redispatchStage under :retry:,
   // never a second implement dispatch beside the rows.
   if (deps.executions.attempts(input.executionId, input.change).length > 0) return
+  const read = { newestId: null, roundId: deps.executions.rounds(input.executionId, input.change).at(-1)?.id ?? null, taskRevision: deps.tasks.store.get(taskId)?.revision ?? 1 }
   const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
   const headSha = head.stdout.trim()
   const startCommit = head.ok ? headSha : changeRow.baselineCommit
   const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: changeRow.worktree })
   const artifacts = await artifactsAt(changeRow.worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : [])
-  const manifest: AttemptManifest = {
-    version: 1,
-    plan: { id: execution.planId, revision: execution.revision, contentHash: execution.contentHash },
-    execution: input.executionId,
-    task: { id: taskId, revision: deps.tasks.store.get(taskId)?.revision ?? 1 },
-    validation: { reportId: execution.reportId, inputHash: execution.inputHash },
-    baseline: changeRow.baselineCommit,
-    startCommit,
-    artifacts,
-    roleProfiles,
-  }
-  const manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
-  const dispatchTask = taskId
-  // A refused send keeps its row (owed, the Retry's); the refusal surfaces after commit.
+  const facts = { taskId, baseline: changeRow.baselineCommit, startCommit, artifacts }
+  // AL2: the row and its send commit in one transaction, every pin, the
+  // route, and the instruction taken from the rows re-read there; only the
+  // git facts above crossed the awaits. A refused send keeps its row (owed,
+  // the Retry's); the refusal surfaces after commit.
   let refusal: StepRefusal | null = null
   deps.executions.db.transaction(() => {
     if (moved() || deps.executions.attempts(input.executionId, input.change).length > 0) return
-    if ((deps.tasks.store.get(dispatchTask)?.revision ?? 1) !== manifest.task.revision) return
-    const attempt = deps.executions.insertAttempt({
-      executionId: input.executionId, change: input.change, kind: 'implement', assignmentId: null,
-      manifest, manifestHash,
-    })
-    const change = deps.executions.change(input.executionId, input.change)!
-    const requestKey = `exec:${input.executionId}:${input.change}:attempt:${attempt.number}:${change.generation}`
-    let assignmentId: string
+    const fresh = deps.plans.revision(execution.planId, execution.revision)
+    const change = deps.executions.change(input.executionId, input.change)
+    if (fresh === null || change === null || routeOf(fresh.content, change)?.group !== input.group) return
+    const attempt = commitAttemptInsert(insertDeps(deps), { executionId: input.executionId, change: input.change, kind: 'implement' }, read, facts)
+    if (attempt === null) return
     try {
-      assignmentId = deps.assignments.dispatchWithin(kawaiCaller(deps.team, input.executionId), {
-        taskId: dispatchTask,
-        target: { kind: 'group', id: input.group },
-        instruction: implementInstruction({
-          planTitle: deps.plans.get(execution.planId)?.title ?? execution.planId,
-          revision: execution.revision,
-          change: input.change,
-          worktree: changeRow.worktree!,
-          branch: changeRow.branch!,
-          baseline: changeRow.baselineCommit!,
-          head: headSha,
-          acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
-          extraChecks: effectiveExtraChecks(revision.content, entry).map(check => check.name),
-          guidance: entry.guidance,
-          taskId: dispatchTask,
-          manifestHash,
-          integrationBranch: integrationBranchOf(execution),
-          contract: instructionContract(deps.tasks.store.get(dispatchTask)),
-        }),
-        requestKey,
-        ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-      }).assignment.id
+      commitAttemptSend(sendDeps(deps), input, attempt.id, implementSend(deps, input.executionId, headSha))
     } catch (error) {
       refusal = refusalOf('implement', error)
-      return
     }
-    deps.executions.setAttemptAssignment(attempt.id, assignmentId)
   })()
   if (refusal !== null) throw refusal
 }
+
+/** The implement instruction's keyed group dispatch, built from the send transaction's rows (AL2); `head` is the git fact. */
+function implementSend(deps: DispatchDeps, executionId: string, head: string): (context: SendContext) => string {
+  return context => deps.assignments.dispatchWithin(kawaiCaller(deps.team, executionId), {
+    taskId: context.change.taskId, target: { kind: 'group', id: context.group },
+    instruction: implementInstruction(context.base(head)), requestKey: context.requestKey, ...context.profiles,
+  }).assignment.id
+}
+
+const sendDeps = (deps: DispatchDeps) => ({ executions: deps.executions, plans: deps.plans, tasks: deps.tasks.store })
+const insertDeps = (deps: DispatchDeps) => ({ executions: deps.executions, plans: deps.plans, taskRevisionOf: (id: string) => deps.tasks.store.get(id)?.revision ?? null })
 
 /** What a fix attempt names: the failed round's checks and findings, and where to continue. */
 export interface FixAttemptInput {
   executionId: string
   change: string
+  /** The caller's group: a precondition of the send, never written (AL2) — a send whose re-derived group differs yields. */
   group: string
+  /** A Reassign's group, committed by the transition after the dispatch: the route's group until then (review-convergence decision 7). */
+  reassign?: string | null
   failingChecks: Array<{ name: string; conclusion: string; link: string | null }>
   findingsIds: string[]
   /** review-findings-ledger D7: built by fixFindings from the fold. */
@@ -194,16 +171,12 @@ export interface FixAttemptInput {
  * The fix attempt row (D12), created or reused; null when the change cannot
  * take one. Split from the dispatch so a hold can create the attempt — the
  * owed dispatch's marker (revision-control 3.2) — without sending the
- * handoff.
+ * handoff. The row's pins and route are taken at commit (AL2); only the git
+ * facts cross the awaits.
  */
-export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInput): Promise<{ id: string; number: number; manifestHash: string } | null> {
-  const execution = deps.executions.execution(input.executionId)
-  if (execution === null) return null
+export async function ensureFixAttempt(deps: DispatchDeps, input: Omit<FixAttemptInput, 'group'> & { group?: string }): Promise<{ id: string; number: number; manifestHash: string } | null> {
   const changeRow = deps.executions.change(input.executionId, input.change)
   if (changeRow === null || changeRow.worktree === null || changeRow.branch === null || changeRow.baselineCommit === null || changeRow.taskId === null) return null
-  const revision = deps.plans.revision(execution.planId, execution.revision)
-  const entry = revision?.content.changes.find(candidate => candidate.change === input.change)
-  if (revision === null || entry === undefined) return null
   const round = deps.executions.rounds(input.executionId, input.change).at(-1) ?? null
   const taskId = changeRow.taskId
 
@@ -217,7 +190,9 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInpu
   // (revision-control 3.2, review B1). The same-round reuse stays: a
   // revision stage re-planned for a newer task revision must not mint an
   // attempt per tick, and a kind-'update' row never stands in for a fix (a
-  // revision replacement of an update attempt mints its own fix row).
+  // revision replacement of an update attempt mints its own fix row). A
+  // reused row whose pins went stale is never sent: the send yields and the
+  // owed step sends its successor (DC1).
   const kind = input.update === undefined ? 'fix' : 'update'
   const newest = existing.at(-1)
   if (newest !== undefined && newest.kind === kind && newest.manifest.answers !== undefined
@@ -230,21 +205,20 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInpu
   const startCommit = head.ok ? head.stdout.trim() : changeRow.baselineCommit
   const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: changeRow.worktree })
   const artifacts = await artifactsAt(changeRow.worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : [])
-  return commitAttemptInsert({ executions: deps.executions, plans: deps.plans, taskRevisionOf: id => deps.tasks.store.get(id)?.revision ?? null },
-    { ...input, kind }, read, {
-      taskId, baseline: changeRow.baselineCommit, startCommit, artifacts,
-      answers: {
-        resultId: round?.resultId ?? '',
-        roundId: round?.id ?? '',
-        failingChecks: input.failingChecks.map(check => ({
-          name: check.name, source: 'actions' as const, conclusion: check.conclusion, link: check.link,
-          startedAt: null, completedAt: null,
-          ...(check.link?.match(/\/runs\/(\d+)/) ? { runId: Number(check.link.match(/\/runs\/(\d+)/)![1]) } : {}),
-        })),
-        findingsIds: input.findingsIds,
-      },
-      ...(input.update !== undefined ? { update: input.update } : {}),
-    })
+  return commitAttemptInsert(insertDeps(deps), { executionId: input.executionId, change: input.change, kind, reassign: input.reassign ?? null }, read, {
+    taskId, baseline: changeRow.baselineCommit, startCommit, artifacts,
+    answers: {
+      resultId: round?.resultId ?? '',
+      roundId: round?.id ?? '',
+      failingChecks: input.failingChecks.map(check => ({
+        name: check.name, source: 'actions' as const, conclusion: check.conclusion, link: check.link,
+        startedAt: null, completedAt: null,
+        ...(check.link?.match(/\/runs\/(\d+)/) ? { runId: Number(check.link.match(/\/runs\/(\d+)/)![1]) } : {}),
+      })),
+      findingsIds: input.findingsIds,
+    },
+    ...(input.update !== undefined ? { update: input.update } : {}),
+  })
 }
 
 /**
@@ -259,55 +233,36 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: FixAttemptIn
   await dispatchFix(deps, input, attempt)
 }
 
-/** The keyed handoff of an existing fix attempt (D12): the instruction names what it fixes. Exported for the gated fix step and the owed dispatch (revision-control 3.2). */
+/**
+ * The keyed handoff of an existing fix attempt (D12): the instruction names
+ * what it fixes. Exported for the gated fix step and the owed dispatch
+ * (revision-control 3.2). A fix is a handoff (D7): it supersedes the
+ * outstanding review through the stop branch, so a delivered review never
+ * holds the change. A fix that answers no round — an adaptation's
+ * (plan-pause Adapt, Apply's adapt) — has no result to hand off from: it is
+ * a plain keyed dispatch, as the owed implement attempt's is. Either commits
+ * with its stamp in the send transaction, its route, instruction, and key
+ * built there (P4, AL2; reviews F1, F7).
+ */
 export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, attempt: { id: string; number: number; manifestHash: string }): Promise<void> {
-  const execution = deps.executions.execution(input.executionId)
-  if (execution === null) return
-  const changeRow = deps.executions.change(input.executionId, input.change)
-  if (changeRow === null || changeRow.worktree === null || changeRow.branch === null || changeRow.baselineCommit === null || changeRow.taskId === null) return
-  const revision = deps.plans.revision(execution.planId, execution.revision)
-  const entry = revision?.content.changes.find(candidate => candidate.change === input.change)
-  if (revision === null || entry === undefined) return
-  const roleProfiles = revision.content.roles.find(role => role.group === input.group)?.profiles ?? []
-  const round = deps.executions.rounds(input.executionId, input.change).at(-1) ?? null
-  const taskId = changeRow.taskId
-
-  const requestKey = `exec:${input.executionId}:${input.change}:attempt:${attempt.number}:${changeRow.generation}`
-  const instruction = fixInstruction({
-    planTitle: deps.plans.get(execution.planId)?.title ?? execution.planId,
-    revision: execution.revision,
-    change: input.change,
-    worktree: changeRow.worktree,
-    branch: changeRow.branch,
-    baseline: changeRow.baselineCommit,
-    head: input.continueFrom,
-    acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
-    extraChecks: effectiveExtraChecks(revision.content, entry).map(check => check.name),
-    guidance: entry.guidance,
-    taskId,
-    manifestHash: attempt.manifestHash,
-    integrationBranch: integrationBranchOf(execution),
-    contract: instructionContract(deps.tasks.store.get(taskId)),
-    failingChecks: input.failingChecks,
-    findings: input.findings,
-    fixRounds: input.fixRounds,
-    fixRoundLimit: execution.maxFailedFixRounds,
-    diagnosis: input.diagnosis ?? null,
-    continueFrom: input.continueFrom,
-  })
-  // A fix is a handoff (D7): it supersedes the outstanding review through
-  // the stop branch, so a delivered review never holds the change. A fix
-  // that answers no round — an adaptation's (plan-pause Adapt, Apply's
-  // adapt) — has no result to hand off from: it is a plain keyed dispatch,
-  // as the owed implement attempt's is. Either commits with its stamp only
-  // while the attempt still names the execution's revision (P4, review F1).
   const caller = kawaiCaller(deps.team, input.executionId)
-  const profiles = roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}
-  await refusable('fix', async () => commitAttemptSend(deps.executions, input, attempt.id, () => round === null
-    ? deps.assignments.dispatchWithin(caller, { taskId, target: { kind: 'group', id: input.group }, instruction, requestKey, ...profiles }).assignment.id
-    : fixHandoffWithin({ assignments: deps.assignments, store: deps.tasks.store }, caller, taskId, {
-      resultId: round.resultId, group: input.group, instructions: instruction, requestKey, ...profiles,
-    }).id))
+  await refusable('fix', async () => commitAttemptSend(sendDeps(deps), input, attempt.id, context => {
+    const instruction = fixInstruction({
+      ...context.base(input.continueFrom),
+      failingChecks: input.failingChecks,
+      findings: input.findings,
+      fixRounds: input.fixRounds,
+      fixRoundLimit: context.execution.maxFailedFixRounds,
+      diagnosis: input.diagnosis ?? null,
+      continueFrom: input.continueFrom,
+    })
+    const { taskId } = context.change
+    return context.round === null
+      ? deps.assignments.dispatchWithin(caller, { taskId, target: { kind: 'group', id: context.group }, instruction, requestKey: context.requestKey, ...context.profiles }).assignment.id
+      : fixHandoffWithin({ assignments: deps.assignments, store: deps.tasks.store }, caller, taskId, {
+        resultId: context.round.resultId, group: context.group, instructions: instruction, requestKey: context.requestKey, ...context.profiles,
+      }).id
+  }))
 }
 
 /**
@@ -318,6 +273,8 @@ export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, at
  * handoff's assignment. The key is the uniform
  * `exec:<execution>:<change>:attempt:<n>:<generation>`; the retired
  * `attempt:update:` shape named the round, which the row itself records now.
+ * Nothing about the route is read before the mint's awaits: the send
+ * transaction derives the group and profiles (AL2, review F7).
  */
 export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
   executionId: string
@@ -325,28 +282,20 @@ export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
   round: RoundRow
   update: { base: string; files: string[] }
 }): Promise<void> {
-  const execution = deps.executions.execution(input.executionId)
-  if (execution === null) return
   const changeRow = deps.executions.change(input.executionId, input.change)
-  if (changeRow === null || changeRow.worktree === null || changeRow.branch === null || changeRow.baselineCommit === null || changeRow.taskId === null) return
-  const revision = deps.plans.revision(execution.planId, execution.revision)
-  const group = changeRow.groupOverride ?? revision?.content.changes.find(entry => entry.change === input.change)?.group ?? null
-  if (group === null) return
-  const roleProfiles = revision?.content.roles.find(role => role.group === group)?.profiles ?? []
+  if (changeRow === null) return
   const attempt = await ensureFixAttempt(deps, {
-    executionId: input.executionId, change: input.change, group,
+    executionId: input.executionId, change: input.change,
     failingChecks: [], findingsIds: [], findings: { blocking: [], blockingText: '', others: 0, legacyTexts: [] },
     continueFrom: input.round.commitSha, fixRounds: changeRow.fixRounds,
     update: input.update,
   })
   if (attempt === null) return
-  const fresh = deps.executions.change(input.executionId, input.change)
-  if (fresh === null) return
-  const requestKey = `exec:${input.executionId}:${input.change}:attempt:${attempt.number}:${fresh.generation}`
-  await refusable('update', async () => commitAttemptSend(deps.executions, input, attempt.id, () => fixHandoffWithin(
-    { assignments: deps.assignments, store: deps.tasks.store }, kawaiCaller(deps.team, input.executionId), changeRow.taskId!, {
-      resultId: input.round.resultId, group, instructions: updateInstruction(input.update), requestKey,
-      ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+  const caller = kawaiCaller(deps.team, input.executionId)
+  await refusable('update', async () => commitAttemptSend(sendDeps(deps), input, attempt.id, context => fixHandoffWithin(
+    { assignments: deps.assignments, store: deps.tasks.store }, caller, context.change.taskId, {
+      resultId: input.round.resultId, group: context.group, requestKey: context.requestKey, ...context.profiles,
+      instructions: updateInstruction(input.update, { revision: context.execution.revision, manifestHash: context.attempt.manifestHash }),
     }).id))
 }
 
@@ -359,53 +308,19 @@ export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
  * round its failing checks and the verdict's findings, an update its failed
  * branch update), and the dispatch goes out once under the attempt's own
  * request key: a re-run replays it, and once sent the assignment carries the
- * key, so nothing is owed again.
+ * key, so nothing is owed again. The planner's `group` is a precondition
+ * only (AL2): the send re-derives it.
  */
 export async function dispatchOwedAttempt(deps: DispatchDeps, input: { executionId: string; change: string; group: string }): Promise<void> {
   const owedRow = deps.executions.attempts(input.executionId, input.change).at(-1)
   if (owedRow === undefined) return
-  // DC1: a row minted before an Apply moved the execution on is never sent; its successor at the current revision is.
+  // DC1: a row whose pins went stale (an Apply moved the execution on, or its route's profiles moved) is never sent; its successor is.
   const newest = currentOwedRow({ executions: deps.executions, plans: deps.plans, taskRevisionOf: taskId => deps.tasks.store.get(taskId)?.revision ?? null }, input, owedRow)
   if (newest === null) return
   if (newest.kind === 'update') return dispatchOwedUpdate(deps, input, newest)
   if (newest.kind === 'fix') return dispatchOwedFix(deps, input, newest)
-  return dispatchOwedImplement(deps, input, newest)
-}
-
-/** The implement attempt's re-send (A1): the row was minted, its dispatch never committed. */
-async function dispatchOwedImplement(deps: DispatchDeps, input: { executionId: string; change: string; group: string }, newest: AttemptRow): Promise<void> {
-  const execution = deps.executions.execution(input.executionId)
-  if (execution === null) return
-  const changeRow = deps.executions.change(input.executionId, input.change)
-  if (changeRow === null || changeRow.worktree === null || changeRow.branch === null || changeRow.baselineCommit === null || changeRow.taskId === null) return
-  const revision = deps.plans.revision(execution.planId, execution.revision)
-  const entry = revision?.content.changes.find(candidate => candidate.change === input.change)
-  if (revision === null || entry === undefined) return
-  const roleProfiles = revision.content.roles.find(role => role.group === input.group)?.profiles ?? []
-  const requestKey = `exec:${input.executionId}:${input.change}:attempt:${newest.number}:${changeRow.generation}`
-  // The send commits with its stamp only while the row still names the execution's revision (P4, review F1).
-  await refusable('implement', async () => commitAttemptSend(deps.executions, input, newest.id, () => deps.assignments.dispatchWithin(kawaiCaller(deps.team, input.executionId), {
-    taskId: changeRow.taskId!,
-    target: { kind: 'group', id: input.group },
-    instruction: implementInstruction({
-      planTitle: deps.plans.get(execution.planId)?.title ?? execution.planId,
-      revision: execution.revision,
-      change: input.change,
-      worktree: changeRow.worktree!,
-      branch: changeRow.branch!,
-      baseline: changeRow.baselineCommit!,
-      head: newest.manifest.startCommit,
-      acceptance: [...entry.acceptance, ...revision.content.acceptanceRules],
-      extraChecks: effectiveExtraChecks(revision.content, entry).map(check => check.name),
-      guidance: entry.guidance,
-      taskId: changeRow.taskId!,
-      manifestHash: newest.manifestHash,
-      integrationBranch: integrationBranchOf(execution),
-      contract: instructionContract(deps.tasks.store.get(changeRow.taskId!)),
-    }),
-    requestKey,
-    ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-  }).assignment.id))
+  // The implement attempt's re-send (A1): the row was minted, its dispatch never committed.
+  await refusable('implement', async () => commitAttemptSend(sendDeps(deps), input, newest.id, implementSend(deps, input.executionId, newest.manifest.startCommit)))
 }
 
 /**
@@ -445,7 +360,13 @@ export async function redispatchStage(deps: DispatchDeps, row: { executionId: st
     if (row.taskId !== null && source !== undefined) {
       const taskId = row.taskId
       const target = { kind: source.targetKind, id: source.targetId }
-      const roleProfiles = source.targetKind === 'group' ? revision?.content.roles.find(role => role.group === source.targetId)?.profiles ?? [] : []
+      // AL2 holds here without a transaction: the profiles are read in the
+      // same macrotask as the durable write. A system caller's group handoff
+      // or dispatch awaits only resolved promises before it commits
+      // (TaskService.context, AssignmentService.teamOf and sessionTarget
+      // return synchronously for it), so no Apply runs in between; a session
+      // target, whose dispatch does await a git read, carries no profiles.
+      const roleProfiles = source.targetKind === 'group' ?revision?.content.roles.find(role => role.group === source.targetId)?.profiles ?? [] : []
       const requestKey = `${source.requestKey}:retry:${row.generation}`
       const handoffKind = source.handoffKind ?? null
       const resultId = source.resultId ?? null
@@ -474,9 +395,4 @@ export async function redispatchStage(deps: DispatchDeps, row: { executionId: st
   }
   const fresh = deps.executions.change(row.executionId, row.change)
   if (fresh !== null && fresh.step === 'redispatch') deps.executions.transition(row.executionId, row.change, fresh, { step: null })
-}
-
-/** The integration branch an execution lands on (D12), named in its instructions; null under direct landing. */
-function integrationBranchOf(execution: { landingMode: string; baseBranch: string }): string | null {
-  return execution.landingMode === 'integration-branch' ? execution.baseBranch : null
 }
