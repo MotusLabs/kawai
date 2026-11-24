@@ -1,11 +1,17 @@
-// pre-push.ts - The push hook (per-result-suite task 3.2, design D4, I2).
-// .githooks/pre-push execs this with git's stdin. A pushed commit passes only
-// when its tree has a full-pass record under this Bun, platform, and
-// architecture, or after this hook ran the full check itself with HEAD at
-// that commit and a clean working tree — and that check recorded the exact
-// tree's key. Everything else is refused, naming the commit and the command.
-// Deletions run nothing. All stdin is buffered before anything runs, so the
-// child check cannot consume the remaining refs. The decisions are
+// pre-push.ts - The push hook (per-result-suite task 3.2, design D4, I2;
+// pre-push-bun-pin D1-D3). .githooks/pre-push execs this with git's stdin.
+// Each pushed commit's pin is its own tree's .bun-version
+// (`<commit>:.bun-version`, never the working tree or the index). A commit
+// passes when its tree has a full-pass record under this platform and
+// architecture and either the running Bun or that pin — no other version.
+// With no such pass and a pin that differs from the running Bun, the ref is
+// refused at once, naming both Buns and the command: no check starts.
+// Otherwise (no usable pin, or the pin is the running Bun) it passes only
+// after this hook ran the full check itself with HEAD at that commit and a
+// clean working tree — and that check recorded the exact tree's key.
+// Everything else is refused, naming the commit and the command. Deletions
+// run nothing. All stdin is buffered before anything runs, so the child
+// check cannot consume the remaining refs. The decisions are
 // lib/pushCheck.ts; this file gathers the facts and runs the one fallback.
 
 import path from 'node:path'
@@ -13,7 +19,7 @@ import { runGit } from '../src/server/git/gitCommand'
 import { listHiddenEntries } from '../src/server/checks/checkKey'
 import { recordsDir } from '../src/server/checks/checkRecords'
 import { stepEnv } from './lib/checkRun'
-import { decidePush, isZeroSha, parsePushInput, settleFallback, type PushLine, type RefFacts } from './lib/pushCheck'
+import { decidePush, isZeroSha, parseBunPin, parsePushInput, settleFallback, type PushLine, type RefFacts } from './lib/pushCheck'
 import { readTreeRecord } from './lib/treeRecord'
 
 export interface PrePushDeps {
@@ -53,26 +59,53 @@ export function dirtyPaths(root: string): string[] | null {
   return paths
 }
 
+/** The usable pin in `commit`'s own tree, or null (D1): absent, unreadable,
+ * empty, or malformed content is no pin. */
+export function readCommitPin(root: string, commit: string): string | null {
+  const result = runGit(['cat-file', 'blob', `${commit}:.bun-version`], { cwd: root })
+  return parseBunPin(result.ok ? result.stdout : null)
+}
+
+/** The version whose record certifies `tree`: the running Bun's first, then
+ * the pin's when it differs — never a third version (D2). */
+export function recordedBunFor(dir: string, tree: string, pin: string | null, now: number): string | null {
+  if (readTreeRecord(dir, tree, now) !== null) return Bun.version
+  if (pin !== null && pin !== Bun.version && readTreeRecord(dir, tree, now, pin) !== null) return pin
+  return null
+}
+
 export function gatherFacts(root: string, lines: PushLine[], now = Date.now()): RefFacts[] {
   const dir = recordsDir(root)
   const head = git(root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])
-  // Facts are read once per tree; a failed status reads as dirty (fail closed).
-  const recordedByTree = new Map<string, boolean>()
+  // Facts are read once per tree (the pin is the tree's own file); a failed
+  // status reads as dirty (fail closed).
+  const byTree = new Map<string, { pin: string | null; recordedBun: string | null }>()
   let status: string[] | undefined
   return lines.map((line): RefFacts => {
     if (isZeroSha(line.localSha)) return { kind: 'deletion', ref: line.remoteRef }
     const commit = git(root, ['rev-parse', '--verify', '--quiet', `${line.localSha}^{commit}`])
     const tree = commit === null ? null : git(root, ['rev-parse', '--verify', '--quiet', `${commit}^{tree}`])
     if (commit === null || tree === null) return { kind: 'unsupported', ref: line.localRef, sha: line.localSha }
-    let recorded = recordedByTree.get(tree)
-    if (recorded === undefined) {
-      recorded = readTreeRecord(dir, tree, now) !== null
-      recordedByTree.set(tree, recorded)
+    let known = byTree.get(tree)
+    if (known === undefined) {
+      const pin = readCommitPin(root, commit)
+      known = { pin, recordedBun: recordedBunFor(dir, tree, pin, now) }
+      byTree.set(tree, known)
     }
-    if (status === undefined && !recorded && head === commit) {
+    if (status === undefined && known.recordedBun === null && head === commit) {
       status = dirtyPaths(root) ?? ['(git status failed)']
     }
-    return { kind: 'commit', ref: line.localRef, commit, tree, recorded, head, dirtyPaths: status ?? [] }
+    return {
+      kind: 'commit',
+      ref: line.localRef,
+      commit,
+      tree,
+      bun: Bun.version,
+      pin: known.pin,
+      recordedBun: known.recordedBun,
+      head,
+      dirtyPaths: status ?? [],
+    }
   })
 }
 
