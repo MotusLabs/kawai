@@ -1,24 +1,10 @@
-// An attempt mint whose git reads straddle an Apply (plan-revision-apply
-// A3/CH4/CH5 and A7/P4, invariant AL; review round 3, F6). A fix or update
-// attempt is decided from the rows read first, then awaits its git reads;
-// the owner's Apply commits in that window. One table over the three
-// choices and the two kinds, each through the real dispatch, Apply, and two
-// real executor ticks. Every row asserts liveness — exactly one assignment
-// goes out after the Apply, it stamps the change's newest row, and that row
-// names the new revision — and that no row the Apply did not mint is left
-// at the old revision:
-// - Continue: nothing was superseded, so the late row is minted at the new
-//   revision and its own dispatch sends it at once (also the gating,
-//   step-null window executionLanding opens before an update dispatch);
-// - Restart: the Apply minted its own row; the late mint yields and the
-//   executor sends the Apply's row;
-// - Adapt on a failed round: the Apply minted one owed fix; the late mint
-//   yields to it;
-// - Adapt on a passed round: the Apply republished the task's direction and
-//   minted nothing; the late mint yields and the revision stage sends one
-//   fix answering the new direction.
-import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
-import type { PlanContent } from '../../shared/plans'
+// The reviewer's F7 probe (plan-revision-apply A3/CH3, invariant AL2;
+// review round 4): Continue changes middle-devs' role profiles while an
+// update's (or, as the control, a fix's) git reads are pending. The late row's
+// manifest and its durable mail must both carry the applied profiles. Kept as
+// the reviewer wrote it (sha256 b55ccf10), with only its unused reads dropped;
+// applyRouteEquivalence.test.ts generalizes it.
+import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test'
 import * as git from '../git/gitCommand'
 import { dispatchFixAttempt, dispatchUpdateAttempt, type DispatchDeps } from '../plans/execution/executionDispatch'
 import { TaskResultService } from '../team/TaskResultService'
@@ -67,10 +53,6 @@ interface Row {
   /** Whether the late mint's own dispatch sends it, before any executor tick. */
   sentByMint: boolean
 }
-
-const reword = (guidance: string) => (content: PlanContent): PlanContent => ({
-  ...content, changes: content.changes.map(entry => (entry.change === 'ui' ? { ...entry, guidance } : entry)),
-})
 
 async function mintMeetsApply(row: Row): Promise<void> {
   writeGroup(wired.world, 'middle-devs', '---\nprofiles: [default, opus]\n---\nBuild.')
@@ -134,8 +116,10 @@ async function mintMeetsApply(row: Row): Promise<void> {
   expect(wired.bench.mail.get(assignment!.messageId!)?.allowedProfiles).toEqual(['opus'])
 }
 
+// @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
 test('Continue changing role profiles during a pending update must use the applied profile for the manifest and routed assignment', () =>
   mintMeetsApply({ kind: 'update', choice: 'continue', applyMints: null, sends: 'update', sentByMint: true }))
 
+// @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
 test('control: Continue changing role profiles during a pending fix uses the applied profiles for the manifest and routed assignment', () =>
   mintMeetsApply({ kind: 'fix', choice: 'continue', applyMints: null, sends: 'fix', sentByMint: true }))
