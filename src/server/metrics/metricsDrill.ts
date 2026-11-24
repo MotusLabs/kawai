@@ -156,6 +156,8 @@ export function readDrillPage(deps: DrillDeps, teamId: string, request: DrillReq
     if (others.length) throw new Error(`A cursor carries its request: send { cursor } alone, without ${others.join(', ')}.`)
     prior = decodeDrillCursor(request.cursor)
     if (prior.team !== teamId) throw new Error('Drill cursor team mismatch: a cursor is read only by the team it was issued to.')
+    // A cursor is issued at or before now, so a later end was never issued.
+    if (prior.src.kind === 'live' && Date.parse(prior.src.end) > deps.reader.clock()) throw new Error(INVALID)
     cursor = prior
   } else {
     if (request.metric === undefined || request.list === undefined) throw new Error('A first page names metric and list (or pass a cursor).')

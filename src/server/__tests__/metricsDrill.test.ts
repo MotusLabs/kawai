@@ -182,6 +182,7 @@ test('T12: a cursor not base64url, v 2, an unknown field, a missing after, or a 
         [{ cursor: encode({ ...raw, extra: 1 }) }, 'Invalid drill cursor'],
         [{ cursor: encode(noAfter) }, 'Invalid drill cursor'],
         [{ cursor: encode({ ...raw, src: { ...raw.src, slice: undefined, reportId: 'x' } }) }, 'Invalid drill cursor'],
+        [{ cursor: encode({ ...raw, src: { ...raw.src, end: new Date(END + 1).toISOString() } }) }, 'Invalid drill cursor'],
         [{ cursor: first.value.next, metric: 'mail_share' }, 'A cursor carries its request'],
         [{ cursor: first.value.next, limit: 20 }, 'A cursor carries its request'],
       ]
