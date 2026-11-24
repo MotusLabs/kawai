@@ -25,6 +25,7 @@ import { logger } from '../../logger'
 import { ExecutionConflict } from './executionPatch'
 import { EffectPinConflict } from './executionEffectStore'
 import { cleanMergeCheck } from '../landing/cleanMerge'
+import { authorizingRound, type LandedStep } from './landingRound'
 
 export interface LandingDeps {
   team: TeamIdentity
@@ -397,17 +398,18 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       headSha: head, baseSha: String(outcome.base ?? ''), mergeSha: mergeCommit, treeVerified,
     })
     store.transition(effect.executionId, effect.change, row, { state: 'landed', step: null })
-    await afterLanded(deps, row, effect.executionId, head)
+    await afterLanded(deps, row, effect.executionId, { head, roundId: effect.roundId ?? null })
   }
 }
 
 /**
  * After a landing fact (D13 step 5, shared with integration's fast-forward):
- * Kawai accepts the round's result, removes the worktree when safe, and
- * completes the execution and the plan when everything landed. `row` is the
- * change as it was before it landed.
+ * Kawai accepts the authorizing round's result, removes the worktree when
+ * safe, and completes the execution and the plan when everything landed.
+ * `row` is the change as it was before it landed; `landed` is the landing
+ * effect's head and round.
  */
-export async function afterLanded(deps: LandingDeps, row: ChangeRow, executionId: string, head: string): Promise<void> {
+export async function afterLanded(deps: LandingDeps, row: ChangeRow, executionId: string, landed: LandedStep): Promise<void> {
   const store = deps.executions
   const execution = store.execution(executionId)
   if (execution === null) return
@@ -415,16 +417,18 @@ export async function afterLanded(deps: LandingDeps, row: ChangeRow, executionId
   // (a sibling update-branch, a Retry's re-opened merge) never decides after
   // it. The settled done merge that landed this change is untouched (O3).
   store.cancelLiveLandingEffects(executionId, row.change)
-  // Kawai accepts the landed change's result (idempotent per result) —
-  // unless the human closed the task while the merge ran (D19): Kawai
-  // never accepts again nor changes its status.
+  // Kawai accepts the result the landing effect's authorizing round names
+  // (idempotent per result) — unless the human closed the task while the
+  // merge ran (D19): Kawai never accepts again nor changes its status. The
+  // change is landed whatever the acceptance says; an unconfirmed round or
+  // a refused acceptance is logged and the task stays for the human.
   const status = row.taskId === null ? null : deps.taskStatusOf(row.taskId)
   if (row.taskId !== null && status !== 'done' && status !== 'cancelled') {
-    const round = store.rounds(executionId, row.change).find(entry => entry.commitSha === head) ?? null
-    if (round !== null) {
-      // The change is landed whatever the acceptance says; a refused
-      // acceptance is logged and the task stays for the human to close.
-      await deps.results.accept({ kind: 'system', team: deps.team, origin: { kind: 'execution', executionId } }, row.taskId, round.resultId)
+    const authorizing = authorizingRound(store, executionId, row.change, landed)
+    if (!authorizing.ok) {
+      logger.warn('plan_execution_accept_identity_refused', { executionId, change: row.change, roundId: landed.roundId, head: landed.head, reason: authorizing.reason })
+    } else {
+      await deps.results.accept({ kind: 'system', team: deps.team, origin: { kind: 'execution', executionId } }, row.taskId, authorizing.round.resultId)
         .catch(error => logger.warn('plan_execution_accept_failed', { executionId, change: row.change, error: String(error) }))
     }
   }

@@ -37,7 +37,10 @@
 // snapshots, and command-ledger tables; migration 27 (`task-affinity`) the
 // nullable `affinity_task` on `team_messages` and `owner_session` on
 // `team_tasks`; migration 28 (`result-author-profile`) the nullable
-// `submitted_by_profile` on `team_task_results`.
+// `submitted_by_profile` on `team_task_results`; migration 29
+// (`task-publication-handoffs`) the handoff, event, and wakeup tables and the
+// nullable `handoff_id` on drafts and revisions (with `lineage_id` on drafts);
+// migration 30 (`decision-bound-task-publication`) adds the decision publication link and receipt table.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -575,9 +578,48 @@ const migration26: SchemaShape['tables'] = {
   },
 }
 
+// Migration 29's delta (owner-publication-handoff D1): handoffs, their
+// events and wakeups (composite primary keys' autoindexes are skipped).
+const migration29: SchemaShape['tables'] = {
+  team_task_handoffs: {
+    columns: [
+      id, column('team_id'), column('task_id'), integer('base_revision'), optional('base_contract_hash'), optional('direction'),
+      optional('acceptance'), optional('contract_text'), column('rationale'), integer('notify'), column('payload_hash'),
+      optional('base_commit'), { ...column('evidence_refs'), dflt_value: "'[]'" }, column('requester_session'), optional('requester_group'),
+      column('request_key'), column('state'), optional('state_reason'), optional('state_actor_kind'), optional('state_actor_session'),
+      optionalInteger('published_revision'), optional('published_payload_hash'), optional('superseded_by'), column('created_at'), column('updated_at'),
+    ],
+    indexes: [
+      { name: 'team_task_handoffs_pending', unique: 1, columns: ['task_id'] },
+      { name: 'team_task_handoffs_request_key', unique: 1, columns: ['task_id', 'request_key'] },
+      { name: 'team_task_handoffs_team', unique: 0, columns: ['team_id', 'state'] },
+    ],
+  },
+  team_task_handoff_events: {
+    columns: [keyPart('handoff_id', 1), { ...integer('seq'), pk: 2 }, optional('from_state'), column('to_state'), column('actor_kind'), optional('actor_session'),
+      optional('reason'), optionalInteger('revision'), column('at')],
+    indexes: [],
+  },
+  team_task_handoff_wakeups: {
+    columns: [keyPart('handoff_id', 1), keyPart('transition', 2), optional('message_id'), column('created_at')],
+    indexes: [],
+  },
+}
+
+const migration30: SchemaShape['tables'] = {
+  plan_decision_publications: {
+    columns: [
+      keyPart('card_id', 1), column('team_id'), column('plan_id'), column('task_id'), column('handoff_id'),
+      integer('base_revision'), column('payload_hash'), column('binding_hash'), column('snapshot_json'),
+      optional('decision_id'), optional('receipt_json'), optional('receipt_hash'),
+    ],
+    indexes: [{ name: 'plan_decision_publications_plan', unique: 0, columns: ['team_id', 'plan_id'] }],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25, ...migration26 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25, ...migration26, ...migration29, ...migration30 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   // Migration 20's: the submitter's nullable coverage map (independent-
   // verification D4), appended after the baseline columns.
@@ -596,9 +638,14 @@ test('a fresh database opened by this build has the same shape plus each migrati
   // Migration 23's: a revision's contract and hash, and a draft's raw
   // contract text (implementation-contract D3), all nullable.
   const revisions = expected.tables.team_task_revisions!
-  const withContract = { ...revisions, columns: [...revisions.columns, optional('contract'), optional('contract_hash')] }
+  // Migration 29's: the revision's handoff association with its unique index,
+  // and the draft's handoff link and lineage (owner-publication-handoff D1).
+  const withContract = {
+    columns: [...revisions.columns, optional('contract'), optional('contract_hash'), optional('handoff_id')],
+    indexes: [{ name: 'team_task_revisions_handoff', unique: 1, columns: ['handoff_id'] }, ...revisions.indexes],
+  }
   const drafts = expected.tables.team_task_drafts!
-  const withContractText = { ...drafts, columns: [...drafts.columns, optional('contract_text')] }
+  const withContractText = { ...drafts, columns: [...drafts.columns, optional('contract_text'), optional('handoff_id'), optional('lineage_id')] }
   // Migration 10's delta: the chat_sessions exhaustion flags; migration 11's
   // the process-observations tables (in `added` above); migration 12's: limit
   // events record their provider and window (providers-and-workers D7), both

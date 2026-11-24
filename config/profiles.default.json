@@ -44,7 +44,13 @@
     "label": "Codex Sol",
     "family": "gpt",
     "runtime": "codex",
-    "model": "gpt-6.1-sol"
+    "model": "gpt-6.2-sol"
+  },
+  "codex-astra": {
+    "label": "Codex Astra",
+    "family": "gpt",
+    "runtime": "codex",
+    "model": "gpt-6.2-astra"
   },
   "codex-luna": {
     "label": "Codex Luna",

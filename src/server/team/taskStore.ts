@@ -32,6 +32,7 @@ import { TaskNotices } from './taskNotices'
 import { TaskResultStore } from './taskResultStore'
 import { ResultCheckStore } from '../verification/resultCheckStore'
 import { createPayloadDiff, publishPayloadDiff } from './taskPayloadDiff'
+import type { TaskHandoffHooks } from './taskHandoffHooks'
 import { TaskJournalWindow } from './taskJournalWindow'
 import { TaskListWindow } from './taskListWindow'
 import type { ImplementationContract } from '../../shared/implementationContract'
@@ -138,6 +139,18 @@ export interface PublishInput {
   notify: boolean
   /** Drop the human's draft in the same transaction (the publication came from it). */
   discardDraft?: boolean
+  /** The prepared handoff this publication fulfills, exempt from the stale hook (owner-publication-handoff D4). */
+  handoffId?: string
+  /** Checks the human decision binding after replay lookup, before writing any publication rows. */
+  freshGuard?: () => void
+  /** On a key replay (H17m): a stored linked draft names another handoff than the key's revision is associated with. */
+  linkedHandoffDiffers?: (revision: number) => boolean
+  /**
+   * The linked-draft check (H43, H17, H38), in the transaction after the key
+   * replay and before the stale-base check: the handoff this publication
+   * fulfills with its in-transaction writes, or null for an ordinary revision.
+   */
+  claim?: (current: TeamTask) => { handoffId: string; within: (revision: TaskRevision, task: TeamTask) => void } | null
   /** Runs inside the publication transaction after the revision row (the notices, D3). */
   within?: (revision: TaskRevision, task: TeamTask) => void
 }
@@ -169,6 +182,8 @@ export class TaskStore {
   readonly journalWindow: TaskJournalWindow
   /** The agent's bounded, compact task list (bounded-task-list D3). */
   readonly listWindow: TaskListWindow
+  /** Pending-handoff hooks run in the publish and status transactions (owner-publication-handoff D4); TaskService installs them. */
+  handoffHooks: TaskHandoffHooks | null = null
 
   constructor(readonly db: Database, readonly mail?: MailboxStore, readonly assignments?: AssignmentStore) {
     // A claim or release of a task's instruction mail changes what the task
@@ -195,6 +210,9 @@ export class TaskStore {
 
   private changed(id: string): TeamTask {
     const task = this.get(id)!
+    // Finding remaps append journal notes inside a combined publication.
+    // Its outer writer emits this task after commit with the final revision.
+    if (this.mail?.deferringCommitObservations) return task
     for (const listener of this.listeners) listener(task)
     return task
   }
@@ -345,11 +363,13 @@ export class TaskStore {
   publish(id: string, input: PublishInput, author: TaskActor, now = nowIso()): PublishOutcome | null {
     let outcome: PublishOutcome | null
     try {
-      outcome = this.db.transaction((): PublishOutcome | null => {
+      const write = (): PublishOutcome | null => {
         const prior = this.resolveKey(id, input)
         if (prior) return prior
+        input.freshGuard?.()
         const current = this.get(id)
         if (!current) return null
+        const claimed = input.claim?.(current) ?? null
         if (input.baseRevision !== undefined && input.baseRevision !== current.revision) {
           throw new Error(`Stale: revision ${current.revision} was published since revision ${input.baseRevision}; nothing was published. Rebase the draft onto revision ${current.revision}.`)
         }
@@ -364,11 +384,19 @@ export class TaskStore {
           author.kind, author.sessionId, now, input.rationale ?? null, input.requestKey ?? null, input.notify ? 1 : 0,
           columns.contract, columns.contract_hash,
         )
+        this.handoffHooks?.published(this.get(id)!, next, input.handoffId ?? claimed?.handoffId, author, now)
         if (input.discardDraft) this.drafts.discard(id, false)
         const revision = this.revisions(id).at(-1)!
         input.within?.(revision, this.get(id)!)
+        claimed?.within(revision, this.get(id)!)
         return { replay: false, task: this.get(id)!, revision }
-      })()
+      }
+      if (input.freshGuard) {
+        if (!this.mail) throw new Error('Mailbox commit observers are unavailable')
+        outcome = this.mail.writeWithCommittedObservations(write)
+      } else {
+        outcome = this.db.transaction(write)()
+      }
     } catch (error) {
       // The arbiter (D2): a same-key publication committed between this
       // request's read and its write — the unique key rejected the insert, or
@@ -388,7 +416,8 @@ export class TaskStore {
       .get(id, input.requestKey) as { revision: number } | null
     if (!row) return null
     const revision = this.revisions(id).find(entry => entry.revision === row.revision)!
-    const diff = publishPayloadDiff(revision, input)
+    // The payload first, then a linked draft's intent (owner-publication-handoff H17m).
+    const diff = publishPayloadDiff(revision, input) ?? (input.linkedHandoffDiffers?.(revision.revision) ? 'linked handoff' : null)
     if (diff) throw new Error(`Request key already used with a different ${diff}; nothing was published`)
     return { replay: true, task: this.get(id)!, revision }
   }
@@ -431,7 +460,8 @@ export class TaskStore {
    * records pending releases and dead-letters waiting mail atomically with
    * the new status, and a transition out cancels them. An actual change
    * also appends a `team_task_status_events` row (team-process-metrics D3)
-   * naming `actor`; a same-status update records nothing.
+   * naming `actor`; a same-status update records nothing. Entering `done`
+   * or `cancelled` closes a pending handoff in the same transaction (D4).
    */
   setStatus(id: string, status: TaskStatus, within?: () => void, actor: JournalAuthor = SYSTEM_AUTHOR, now = nowIso()): TeamTask | null {
     const changes = this.db.transaction(() => {
@@ -442,7 +472,9 @@ export class TaskStore {
         this.db.prepare(`INSERT INTO team_task_status_events (task_id, team_id, from_status, to_status, actor_kind, actor_session, at)
           VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, before.team_id, before.status, status, actor.kind, actor.sessionId, now)
       }
-      return this.db.prepare('UPDATE team_tasks SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id).changes
+      const updated = this.db.prepare('UPDATE team_tasks SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id).changes
+      if (before.status !== status && (status === 'done' || status === 'cancelled')) this.handoffHooks?.closed(this.get(id)!, actor, now)
+      return updated
     })()
     return changes === 1 ? this.changed(id) : null
   }

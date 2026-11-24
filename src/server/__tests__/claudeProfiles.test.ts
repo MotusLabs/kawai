@@ -101,6 +101,7 @@ describe('Claude profile resolution', () => {
     const codexRows = metadata.filter(profile => profile.runtime === 'codex')
     expect(codexRows.map(({ id, label, providerLabel }) => ({ id, label, providerLabel }))).toEqual([
       { id: 'codex-sol', label: 'Codex Sol', providerLabel: 'Codex' },
+      { id: 'codex-astra', label: 'Codex Astra', providerLabel: 'Codex' },
       { id: 'codex-luna', label: 'Codex Luna', providerLabel: 'Codex' },
     ])
     for (const row of codexRows) expect(row.providerId).toMatch(/^codex-home-[0-9a-f]{12}$/)

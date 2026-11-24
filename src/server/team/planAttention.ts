@@ -153,14 +153,19 @@ export const planStopItems: AttentionSource = ({ plans, taskTitle }: AttentionIn
  * A stall: the plan's Lead role unblocks the holder, else the human (D13).
  * A convergence stall is its diagnosis card's item while the card is open,
  * so it adds none (review-convergence decision 8); after Amend it is the
- * human's **Publish a task revision**, linking to the task.
+ * human's **Publish a task revision**, linking to the task — unless a pending
+ * publication handoff of the task already asks for it (owner-publication-handoff
+ * S3), whose item then stands alone.
  */
 export const planStallItems: AttentionSource = (input: AttentionInput) => [...stallItems(input), ...amendItems(input)]
 
-const amendItems = ({ plans, taskTitle }: AttentionInput) =>
-  (plans ?? []).flatMap(fact => fact.changes.flatMap(change => {
+const amendItems = ({ plans, taskTitle, handoffs }: AttentionInput) => {
+  // A pending handoff already asks for the revision (owner-publication-handoff S3): its item stands alone.
+  const prepared = new Set((handoffs ?? []).map(fact => fact.handoff.taskId))
+  return (plans ?? []).flatMap(fact => fact.changes.flatMap(change => {
     const stall = change.supervision.stall
     if (change.supervision.outcome !== 'stalled' || stall?.kind !== 'convergence' || stall.awaitingRevision === null || change.taskId === null) return []
+    if (prepared.has(change.taskId)) return []
     return [{
       id: attentionItemId('plan-stall', `${fact.executionId}:${change.supervision.change}:${stall.episodeKey}:amend`),
       kind: 'plan-stall' as const,
@@ -172,6 +177,7 @@ const amendItems = ({ plans, taskTitle }: AttentionInput) =>
       requiresHuman: true,
     }]
   }))
+}
 
 const stallItems = ({ plans, taskTitle }: AttentionInput) =>
   (plans ?? []).flatMap(fact => fact.changes
@@ -180,7 +186,10 @@ const stallItems = ({ plans, taskTitle }: AttentionInput) =>
       id: attentionItemId('plan-stall', `${fact.executionId}:${change.supervision.change}:${change.supervision.stall!.episodeKey}`),
       kind: 'plan-stall' as const,
       cause: `Change ${change.supervision.change} of plan "${fact.planTitle}" is stalled: ` +
-        (change.supervision.stall!.kind === 'no-progress' ? 'no progress' : 'repeating failure'),
+        (change.supervision.stall!.kind === 'no-progress' ? 'no progress' : 'repeating failure') +
+        // S5 (owner-publication-handoff D9): a gone holder is named archived.
+        (change.supervision.stall!.kind === 'no-progress' && change.supervision.stall!.holderGone && change.supervision.holder
+          ? ` (holder ${change.supervision.holder.session} archived; no session running ${change.supervision.change})` : ''),
       owner: fact.leadGroup === null ? humanOwner : groupOwner(fact.leadGroup),
       impact: taskImpact(change.taskId, taskTitle),
       nextAction: 'Unblock the holder',

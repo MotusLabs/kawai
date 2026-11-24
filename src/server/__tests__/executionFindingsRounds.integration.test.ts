@@ -119,7 +119,7 @@ describe('table RD — the round reads the fold', () => {
     expect(ledger(executionId, 'rd-two').map(entry => [entry.id, entry.state])).toEqual([['F1', 'resolved'], ['F2', 'resolved'], ['F3', 'disputed']])
     const reads = {
       db: h.bench.db.db, mail: h.mail, executions: h.executions, plans: h.bench.plans, decisions, conditionsOf: () => [],
-      runtime: { holder: () => null, blocker: () => null },
+      runtime: { holder: () => null, blocker: () => null, live: () => false },
     }
     const supervision = readPlanSupervision(reads, matrix.world.team.teamId, h.executions.execution(executionId)!.planId, new Date(h.clock.now))
     const cause = supervision.find(entry => entry.change === 'rd-two')!.cause

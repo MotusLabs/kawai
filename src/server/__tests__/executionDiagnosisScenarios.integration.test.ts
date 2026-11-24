@@ -91,7 +91,7 @@ test('the Lead\'s Amend publishes no task revision; the change waits on the owne
   expect(h.tasks.store.get(taskId)!.revision).toBe(1)
   expect(h.tasks.store.revisions(taskId)).toHaveLength(1)
   expect(row(executionId, 'lp-a').step).toBe('diagnosing')
-  const reads = { db: h.bench.db.db, mail: h.mail, executions: h.executions, plans: h.bench.plans, decisions: new DecisionStore(h.bench.db.db), conditionsOf: () => [], runtime: { holder: () => null, blocker: () => null } }
+  const reads = { db: h.bench.db.db, mail: h.mail, executions: h.executions, plans: h.bench.plans, decisions: new DecisionStore(h.bench.db.db), conditionsOf: () => [], runtime: { holder: () => null, blocker: () => null, live: () => false } }
   const derived = derivePlanSupervision(reads, teamId(), h.executions.execution(executionId)!.planId, new Date(h.clock.now))!
   expect(derived.changes[0]!.alsoApplying).toContainEqual({ kind: 'contract-revision', taskId, revision: 2 })
 })

@@ -16,7 +16,11 @@ import { answerBody, DecisionRefusal, payloadDiff, rationaleOf, resolveChoice } 
 import { teamPlan } from './decisionScope'
 import { prepareOverrideFix } from './fixTasks'
 import { journalLateDiagnosisDecision } from './diagnosisCards'
-import type { DecisionCaller, DecisionOutcome, DecisionService } from './DecisionService'
+import type { DecisionCaller, DecisionMail, DecisionOutcome, DecisionService } from './DecisionService'
+import { APPROVE_ACTION } from './decisionPublicationApproval'
+import { DecisionPublicationStore } from './decisionPublicationStore'
+import { liveRecord } from '../../team/taskHandoffFacts'
+import { resolveTeam, type TeamIdentity } from '../../team/teamIdentity'
 
 export interface OwnerAnswerInput { planId: string; cardId: string; choice?: string | null; optionIndex?: number | null; rationale?: string | null; commandId: string }
 export interface OwnerOverrideInput extends OwnerAnswerInput { expectedDecisionId: string; rationale: string }
@@ -43,7 +47,7 @@ const trimmed = (value: string | null | undefined) => value?.trim() || null
 function replay(service: DecisionService, teamId: string, planId: string, commandId: string, payload: Record<string, unknown>, fields: readonly string[]): DecisionOutcome | null {
   const prior = service.deps.decisions.decisionByCommand(teamId, planId, commandId)
   if (!prior) return null
-  const field = payloadDiff(prior.payload, payload, fields)
+  const field = prior.payload?.action === APPROVE_ACTION ? 'action' : payloadDiff(prior.payload, payload, fields)
   if (field) throw new DecisionRefusal('replay-mismatch', `command_id ${commandId} was already used with a different ${field}; decision ${prior.decision.id} stands and nothing was written.`)
   return { card: service.deps.decisions.card(teamId, prior.decision.cardId)!, decision: prior.decision, replayed: true, message: null }
 }
@@ -69,6 +73,26 @@ async function answerMail(service: DecisionService, caller: DecisionCaller & { k
   return null
 }
 
+async function boundAnswerMail(service: DecisionService, team: TeamIdentity, card: DecisionCard, body: string): Promise<DecisionMail> {
+  const asker = service.deps.getSession(card.askedBy.session)
+  const sameTeam = asker && (await resolveTeam(asker.projectPath).catch(() => null))?.teamId === team.teamId
+  const group = card.askedBy.group
+  const catalog = loadGroupCatalog({ groupsRoot: team.groupsRoot, ...(service.deps.homeDir ? { homeDir: service.deps.homeDir } : {}) })
+  const store = service.deps.mailbox.store
+  return {
+    commit: () => {
+      const current = service.deps.getSession(card.askedBy.session)
+      const direct = sameTeam && liveRecord(current) && current?.projectPath === asker.projectPath
+      if (!direct && (!group || !catalog.groups.has(group))) return null
+      return store.enqueue({
+        teamId: team.teamId, toKind: direct ? 'session' : 'group', toId: direct ? card.askedBy.session : group!,
+        fromKind: 'human', fromSession: null, fromGroup: null, originPath: team.groupsRoot, body, tags: ['decision-answer'], actor: 'human',
+      })
+    },
+    after: async message => store.get(message.id) ?? message,
+  }
+}
+
 export async function answerAsOwner(service: DecisionService, caller: DecisionCaller, input: OwnerAnswerInput): Promise<DecisionOutcome> {
   const team = human(caller, 'answer')
   const commandId = commandOf(input.commandId)
@@ -83,14 +107,16 @@ export async function answerAsOwner(service: DecisionService, caller: DecisionCa
   const first = decisions.decisionsOfCard(team.teamId, card.id)[0]
   if (first) service.refuseDecided(card, first)
   const id = `decision-${crypto.randomUUID()}`
-  const prepared = await answerMail(service, caller as DecisionCaller & { kind: 'human' }, card, answerBody(card, { id, choice, rationale, decidedBy: HUMAN } as PlanDecision))
+  const bound = new DecisionPublicationStore(service.deps.db).byCard(team.teamId, card.planId, card.id) !== null
+  const body = answerBody(card, { id, choice, rationale, decidedBy: HUMAN } as PlanDecision)
+  const prepared = bound ? await boundAnswerMail(service, team, card, body) : await answerMail(service, caller as DecisionCaller & { kind: 'human' }, card, body)
   try {
     return await service.commitDecision(prepared, card, () => decisions.insertDecision({
       id, cardId: card.id, planId: plan.id, teamId: team.teamId, seq: 1, kind: 'answer', choice, optionIndex, rationale, decidedBy: HUMAN, affected: card.taskId ? [card.taskId] : [], commandId, payload,
     }), () => {
       const question = card.messageId ? mailbox.store.get(card.messageId) : null
       if (question && QUESTION_STATES.has(question.state)) mailbox.store.cancel(question.id, { kind: 'human' }, 'answered by the owner')
-    })
+    }, bound)
   } catch (error) {
     if (error instanceof DecisionConflict && error.kind === 'command-replay') return replay(service, team.teamId, plan.id, commandId, payload, ANSWER_FIELDS)!
     if (error instanceof DecisionConflict && error.kind === 'card-decided') service.refuseDecided(card, error.decision)

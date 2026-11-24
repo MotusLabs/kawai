@@ -257,7 +257,7 @@ describe('component rendering', () => {
 
   test('renders header', () => {
     const html = renderMarkup(
-      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} />
+      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} contextLabel="KAWAI" />
     )
     expect(html).toContain('KAWAI')
   })

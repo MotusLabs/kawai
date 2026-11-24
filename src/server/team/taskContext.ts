@@ -16,7 +16,10 @@
 // rendered clauses and globs, or says the task has no contract; a context
 // recorded before contracts has neither and formats as it did. A task with
 // structured findings adds one line naming its blocking and disputed ids
-// (review-findings-ledger D10); a task without keeps the old shape.
+// (review-findings-ledger D10); a task without keeps the old shape. A task
+// with a pending publication handoff adds one line naming it as pending
+// (owner-publication-handoff D10) — never its text as the direction, which
+// stays the published revision's; a task without keeps the old shape.
 import type { ChatPeerTaskContext } from '../../shared/teamTasks'
 import { renderContract } from '../../shared/implementationContract'
 import { blocking, pendingDisputes } from '../../shared/findingsLedger'
@@ -51,7 +54,20 @@ export function buildTaskContext(store: TaskStore, taskId: string | null, plans?
     ...(owned ? { execution: { id: owned.executionId, revision: owned.revision } } : {}),
     ...(task.identity ? { contract: { identity: task.identity, contract: task.contract ?? null } } : {}),
     ...findingsOf(store, task.id),
+    ...pendingHandoffOf(store, task.id),
   }
+}
+
+/** The task's open or stale handoff, by id, state and base only. */
+function pendingHandoffOf(store: TaskStore, taskId: string): Pick<ChatPeerTaskContext, 'pendingHandoff'> {
+  const row = store.db.prepare("SELECT id, state, base_revision FROM team_task_handoffs WHERE task_id = ? AND state IN ('open', 'stale')").get(taskId) as
+    { id: string; state: 'open' | 'stale'; base_revision: number } | null
+  return row ? { pendingHandoff: { id: row.id, state: row.state, baseRevision: Number(row.base_revision) } } : {}
+}
+
+/** `Pending publication handoff H (open) prepared on revision 1 — not published; the direction above is revision 1's.` */
+function pendingHandoffLine(task: ChatPeerTaskContext, pending: NonNullable<ChatPeerTaskContext['pendingHandoff']>): string {
+  return `Pending publication handoff ${pending.id} (${pending.state}) prepared on revision ${pending.baseRevision} — not published; the direction above is revision ${task.revision}'s. task_get with handoff_id reads it.`
 }
 
 /** The ledger's blocking and disputed ids (review-findings-ledger D10); nothing while the task has no structured findings, so older contexts keep their shape. */
@@ -104,6 +120,7 @@ export function formatTaskHeader(task: ChatPeerTaskContext, version: TaskHeaderV
     ...(task.acceptance ? ['Acceptance criteria:', task.acceptance] : []),
     ...(task.contract ? contractLines(task.contract) : []),
     ...(task.findings ? [findingsLine(task.findings)] : []),
+    ...(task.pendingHandoff ? [pendingHandoffLine(task, task.pendingHandoff)] : []),
     ...(task.journal.length > 0
       ? [JOURNAL_LINES[version], ...task.journal.map(entry => `- ${entry.createdAt} ${entry.author}: ${entry.text}`)]
       : []),

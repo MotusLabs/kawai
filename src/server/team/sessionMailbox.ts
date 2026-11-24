@@ -558,6 +558,9 @@ export class SessionMailbox {
         if (mail.toKind === 'session' && mail.toId !== null && !this.options.getRecord(mail.toId)) store.deadLetter(mail.id, 'killed-recipient')
       }
     }
+    // Handoffs an older build or a manual edit left inconsistent (owner-publication-handoff D7):
+    // repaired with their wakeups before the first dispatch cycle sends them.
+    this.tasks.handoffs.reconcile()
     this.releaseSubscription = store.subscribe((team, message) => {
       this.options.onChange?.(team, message)
       this.dispatcher.notify()

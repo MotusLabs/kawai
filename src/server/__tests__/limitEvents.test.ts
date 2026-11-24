@@ -23,6 +23,7 @@ describe('LimitEventStore', () => {
   })
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
 
+  // @covers: profile-limit-handling › Limit events are recorded per profile › Final rate-limit failure
   test('records events per profile with every field and notifies listeners', () => {
     const store = new LimitEventStore(schemaDb(file), () => now)
     const seen: LimitEvent[] = []
@@ -34,6 +35,7 @@ describe('LimitEventStore', () => {
     expect(seen.map(e => e.profileId)).toEqual(['glm', 'mimo'])
   })
 
+  // @covers: profile-limit-handling › Limit events are recorded per profile › Survives restart
   test('survives reopening the database (server restart)', () => {
     new LimitEventStore(schemaDb(file), () => now).record({ ...base, final: true })
     now = T0 + 10 * 60_000

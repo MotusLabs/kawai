@@ -129,7 +129,7 @@ describe('the outbound window against the real store (findings-8134cc45 PC1)', (
         list: () => [], get: () => null,
         results: { get: () => null, outstandingSince: () => [], submittedBy: () => false },
         acknowledgements: { highest: () => null },
-      } },
+      }, handoffs: { store: { pendingForTeam: () => [], publishedOfOpenTasks: () => [] }, live: () => false } },
       mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
       waitingFor: () => ({}),
       teamRecords: () => [],

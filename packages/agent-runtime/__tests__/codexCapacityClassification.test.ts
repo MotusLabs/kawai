@@ -38,6 +38,18 @@ async function upstream(s: Scripted, info: unknown, willRetry = true): Promise<v
   await s.flush()
 }
 
+/**
+ * The provider retry activity's exact body. Only the capacity clock is
+ * scripted; the activity's elapsedMs comes from the live wall clock
+ * (projectActivity uses Date.now), so any finite nonnegative number is
+ * accepted, not only the 0 ms an unsampled clock would give.
+ */
+function expectProviderRetryActivity(activity: unknown): void {
+  expect(activity).toEqual({ phase: 'retrying', attempt: 1, maxRetries: 1, elapsedMs: expect.any(Number) })
+  const { elapsedMs } = activity as { elapsedMs: number }
+  expect(Number.isFinite(elapsedMs) && elapsedMs >= 0).toBe(true)
+}
+
 /** Today's upstream overload observables (O1). */
 async function expectTodayUpstream(option: unknown): Promise<void> {
   const s = scripted(option)
@@ -45,7 +57,7 @@ async function expectTodayUpstream(option: unknown): Promise<void> {
   await upstream(s, 'serverOverloaded')
   expect(limitFailures(s).map(({ kind, final }) => ({ kind, final }))).toEqual([{ kind: 'serverOverloaded', final: false }])
   expect(s.limits.some((e) => e.type === 'wait-start')).toBe(true)
-  expect(s.activities.at(-1)).toEqual({ phase: 'retrying', attempt: 1, maxRetries: 1, elapsedMs: 0 })
+  expectProviderRetryActivity(s.activities.at(-1))
   expect(codexLimitScope('serverOverloaded')).toBe('login')
   expect(recovery(s)).toMatchObject({ timers: 0, retries: 0, continuations: 0 })
 }
@@ -90,7 +102,13 @@ describe('codex-capacity-retry option table O', () => {
       const before = s.activities.length
       await upstream(s, 'serverOverloaded', willRetry)
       expect(s.limits).toEqual([])
-      expect(s.activities.slice(before)).toEqual(willRetry ? [{ phase: 'retrying', attempt: 1, maxRetries: 1, elapsedMs: 0 }] : [])
+      const published = s.activities.slice(before)
+      if (willRetry) {
+        expect(published).toHaveLength(1)
+        expectProviderRetryActivity(published[0])
+      } else {
+        expect(published).toEqual([])
+      }
       expect(recovery(s)).toMatchObject({ timers: 0, retries: 0, continuations: 0, terminals: 0, state: 'active' })
     }
   })

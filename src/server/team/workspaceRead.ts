@@ -27,6 +27,7 @@ import type { TeamTaskSummary } from '../../shared/teamTasks'
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { acceptanceItems, taskImpact, type PendingAcceptance } from './attentionAcceptance'
+import { handoffAttentionFacts, handoffAttentionItems, handoffFollowUpItems, type HandoffAttentionFact, type HandoffFollowUpFact } from './handoffAttention'
 import { exhaustionAttentionItems, type ExhaustionFact } from './workspaceExhaustion'
 import { CAPACITY_CONSTRAINT_KINDS, capacityConstraintLabel, morningSummary } from './workspaceSummary'
 import {
@@ -220,6 +221,10 @@ export interface AttentionInput {
   plans?: PlanAttentionFact[]
   /** Each open plan's holds and pauses, from the one revision-control reader (revision-control D13). */
   revisionControl?: RevisionControlAttentionFact[]
+  /** Pending publication handoffs with their parties' liveness (owner-publication-handoff D8). */
+  handoffs?: HandoffAttentionFact[]
+  /** Published handoffs of open tasks with their follow-up facts (owner-publication-handoff D5, D8). */
+  handoffFollowUps?: HandoffFollowUpFact[]
 }
 
 /** One attention source: a pure function over the input (D5's registry). */
@@ -294,6 +299,10 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }
 /** Unacknowledged outbound violations (execution-safety-recovery D10; workspaceOutbound.ts). */
 const outboundItems: AttentionSource = ({ outboundViolations, nameOf }) => outboundAttentionItems(outboundViolations, nameOf)
 
+/** Prepared revisions awaiting their next actor, and published ones awaiting follow-up (owner-publication-handoff D8; handoffAttention.ts). */
+const handoffItems: AttentionSource = ({ handoffs, handoffFollowUps }) =>
+  [...handoffAttentionItems(handoffs ?? []), ...handoffFollowUpItems(handoffFollowUps ?? [])]
+
 /** Context-exhausted sessions awaiting a decision (chat-context-exhaustion D8; workspaceExhaustion.ts). */
 const exhaustionItems: AttentionSource = ({ exhaustion, taskTitle, nameOf }) =>
   exhaustionAttentionItems(exhaustion ?? [], taskTitle, nameOf)
@@ -308,6 +317,7 @@ export const ATTENTION_SOURCES: readonly AttentionSource[] = [
   planStopItems, planStallItems, decisionQuestionItems, planFixItems, planConditionItems, planPromotionItems,
   // revision-control D13: the owner's overdue holds and pauses, and the checkpoint decisions.
   planHoldOverdueItems, planPauseOverdueItems, planCheckpointDecisionItems,
+  handoffItems,
 ]
 
 /** Every attention item the current state yields, in a stable order. */
@@ -368,10 +378,20 @@ export class WorkspaceRead {
       // Acceptance follows the closing right, so it awaits the owner (group-mail-task-affinity D7).
       const creatorId = taskOwner(summary)
       const creator = creatorId ? records.find(record => record.sessionId === creatorId && record.archivedAt == null) : undefined
+      const live = manager.tasks.handoffs.live
+      const claimant = summary.assignment?.claimedBy ?? null
+      // Table F (owner-publication-handoff D8): who owns a failing result's fixes.
+      const fixes = result.reviewVerdict !== 'fail' ? undefined : {
+        submitterLive: submittedBy?.sessionId ? live(submittedBy.sessionId) : true,
+        liveClaimant: claimant && live(claimant) ? { sessionId: claimant, name: nameOf(claimant) } : null,
+        executionOwns: ownedByExecution(summary.id),
+        liveOwner: creatorId && live(creatorId) ? { sessionId: creatorId, name: nameOf(creatorId) } : null,
+      }
       return [{
         resultId: result.id, taskId: summary.id, submitter: submittedBy ? actorName(submittedBy) : 'Human',
         submitterId: submittedBy?.sessionId ?? null, needsReevaluation: result.needsReevaluation,
         reviewVerdict: result.reviewVerdict, liveCreator: creator ? { sessionId: creator.sessionId, name: creator.name } : null,
+        ...(fixes ? { fixes } : {}),
       }]
     })
     const attention = attentionItems({
@@ -381,6 +401,7 @@ export class WorkspaceRead {
       // The plan sources' facts, gathered over the supervision reads (plan-supervision D13).
       plans: manager.planAttentionFacts?.(teamId) ?? [],
       revisionControl: revisionControlFacts(manager, teamId),
+      ...handoffAttentionFacts(manager, teamId, nameOf),
       exhaustion: manager.exhaustionEpisodes(teamId).map(episode => {
         const record = records.find(row => row.sessionId === episode.sessionId)
         const task = episode.taskId ? store.get(episode.taskId) : null

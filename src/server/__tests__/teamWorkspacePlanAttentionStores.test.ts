@@ -80,7 +80,7 @@ describe('planAttentionFacts over the real stores: executions, fixes, promotions
 
   const readsFor = (db: Database, tasks: ReturnType<typeof taskService>): PlanAttentionReads => ({
     db, mail: new MailboxStore(db),
-    runtime: { holder: () => null, blocker: () => null },
+    runtime: { holder: () => null, blocker: () => null, live: () => false },
     conditionsOf: () => [],
     tasks: { get: taskId => tasks.get(taskId) },
     executions: new ExecutionStore(db), plans: new PlanStore(db), decisions: new DecisionStore(db),
@@ -222,7 +222,7 @@ describe('WorkspaceRead.snapshot carries the plan facts (B3, 9.2/9.3 wiring)', (
         list: () => [], get: () => null,
         results: { get: () => null, outstandingSince: () => [], submittedBy: () => false },
         acknowledgements: { highest: () => null },
-      } },
+      }, handoffs: { store: { pendingForTeam: () => [], publishedOfOpenTasks: () => [] }, live: () => false } },
       mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
       waitingFor: () => ({}),
       teamRecords: () => [],
