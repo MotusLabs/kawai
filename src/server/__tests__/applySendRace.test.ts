@@ -75,6 +75,51 @@ async function inFlight(executionId: string): Promise<string> {
   return flight.taskId
 }
 
+/** A fix or update attempt minted while its git reads run, an Apply committing meanwhile, then the next owed pass. */
+async function staleHandoff(kind: 'fix' | 'update'): Promise<void> {
+  const { planId, executionId } = await wired.running()
+  const taskId = await inFlight(executionId)
+  const roundId = wired.answerNewestRow(executionId, 'ui', 1)
+  const round = wired.executions.round(roundId)!
+  if (kind === 'fix') {
+    wired.bench.db.db.prepare("UPDATE plan_execution_rounds SET outcome = 'fail' WHERE id = ?").run(roundId)
+    const gating = wired.executions.change(executionId, 'ui')!
+    expect(wired.executions.transition(executionId, 'ui', gating, { state: 'implementing', step: null })).not.toBeNull()
+  }
+  const next = await wired.approveNext(planId, reword(`Revise the UI (${kind})`))
+  const from = wired.executions.execution(executionId)!.revision
+  const before = wired.tasks.store.assignmentsOf(taskId).length
+  const stamps = recordStamps()
+  const latch = pauseAtHead()
+  const send = kind === 'fix'
+    ? dispatchFixAttempt(deps(), {
+      executionId, change: 'ui', group: 'middle-devs', failingChecks: [{ name: 'lint', conclusion: 'failure', link: null }], findingsIds: [],
+      findings: { blocking: [], blockingText: '', others: 0, legacyTexts: [] }, continueFrom: 'round-commit', fixRounds: 1,
+    })
+    : dispatchUpdateAttempt(deps(), { executionId, change: 'ui', round, update: { base: 'base-head', files: ['a.ts'] } })
+  try {
+    await latch.entered
+    expect(await wired.applyAs({ executionId, choices: { ui: 'continue' } })).toMatchObject({ ok: true })
+  } finally {
+    latch.release()
+    try { await send } finally { latch.restore() }
+  }
+  const stale = wired.executions.attempts(executionId, 'ui').at(-1)!
+  expect({ kind: stale.kind, revision: stale.manifest.plan.revision, assignmentId: stale.assignmentId })
+    .toEqual({ kind, revision: from, assignmentId: null })
+  expect(wired.tasks.store.assignmentsOf(taskId).length).toBe(before)
+  expect(wired.planFor().dispatches).toContainEqual(expect.objectContaining({ executionId, change: 'ui', kind: 'owed' }))
+  await dispatchOwedAttempt(deps(), { executionId, change: 'ui', group: 'middle-devs' })
+  const sent = wired.executions.attempts(executionId, 'ui').at(-1)!
+  expect({ kind: sent.kind, revision: sent.manifest.plan.revision, answers: sent.manifest.answers, staleSent: wired.executions.attempts(executionId, 'ui').find(row => row.id === stale.id)!.assignmentId })
+    .toEqual({ kind, revision: next.revision, answers: stale.manifest.answers, staleSent: null })
+  const added = wired.tasks.store.assignmentsOf(taskId).slice(before)
+  expect(added.map(entry => ({ id: entry.id, handoffKind: entry.handoffKind, resultId: entry.resultId })))
+    .toEqual([{ id: sent.assignmentId!, handoffKind: 'fix', resultId: round.resultId }])
+  stamps.restore()
+  expect(stamps.rows).toEqual([{ assignmentId: sent.assignmentId!, manifest: next.revision, execution: next.revision }])
+}
+
 describe('an owed send meets an Apply (F1)', () => {
   // @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
   test('P4 probe: Continue during an owed implement send; every stamp commits while the execution is on its manifest revision, and one assignment goes out', async () => {
@@ -114,52 +159,11 @@ describe('an owed send meets an Apply (F1)', () => {
     expect(wired.tasks.store.assignmentsOf(taskId).slice(before).map(entry => entry.id)).toEqual(stamps.rows.map(row => row.assignmentId))
   })
 
-  for (const kind of ['fix', 'update'] as const) {
-    // @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
-    test(`a ${kind} attempt minted while its git reads run, then an Apply: the stale row is never handed off; the next owed pass sends its successor once with the same answers`, async () => {
-      const { planId, executionId } = await wired.running()
-      const taskId = await inFlight(executionId)
-      const roundId = wired.answerNewestRow(executionId, 'ui', 1)
-      const round = wired.executions.round(roundId)!
-      if (kind === 'fix') {
-        wired.bench.db.db.prepare("UPDATE plan_execution_rounds SET outcome = 'fail' WHERE id = ?").run(roundId)
-        const gating = wired.executions.change(executionId, 'ui')!
-        expect(wired.executions.transition(executionId, 'ui', gating, { state: 'implementing', step: null })).not.toBeNull()
-      }
-      const next = await wired.approveNext(planId, reword(`Revise the UI (${kind})`))
-      const from = wired.executions.execution(executionId)!.revision
-      const before = wired.tasks.store.assignmentsOf(taskId).length
-      const stamps = recordStamps()
-      const latch = pauseAtHead()
-      const send = kind === 'fix'
-        ? dispatchFixAttempt(deps(), {
-          executionId, change: 'ui', group: 'middle-devs', failingChecks: [{ name: 'lint', conclusion: 'failure', link: null }], findingsIds: [],
-          findings: { blocking: [], blockingText: '', others: 0, legacyTexts: [] }, continueFrom: 'round-commit', fixRounds: 1,
-        })
-        : dispatchUpdateAttempt(deps(), { executionId, change: 'ui', round, update: { base: 'base-head', files: ['a.ts'] } })
-      try {
-        await latch.entered
-        expect(await wired.applyAs({ executionId, choices: { ui: 'continue' } })).toMatchObject({ ok: true })
-      } finally {
-        latch.release()
-        try { await send } finally { latch.restore() }
-      }
-      const stale = wired.executions.attempts(executionId, 'ui').at(-1)!
-      expect({ kind: stale.kind, revision: stale.manifest.plan.revision, assignmentId: stale.assignmentId })
-        .toEqual({ kind, revision: from, assignmentId: null })
-      expect(wired.tasks.store.assignmentsOf(taskId).length).toBe(before)
-      expect(wired.planFor().dispatches).toContainEqual(expect.objectContaining({ executionId, change: 'ui', kind: 'owed' }))
-      await dispatchOwedAttempt(deps(), { executionId, change: 'ui', group: 'middle-devs' })
-      const sent = wired.executions.attempts(executionId, 'ui').at(-1)!
-      expect({ kind: sent.kind, revision: sent.manifest.plan.revision, answers: sent.manifest.answers, staleSent: wired.executions.attempts(executionId, 'ui').find(row => row.id === stale.id)!.assignmentId })
-        .toEqual({ kind, revision: next.revision, answers: stale.manifest.answers, staleSent: null })
-      const added = wired.tasks.store.assignmentsOf(taskId).slice(before)
-      expect(added.map(entry => ({ id: entry.id, handoffKind: entry.handoffKind, resultId: entry.resultId })))
-        .toEqual([{ id: sent.assignmentId!, handoffKind: 'fix', resultId: round.resultId }])
-      stamps.restore()
-      expect(stamps.rows).toEqual([{ assignmentId: sent.assignmentId!, manifest: next.revision, execution: next.revision }])
-    })
-  }
+  // @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
+  test('a fix attempt minted while its git reads run, then an Apply: the stale row is never handed off; the next owed pass sends its successor once with the same answers', () => staleHandoff('fix'))
+
+  // @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
+  test('an update attempt minted while its git reads run, then an Apply: the stale row is never handed off; the next owed pass sends its successor once with the same answers', () => staleHandoff('update'))
 })
 
 describe('Adapt before the first attempt (F3)', () => {
