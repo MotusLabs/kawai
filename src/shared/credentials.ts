@@ -5,18 +5,18 @@
 
 export type CredentialKind = 'secret-source' | 'launch-env'
 
-/** Where a listed variable's effective value comes from. `legacy-settings`
- * is the Settings map before its migration commits (OD-M9/M10). */
-export type CredentialSource = 'store' | 'seed' | 'legacy-settings'
+/** Where a listed variable's effective value comes from. The legacy Settings
+ * map is never a source (OD-M9/M10 = b); the migration state names it. */
+export type CredentialSource = 'store' | 'seed'
 
 export interface CredentialListingRow {
   name: string
-  /** The store entry's kind; null for a seed or legacy-only variable. */
+  /** The store entry's kind; null for a seed-only variable. */
   kind: CredentialKind | null
   /** Presence only: a blank exports the variable empty. */
   state: 'set' | 'blank'
   source: CredentialSource
-  /** A store entry hides a value from the process env, the seed, or the legacy map. */
+  /** A store entry hides a value from the process env or the seed. */
   overriding: boolean
   /** A delivered-kind variable whose name is registered: stored but inert (W7/W8). */
   collision: boolean

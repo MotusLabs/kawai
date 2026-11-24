@@ -230,11 +230,14 @@ export function buildClaudeLaunch(
   // protection the branch exists to provide. The credentialed branch composes
   // the controlled blanks, the route pins, and the credential blanks into
   // settings.env; the named noncredentialed branch composes the controlled
-  // map alone. The token's own ANTHROPIC_AUTH_TOKEN key is the designed W2
-  // channel and never a collision (it is in neither list).
+  // map alone. The credentialed branch also writes the token's output name,
+  // ANTHROPIC_AUTH_TOKEN (the W2 channel): a registered ANTHROPIC_AUTH_TOKEN
+  // refuses too, whichever variable the provider's authTokenEnv names
+  // (provider-credential-store I3/M7) — the launch would otherwise carry a
+  // registered name under its own name.
   const controlledCollisions = PROFILE_CONTROLLED_ENV.filter(name => registered.has(name))
   if (credential) {
-    const pinnedCollisions = ['ANTHROPIC_BASE_URL', ...TRANSPORT_PIN_ENV].filter(name => registered.has(name))
+    const pinnedCollisions = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', ...TRANSPORT_PIN_ENV].filter(name => registered.has(name))
     const blankCollisions = Object.keys(BLANK_OTHER_CREDENTIALS).filter(name => registered.has(name))
     const collisions = [...new Set([...controlledCollisions, ...pinnedCollisions, ...blankCollisions])].sort()
     if (collisions.length > 0) throw new RegisteredNameRefusal('credentialed', collisions)

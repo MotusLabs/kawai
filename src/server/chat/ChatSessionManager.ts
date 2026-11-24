@@ -293,6 +293,13 @@ export interface ChatSessionManagerOptions {
    * next launch. Production passes the composition's; tests may omit it.
    */
   getSecretSourceKeys?: () => Iterable<string>
+  /**
+   * Settles when the startup credential migration finished, either way
+   * (provider-credential-store S6): restore — and so mail dispatch — and new
+   * sessions' gate and availability probe wait for it, so no launch composes
+   * before the migration's one write. Tests may omit it.
+   */
+  startupGate?: Promise<unknown>
   /** Per-session protocol capture for the chat debug view (always on). */
   wireLogs?: ChatWireLogs
   /** Project-directory check; injected in tests that use fictitious paths. */
@@ -522,6 +529,8 @@ export class ChatSessionManager {
   >()
 
   async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string; cloneFromSessionId?: string; taskId?: string; spawned?: boolean }): Promise<ChatCreateResult> {
+    // No creation gate or probe composes before the startup migration settled.
+    if (this.options.startupGate) await this.options.startupGate.catch(() => undefined)
     // Refuse a bad path before the probe spends an SDK spawn on it.
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -1440,7 +1449,8 @@ export class ChatSessionManager {
     // chat-attach awaits them via whenRestored(). The mailbox and wire-log
     // orphan pruning start only after the rows exist — pruning before the
     // restore would see an empty registry and delete every chat's wire log.
-    this.restorePromise = this.restorePersisted()
+    const gate = this.options.startupGate
+    this.restorePromise = (gate ? gate.catch(() => undefined).then(() => this.restorePersisted()) : this.restorePersisted())
       .then(async () => {
         if (this.isShutDown) return
         this.teamMail.start()

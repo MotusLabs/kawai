@@ -262,8 +262,7 @@ string.
 
 **Composition, per variable.** The gate and every launch resolve each
 variable from, lowest first: the server process environment,
-`AGENTBOARD_CHAT_ENV`, the legacy Settings map (only until it migrates; see
-below), then the store. A higher source replaces one variable, never the
+`AGENTBOARD_CHAT_ENV`, then the store. A higher source replaces one variable, never the
 whole set, so a seed-only key survives a store entry for another name.
 Claude launches then remove every registered name (catalog bindings, secret
 sources, and retained names) before applying the profile. Codex launches
@@ -290,11 +289,18 @@ build moves that map into the store as launch variables: the store write
 comes first and must reach the disk, then one database transaction deletes
 the map and records a names-only stamp. Entries the store already holds with
 the same value are absorbed; a different store value wins, and Settings lists
-the skip by name. A crash before the transaction leaves the map in place and
-the migration re-runs at the next start; once the stamp exists it never runs
-again. Restoring a database backup taken before the upgrade brings the map
-back and re-runs the migration the same way. To roll back to an older build,
-restore that pre-upgrade backup: older builds ignore the store.
+the skip by name. The map itself is never a source: until the migration
+commits, a value that exists only in the map does not reach any session, and
+Settings shows the migration as pending with its reason (the write was not
+confirmed on disk, failed, or the store cannot be read). A pending or
+interrupted migration keeps the map and retries at the next start; once the
+stamp exists it never runs again, and a map found beside the stamp is
+ignored and listed by name. A retry imports the map again, so a variable you
+cleared while the migration was pending comes back from the map: clear it
+again once the migration completes. Restoring a database backup taken before
+the upgrade brings the map back and re-runs the migration the same way,
+keeping the store's later values. To roll back to an older build, restore
+that pre-upgrade backup: older builds ignore the store.
 
 **Backups taken before the migration may hold the old values.** Every
 backup taken before the migration's database commit can contain the map —

@@ -39,7 +39,8 @@ describe('credential store documentation', () => {
     const doc = section('Credential store')
     for (const phrase of [
       '`~/.kawai/credentials.json`', '(`launch-env`)', '(`secret-source`)',
-      'the server process environment, `AGENTBOARD_CHAT_ENV`, the legacy Settings map',
+      'the server process environment, `AGENTBOARD_CHAT_ENV`, then the store',
+      'The map itself is never a source',
       'never a value, a prefix, or a length', 'The retired `/api/settings/chat-provider-env` answers 404.',
     ]) expect(doc).toContain(phrase)
   })

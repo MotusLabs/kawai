@@ -2,13 +2,14 @@
 // server, built at bootstrap over the one production credential store. Per
 // variable, *resolution* — what the auth gate, injection, the availability
 // probe, and provider usage pulls read — is process env < AGENTBOARD_CHAT_ENV
-// seed < (the legacy Settings map, only until its migration commits) < store,
-// any kind, a blank exporting empty and an absent entry passing through; an
+// seed < store, any kind, a blank exporting empty and an absent entry passing through; an
 // unreadable, unsafe, or malformed store composes as absent. *Delivery* —
 // what a launch receives — is resolution minus every registered name (the
 // registry, which this module feeds with the store's secret-source keys).
 // The seed's old wholesale replacement (`current()` returning override-or-
-// seed) is retired: composition is per variable, never wholesale.
+// seed) is retired: composition is per variable, never wholesale. The legacy
+// Settings map is never a source (bound table M, OD-M9/M10 = b): only the
+// startup migration reads it (credentialMigration.ts).
 import type {
   CredentialListing,
   CredentialListingRow,
@@ -54,8 +55,6 @@ export interface CredentialCompositionOptions {
   store: CredentialStore
   /** The parsed AGENTBOARD_CHAT_ENV seed. */
   seed: ChatProviderEnv
-  /** The legacy Settings map while its migration is uncommitted; null after. */
-  legacy?: () => ChatProviderEnv | null
   /** The process environment; injected in tests. */
   processEnv?: () => Env
 }
@@ -63,9 +62,9 @@ export interface CredentialCompositionOptions {
 export class CredentialComposition {
   constructor(private readonly options: CredentialCompositionOptions) {}
 
-  /** The per-variable overrides above the process env: seed < legacy < store. */
+  /** The per-variable overrides above the process env: seed < store. */
   overrides(): ChatProviderEnv {
-    const merged: ChatProviderEnv = { ...this.options.seed, ...this.options.legacy?.() }
+    const merged: ChatProviderEnv = { ...this.options.seed }
     const { status, entries } = this.options.store.list()
     if (!status.ok) return merged
     for (const entry of entries) {
@@ -86,19 +85,17 @@ export class CredentialComposition {
     const listed = this.options.store.list()
     const processEnv = this.options.processEnv?.() ?? process.env
     const seed = this.options.seed
-    const legacy = this.options.legacy?.() ?? {}
     const rows = new Map<string, CredentialListingRow>()
-    const lower = (name: string, source: 'seed' | 'legacy-settings', value: string) =>
-      rows.set(name, { name, kind: null, state: value === '' ? 'blank' : 'set', source, overriding: false, collision: registered.has(name) })
-    for (const [name, value] of Object.entries(seed)) lower(name, 'seed', value)
-    for (const [name, value] of Object.entries(legacy)) lower(name, 'legacy-settings', value)
+    for (const [name, value] of Object.entries(seed)) {
+      rows.set(name, { name, kind: null, state: value === '' ? 'blank' : 'set', source: 'seed', overriding: false, collision: registered.has(name) })
+    }
     for (const entry of listed.entries) {
       rows.set(entry.name, {
         name: entry.name,
         kind: entry.kind,
         state: entry.state,
         source: 'store',
-        overriding: processEnv[entry.name] !== undefined || Object.hasOwn(seed, entry.name) || Object.hasOwn(legacy, entry.name),
+        overriding: processEnv[entry.name] !== undefined || Object.hasOwn(seed, entry.name),
         collision: entry.kind === 'launch-env' && registered.has(entry.name),
       })
     }
@@ -144,12 +141,9 @@ export function createServerCredentials(options: {
   db: RetainedNamesDb
   seed: ChatProviderEnv
   homeDir?: string
-  legacy?: () => ChatProviderEnv | null
 }): ServerCredentials {
   const store = createProductionCredentialStore(options.db, options.homeDir)
-  const composition = new CredentialComposition({
-    store, seed: options.seed, ...(options.legacy ? { legacy: options.legacy } : {}),
-  })
+  const composition = new CredentialComposition({ store, seed: options.seed })
   return { store, composition }
 }
 

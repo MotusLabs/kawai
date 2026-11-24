@@ -20,7 +20,6 @@ const ENDPOINT = '/api/settings/credentials'
 const SOURCE_LABEL: Record<CredentialListingRow['source'], string> = {
   store: 'Saved here',
   seed: 'AGENTBOARD_CHAT_ENV',
-  'legacy-settings': 'Legacy Settings (not yet migrated)',
 }
 
 const KIND_LABEL: Record<CredentialKind, string> = {

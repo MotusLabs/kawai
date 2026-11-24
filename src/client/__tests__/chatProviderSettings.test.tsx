@@ -218,6 +218,24 @@ describe('ChatProviderSettings — the write-only credential section', () => {
     expect(byTestId(renderer, 'credential-store-state')[0]!.children.join('')).toContain('malformed')
     expect(byTestId(renderer, 'credential-migration-skipped')[0]!.children.join('')).toBe('Legacy Settings OLD_NAME not migrated: the store already holds OLD_NAME.')
     expect(byTestId(renderer, 'credential-collision-RELAY_KEY')[0]!.children.join('')).toContain('registered credential name')
+    expect(byTestId(renderer, 'credential-migration')[0]!.children.join('')).toBe('Migration pending.')
+    expect(byTestId(renderer, 'credential-migration-ignored')).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('a complete migration lists residual ignored names and no pending text (table M, M2)', async () => {
+    const base = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith('/api/settings/credentials')) return base(input, init)
+      return Response.json({
+        store: { ok: true },
+        rows: [],
+        migration: { state: 'complete', text: 'Legacy Settings values found after the migration are not used.', skipped: [], ignored: ['RESIDUAL_A', 'RESIDUAL_B'] },
+      } satisfies CredentialListing)
+    }) as typeof fetch
+    const renderer = await render()
+    expect(byTestId(renderer, 'credential-migration')).toHaveLength(0)
+    expect(byTestId(renderer, 'credential-migration-ignored')[0]!.children.join('')).toBe('Legacy Settings values found after the migration are not used: RESIDUAL_A, RESIDUAL_B.')
     renderer.unmount()
   })
 })

@@ -11,15 +11,20 @@
 //   A4   reclassify skips the retain step, so a reclassified key is delivered;
 //   PW5  the usage pull reads the raw seed, so a store-only balance key is lost;
 //   4.5  the composition is cached for the process lifetime, so an import
-//        does not reach the next creation without a restart.
+//        does not reach the next creation without a restart;
+//   I3   a registered ANTHROPIC_AUTH_TOKEN is not refused on the credentialed
+//        branch, so the launch carries a registered name under its own name;
+//   S6   the startup gate is not awaited, so restore or the first creation
+//        runs before the startup migration's store write settles.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ChatEvent } from '../../shared/chat'
+import { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatWireLogs } from '../chat/ChatWireLogs'
 import { createServerCredentials, credentialManagerOptions } from '../chat/credentialComposition'
-import { readRetainedNames } from '../chat/secretNameRegistry'
+import { readRetainedNames, retainSecretName } from '../chat/secretNameRegistry'
 import { resetCodexExecutableCache } from '../chat/codex/codexExecutable'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
@@ -270,4 +275,68 @@ describe('PW3 and A4 — store secret sources stay withheld at every launch', ()
     expect(names).toContain('CODEX_HOME')
     expect(names).not.toContain('PCS_SECRET_KEY')
   })
+})
+
+describe('S6 — the startup gate orders the migration before restore and creation', () => {
+  test('restore and the first creation wait for the startup gate, so a credential the gated step stored passes the first gate', async () => {
+    const handles: FakeHandle[] = []
+    const credentials = createServerCredentials({ db, seed: {}, homeDir: home })
+    let release!: () => void
+    const startupGate = new Promise<void>(resolve => { release = resolve })
+    const manager = new ChatSessionManager({
+      isDirectory: anyDirectory,
+      db, registry: new SessionRegistry(), onEvent: () => {},
+      queryFactory: fakeQueryFactory(handles),
+      executableCheck: async () => ({ path: '/opt/claude', identity: 'id-1' }),
+      availabilityProbe: async () => {},
+      providerUsageFetch: (async () => { throw new Error('not expected') }) as unknown as typeof fetch,
+      profileCatalogHome: home,
+      startupGate,
+      ...credentialManagerOptions(credentials.composition),
+    })
+    try {
+      let restored = false
+      void manager.whenRestored().then(() => { restored = true })
+      let settled = false
+      const creation = manager.createAvailableSession({ projectPath: project, claudeProfileId: 'relay-opus' })
+        .finally(() => { settled = true })
+      await flush()
+      await Bun.sleep(50)
+      expect({ restored, settled }).toEqual({ restored: false, settled: false })
+      // The gated step (the migration in bootstrap) writes the store, then settles.
+      expect((await credentials.store.set('PCS_RELAY_TOKEN', 'gated-token', 'secret-source')).durable).toBe(true)
+      release()
+      const created = await creation
+      expect(created.ok).toBe(true)
+      await manager.whenRestored()
+      expect(restored).toBe(true)
+    } finally {
+      manager.dispatcher.close()
+      manager.observations.stop()
+    }
+  })
+})
+
+describe('I3/M7 — a registered output name refuses the credentialed launch', () => {
+  for (const source of ['a stored secret-source', 'a retained name only'] as const) {
+    test(`a registered ANTHROPIC_AUTH_TOKEN (${source}) refuses the relay creation by name before any spawn, though authTokenEnv names another variable`, async () => {
+      const handles: FakeHandle[] = []
+      const { credentials, manager } = await claudeServer(handles)
+      expect((await credentials.store.set('PCS_RELAY_TOKEN', 'zq-relay-token', 'secret-source')).durable).toBe(true)
+      if (source === 'a stored secret-source') {
+        expect((await credentials.store.set('ANTHROPIC_AUTH_TOKEN', 'zq-registered-output', 'secret-source')).durable).toBe(true)
+      } else {
+        retainSecretName(db, 'ANTHROPIC_AUTH_TOKEN')
+      }
+      expect(readRetainedNames(db).has('ANTHROPIC_AUTH_TOKEN')).toBe(true)
+      // The creation gate composes the launch and refuses there, before a session or a child exists.
+      const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'relay-opus' })
+      expect(created.ok).toBe(false)
+      const error = created.ok ? '' : created.error
+      expect(error).toContain('Registered secret name(s) ANTHROPIC_AUTH_TOKEN cannot be launched on the credentialed branch')
+      expect(error).not.toContain('zq-')
+      await flush()
+      expect(handles).toHaveLength(0)
+    })
+  }
 })

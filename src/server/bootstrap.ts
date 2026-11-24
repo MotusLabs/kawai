@@ -46,7 +46,7 @@ import { createArchivedChatRoutes } from './routes/archivedChats'
 import { createChatSearchRoutes } from './routes/chatSearch'
 import { createPlanWorkspaceAssetRoutes } from './routes/planWorkspaceAsset'
 import { createPasteFileRoutes } from './routes/pasteFile'
-import { readLegacyProviderEnv } from './chat/credentialMigration'
+import { migrateLegacyProviderEnv, migrationStatus } from './chat/credentialMigration'
 import { mountCredentialRoutes } from './routes/credentials'
 import { withheldCredentialNamesAt } from './chat/ClaudeProfiles'
 import { createServerCredentials, credentialManagerOptions } from './chat/credentialComposition'
@@ -92,12 +92,18 @@ export function startServer(): void {
   // Credentials (provider-credential-store S1-S3): the one store at
   // <HOME>/.kawai/credentials.json with the SQLite retain collaborator, and
   // the composition every chat consumer reads — per variable, process env <
-  // seed < legacy Settings map (until migrated) < store.
-  const credentials = createServerCredentials({
-    db,
-    seed: config.chatProviderEnv,
-    legacy: () => readLegacyProviderEnv(db),
-  })
+  // seed < store.
+  const credentials = createServerCredentials({ db, seed: config.chatProviderEnv })
+  // The legacy Settings map's one migration (S6, bound table M): after the
+  // startup backup and SQL migrations, file first, then one SQLite commit.
+  // While one is pending, chat restore, new-session probes, and credential
+  // mutations wait for it, so no launch composes and no operator write races
+  // it. With nothing to migrate (no map, or a stamp) there is no gate: the
+  // run would write nothing, and startup keeps its ungated order.
+  let credentialMigration = migrationStatus(db)
+  const credentialsReady = credentialMigration.state === 'pending'
+    ? migrateLegacyProviderEnv({ db, store: credentials.store }).then(state => { credentialMigration = state })
+    : undefined
 
   const sessionManager = new SessionManager(undefined, {
     displayNameExists: (name, excludeSessionId) => db.displayNameExists(name, excludeSessionId),
@@ -194,6 +200,7 @@ export function startServer(): void {
     onNotifications: (sessionId, notifications) =>
       chatConnections.publishNotifications(sessionId, notifications),
     ...credentialManagerOptions(credentials.composition),
+    ...(credentialsReady ? { startupGate: credentialsReady } : {}),
     wireLogs: chatWireLogs,
     workerStore: chatWorkerStore,
     imageStore: chatImageStore,
@@ -442,7 +449,8 @@ export function startServer(): void {
       setAppSetting: (key, value) => db.setAppSetting(key, value),
       secretSourceKeys: () => credentials.composition.secretSourceKeys(),
     }),
-    migration: () => ({ state: 'none', text: null, skipped: [], ignored: [] }),
+    migration: () => credentialMigration,
+    ...(credentialsReady ? { ready: credentialsReady } : {}),
   })
   app.route('/api/chat/profiles', createClaudeProfileRoutes())
   app.route('/api/chat/groups', createTeamGroupRoutes({
