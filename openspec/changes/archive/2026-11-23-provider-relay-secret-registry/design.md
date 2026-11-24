@@ -113,7 +113,7 @@ Scenario → evidence map (the closeout result cites these literally):
 - A1: The result's coverage map cites, for each of the four scenarios of "Registered secret names stay withheld" in this change's delta, at least one existing test by literal title, and every cited test passes in the result's clean full-properties certificate run.
 - A2: Each test cited for "A dropped entry's variables stay withheld" carries a `// @covers: provider-credentials › Registered secret names stay withheld › A dropped entry's variables stay withheld` annotation, and `scripts/__tests__/specCoverageGuard.test.ts` passes.
 - A3: At most five hand-applied mutants of the registry wiring (for example: drop `retainedNamesDb` in `catalogRegisteredNames`, skip the `RegisteredNameRefusal` throw at `ClaudeProfiles.ts:215`, bypass `codexProfiles.ts:76`) each fail at least one cited test; the result lists each mutant and the failing test title.
-- A4: After archive, `openspec/specs/provider-credentials/spec.md` holds exactly this change's one requirement and its four scenarios, and `openspec validate --specs --strict` passes.
+- A4: After archive, `openspec/specs/provider-credentials/spec.md` contains exactly this change's one requirement and its four scenarios. The spec passes targeted strict validation and the aggregate comparison meets V3.
 
 ### Invariants
 - I1: No production source, configuration, or package file changes; test files change only by added `@covers` comment lines.
@@ -127,8 +127,8 @@ Scenario → evidence map (the closeout result cites these literally):
 
 ### Verification
 - V1: The literal-citation preflight (`.kawai/validation.md`) reports zero unresolved citations for the result's map before the final campaign.
-- V2: A clean committed tree passes `bun run check --full-properties` under the pinned Bun 1.4.3, and `bun scripts/verify-result.ts --commit <head> --coverage <map>` exits 0.
-- V3: `openspec validate provider-relay-secret-registry --strict` passes before archive; the archive commit's `openspec validate --specs --strict` passes.
+- V2: A clean committed head passes pinned Bun 1.4.3 `bun run check --full-properties`. Current `verify-result.ts --commit <head> --coverage <map>` passes commit/head/clean/certificate/scope/citations/base-merge facts. Exit 1 is allowed only for listed other-branch conflicts proven pre-existing against that base and disjoint from scope. All task-dependent failures block. No held branch edit, adoption, deletion or resumption.
+- V3: Strict validation of `provider-relay-secret-registry` before archive and of `provider-credentials` on the clean archived head passes. Run `openspec validate --specs --strict` on the candidate and its pinned pre-change baseline with the same CLI. Record both pins, exit statuses, and complete diagnostics. A nonzero aggregate is allowed solely for identical diagnostics reproduced in byte-identical out-of-scope baseline specs. Any new or changed diagnostic fails. Apply the same comparison to the projected landing tree and current destination baseline when they differ from the branch's validation pair.
 
 ### Excluded
 - X1: Secret-source store keys and the reclassification scenario (owned by `provider-credential-store`).
