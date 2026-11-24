@@ -297,7 +297,9 @@ export class ExecutionStore extends ExecutionEffectStore {
 
   /** The change's current incarnation's attempts (changeIncarnation.ts): a restored re-add's history stays, never current. */
   attempts(executionId: string, change: string): AttemptRow[] {
-    return currentAttempts(this.allAttempts(executionId, change), this.change(executionId, change)?.taskId ?? null, this.retiredTasks(executionId, change))
+    const retired = this.retiredTasks(executionId, change)
+    const all = this.allAttempts(executionId, change)
+    return retired.size === 0 ? all : currentAttempts(all, this.change(executionId, change)?.taskId ?? null, retired)
   }
 
   private allAttempts(executionId: string, change: string): AttemptRow[] {
@@ -401,8 +403,9 @@ export class ExecutionStore extends ExecutionEffectStore {
   }
 
   rounds(executionId: string, change: string): RoundRow[] {
-    return currentRounds((this.db.prepare('SELECT * FROM plan_execution_rounds WHERE execution_id = ? AND change = ? ORDER BY number').all(executionId, change) as Array<Record<string, unknown>>)
-      .map(mapRound), this.allAttempts(executionId, change), this.attempts(executionId, change))
+    const rows = (this.db.prepare('SELECT * FROM plan_execution_rounds WHERE execution_id = ? AND change = ? ORDER BY number').all(executionId, change) as Array<Record<string, unknown>>).map(mapRound)
+    if (this.retiredTasks(executionId, change).size === 0) return rows
+    return currentRounds(rows, this.allAttempts(executionId, change), this.attempts(executionId, change))
   }
 
   /** Record the push and open the CI window (D10). */
