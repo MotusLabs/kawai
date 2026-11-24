@@ -123,15 +123,18 @@ function adapt(deps: ApplyWritesDeps, input: ApplyWritesInput, entry: DeltaChang
   if (publication === null) throw new PlanRefusal('state', `The task of change ${entry.change} is missing; nothing was applied.`)
   const taskRevision = publication.revision.revision
   // The fix attempt: an open or passed round is D9's after commit; with no
-  // such round, the newest attempt — dispatched or still owed — is re-issued
-  // here as one owed fix row, after the notice, so a fix follows in every
-  // state (review F3). An owed fix keeps the answers it owed.
+  // such round, one owed fix row is minted here, after the notice, so a fix
+  // follows in every state (review F3) — over the newest attempt, dispatched
+  // or still owed, and also before the first attempt exists (the task is
+  // attached, its implement dispatch still in flight: that dispatch's
+  // transaction then finds a row and yields to the fix). An owed fix keeps
+  // the answers it owed.
   const latest = deps.store.rounds(input.execution.id, entry.change).at(-1) ?? null
   const answeredByRound = latest !== null && (latest.outcome === null || latest.outcome === 'pass')
   const newest = deps.store.attempts(input.execution.id, entry.change).at(-1) ?? null
-  if (!answeredByRound && newest !== null) {
+  if (!answeredByRound) {
     supersedeStanding(deps, taskId, `apply:${input.commandId}`)
-    const answers = newest.kind === 'fix' && owed(deps, changeRow, newest) ? newest.manifest.answers : undefined
+    const answers = newest !== null && newest.kind === 'fix' && owed(deps, changeRow, newest) ? newest.manifest.answers : undefined
     reissue(deps, input, changeRow, 'fix', { id: taskId, revision: taskRevision }, answers)
   }
   return { taskId, taskRevision }
