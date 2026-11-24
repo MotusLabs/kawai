@@ -176,12 +176,12 @@ Every refusal uses the tool-error envelope of the unknown-window refusal
 | T9 | two drills whose `end` differ by 31 s (fake clock) | each page equals `readAt` at its own end |
 | T10 | page 2 read 1 h after page 1 (fake clock, records unchanged) | page equals the read at the cursor's `end`, not at now |
 | T11 | `limit` 0, 201, 1.5 on `messages`; 51 on `toolStreaks` | refused naming 1–200; refused naming 1–50 |
-| T12 | cursor not base64url; `v:2`; an unknown field; missing `after`; cursor plus `metric` | refused as invalid cursor or "a cursor carries its request" (one row each) |
+| T12 | cursor not base64url; `v:2`; an unknown field; missing `after`; cursor plus any first-page argument; an unknown tool argument; a live tool-streak cursor whose end differs from its inner cursor's | refused as invalid cursor, "a cursor carries its request", or an unrecognized key (one row each) |
 | T13 | `report_id` of another team, or unknown | refused `Unknown report: <id>` |
 | T14 | a live cursor used from a session of another team | refused as a team mismatch; no entries |
 | T15 | live `toolStreaks` walk while three later streaks commit | pages and total equal the first page's high-water mark; entries equal the human pager's for the same end and page size |
 | T16 | report `toolStreaks` on a snapshot with total 120, 50 stored | entries are the 50 stored, `total` 120, `reachable` 50, then `next` null |
-| T17 | `end` later than now, or not ISO | refused naming `end` |
+| T17 | `end` later than now, or not an ISO instant (out-of-range fields included) | refused naming `end`; an ISO instant with `Z` or an offset, with or without a fraction, reads at that instant |
 | T18 | the human's `process-tool-drill-page` and report connection after agent walks | unchanged responses (connection tests stay green) |
 
 Unreachable: a report cursor with a `slice` (the cursor schema has no slice
@@ -219,8 +219,9 @@ The first checkpoint is one real path: `team_metrics_drill` registered in
 `teamToolTable`, called through the Claude and Codex registrations against a
 manager-built `MetricsReader`, returning page 1 and page 2 of `mail_share`
 messages at a fixed end, plus the T14 refusal. A mutant that leaves the
-handler unregistered must fail it. Report and tool-streak sources expand
-after that checkpoint.
+handler unregistered, or drops the metrics services from the manager's
+composition, must fail it (`metricsDrillManager.integration.test.ts`).
+Report and tool-streak sources expand after that checkpoint.
 
 ## Affected existing workflows
 

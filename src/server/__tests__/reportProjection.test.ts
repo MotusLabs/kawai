@@ -181,17 +181,88 @@ function tab(f: MetricsToolFixture) {
   return { send, close: () => wire.disconnect(connection) }
 }
 
-/** Every agent read of Table T over the fixture, through both runtimes. */
-async function agentReads(f: MetricsToolFixture, id: string) {
-  for (const { call } of f.runtimes) {
-    for (const detail of ['compact', 'full']) await call('chat-lead', 'team_metrics', { window: '7d', detail })
-    await call('chat-lead', 'process_reports_list', { limit: 10 })
-    for (const detail of ['compact', 'full']) await call('chat-lead', 'process_report_get', { report_id: id, detail })
-    for (const args of [{ window: '7d', metric: 'mail_share', list: 'messages' }, { report_id: id, metric: 'mail_share', list: 'messages' },
-      { window: '7d', metric: 'tool_abandoned_streaks', list: 'toolStreaks' }, { report_id: id, metric: 'tool_abandoned_streaks', list: 'toolStreaks' }]) {
-      const first = await call('chat-lead', DRILL, { ...args, ...(args.list === 'toolStreaks' ? { limit: 50 } : { limit: 200 }) })
-      expect(first.error).toBeNull()
-      await call('chat-lead', DRILL, { cursor: first.value.next })
+type Read = { label: string; session?: string; name: string; args: Record<string, unknown>; refused?: string; walk?: boolean }
+const iso = (ms: number) => new Date(ms).toISOString()
+const cursorOf = (raw: string) => JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
+const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+
+/**
+ * Every read-only call of Table T and its variants (refusals included), on
+ * report `id` and `theirs` (another team's): a walk follows `next` to null,
+ * and every call's outcome is asserted, never discarded.
+ */
+function tableReads(id: string, theirs: string, cursors: { live: string; streaks: string }): Read[] {
+  const live = { window: '7d', metric: 'mail_share', list: 'messages' }
+  const streaks = { window: '7d', end: iso(END), metric: 'tool_abandoned_streaks', list: 'toolStreaks' }
+  const raw = cursorOf(cursors.live), rawStreaks = cursorOf(cursors.streaks)
+  const { after: _after, ...noAfter } = raw
+  return [
+    { label: 'T1 compact', name: 'team_metrics', args: { window: '7d' } },
+    { label: 'T1a full', name: 'team_metrics', args: { window: '7d', detail: 'full' } },
+    { label: 'T4 sliced compact', name: 'team_metrics', args: { window: '7d', slice: { kind: 'group' } } },
+    { label: 'T4 sliced full', name: 'team_metrics', args: { window: '7d', detail: 'full', slice: { kind: 'group' } } },
+    { label: 'unknown window', name: 'team_metrics', args: { window: '30d' }, refused: 'Allowed windows' },
+    { label: 'team-less session', session: 'chat-nobody', name: 'team_metrics', args: { window: '7d' }, refused: 'no team' },
+    { label: 'T2 live messages walk', name: DRILL, args: { ...live, end: iso(END), limit: 200 }, walk: true },
+    { label: 'T3 velocity', name: DRILL, args: { window: '7d', metric: 'velocity', list: 'tasks' }, refused: 'Allowed metrics' },
+    { label: 'T3 toolStreaks on mail_share', name: DRILL, args: { window: '7d', metric: 'mail_share', list: 'toolStreaks' }, refused: 'Metrics with tool streaks' },
+    { label: 'T3 breakdown', name: DRILL, args: { window: '7d', metric: 'mail_share', list: 'breakdown' }, refused: 'Allowed lists' },
+    { label: 'T4 sliced drill walk', name: DRILL, args: { window: '7d', slice: { kind: 'group' }, metric: 'task_mail_per_task', list: 'messages', limit: 200 }, walk: true },
+    { label: 'T4 slice x', name: DRILL, args: { ...live, slice: { kind: 'x' } }, refused: 'Allowed: group' },
+    { label: 'T5 tasks walk', name: DRILL, args: { window: '7d', metric: 'lead_time_p50', list: 'tasks', limit: 200 }, walk: true },
+    { label: 'T9 earlier end', name: DRILL, args: { ...live, end: iso(END - 31_000), limit: 200 } },
+    { label: 'T11 limit 0', name: DRILL, args: { ...live, limit: 0 }, refused: '1–200' },
+    { label: 'T11 limit 201', name: DRILL, args: { ...live, limit: 201 }, refused: '1–200' },
+    { label: 'T11 limit 1.5', name: DRILL, args: { ...live, limit: 1.5 }, refused: '1–200' },
+    { label: 'T11 streak limit 51', name: DRILL, args: { ...streaks, limit: 51 }, refused: '1–50' },
+    { label: 'T12 not base64url', name: DRILL, args: { cursor: '!not-base64url' }, refused: 'Invalid drill cursor' },
+    { label: 'T12 v 2', name: DRILL, args: { cursor: encode({ ...raw, v: 2 }) }, refused: 'Invalid drill cursor' },
+    { label: 'T12 unknown field', name: DRILL, args: { cursor: encode({ ...raw, extra: 1 }) }, refused: 'Invalid drill cursor' },
+    { label: 'T12 missing after', name: DRILL, args: { cursor: encode(noAfter) }, refused: 'Invalid drill cursor' },
+    { label: 'T12 cursor and metric', name: DRILL, args: { cursor: cursors.live, metric: 'mail_share' }, refused: 'A cursor carries its request' },
+    { label: 'T12 cursor and extra key', name: DRILL, args: { cursor: cursors.live, extra: true }, refused: 'Unrecognized key' },
+    { label: 'T12a streak ends differ', name: DRILL, args: { cursor: encode({ ...rawStreaks, src: { ...rawStreaks.src, end: iso(END - 1000) } }) }, refused: 'Invalid drill cursor' },
+    { label: 'T13 their report get', name: 'process_report_get', args: { report_id: theirs }, refused: `Unknown report: ${theirs}` },
+    { label: 'T13 their report full', name: 'process_report_get', args: { report_id: theirs, detail: 'full' }, refused: `Unknown report: ${theirs}` },
+    { label: 'T13 their report drill', name: DRILL, args: { report_id: theirs, metric: 'mail_share', list: 'messages' }, refused: `Unknown report: ${theirs}` },
+    { label: 'T13 unknown report', name: DRILL, args: { report_id: 'report-missing', metric: 'mail_share', list: 'messages' }, refused: 'Unknown report: report-missing' },
+    { label: 'T14 foreign team cursor', session: 'chat-other', name: DRILL, args: { cursor: cursors.live }, refused: 'team mismatch' },
+    { label: 'T15 live streaks walk', name: DRILL, args: { ...streaks, limit: 50 }, walk: true },
+    { label: 'T16 report streaks walk', name: DRILL, args: { report_id: id, metric: 'tool_abandoned_streaks', list: 'toolStreaks', limit: 20 }, walk: true },
+    { label: 'report messages walk', name: DRILL, args: { report_id: id, metric: 'mail_share', list: 'messages', limit: 200 }, walk: true },
+    { label: 'T17 future end', name: DRILL, args: { ...live, end: iso(END + 1) }, refused: 'end must be an ISO instant' },
+    { label: 'T17 not ISO', name: DRILL, args: { ...live, end: 'yesterday' }, refused: 'end must be an ISO instant' },
+    { label: 'T6 list', name: 'process_reports_list', args: { limit: 10 } },
+    { label: 'T7 get compact', name: 'process_report_get', args: { report_id: id } },
+    { label: 'T7 get full', name: 'process_report_get', args: { report_id: id, detail: 'full' } },
+  ]
+}
+
+/**
+ * Runs every Table T read through both runtimes, asserting each call's
+ * outcome; `afterEach(label)` runs after every call (each page of a walk).
+ */
+async function agentReads(f: MetricsToolFixture, id: string, afterEach: (label: string) => void = () => {}) {
+  const theirs = f.service.list(OTHER).reports[0]!.id
+  for (const { runtime, call } of f.runtimes) {
+    const live = await call('chat-lead', DRILL, { window: '7d', end: iso(END), metric: 'mail_share', list: 'messages', limit: 10 })
+    const streaks = await call('chat-lead', DRILL, { window: '7d', end: iso(END), metric: 'tool_abandoned_streaks', list: 'toolStreaks', limit: 10 })
+    afterEach(`${runtime} cursors`)
+    for (const read of tableReads(id, theirs, { live: live.value.next, streaks: streaks.value.next })) {
+      const label = `${runtime} ${read.label}`
+      let outcome = await call(read.session ?? 'chat-lead', read.name, read.args)
+      afterEach(label)
+      if (read.refused) {
+        expect([outcome.value, outcome.error?.includes(read.refused)], label).toEqual([null, true])
+        continue
+      }
+      expect(outcome.error, label).toBeNull()
+      for (let pages = 1; read.walk && outcome.value.next !== null; pages++) {
+        if (pages > 20) throw new Error(`${label}: the walk did not end`)
+        outcome = await call('chat-lead', DRILL, { cursor: outcome.value.next })
+        afterEach(`${label} page ${pages + 1}`)
+        expect(outcome.error, `${label} page ${pages + 1}`).toBeNull()
+      }
     }
   }
 }
@@ -209,8 +280,21 @@ test('T18: the human tool pager, report detail, and metrics snapshot answer iden
       { type: 'process-report-open', teamPath: '/repo', reportId: id! },
       { type: 'process-metrics-open', teamPath: '/repo', window: '7d', slice: null },
     ]
+    // An agent's compact read first, in the same cache period as the tab's.
+    for (const { runtime, call } of f.runtimes) {
+      const compact = await call('chat-lead', 'team_metrics', { window: '7d' })
+      expect(compact.value.projectionTruncated, runtime).toBe(true)
+    }
     const before = []
     for (const request of requests) before.push(await t.send(request))
+    // The tab's snapshot is whole: every metric, drill, breakdown, and slice row of the read, unmarked.
+    const whole = roundTrip(readMetrics(f.seed.db, TEAM, '7d', null, END))
+    expect(before[2].type).toBe('process-metrics-snapshot')
+    expect(before[2].metrics.metrics).toEqual(whole.metrics)
+    expect(before[2].metrics.projectionTruncated).toBeUndefined()
+    const mail = before[2].metrics.metrics.find((m: { id: string }) => m.id === 'mail_share')
+    expect(mail.drill.messages).toHaveLength(MAIL_SHARE_MESSAGES)
+    expect(mail.drill.messagesTotal).toBeUndefined()
     expect(before[1].report.snapshot).toEqual(roundTrip(f.service.report(TEAM, id!)!.snapshot))
     expect(messageRefs(before[1].report.snapshot)).toBe(6998)
     await agentReads(f, id!)
@@ -223,14 +307,25 @@ test('T18: the human tool pager, report detail, and metrics snapshot answer iden
 })
 
 // @covers: process-reports › Agents read report snapshots compactly › Stored snapshot unchanged
-test('P4: Table T agent reads leave every stored report and observation row byte-identical; a submission adds a whole report and changes no existing row', async () => {
+test('P4: every read-only Table T call and refusal leaves every stored report and observation row byte-identical and the cached read unchanged; a submission adds a whole report and changes no existing row', async () => {
   const f = make()
   try {
     big(f)
     const [id] = reports(f)
     const before = f.rows()
-    await agentReads(f, id!)
-    expect(f.rows()).toBe(before)
+    // The read the tab and agents share, cached at END: no agent read may change it.
+    const cached = f.reader.read(TEAM, '7d', null)
+    const cachedBefore = structuredClone(cached)
+    let calls = 0
+    await agentReads(f, id!, label => {
+      calls++
+      expect(f.rows() === before, `${label}: stored rows unchanged`).toBe(true)
+      expect(cached, `${label}: cached read unchanged`).toEqual(cachedBefore)
+    })
+    // Per runtime: the cursor setup, 38 reads, and the later pages of the six
+    // walks (T2 12, sliced 4, T5 1, T15 2, T16 2, report messages 12).
+    expect(calls).toBe(2 * (1 + 38 + 33))
+    expect(f.reader.read(TEAM, '7d', null)).toEqual(cachedBefore)
     const prior = JSON.parse(before) as unknown[][]
     const submitted = await f.runtimes[0]!.call('chat-lead', 'process_report_submit', { window: '7d', summary: 'Weekly.' })
     const after = JSON.parse(f.rows()) as unknown[][]

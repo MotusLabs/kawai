@@ -3,17 +3,18 @@
 // 0–3,000 unique ids (limits 1–200) from a live source at a fixed fake clock
 // and from a stored report, and over 0–300 tool streaks (limits 1–50),
 // following `next` through the production `team_metrics_drill` handler of
-// `teamToolTable` returns the sorted list once and every page states the
+// `teamToolTable` returns the generated rows whole, once, in order (ids in
+// code-unit order; streaks newest closed first), and every page states the
 // same total. P2, the compact form is a projection: over `metricsSeed`
 // inputs, compact keeps every value, `n`, baseline, and flag, each kept list
 // is a prefix of the full one with `<key>Total` its full length, the input is
-// unchanged, and the drill pages' union is the full list in id order.
+// unchanged (the paged reader's cached read included), and the drill pages'
+// union is the full list's entries, whole, in id order.
 import { expect, test } from 'bun:test'
 import type { MetricSlice, MetricValue, MetricWindow, ProcessMetrics } from '../../shared/processMetrics'
 import { MetricsReader, readMetrics } from '../metrics/computeMetrics'
 import { readDrillPage } from '../metrics/metricsDrill'
 import { compactMetrics } from '../metrics/metricsProjection'
-import { closedOrder } from '../metrics/toolMetrics'
 import { propertyCases } from './helpers/propertyCases'
 import { END, Seed, TEAM } from './metricsSeed'
 import { useMetricsTools, type MetricsToolFixture } from './metricsDrillHarness'
@@ -59,14 +60,18 @@ test('P1: following next from the first page returns every live, report, and too
     try {
       if (kind === 'toolStreaks') {
         const n = Math.floor(rand() * 301), limit = 1 + Math.floor(rand() * 50)
-        f.seed.db.transaction(() => { for (let i = 0; i < n; i++) f.streak(i, END - (1 + Math.floor(rand() * (n / 2 + 1))) * 60_000) })()
-        const expected = f.reader.toolDrill(TEAM, '7d', null, 50, null).total
+        const closed = Array.from({ length: n }, () => END - (1 + Math.floor(rand() * (n / 2 + 1))) * 60_000)
+        f.seed.db.transaction(() => { closed.forEach((at, i) => f.streak(i, at)) })()
+        // The generated cohort, independently: each streak as the harness wrote
+        // it, its fact id the observation's seq, newest closed first (ties: higher fact id first).
+        const seqs = new Map((f.seed.db.prepare('SELECT seq, source_key FROM process_observations').all() as Array<{ seq: number; source_key: string }>)
+          .map(row => [row.source_key, row.seq]))
+        const cohort = closed.map((at, i) => ({ factId: seqs.get(`streak-${TEAM}-${i}`)!, tool: 'Bash', length: i % 7 + 1, sessionId: `session-${i}`,
+          turnId: `turn-${i}`, firstCallId: `call-${i}`, firstAt: new Date(at - 500).toISOString(), closedAt: new Date(at).toISOString() }))
+          .sort((a, b) => (b.closedAt < a.closedAt ? -1 : b.closedAt > a.closedAt ? 1 : b.factId - a.factId))
         const { entries, totals } = await walk(f, { window: '7d', end: new Date(END).toISOString(), metric: 'tool_abandoned_streaks', list: 'toolStreaks', limit }, n / limit + 2)
-        const facts = entries as Array<{ factId: number; closedAt: string }>
-        expect(expected, `case ${c}`).toBe(n)
         expect(totals, `case ${c}`).toEqual([n])
-        expect(facts.map(e => e.factId), `case ${c}`).toEqual([...facts].sort(closedOrder as never).map(e => e.factId))
-        expect(new Set(facts.map(e => e.factId)).size, `case ${c}`).toBe(n)
+        expect(entries, `case ${c}`).toEqual(cohort)
         continue
       }
       const list = rand() < 0.5 ? 'tasks' : 'messages'
@@ -86,7 +91,8 @@ test('P1: following next from the first page returns every live, report, and too
       }
       const { entries, totals } = await walk(f, { ...source, metric, list, limit }, n / limit + 2)
       expect(totals, `case ${c}`).toEqual([n])
-      expect((entries as Array<{ id: string }>).map(e => e.id), `case ${c}`).toEqual([...ids].sort(codeUnit))
+      // The generated rows, whole: a task's title is its id, a message is its own thread.
+      expect(entries, `case ${c}`).toEqual([...ids].sort(codeUnit).map(id => (list === 'tasks' ? { id, title: id } : { id, threadId: id })))
     } finally { f.close() }
   }
 }, 600_000)
@@ -152,21 +158,27 @@ test('P2: compact keeps every value, n, baseline, and flag, keeps list prefixes 
         checkList(kept as never, metric as never, 'slices', label)
         if (metric.drill.toolStreaks) checkList(kept.drill.toolStreaks as never, metric.drill.toolStreaks as never, 'entries', label)
       })
-      // The drill pages' union is each full list in id order.
+      // The drill pages' union is each full list, whole entries, in id order;
+      // the cached read being paged and its compact projection change nothing in it.
       const reader = new MetricsReader(s.db, () => END)
+      const paged = reader.readAt(TEAM, window, slice, END)
+      const pagedBefore = structuredClone(paged)
+      expect(compactMetrics(paged).metrics.map(numerics), `case ${c}`).toEqual(full.metrics.map(numerics))
       for (const metric of full.metrics) {
         for (const list of ['tasks', 'messages'] as const) {
-          const seen: string[] = []
+          const seen: unknown[] = []
           let page = readDrillPage({ reader }, TEAM, { window, ...(slice ? { slice } : {}), end: new Date(END).toISOString(), metric: metric.id, list, limit: 200 })
           for (;;) {
-            seen.push(...page.entries.map(e => (e as { id: string }).id))
+            seen.push(...page.entries)
             if (!page.next) break
             page = readDrillPage({ reader }, TEAM, { cursor: page.next })
           }
-          expect(seen, `case ${c} ${metric.id} ${list}`).toEqual(metric.drill[list].map(e => e.id).sort(codeUnit))
+          expect(seen, `case ${c} ${metric.id} ${list}`).toEqual([...metric.drill[list]].sort((a, b) => codeUnit(a.id, b.id)))
         }
       }
       expect(full, `case ${c} input unchanged after paging`).toEqual(before)
+      expect(paged, `case ${c} paged cache unchanged`).toEqual(pagedBefore)
+      expect(reader.readAt(TEAM, window, slice, END), `case ${c} cache still serves the same read`).toEqual(pagedBefore)
     } finally { s.db.close() }
   }
 }, 600_000)

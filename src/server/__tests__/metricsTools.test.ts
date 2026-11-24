@@ -160,10 +160,24 @@ test('T9a: two team_metrics reads 1 s apart share one periodEnd; a fresh report 
       const second = await call('chat-lead', 'team_metrics', { window: '7d' })
       expect(second.value.periodEnd, runtime).toBe(first.value.periodEnd)
       expect(first.value.periodEnd).toBe(new Date(f.clock.now - 1000).toISOString())
+      // Prime the exact-end cache at now too, then change the records
+      // without moving the clock: both caches now hold stale values for now.
+      const primed = await call('chat-lead', 'team_metrics_drill', { window: '7d', end: new Date(f.clock.now).toISOString(), metric: 'mail_share', list: 'messages', limit: 1 })
+      const total = primed.value.total
+      f.seed.message({ id: `msg-fresh-${runtime}`, createdHoursAgo: 1 })
+      const cachedAgain = await call('chat-lead', 'team_metrics_drill', { window: '7d', end: new Date(f.clock.now).toISOString(), metric: 'mail_share', list: 'messages', limit: 1 })
+      expect(cachedAgain.value.total, runtime).toBe(total)
+      expect((await call('chat-lead', 'team_metrics', { window: '7d' })).value.metrics.find((m: MetricValue) => m.id === 'mail_share').drill.messagesTotal).toBe(total)
       const report = await call('chat-lead', 'process_report_submit', { window: '7d', summary: 'Weekly.' })
       expect(report.error, runtime).toBeNull()
       expect(report.value.snapshot.periodEnd).toBe(new Date(f.clock.now).toISOString())
       expect(report.value.periodEnd).toBe(new Date(f.clock.now).toISOString())
+      // The stored snapshot is the read at now over the changed records.
+      const stored = f.service.store.report(TEAM, report.value.id)!.snapshot
+      const reference = readMetrics(f.seed.db, TEAM, '7d', null, f.clock.now)
+      expect(roundTrip(stored.metrics), runtime).toEqual(roundTrip(reference.metrics))
+      expect(stored.metrics.find(m => m.id === 'mail_share')!.drill.messages.map(m => m.id)).toContain(`msg-fresh-${runtime}`)
+      expect(stored.metrics.find(m => m.id === 'mail_share')!.drill.messages).toHaveLength(total + 1)
     }
   } finally { f.close() }
 })
