@@ -54,7 +54,7 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
 
 const execution = (baseCommit: string) => ({ id: 'exec-1', planId: 'plan-1', landingMode: 'direct', baseBranch: 'master', baseCommit }) as unknown as ExecutionRow
 const fakeStore = (row: ExecutionRow, landings: Array<{ executionId: string; change: string; mergeSha: string }> = []) =>
-  ({ execution: () => row, doneProvisions: () => [], landings: () => landings }) as unknown as ExecutionStore
+  ({ execution: () => row, provisionedBranches: () => new Set(), landings: () => landings }) as unknown as ExecutionStore
 const provisionEffect = (change: string, base: string, dependsOn: string[] = []) => ({
   id: `effect-${change}`, executionId: 'exec-1', change, roundId: null, kind: 'provision', effectKey: `exec-1:${change}:provision:1:0`,
   command: { repo: main, path: path.join(main, '.worktrees', change), branch: change, base, baseBranch: 'master', planId: 'plan-1', dependsOn },

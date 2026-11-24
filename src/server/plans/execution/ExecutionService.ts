@@ -201,7 +201,10 @@ export class ExecutionService {
     })
     const landings = this.deps.store.landings(planId)
     const landed = new Set(landings.map(landing => landing.change))
-    const probeInput = { main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }
+    const probeInput = {
+      main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names,
+      provisioned: this.deps.store.provisionedBranches(planId),
+    }
     const landing = revisionRow?.content.landing ?? { mode: 'direct' as const }
     // An unregistered mode is refused by landing-mode-supported; direct's checks still report the repository.
     const mechanism = (this.deps.mechanisms ?? DIRECT_MECHANISMS).get(landing.mode) ?? directMechanism
