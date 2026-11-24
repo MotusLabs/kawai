@@ -39,8 +39,8 @@ function createStorage(): Storage {
 beforeEach(() => {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input)
-    const data = url.includes('chat-provider-env')
-      ? { env: {}, redacted: [], source: 'none' }
+    const data = url.includes('/api/settings/credentials')
+      ? { store: { ok: true }, rows: [], migration: { state: 'none', text: null, skipped: [], ignored: [] } }
       : url.includes('history-max-age-hours') ? { hours: 24 } : { enabled: true }
     return Response.json(data)
   }) as typeof fetch
@@ -93,8 +93,8 @@ describe('SettingsModal', () => {
       if (url === '/api/settings/terminal-colors') {
         return terminalColorsResponse
       }
-      const payload = url.includes('chat-provider-env')
-        ? { env: {}, redacted: [], source: 'none' }
+      const payload = url.includes('/api/settings/credentials')
+        ? { store: { ok: true }, rows: [], migration: { state: 'none', text: null, skipped: [], ignored: [] } }
         : url.includes('history-max-age-hours') ? { hours: 24 } : { enabled: true }
       return new Response(JSON.stringify(payload), {
         status: 200,
@@ -149,8 +149,8 @@ describe('SettingsModal', () => {
         method,
         body: typeof init?.body === 'string' ? init.body : null,
       })
-      const payload = url.includes('chat-provider-env')
-        ? { env: {}, redacted: [], source: 'none' }
+      const payload = url.includes('/api/settings/credentials')
+        ? { store: { ok: true }, rows: [], migration: { state: 'none', text: null, skipped: [], ignored: [] } }
         : url.includes('history-max-age-hours') ? { hours: 24 } : { enabled: true }
       return new Response(JSON.stringify(payload), {
         status: 200,

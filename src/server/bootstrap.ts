@@ -46,7 +46,9 @@ import { createArchivedChatRoutes } from './routes/archivedChats'
 import { createChatSearchRoutes } from './routes/chatSearch'
 import { createPlanWorkspaceAssetRoutes } from './routes/planWorkspaceAsset'
 import { createPasteFileRoutes } from './routes/pasteFile'
-import { createChatProviderEnvStore, loadOverride } from './routes/chatProviderEnv'
+import { readLegacyProviderEnv } from './chat/credentialMigration'
+import { mountCredentialRoutes } from './routes/credentials'
+import { withheldCredentialNamesAt } from './chat/ClaudeProfiles'
 import { createServerCredentials, credentialManagerOptions } from './chat/credentialComposition'
 import { createSettingsRoutes, loadStoredSettings } from './routes/settings'
 import { createSessionPreviewRoutes } from './routes/sessionPreview'
@@ -87,9 +89,6 @@ export function startServer(): void {
   // The chat manager reads this live at each question (question-auto-answer D5).
   let runtimeQuestionAutoAnswerMinutes = storedSettings.questionAutoAnswerMinutes
 
-  // Chat provider environment: the Settings override wins over
-  // AGENTBOARD_CHAT_ENV; read live by the chat manager at each SDK spawn.
-  const chatProviderEnv = createChatProviderEnvStore(db, config.chatProviderEnv)
   // Credentials (provider-credential-store S1-S3): the one store at
   // <HOME>/.kawai/credentials.json with the SQLite retain collaborator, and
   // the composition every chat consumer reads — per variable, process env <
@@ -97,7 +96,7 @@ export function startServer(): void {
   const credentials = createServerCredentials({
     db,
     seed: config.chatProviderEnv,
-    legacy: () => loadOverride(db),
+    legacy: () => readLegacyProviderEnv(db),
   })
 
   const sessionManager = new SessionManager(undefined, {
@@ -433,7 +432,18 @@ export function startServer(): void {
     },
   }))
 
-  app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
+  // The write-only credential routes (provider-credential-store S5); the
+  // retired /api/settings/chat-provider-env is no longer mounted.
+  mountCredentialRoutes(app, {
+    store: credentials.store,
+    composition: credentials.composition,
+    registered: () => withheldCredentialNamesAt({}, {
+      getAppSetting: key => db.getAppSetting(key),
+      setAppSetting: (key, value) => db.setAppSetting(key, value),
+      secretSourceKeys: () => credentials.composition.secretSourceKeys(),
+    }),
+    migration: () => ({ state: 'none', text: null, skipped: [], ignored: [] }),
+  })
   app.route('/api/chat/profiles', createClaudeProfileRoutes())
   app.route('/api/chat/groups', createTeamGroupRoutes({
     groupProfileCounts: (teamId, groupId) => chatSessionManager.groupProfileCounts(teamId, groupId),

@@ -21,6 +21,7 @@ function idleQueryFactory(): ChatQueryFactory {
     let close: (() => void) | null = null
     const stream = async function* (): AsyncGenerator<SDKMessage, void> {
       await new Promise<void>((resolve) => { close = resolve })
+      yield* []
     }
     return Object.assign(stream(), {
       interrupt: () => Promise.resolve(undefined),

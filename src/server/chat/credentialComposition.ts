@@ -65,7 +65,7 @@ export class CredentialComposition {
 
   /** The per-variable overrides above the process env: seed < legacy < store. */
   overrides(): ChatProviderEnv {
-    const merged: ChatProviderEnv = { ...this.options.seed, ...(this.options.legacy?.() ?? {}) }
+    const merged: ChatProviderEnv = { ...this.options.seed, ...this.options.legacy?.() }
     const { status, entries } = this.options.store.list()
     if (!status.ok) return merged
     for (const entry of entries) {
@@ -106,7 +106,7 @@ export class CredentialComposition {
     const store: CredentialStoreState = status.ok || status.reason === 'missing'
       ? { ok: true }
       : { ok: false, reason: status.reason, text: storeReasonText(status.reason) }
-    return { store, rows: [...rows.values()].sort((a, b) => a.name.localeCompare(b.name)), migration }
+    return { store, rows: [...rows.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)), migration }
   }
 }
 
