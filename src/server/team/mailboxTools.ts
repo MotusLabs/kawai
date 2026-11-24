@@ -120,7 +120,7 @@ export interface MailboxServerServices {
   impact?: ImpactService
   releases?: MemberRelease
   management?: MailboxManagement
-  /** The read-only `team_metrics` tool (team-process-metrics D5). */
+  /** The read-only `team_metrics` and `team_metrics_drill` tools (team-process-metrics D5, bounded-metrics-reads D2). */
   metrics?: MetricsToolDeps
   /** Process report submit/list/get/link (team-process-metrics D6); never decide or unlink. */
   reports?: ReportToolDeps
@@ -169,8 +169,9 @@ export function teamToolTable(
     ...(validation ? validationHandlers(validation, sessionId) : {}),
     // Decisions: ask and record only — the owner answers and overrides (D16).
     ...(decisions ? decisionHandlers(decisions, sessionId) : {}),
-    // Metrics: read-only, bound to the caller's team (D5).
-    ...(metrics ? metricsHandlers(metrics, sessionId) : {}),
+    // Metrics: read-only, bound to the caller's team (D5); drills read the
+    // team's stored reports through the report service's store.
+    ...(metrics ? metricsHandlers(metrics, sessionId, reports ? { report: (teamId, id) => reports.service.store.report(teamId, id) } : undefined) : {}),
     // Reports: submit, read, and link only — no decide, apply, or unlink tool (D6).
     ...(reports ? reportHandlers(reports, sessionId) : {}),
     // Checkpoints: the Pausing holder records where work stands; Kawai pushes (revision-control D7).

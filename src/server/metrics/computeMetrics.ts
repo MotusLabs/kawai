@@ -6,7 +6,9 @@
 // or `notSliceable`. Identical inputs give identical results. `MetricsReader`
 // caches a read per (team, window, slice) for 30 s so the tab and a tool call
 // in the same moment share one computation; a `fresh` read (the tab's
-// Refresh) recomputes and replaces the cached entry.
+// Refresh, a report submission) recomputes and replaces the cached entry.
+// `readAt` caches a read at a fixed window end per (team, window, slice,
+// end) for 30 s, so the pages of one agent drill walk share a computation.
 import type { Database } from 'bun:sqlite'
 import {
   unknownToolMeasurement, type ToolMeasurementStatus,
@@ -90,6 +92,8 @@ export function readMetrics(db: Database, teamId: string, window: MetricWindow, 
 
 export class MetricsReader {
   private readonly cache = new Map<string, { at: number; metrics: ProcessMetrics }>()
+  /** Reads at a fixed window end (bounded-metrics-reads D3), keyed by that end. */
+  private readonly atEnd = new Map<string, { at: number; metrics: ProcessMetrics }>()
 
   constructor(
     private readonly db: Database,
@@ -98,8 +102,32 @@ export class MetricsReader {
     private readonly toolStatus:()=>ToolMeasurementStatus=unknownToolMeasurement,
   ) {}
 
-  toolDrill(teamId:string,window:MetricWindow,slice:MetricSlice|null,pageSize:number,cursor:string|null) {
-    return readToolDrill(this.db,teamId,window,slice,pageSize,cursor,this.now())
+  /** The reader's clock, so callers bound an `end` by the same now. */
+  clock(): number {
+    return this.now()
+  }
+
+  toolDrill(teamId:string,window:MetricWindow,slice:MetricSlice|null,pageSize:number,cursor:string|null,end=this.now()) {
+    return readToolDrill(this.db,teamId,window,slice,pageSize,cursor,end)
+  }
+
+  private evict(at: number) {
+    for (const cache of [this.cache, this.atEnd]) for (const [k, v] of cache) if (at - v.at >= METRICS_CACHE_MS) cache.delete(k)
+  }
+
+  private compute(teamId: string, window: MetricWindow, slice: MetricSlice | null, end: number, at: number): ProcessMetrics {
+    const metrics = readMetrics(this.db, teamId, window, slice, end, this.resolveProvider)
+    this.atEnd.set(JSON.stringify([teamId, window, slice, end]), { at, metrics })
+    return metrics
+  }
+
+  /** The metrics of the window ending at `end`, shared for 30 s by every read at that end. */
+  readAt(teamId: string, window: MetricWindow, slice: MetricSlice | null, end: number): ProcessMetrics {
+    const at = this.now()
+    const hit = this.atEnd.get(JSON.stringify([teamId, window, slice, end]))
+    if (hit && at - hit.at < METRICS_CACHE_MS) return {...hit.metrics,toolMeasurement:this.toolStatus()}
+    this.evict(at)
+    return {...this.compute(teamId, window, slice, end, at),toolMeasurement:this.toolStatus()}
   }
 
   read(teamId: string, window: MetricWindow, slice: MetricSlice | null, options: { fresh?: boolean } = {}): ProcessMetrics {
@@ -107,8 +135,10 @@ export class MetricsReader {
     const at = this.now()
     const hit = this.cache.get(key)
     if (hit && !options.fresh && at - hit.at < METRICS_CACHE_MS) return {...hit.metrics,toolMeasurement:this.toolStatus()}
-    for (const [k, v] of this.cache) if (at - v.at >= METRICS_CACHE_MS) this.cache.delete(k)
-    const metrics = readMetrics(this.db, teamId, window, slice, at, this.resolveProvider)
+    this.evict(at)
+    // A miss reads at now through the end cache; `fresh` bypasses both caches.
+    const cached = options.fresh ? undefined : this.atEnd.get(JSON.stringify([teamId, window, slice, at]))
+    const metrics = cached && at - cached.at < METRICS_CACHE_MS ? cached.metrics : this.compute(teamId, window, slice, at, at)
     this.cache.set(key, { at, metrics })
     return {...metrics,toolMeasurement:this.toolStatus()}
   }
