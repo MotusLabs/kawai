@@ -164,6 +164,11 @@ describe('table C — per-variable composition', () => {
     expect(other.gate).toBe('seed-b')
     expect(other.claudeDefault).toBe('seed-b')
     expect(other.claudeNamed).toBe('seed-b')
+    // Codex (D5): neither the seed nor the store supplies or overrides its variables.
+    expect(observed.codex).toBeUndefined()
+    expect(other.codex).toBeUndefined()
+    process.env[VAR] = 'ambient-a'
+    expect(observe({ [VAR]: 'seed-a' }, VAR).observed.codex).toBe('ambient-a')
   })
 
   // @covers: provider-credentials › Imported credentials live in the server-owned store › Corrupt store degrades visibly

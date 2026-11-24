@@ -131,9 +131,13 @@ table below, which gets the blind reading before code.
 ### Composition table C (per variable; observable at gate and launch)
 
 `*` = don't care. "Registered" = in the registry union (catalog, store
-secret-source key, retained).
+secret-source key, retained). The delivery column is the **Claude launch**
+delivery. A Codex launch keeps D5's filtered process environment (task r2,
+decision-8391d617): the process env minus the registered names, so C1 passes
+through, C5–C7 are withheld, and the seed and the store never supply or
+override a Codex variable (C2–C4, C9).
 
-| Id | Process env | Seed | Store entry | Registered | Resolution (gate, injection, pulls) | Delivery (launch) |
+| Id | Process env | Seed | Store entry | Registered | Resolution (gate, injection, pulls) | Delivery (Claude launch) |
 | --- | --- | --- | --- | --- | --- | --- |
 | C1 | set | absent | absent | no | process value | process value |
 | C2 | * | set | absent | no | seed value | seed value |
@@ -230,10 +234,12 @@ the choice before code):
   changes no byte of the store and no `app_settings` row. Same generator,
   100 cases.
 - **PC1 — Composition equals the table.** For seeded (process env, seed,
-  store, registry) tuples, the gate's resolution and each launch branch's
-  delivered env equal table C's projection. The launch is checked by the
-  composed structure the real `resolveClaudeProfile`/`codexSpawnEnv`
-  produce, never a re-implementation. 200 cases.
+  store, registry) tuples, the gate's resolution and the Claude launch's
+  delivered env equal table C's projection, and the Codex launch equals the
+  process env minus the registered names (C8 and C10 under both launch
+  projections). The launches are checked by the composed structures the real
+  `resolveClaudeProfile`/`codexSpawnEnv` produce, never a re-implementation.
+  200 cases.
 - **P1s — Store secrecy (umbrella P1, store paths).** No store value in any
   HTTP body, log line, wire-log frame, SQLite row, or flag settings layer,
   including the migration write and the editor's failure log path. 200
@@ -284,7 +290,7 @@ added. Every scenario has both where the core already covers it.
 ## Implementation contract
 
 ### Acceptance
-- A1: In the composed server, every row of table C holds at the creation gate and at Claude and Codex launches, shown by PC1 and by PW2/PW3 through `ChatSessionManager` with each row's observable delivered or absent variable.
+- A1: In the composed server, every row of table C holds at the creation gate and for Claude launch delivery, shown by PC1 and PW2/PW3 through `ChatSessionManager` with the observed delivered or withheld variable. Codex launches follow D5's filtered process environment. Verify allowed unregistered process passthrough (C1), registered-name withholding (C5–C7), and seed and store entries unable to supply or override Codex variables (C2–C4/C9). PC1 checks C8 and C10 under both launch projections.
 - A2: `GET /api/settings/credentials` and every other read surface return name, kind, state, source, and marks only for any store contents (U1, P2); the retired `/api/settings/chat-provider-env` answers 404 (U7); mutations return the typed applied/durable outcome with fixed safe text (U2-U6).
 - A3: The startup migration behaves as the binding M table (after the blind reading) for every row, and PM1/PM2 hold; PW4 shows it on a disposable database copy through the real bootstrap.
 - A4: A secret-source store key is absent from every launch under its own name and stays withheld after reclassification to launch-env while registered ("Reclassification does not end withholding"), through the real registry collaborator (PW3).
@@ -333,7 +339,7 @@ added. Every scenario has both where the core already covers it.
 - V1: Table C, U, and the binding M table are committed verbatim as table-driven tests next to the code; PM1, PM2, PC1, P1s, P2 run as seeded properties through `propertyCases`.
 - V2: PW1-PW5 run through the production composition, and each named wiring mutant fails its test; the result lists each mutant with its failing title.
 - V3: Preserved workflows still pass: `src/server/__tests__/credentialStore*.test.ts`, the registry tests, the chat provider settings client tests (rewritten only where the retired GET is asserted), and the existing auth-gate and launch tests.
-- V4: The literal-citation preflight finds zero unresolved citations; the clean committed head passes `bun run check --full-properties` (pinned Bun 1.4.3); `bun scripts/verify-result.ts` exits 0.
+- V4: The literal-citation preflight finds zero unresolved citations. `bun run check --full-properties` passes on the clean committed head using the Bun version declared by `.bun-version` at that commit. `bun scripts/verify-result.ts` exits 0.
 - V5: A disposable-copy rehearsal — a copied database with a seeded map, a disposable HOME, a spare port, never the live data directory — records the PW4 outcome; e2e, if any, runs only through the CI fixture path.
 
 ### Excluded

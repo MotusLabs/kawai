@@ -77,13 +77,12 @@ secret source and launch-env entry SHALL be an explicit act.
 - **THEN** its text is a fixed safe reason naming the path class and reason code, carrying no value, prefix, length, parser message, or cause chain, and an invalid raw input is never echoed back as a name
 
 ### Requirement: Credential resolution composes per variable
-The effective credential source SHALL compose per variable, last writer
-winning: process env, then the chat-env seed, then the store — a store
-entry overrides the lower source, a blank exports empty, an unset key
-passes through. Injection, the auth gate, and provider pulls SHALL read
-this composition. A launch SHALL receive the delivery composition:
-launch-env entries as configured, minus every registered secret name — a
-secret source never reaches a launch under its own name.
+Credentials SHALL compose per variable, last writer winning: process env,
+then the chat-env seed, then the store; a blank exports empty, an unset key
+passes through. The auth gate, injection, and provider pulls SHALL read it.
+A Claude launch SHALL receive it minus every registered name; a Codex launch
+keeps its filtered process env minus those names. A secret source never
+reaches a launch under its own name.
 
 #### Scenario: Store overrides the ambient environment
 - **WHEN** the process environment holds a variable and the store holds the same variable
