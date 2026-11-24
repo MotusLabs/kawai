@@ -4,23 +4,23 @@
 The pre-push hook SHALL allow pushing a commit only when a full check passed for that commit's tree on the current platform and architecture, under the current Bun version or the Bun version pinned by the commit's own `.bun-version`. When no such pass exists and that pin differs from the current Bun, it SHALL refuse without running a check. Otherwise, when the working tree is clean at that commit, it SHALL run the full check; else it SHALL refuse, naming the commit and how to check it.
 
 #### Scenario: Recorded pass
-- **WHEN** the pushed commit's tree has a recorded full pass
-- **THEN** the push proceeds without running checks
+- **WHEN** the pushed commit's tree has a recorded full pass under the current Bun version or the commit's own pin
+- **THEN** the push proceeds without running checks, naming the pass's Bun version
 
 #### Scenario: Unchecked tip with a clean tree
-- **WHEN** the pushed commit is HEAD, the working tree is clean, and no pass is recorded
+- **WHEN** the pushed commit is HEAD, the working tree is clean, no pass is recorded, and the commit's own pin is absent, not a usable version, or the current Bun version
 - **THEN** the hook runs the full check and allows the push only if it passes
 
 #### Scenario: Unchecked commit that is not checked out
 - **WHEN** the pushed commit is not the clean working tree and has no recorded pass
-- **THEN** the push is refused with a message naming the commit and `bun run check` on a checkout of it
+- **THEN** the push is refused with a message naming the commit and `bun run check` on a checkout of it, under the commit's pin when it differs from the current Bun
 
 #### Scenario: Multiple pushed refs
 - **WHEN** stdin names two unchecked commits and only the first matches the clean working tree
 - **THEN** the hook buffers both refs before checking the first, and still refuses the second with its commit id
 
 #### Scenario: Annotated commit tag
-- **WHEN** a pushed annotated tag points to a commit whose tree has a recorded full pass
+- **WHEN** a pushed annotated tag points to a commit whose tree has a recorded full pass under the current Bun version or the commit's own pin
 - **THEN** the hook looks up the peeled commit tree and allows the push
 
 #### Scenario: Deleting a branch
@@ -42,6 +42,10 @@ The pre-push hook SHALL allow pushing a commit only when a full check passed for
 #### Scenario: Missing or malformed pin
 - **WHEN** the pushed commit's tree has no `.bun-version`, or its trimmed content is not a `MAJOR.MINOR.PATCH` version
 - **THEN** the hook accepts only a pass under the current Bun and otherwise behaves as without a pin, running the full check on a clean HEAD
+
+#### Scenario: Paths in refusals print escaped
+- **WHEN** a refusal or settlement line lists paths and one of them contains whitespace or a control character
+- **THEN** the hook prints that path with those characters escaped, and a path with neither prints unchanged
 
 #### Scenario: Pass under another Bun version
 - **WHEN** the pushed commit's tree has a recorded full pass only under a Bun that is neither the current one nor the commit's pin
