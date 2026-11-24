@@ -12,9 +12,12 @@ import type { TaskService } from './TaskService'
 import type { TaskResultService } from './TaskResultService'
 import { JOURNAL_LIMIT_MAX, TaskJournalReads } from './taskJournalWindow'
 import { TASK_LIST_LIMIT_MAX, TASK_LIST_STATUSES } from './taskListWindow'
+import { PREPARED_PAYLOAD_FIELDS } from './taskHandoffService'
+import { handoffRead } from './taskHandoffRead'
 
 export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_journal_read', 'task_result_diff_read', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
-  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result', 'task_transfer_owner'] as const
+  'task_submit_result', 'task_submit_coverage', 'task_submit_findings', 'task_dispute_findings', 'task_decide_dispute', 'task_handoff', 'task_check_result', 'task_transfer_owner', 'task_request_publication',
+  'task_settle_publication'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
 const taskId = { task_id: z.string().min(1) }
@@ -56,6 +59,7 @@ export const taskSchemas = {
     acknowledgements_before: z.object({
       session_id: z.string({ error: acknowledgementAnchor }), revision: z.number({ error: acknowledgementAnchor }),
     }, { error: acknowledgementAnchor }).optional(),
+    handoff_id: anchorId('handoff_id'),
   }),
   task_journal_read: z.object({ ...taskId, entry_id: z.string().min(1), offset_bytes: offsetSchema }),
   task_result_diff_read: z.object({ ...taskId, result_id: z.string().min(1), offset_bytes: offsetSchema }),
@@ -64,7 +68,18 @@ export const taskSchemas = {
   task_amend: z.object({
     ...taskId, direction: z.string().optional(), acceptance: z.string().optional(), contract: z.string().optional(),
     rationale: z.string().optional(), notify: z.boolean().optional(),
+    // Publish a prepared revision (owner-publication-handoff D3): beside it only task_id.
+    handoff_id: z.string().min(1).optional(),
   }),
+  // owner-publication-handoff D10: a prepared revision for the owner or the human to publish.
+  task_request_publication: z.object({
+    ...taskId, base_revision: z.number().int().min(1), rationale: z.string(),
+    direction: z.string().optional(), acceptance: z.string().optional(), contract: z.string().optional(),
+    notify: z.boolean().optional(), base_commit: z.string().optional(), evidence_refs: z.array(z.string()).optional(),
+    request_key: z.string().min(1),
+  }),
+  // The reason is checked after the right (H-SETTLE's order), so it may arrive empty here.
+  task_settle_publication: z.object({ handoff_id: z.string().min(1), action: z.enum(['decline', 'withdraw']), reason: z.string() }),
   task_list: z.object({
     status: z.enum(TASK_LIST_STATUSES as [TaskListStatus, ...TaskListStatus[]], { error: listStatus }).optional(),
     limit: z.number({ error: listLimit }).int({ error: listLimit }).min(1, { error: listLimit })
@@ -122,12 +137,14 @@ export const taskSchemas = {
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
   task_create: 'Create a team task (only if your group may create tasks). Optional parent_id, worktree (a worktree root of this repository), and openspec_change; plan_id with plan_change links the task to a change of an open plan\'s approved revision (both or neither; fixed afterwards). Optional contract: an implementation contract in Markdown — a `## Implementation contract` heading, then `### Acceptance`, `### Invariants`, `### Scope`, `### Verification`, `### Excluded` in that order, clauses as `- A1: text` (I, V, X likewise), Scope as one glob per bullet; Acceptance, Scope, and Verification need at least one entry. A contract that does not parse refuses the creation with every problem and its line. You become its creator.',
-  task_get: 'Read a task, bounded on every call: the current direction, acceptance, contract, and assignment (task) whole; every growing list a window with its total in bounds.<list> (total, returned, truncated when older rows remain, nextBefore to continue). The journal: the newest 50 entries (journal_limit 1–200), oldest first, each a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8); page older with journal_before set to bounds.journal.nextBefore, and read any entry whole with task_journal_read. subtasks: the newest 100, oldest first, as task_list rows (no direction or acceptance); page with subtasks_before. messages: the newest 50, oldest first, each body a preview of at most 2,000 UTF-8 bytes with bodyBytes and bodyCut; page with messages_before; full_messages: true returns whole bodies in the same window (potentially large). revisions lists the newest 50 revisions oldest first as rows — revision, identity (r<revision>#<hash>), contractHash (null without a contract), author, createdAt, notify, directionBytes, acceptanceBytes, and a rationale preview of at most 2,000 stored bytes with rationaleBytes and rationaleCut — never their direction or acceptance; bounds.revisions has total, returned, truncated, and nextBefore, and revisions_before (an integer from 2 to the task\'s revision) returns the revisions below it. Read one revision whole with revision (an integer from 1 to the task\'s revision): revisionText carries its direction, acceptance, and rationale. results: the outstanding result first, whole and sealed, then the newest 50 other results newest first as rows (id, commit, taskRevision, submittedBy, supersededBy, acceptedAt, reviewVerdict, createdAt, and a 2,000-byte summary preview with summaryBytes and summaryCut — no findings, maps, or diff); page with results_before (bounds.results.nextBefore; total excludes the outstanding result). result_id returns that result whole as resultDetail, sealed the same way. In a whole result the diff is a preview of at most 8,192 bytes with diffBytes, diffCut, and diffResumeOffsetBytes; read the whole diff with task_result_diff_read. assignments: the newest 50, oldest first, without their instruction (task.assignment keeps the current one\'s); page with assignments_before. publications: the newest 50, oldest first, each rationale a 2,000-byte preview with rationaleBytes and rationaleCut (revision reads it whole); page with publications_before (a revision number). acknowledgements: the newest 50, oldest first; page with acknowledgements_before ({ session_id, revision }). An anchor that is not this task\'s is refused naming it. Not byte-bounded: the current direction, acceptance, and instruction, whole results apart from their diff, revisionText, full_messages bodies, publication recipients, and task participants. findingsLedger lists the newest 100 findings (F<n>), newest first, each with level, clause, state, and transitions (ledgerOlderRemaining when more exist); each whole result\'s findings rows carry their items, class, and whether they counted. A Codex thread started before these arguments existed keeps its original catalogue and cannot use them.',
+  task_get: 'Read a task, bounded on every call: the current direction, acceptance, contract, and assignment (task) whole; every growing list a window with its total in bounds.<list> (total, returned, truncated when older rows remain, nextBefore to continue). The journal: the newest 50 entries (journal_limit 1–200), oldest first, each a preview of at most 2,000 stored bytes with totalBytes, cut, and resumeOffsetBytes (text null when not valid UTF-8); page older with journal_before set to bounds.journal.nextBefore, and read any entry whole with task_journal_read. subtasks: the newest 100, oldest first, as task_list rows (no direction or acceptance); page with subtasks_before. messages: the newest 50, oldest first, each body a preview of at most 2,000 UTF-8 bytes with bodyBytes and bodyCut; page with messages_before; full_messages: true returns whole bodies in the same window (potentially large). revisions lists the newest 50 revisions oldest first as rows — revision, identity (r<revision>#<hash>), contractHash (null without a contract), author, createdAt, notify, directionBytes, acceptanceBytes, and a rationale preview of at most 2,000 stored bytes with rationaleBytes and rationaleCut — never their direction or acceptance; bounds.revisions has total, returned, truncated, and nextBefore, and revisions_before (an integer from 2 to the task\'s revision) returns the revisions below it. Read one revision whole with revision (an integer from 1 to the task\'s revision): revisionText carries its direction, acceptance, and rationale. results: the outstanding result first, whole and sealed, then the newest 50 other results newest first as rows (id, commit, taskRevision, submittedBy, supersededBy, acceptedAt, reviewVerdict, createdAt, and a 2,000-byte summary preview with summaryBytes and summaryCut — no findings, maps, or diff); page with results_before (bounds.results.nextBefore; total excludes the outstanding result). result_id returns that result whole as resultDetail, sealed the same way. In a whole result the diff is a preview of at most 8,192 bytes with diffBytes, diffCut, and diffResumeOffsetBytes; read the whole diff with task_result_diff_read. assignments: the newest 50, oldest first, without their instruction (task.assignment keeps the current one\'s); page with assignments_before. publications: the newest 50, oldest first, each rationale a 2,000-byte preview with rationaleBytes and rationaleCut (revision reads it whole); page with publications_before (a revision number). acknowledgements: the newest 50, oldest first; page with acknowledgements_before ({ session_id, revision }). An anchor that is not this task\'s is refused naming it. Not byte-bounded: the current direction, acceptance, and instruction, whole results apart from their diff, revisionText, full_messages bodies, publication recipients, and task participants. findingsLedger lists the newest 100 findings (F<n>), newest first, each with level, clause, state, and transitions (ledgerOlderRemaining when more exist); each whole result\'s findings rows carry their items, class, and whether they counted. handoffs lists the task\'s newest 20 publication handoffs, newest first (id, state, baseRevision, requester, a 12-digit payloadHash, publishedRevision, publishedAsEdited, disposition, a pending one\'s nextActor and a published one\'s follow-up phase; bounds in handoffBounds); handoff_id returns one handoff whole as handoff, with its prepared fields and events. A pending handoff is never the task\'s direction: the direction stays the published revision\'s. A Codex thread started before these arguments existed keeps its original catalogue and cannot use them.',
   task_journal_read: 'Read one journal entry of a task losslessly (entry_id from task_get): up to 8,192 stored bytes from offset_bytes (default 0; a preview\'s resumeOffsetBytes continues it) as dataBase64, which is authoritative, with their text when valid UTF-8 (else null), the entry\'s totalBytes, and nextOffsetBytes (null at the end). Read-only.',
   task_result_diff_read: 'Read one result\'s diff losslessly (result_id from task_get): up to 8,192 stored bytes from offset_bytes (default 0; a whole result\'s diffResumeOffsetBytes continues its preview) as dataBase64, which is authoritative, with their text when valid UTF-8 (else null), the diff\'s totalBytes (0 without a diff), and nextOffsetBytes (null at the end). Read-only.',
   task_note: "Append a note to a task's journal (decisions, findings, progress). Notes are permanent.",
   task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its owner only). Optional note is journaled.',
-  task_amend: "Publish a new revision of a task's direction, acceptance criteria, or contract (its owner only). Optional contract (the task_create grammar) replaces the current one; omitted or blank carries it forward unchanged, and a contract can never be removed. A contract that does not parse refuses the amendment with every problem and publishes nothing. Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice.",
+  task_amend: "Publish a new revision of a task's direction, acceptance criteria, or contract (its owner only). Optional contract (the task_create grammar) replaces the current one; omitted or blank carries it forward unchanged, and a contract can never be removed. A contract that does not parse refuses the amendment with every problem and publishes nothing. Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice. With handoff_id (and only task_id beside it) publishes that prepared revision as it was requested.",
+  task_request_publication: 'Ask the task\'s owner (or the human, when the task has no live owner) to publish a revision you prepared, when you may author task directions but do not own the task: base_revision (the task\'s current revision), a rationale, and at least one of direction, acceptance, contract (the task_create grammar); notify (default true) also sends the holder a revision notice when it is published. Optional base_commit (a full commit id) and up to 20 evidence_refs (repository-relative paths or ids). request_key makes a resend a replay; the same key with a different payload is refused naming the field. A newer request of yours supersedes your pending one; another group\'s pending request refuses it. This publishes nothing: the owner publishes it with task_amend { task_id, handoff_id }. If the handoff routes to the plan owner, the original requester can pass its id as publication_handoff_id to decision_ask for review in Plans.',
+  task_settle_publication: 'End a pending publication handoff (handoff_id from task_get) with a reason: action "withdraw" for the requester or a session of its group (nobody is woken), or "decline" for the task\'s owner (the requester is woken). Publishing it is task_amend { task_id, handoff_id }; nothing else settles a handoff.',
   task_list: `List this team's tasks as compact rows (no direction or acceptance — use task_get), newest first. Without status, only open, active, and blocked tasks; status takes one status or "all". At most limit rows (1–${TASK_LIST_LIMIT_MAX}, default 50); page older with before set to bounds.nextBefore. bounds.total counts every match; statuses names the filter applied.`,
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
   task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
@@ -152,13 +169,15 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
       // transaction projects every whole result for the reading session when
       // the server has a result service (bounded-task-reads D10); the human's
       // path (humanDetail) never seals.
-      return reads.agentGet(caller, args.task_id, {
+      const detail = await reads.agentGet(caller, args.task_id, {
         journalBefore: args.journal_before, journalLimit: args.journal_limit, revisionsBefore: args.revisions_before, revision: args.revision,
         subtasksBefore: args.subtasks_before, messagesBefore: args.messages_before, fullMessages: args.full_messages,
         resultsBefore: args.results_before, resultId: args.result_id, assignmentsBefore: args.assignments_before,
         publicationsBefore: args.publications_before,
         acknowledgementsBefore: anchor === undefined ? undefined : { sessionId: anchor.session_id, revision: anchor.revision },
       }, results?.wholeResultSeal(caller, args.task_id))
+      // Publication handoffs (owner-publication-handoff D10), behind the same read rule.
+      return { ...detail, ...handoffRead(tasks, tasks.store.get(args.task_id)!, args.handoff_id) }
     },
     task_journal_read: async (input: unknown) => {
       const { task_id, entry_id, offset_bytes } = taskSchemas.task_journal_read.parse(input)
@@ -177,8 +196,25 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
       return tasks.setStatus(caller, task_id, next, note)
     },
     task_amend: async (input: unknown) => {
-      const { task_id, direction, acceptance, contract, rationale, notify } = taskSchemas.task_amend.parse(input)
+      const { task_id, direction, acceptance, contract, rationale, notify, handoff_id } = taskSchemas.task_amend.parse(input)
+      if (handoff_id !== undefined) {
+        const given = { direction, acceptance, contract, rationale, notify }
+        const extras = PREPARED_PAYLOAD_FIELDS.filter(field => given[field] !== undefined)
+        return (await tasks.handoffs.publish(caller, task_id, handoff_id, extras)).task
+      }
       return tasks.amend(caller, task_id, { direction, acceptance, contract, rationale, notify })
+    },
+    task_request_publication: async (input: unknown) => {
+      const args = taskSchemas.task_request_publication.parse(input)
+      return tasks.handoffs.request(caller, args.task_id, {
+        baseRevision: args.base_revision, rationale: args.rationale, direction: args.direction, acceptance: args.acceptance,
+        contract: args.contract, notify: args.notify ?? true, baseCommit: args.base_commit, evidenceRefs: args.evidence_refs,
+        requestKey: args.request_key,
+      })
+    },
+    task_settle_publication: async (input: unknown) => {
+      const args = taskSchemas.task_settle_publication.parse(input)
+      return tasks.handoffs.settle(caller, args.handoff_id, args.action, args.reason)
     },
     task_acknowledge: async (input: unknown) => {
       const { task_id, revision } = taskSchemas.task_acknowledge.parse(input)

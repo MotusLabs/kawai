@@ -299,6 +299,9 @@ describe('attentionItems (4.1)', () => {
     pendingAcceptance: [], outboundViolations: [],
   })
 
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › An open approval is a human-required item (E05)
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › A staffing wait is agent-owned (E05)
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › An uncertain delivery needs the human
   test('one item per source kind with cause, owner, impact, next action, and link', () => {
     const items = attentionItems(input())
     expect(items.map(item => item.id)).toEqual([
@@ -340,6 +343,9 @@ describe('attentionItems (4.1)', () => {
       .toEqual({ kind: 'session', id: 'chat-2', label: 'Name of chat-2' })
   })
 
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › An open approval is a human-required item (E05)
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › A staffing wait is agent-owned (E05)
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › An uncertain delivery needs the human
   test('requiresHuman splits human blocking from agent-owned waits', () => {
     const byKind = new Map(attentionItems(input()).map(item => [item.kind, item]))
     expect(byKind.get('approval')!.requiresHuman).toBe(true)
@@ -482,6 +488,7 @@ describe('Phase 2 sources (11.1, 11.2)', () => {
     expect(passing).toMatchObject({ stage: 'awaiting-acceptance', nextAction: 'Accept result' })
   })
 
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › Failing findings are a wait for fixes
   test('failing findings yield one agent-owned fixes-requested item owned by the submitter, and no pending acceptance', () => {
     const items = itemsFor({ reviewVerdict: 'fail', liveCreator: { sessionId: 'chat-lead', name: 'Lead' } })
     expect(items).toEqual([{
@@ -493,6 +500,7 @@ describe('Phase 2 sources (11.1, 11.2)', () => {
     }])
   })
 
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › An agent-created task's acceptance waits on its creator
   test('a task created by a live agent session waits on that session, not the human', () => {
     const [item] = itemsFor({ liveCreator: { sessionId: 'chat-lead', name: 'Lead' } })
     expect(item).toMatchObject({
@@ -503,6 +511,7 @@ describe('Phase 2 sources (11.1, 11.2)', () => {
     })
   })
 
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › Pending acceptance needs the human
   test('a pending acceptance is a human-required item linking to the task', () => {
     const items = attentionItems({
       sessions: [], messages: [], waiting: {}, taskTitle: () => 'Build the thing', nameOf: id => `Name of ${id}`,
@@ -578,7 +587,7 @@ describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
             submittedBy: () => false,
           },
           acknowledgements: { highest: () => null },
-        },
+        }, handoffs: { store: { pendingForTeam: () => [], publishedOfOpenTasks: () => [] }, live: () => false },
       },
       mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
       waitingFor: () => ({}),
@@ -590,7 +599,7 @@ describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
       teamApprovalDefault: () => null,
       turnEnds: { finishedForTeam: () => [] }, exhaustionEpisodes: () => [], outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
     }
-    const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
+    const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team', groupsRoot: '/nonexistent-kawai-groups-root' } as never)
 
     const pending = snapshot.attention.find(item => item.id === 'pending-acceptance:r-human')
     expect(pending?.cause).toBe('Result submitted by Human awaits acceptance')
@@ -617,6 +626,10 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
         list: () => [task], get: () => task,
         results: { get: () => result(verdict), outstandingSince: () => [], submittedBy: () => false },
         acknowledgements: { highest: () => null },
+      }, handoffs: {
+        store: { pendingForTeam: () => [], publishedOfOpenTasks: () => [] },
+        // The handoff liveness predicate over these records (owner-publication-handoff D6, Table F).
+        live: (id: string) => records.some(row => row.sessionId === id && !row.archivedAt && !row.contextExhausted),
       } },
       mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
       waitingFor: () => ({}),
@@ -629,7 +642,7 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
       turnEnds: { finishedForTeam: () => [] }, exhaustionEpisodes: () => [], outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
       results: { ownedByExecution: () => owned },
     }
-    return new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
+    return new WorkspaceRead(manager as never).snapshot({ teamId: 'team', groupsRoot: '/nonexistent-kawai-groups-root' } as never)
   }
   const lead = { kind: 'agent', sessionId: 'chat-lead' } as const
   const dev = record({ sessionId: 'chat-dev', name: 'Dev' })
@@ -655,6 +668,7 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
     expect(tasks[0]!.requiresHuman).toBe(true)
   })
 
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › An agent-created task's acceptance waits on its creator
   test('a live agent creator owns the acceptance wait and the row is not human-blocked', () => {
     const { attention, tasks } = snapshotFor(lead, [dev, record({ sessionId: 'chat-lead', name: 'Lead' })])
     expect(attention).toMatchObject([{
@@ -664,17 +678,20 @@ describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-owne
     expect(tasks[0]).toMatchObject({ requiresHuman: false, stage: 'awaiting-acceptance', nextAction: 'Accept result' })
   })
 
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › A creator that is gone hands acceptance to the human
   test('an archived creator hands acceptance back to the human', () => {
     const archived = record({ sessionId: 'chat-lead', name: 'Lead', archivedAt: '2026-10-15T05:00:00Z' })
     const { attention } = snapshotFor(lead, [dev, archived])
     expect(attention).toMatchObject([{ kind: 'pending-acceptance', owner: { kind: 'human' }, requiresHuman: true }])
   })
 
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › A creator that is gone hands acceptance to the human
   test('a killed creator (no session record) hands acceptance back to the human', () => {
     const { attention } = snapshotFor(lead, [dev])
     expect(attention).toMatchObject([{ kind: 'pending-acceptance', owner: { kind: 'human' }, requiresHuman: true }])
   })
 
+  // @covers: team-workspace › The attention queue lists what needs a human or is waiting on an agent › Failing findings are a wait for fixes
   test('failing findings list one agent-owned wait owned by the submitter, even for a human-created task', () => {
     const { attention, tasks } = snapshotFor({ kind: 'human', sessionId: null }, [dev], 'fail')
     expect(attention).toMatchObject([{

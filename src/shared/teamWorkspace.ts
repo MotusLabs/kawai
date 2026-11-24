@@ -35,12 +35,16 @@ export type AttentionKind =
   | 'plan-fix'
   | 'plan-condition'
   | 'plan-promotion'
+  // A prepared revision waiting for its publisher, and a published one
+  // whose holder has not acknowledged it (owner-publication-handoff D8).
+  | 'publication-handoff'
+  | 'publication-follow-up'
   | (string & {})
 
-/** Who an attention item is waiting on: the human, one session, or a group. */
+/** Who an attention item is waiting on: the human, one session, a group, or Kawai (owner-publication-handoff D8). */
 export interface AttentionOwner {
-  kind: 'human' | 'session' | 'group'
-  /** Null for the human; a group id otherwise. */
+  kind: 'human' | 'session' | 'group' | 'kawai'
+  /** Null for the human and Kawai; a session or group id otherwise. */
   id: string | null
   label: string
 }
@@ -70,6 +74,8 @@ export interface AttentionLink {
   planId?: string
   /** The change of the plan the link scrolls to, when the item has one. */
   change?: string
+  /** A `task` link's publication handoff anchor (owner-publication-handoff D8). */
+  handoffId?: string
 }
 
 export interface AttentionItem {
@@ -253,6 +259,10 @@ export interface TeamMemberRow {
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   /** Valid per-profile overrides of `effort` (group-profile-effort); absent when none. */
   profileEffort?: Record<string, 'low' | 'medium' | 'high' | 'xhigh' | 'max'>
+  /** The role's auto-compaction window in tokens (mimo-million-token-context D3); absent when unset. */
+  autoCompactWindow?: number
+  /** Resolved per-profile windows overriding `autoCompactWindow`; absent when none. */
+  profileAutoCompactWindow?: Record<string, number>
   /** Problems that fell back to defaults, naming what fell back. */
   warnings: string[]
   /** Every layer's file for this group; exactly one is in effect. */
@@ -325,6 +335,11 @@ export interface TeamWorkspaceSnapshot {
    * not auto (unify-approval-defaults D4); empty once the default is auto.
    */
   autoRequestedBy: string[]
+  /**
+   * The main checkout's `.kawai/groups/` holds no group file, so the Members
+   * tab offers Set up team (starter-team-setup D2); absent = not offered.
+   */
+  setupAvailable?: boolean
   summary: MorningSummary
   /** Last known identity of killed sessions named by rows and items. */
   directory: SessionDirectoryEntry[]

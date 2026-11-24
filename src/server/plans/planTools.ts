@@ -9,6 +9,7 @@
 // the caller's current group file at each call.
 import { z } from 'zod'
 import type { PlanService } from './PlanService'
+import { revisionControlOf } from './revisionControl/revisionControlServices'
 
 export const PLAN_TOOL_NAMES = ['plan_list', 'plan_get', 'plan_create', 'plan_save_draft', 'plan_submit_for_review'] as const
 
@@ -32,7 +33,7 @@ export const planSchemas = {
 
 export const planDescriptions: Record<(typeof PLAN_TOOL_NAMES)[number], string> = {
   plan_list: "List this team's plans with lifecycle (open/completed/cancelled), displayed state, approved revision, strategy pin, and linked-task count. Optional status filters by lifecycle or state (draft, ready, in-progress, completed, cancelled).",
-  plan_get: 'Read one plan in full: the record, every revision with content, hash, and strategy pin, the drafts, the event history, linked tasks, per-change progress of the approved revision, its executions, and its integration branches with their candidates and promotions.',
+  plan_get: 'Read one plan in full: the record, every revision with content, hash, and strategy pin, the drafts, the event history, linked tasks, per-change progress of the approved revision, its executions, its integration branches with their candidates and promotions, and the owner\'s holds and pauses (each pause target\'s state, causes, holder, checkpoints, and decision). Only the owner places, releases, or extends a hold, pauses, or resolves a pause — no tool of yours can.',
   plan_create: 'Create a plan (only if your group sets canCreatePlans: true): a title and optional template content (goal, success criteria, non-goals, approach, alignment, changes, acceptance, checks, landing, roles, review group). Your draft holds the content; nothing is approved.',
   plan_save_draft: 'Save a plan draft (template content; structural faults are refused with every violation). Optional content.leadGroup names the plan\'s Lead role, one of its roles; unset, questions and fixes go to the owner. A change\'s optional fixes lists the fix or correction task ids (task-<uuid>, no repeats) it answers; one task may span several changes, and an id that is no fix or correction task of the plan only warns. Pass expected_draft_hash (and optionally expected_base_revision) from your last read: a mismatch writes nothing and returns the stored draft — reconcile, do not overwrite. Never changes an approved revision.',
   plan_submit_for_review: 'Submit your draft (or draft_id) as the next numbered revision in review, pinned to the team\'s current approved strategy revision. Only the human approves, withdraws, completes, cancels, or reopens a plan — no tool of yours can.',
@@ -43,7 +44,13 @@ export function planHandlers(plans: PlanService, sessionId: string) {
   const caller = { kind: 'agent' as const, sessionId }
   return {
     plan_list: async (input: unknown) => plans.list(caller, planSchemas.plan_list.parse(input).status),
-    plan_get: async (input: unknown) => plans.get(caller, planSchemas.plan_get.parse(input).plan_id),
+    plan_get: async (input: unknown) => {
+      // get refuses another team's plan first (DV4); the holds and pauses
+      // are read-only here, from the one revision-control reader (D15).
+      const detail = await plans.get(caller, planSchemas.plan_get.parse(input).plan_id)
+      const control = revisionControlOf(plans)?.read(detail.plan.teamId, detail.plan.id)
+      return control ? { ...detail, holds: control.holds, pauses: control.pauses } : detail
+    },
     plan_create: async (input: unknown) => {
       const { title, content } = planSchemas.plan_create.parse(input)
       return plans.create(caller, { title, ...(content !== undefined ? { content } : {}) })

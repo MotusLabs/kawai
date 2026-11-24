@@ -121,5 +121,5 @@ test('createCodexDriverWith forwards its per-method deadlines; the public factor
 })
 
 test('the package entry exports no private seam', () => {
-  expect(Object.keys(codexEntry).sort()).toEqual(['createCodexDriver', 'hasCodexLogin'])
+  expect(Object.keys(codexEntry).sort()).toEqual(['CODEX_CAPACITY_CONTINUATION', 'CODEX_CAPACITY_CONTINUATION_VERSION', 'createCodexDriver', 'hasCodexLogin', 'isCodexCapacityContinuation'])
 })

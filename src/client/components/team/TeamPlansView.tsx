@@ -11,8 +11,11 @@
 // works on a phone. Every control disables while disconnected; refusals,
 // with each failing approval precondition, show inline — a pin refusal with
 // its strategy impact (strategy-revision-impact D6) beside it, the same state
-// the plan's impact badge shows, linking to the impact review.
+// the plan's impact badge shows, linking to the impact review. An approved
+// plan's detail lists its holds after the Execution section
+// (`PlanHoldsSection`, revision-control D14).
 import { useEffect, useRef, useState } from 'react'
+import { scrollWithinContainer } from '../../utils/scrollWithinContainer'
 import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import { PLAN_STATE_LABELS, type PlanDetail, type PlanSummary } from '@shared/plans'
 import type { PlanRevisionValidation } from '@shared/planValidation'
@@ -21,6 +24,7 @@ import PlanIntentSection from './PlanIntentSection'
 import PlanChangesSection from './PlanChangesSection'
 import PlanPolicySection from './PlanPolicySection'
 import PlanExecutionSection from './PlanExecutionSection'
+import PlanHoldsSection from './PlanHoldsSection'
 import PlanReportSection from './PlanReportSection'
 import PlanUsageSection from './PlanUsageSection'
 import { PlanDecisionsList } from './PlanDecisionCard'
@@ -91,7 +95,7 @@ export default function TeamPlansView({ teamPath, view, sendMessage, subscribe, 
         <OpenImpactReview revision={(selected ? view.detailImpact ?? view.impact[selected] : null)?.reviewRevision ?? null} onOpen={onOpenImpactReview} />
       </p>}
     </div>}
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="min-h-0 flex-1 overflow-y-auto p-3" data-plan-scroll-container>
       {selected
         ? <PlanDetailPane teamPath={teamPath} planId={selected} detail={view.detail} validation={view.detailValidation} onCaptureStrategy={onCaptureStrategy} sessions={sessions} sendMessage={sendMessage}
           subscribe={subscribe} onOpenNewSession={onOpenNewSession}
@@ -210,7 +214,18 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, subsc
   // A pending reveal whose rendered target wins instead: the child effects scroll and focus the row or
   // card first, and exactly one element ends focused — the revealed target when the detail renders it,
   // else the title (plan-supervision D15).
-  useEffect(() => { if (loaded && !titleYieldsToReveal.current) heading.current?.focus() }, [loaded, planId])
+  const enteredPlan = useRef<string | null>(null)
+  useEffect(() => {
+    if (!loaded) return
+    const entering = enteredPlan.current !== planId
+    enteredPlan.current = planId
+    // Consuming a reveal changes its anchor back to null. That transition
+    // must not steal focus from the target the child just revealed.
+    if ((entering || revealAnchor !== null) && !titleYieldsToReveal.current) {
+      scrollWithinContainer(heading.current, 'start')
+      heading.current?.focus({ preventScroll: true })
+    }
+  }, [loaded, planId, revealAnchor])
   useEffect(() => {
     if (loaded && reveal && reveal.teamKey === teamPath && reveal.planId === planId) {
       useTeamPlanStore.getState().consumeReveal(teamPath)
@@ -244,6 +259,8 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, subsc
       <PlanPolicySection content={shown.content} />
       <PlanExecutionSection teamPath={teamPath} plan={detail.plan} detail={detail} connected={connected} onSend={sendMessage} onOpenTask={onOpenTask}
         sessions={sessions} busy={busy} revealAnchor={revealAnchor} />
+      {approved && <PlanHoldsSection teamPath={teamPath} planId={plan.id} changes={approved.content.changes.map(entry => entry.change)}
+        connected={connected} busy={busy} onSend={sendMessage} />}
       {/* Supervision (plan-supervision D15): the report, the plan-level Decisions list, and the usage totals,
           each only when the detail carries it. */}
       {detail.supervision && <PlanReportSection view={detail.supervision} sessions={sessions} onOpenImpactReview={onOpenImpactReview} />}

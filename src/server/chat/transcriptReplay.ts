@@ -6,6 +6,7 @@
 // request pairs that history immediately marks cancelled (design D7).
 import { parseEnvelope } from '../team/envelope'
 import fs from 'node:fs'
+import { nativeImages } from './images/nativeImages'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { ChatEvent, ChatTurnTriggerTask } from '../../shared/chat'
@@ -380,6 +381,11 @@ export function createTranscriptParser(
         return
       }
       const blocks = Array.isArray(contentValue) ? contentValue : []
+      const images = type === 'user' ? nativeImages(blocks) : []
+      const imageText = images.length ? blocks.map(block => asRecord(block))
+        .filter(block => block?.type === 'text' && typeof block.text === 'string')
+        .map(block => String(block!.text)).join('\n') : ''
+      let imageMessageEmitted = false
       let blockIndex = 0
       for (const block of blocks) {
         blockIndex += 1
@@ -388,6 +394,18 @@ export function createTranscriptParser(
         const blockId = `hist-${lineUuid}-${blockIndex}`
         const turnId = `hist-turn-${turnCounter}`
         const blockType = blockRecord.type
+        // Group human input once, preserving interleaved tool results and IDs.
+        if (images.length && ((blockType === 'text' && typeof blockRecord.text === 'string') || ['image', 'input_image', 'localImage'].includes(String(blockType)))) {
+          if (!imageMessageEmitted) {
+            turnCounter += 1
+            events.push({ id: blockId, sequence: 0, at,
+              type: 'user_message', turnId: `hist-turn-${turnCounter}`, text: imageText, images,
+              ...(recordUuid ? { messageUuid: recordUuid } : {}),
+            })
+            imageMessageEmitted = true
+          }
+          continue
+        }
         if (blockType === 'text' && typeof blockRecord.text === 'string') {
           if (type === 'user') {
             if (isTaskNotificationRecord(record, blockRecord.text)) {

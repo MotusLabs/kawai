@@ -1,19 +1,25 @@
 // Composer state stays below ChatView so editing never renders history.
 // Remounted by session id to reset caret/menu state while stored drafts survive.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ChatCommandState } from '@shared/chat'
 import type { SessionStatus } from '@shared/types'
 import { useChatStore } from '../../stores/chatStore'
 import SlashCommandMenu from './SlashCommandMenu'
 import { filterChatCommands, insertCommand, slashTokenAt } from './slashCommandFilter'
+import { EMPTY_DRAFT_IMAGES, pastedImages, useChatImageDrafts } from '../../stores/chatImageDrafts'
+import ChatDraftImages from './ChatDraftImages'
 
 export default function ChatComposer({ sessionId, status, connected, commandState, onSubmit, onInterrupt, attachment }: {
   sessionId: string; status: SessionStatus; connected: boolean; commandState: ChatCommandState
-  onSubmit: (text: string) => void; onInterrupt: () => void
+  onSubmit: (text: string) => void | boolean; onInterrupt: () => void
   /** The captured-plan-attachment line (§6.3); absent in ordinary hosts. */
   attachment?: ReactNode
 }) {
   const text = useChatStore(state => state.drafts[sessionId] ?? '')
+  const images = useChatImageDrafts(state => state.drafts[sessionId] ?? EMPTY_DRAFT_IMAGES)
+  const revision = useChatImageDrafts(state => state.revisions[sessionId] ?? 0)
+  const attempts = useChatImageDrafts(state => state.attempts)
+  const sending = Object.values(attempts).some(p => p.sessionId === sessionId && p.revision === revision && ['uploading', 'awaiting-result'].includes(p.state))
   const setDraft = useChatStore(state => state.setDraft)
   const setText = (value: string) => setDraft(sessionId, value)
   // Slash-command menu: open while the caret is inside a `/` word anywhere in
@@ -24,7 +30,17 @@ export default function ChatComposer({ sessionId, status, connected, commandStat
   const [menuDismissed, setMenuDismissed] = useState(false)
   const [caret, setCaret] = useState<number | null>(null)
   const token = useMemo(() => (caret == null ? null : slashTokenAt(text, caret)), [text, caret])
-  useEffect(() => { setHighlighted(0); setMenuDismissed(false) }, [token?.start, token?.query])
+  // A new token starts on its first match and undismissed in the same render
+  // that first sees it (React's adjust-state-while-rendering pattern), so the
+  // next key never acts on the previous token's highlight or Escape. A
+  // passive-effect reset is a deferred update that a quick key can beat.
+  const tokenKey = token ? `${token.start}:${token.query}` : null
+  const [seenTokenKey, setSeenTokenKey] = useState(tokenKey)
+  if (seenTokenKey !== tokenKey) {
+    setSeenTokenKey(tokenKey)
+    setHighlighted(0)
+    setMenuDismissed(false)
+  }
   const menuOpen =
     token !== null && !menuDismissed && commandState.status !== 'unavailable'
   const matches = useMemo(
@@ -105,9 +121,8 @@ export default function ChatComposer({ sessionId, status, connected, commandStat
     : undefined
   return <form className="border-t border-border p-3" onSubmit={event => {
     event.preventDefault()
-    if (!connected || !text.trim()) return
-    onSubmit(text.trim())
-    setText('')
+    if (!connected || sending || (!text.trim() && !images.length)) return
+    if (onSubmit(text.trim()) !== false) setText('')
   }}>
     <div className="mx-auto max-w-4xl">
       {menuOpen && (
@@ -118,11 +133,19 @@ export default function ChatComposer({ sessionId, status, connected, commandStat
         </div>
       )}
       {attachment}
+      <ChatDraftImages sessionId={sessionId} />
       <div className="flex items-end gap-2">
         <textarea ref={composerRef} aria-label="Message Claude" className="input chat-composer min-h-20 flex-1 resize-y text-chat-body" value={text}
           disabled={!connected} placeholder="Message Claude…" onChange={handleComposerChange}
-          onSelect={handleComposerSelect} onKeyDown={handleComposerKeyDown} />
-        <button className="btn btn-primary text-chat-meta" disabled={!connected || !text.trim()}>Send</button>
+          onSelect={handleComposerSelect} onKeyDown={handleComposerKeyDown}
+          onPaste={event => {
+            const pasted = pastedImages(event.clipboardData)
+            if (!pasted.hasImages) return
+            event.preventDefault()
+            if (!pasted.files.length) useChatImageDrafts.getState().error(sessionId, 'The browser did not provide image data. Copy the image itself and try again.')
+            else useChatImageDrafts.getState().add(sessionId, pasted.files)
+          }} />
+        <button className="btn btn-primary text-chat-meta" disabled={!connected || sending || (!text.trim() && !images.length)}>Send</button>
         <button type="button" className="btn text-chat-meta" disabled={!connected || status === 'waiting'}
           onClick={onInterrupt}>Stop</button>
       </div>

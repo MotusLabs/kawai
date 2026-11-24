@@ -94,7 +94,15 @@ export type AgentEvent =
       terminalReason: string | null
     })
   | (AgentTurnEventBase & { type: 'turn_interrupted' })
-  | (AgentEventBase & { type: 'notice'; text: string; kind?: 'compacted' })
+  /** `capacity_recovery`: a Codex capacity retry began, or its window closed (option `capacityRecovery: 'bounded'`). */
+  | (AgentEventBase & { type: 'notice'; text: string; kind?: 'compacted' | 'capacity_recovery' })
+  /**
+   * Informational, Codex `capacityRecovery: 'bounded'` only: the logical turn's
+   * attempt failed on model capacity and stays open. `ordinal` counts the
+   * runtime's own retries; `nextRetryAt` is null when no retry fits before
+   * `deadline` (`expiring`). Epoch times as ISO strings, for display.
+   */
+  | (AgentTurnEventBase & { type: 'capacity_retry'; ordinal: number; nextRetryAt: string | null; deadline: string; expiring: boolean })
   | (AgentEventBase & { type: 'error'; error: AgentErrorInfo })
 
 export type AgentEventType = AgentEvent['type']

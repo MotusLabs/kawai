@@ -38,7 +38,10 @@ jobs:
           bun-version: '1.3.0'
       - name: Exercise minimum Bun consumers under the pinned check runner
         run: |
+          # The declared expectation is independent of the check runner: the
+          # consumer target must report it exactly.
           export CONSUMER_BUN="$(command -v bun)"
+          export CONSUMER_BUN_VERSION='1.3.0'
           export PATH="$RUNNER_TEMP/check-pin:$PATH"
           bun run test packages/agent-runtime/__tests__/consumerInstall.test.ts
   publish:

@@ -13,6 +13,8 @@ import { unknownTeamError } from '../../shared/team'
 import type { TeamTask } from '../../shared/teamTasks'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
+import { PREPARED_PAYLOAD_FIELDS } from './taskHandoffService'
+import { loadHandoffDraft } from './taskHandoffDrafts'
 
 type TaskClientMessage = Extract<ClientMessage, { type: `team-task${string}` }>
 
@@ -59,7 +61,8 @@ export class TaskConnections {
       const human = store.humanDetail(taskId)
       const release = human ? this.manager.results?.release?.preview(taskId) : undefined
       const executionOwned = this.manager.results?.ownedByExecution(taskId) === true
-      const detail = human && { ...human, ...(release ? { release } : {}), ...(executionOwned ? { executionOwned } : {}) }
+      const handoffs = human ? this.manager.tasks.handoffs.store.forTask(taskId) : []
+      const detail = human && { ...human, ...(release ? { release } : {}), ...(executionOwned ? { executionOwned } : {}), ...(handoffs.length ? { handoffs } : {}) }
       if (detail) connection.send({
         type: 'team-task-detail', teamPath, teamId: subscription.teamId, detail,
         // Its messages name participants; the directory keeps a killed one's.
@@ -144,23 +147,43 @@ export class TaskConnections {
               direction: message.direction ?? '', acceptance: message.acceptance ?? null, rationale: message.rationale ?? null,
               ...(message.contract !== undefined ? { contract: message.contract } : {}),
               ...(message.baseRevision !== undefined ? { baseRevision: message.baseRevision } : {}),
+              observedDraft: message.observedDraft ?? null,
             })
-          } else if (message.action === 'rebase') await tasks.rebaseDraft(caller, message.taskId)
+          } else if (message.action === 'rebase') await tasks.rebaseDraft(caller, message.taskId, message.observedDraft ?? null)
           else await tasks.discardDraft(caller, message.taskId)
           task = tasks.store.get(message.taskId) ?? undefined
           break
         case 'team-task-publish': {
-          // The human form requires a rationale (Q6); the store keeps it optional.
-          if (!message.rationale.trim()) throw new Error('A publication needs a rationale')
+          // The ordinary entry computes the canonical key once and refuses a
+          // reserved one before the human form's rationale requirement (Q6) and
+          // every other check (owner-publication-handoff D3, H33); the store
+          // keeps the rationale optional for agents.
           const outcome = await tasks.publish(caller, message.taskId, {
+            requireRationale: true,
             direction: message.direction, acceptance: message.acceptance ?? null, rationale: message.rationale,
             ...(message.contract !== undefined ? { contract: message.contract } : {}),
             baseRevision: message.baseRevision, requestKey: message.requestKey, notify: message.notify,
             ...(message.fromDraft ? { fromDraft: true } : {}),
+            observedDraft: message.observedDraft ?? null,
           })
           result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
           return
         }
+        case 'team-task-handoff-publish': {
+          // Payload fields beside the handoff id are refused (H35), whatever the client sent.
+          const extras = PREPARED_PAYLOAD_FIELDS.filter(field => field in message)
+          const outcome = await tasks.handoffs.publish(caller, message.taskId, message.handoffId, extras)
+          result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
+          return
+        }
+        case 'team-task-handoff-load-draft':
+          await loadHandoffDraft(tasks, caller, message.taskId, message.handoffId, message.replace === true)
+          task = tasks.store.get(message.taskId) ?? undefined
+          break
+        case 'team-task-handoff-decline':
+          await tasks.handoffs.settle(caller, message.handoffId, 'decline', message.reason, message.taskId)
+          task = tasks.store.get(message.taskId) ?? undefined
+          break
         case 'team-task-handoff': {
           const outcome = await this.manager.results.handoff(caller, message.taskId, {
             kind: message.kind, resultId: message.resultId, target: message.target, instructions: message.instructions,

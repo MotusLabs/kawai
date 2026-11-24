@@ -129,6 +129,7 @@ async function submitAsOldHolder(world: RestartedWorld, results: TaskResultServi
 // findings, and checkpoint are refused before the new dispatch; after the
 // new dispatch is claimed the old holder is refused again and the new
 // claimant's result is accepted.
+// @covers: plan-pause › The owner chooses how paused work goes on › The holder ignores the pause
 test('after a Restart the old holder\'s result, findings, and checkpoint are refused in both windows — rebuilt over the same database — and the new claimant\'s result is accepted', async () => {
   const world = await heldWorld('claimed', 'human')
   wired.expectOk(await wired.resolve({ planId: world.planId, pauseId: world.pauseId, change: 'api', choice: 'restart' }))

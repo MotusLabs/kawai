@@ -1,7 +1,9 @@
 // New-session dialog: project/worktree/branch selection, agent and chat
-// profile choice, and per-session approval policy.
+// profile choice, and per-session approval policy. A chat for a project
+// whose team has no group files shows the missing-groups notice.
 import { useClaudeProfiles } from './chat/useClaudeProfiles'
 import { capWarning, useTeamGroups } from './chat/useTeamGroups'
+import MissingGroupsNotice from './chat/MissingGroupsNotice'
 import { useEffect, useRef, useState } from 'react'
 import { type ClaudeProfileMetadata } from '@shared/chat'
 import { type CommandPreset, getFullCommand, useSettingsStore } from '../stores/settingsStore'
@@ -71,6 +73,8 @@ interface NewSessionModalProps {
       create-then-bind arm distinguishes a cancel from a create-close
       (plan-workspace §6.2, B5). */
   onDismiss?: (created: boolean) => void
+  /** The missing-groups notice's opener (starter-team-setup D2); absent = navigate only. */
+  onOpenTeamMembers?: (projectPath: string) => void
   onCreate: (
     projectPath: string,
     name?: string,
@@ -139,6 +143,7 @@ export function profilePickerGroups(profiles: ClaudeProfileMetadata[]): Array<{
 export default function NewSessionModal({
   isOpen,
   onClose,
+  onOpenTeamMembers,
   onDismiss,
   onCreate,
   defaultProjectDir,
@@ -171,6 +176,8 @@ export default function NewSessionModal({
   // Team groups (agent-teams): the project's roles; "" = no group.
   const teamGroups = useTeamGroups(isOpen && kind === 'chat', projectPath)
   const teamApproval = teamGroups.approvalDefault?.projectPath === projectPath.trim() ? teamGroups.approvalDefault : null
+  // starter-team-setup D2: the answer for the shown path only, so the notice follows path changes.
+  const missingGroups = teamGroups.setupAvailable?.projectPath === projectPath.trim() && teamGroups.setupAvailable.available
   const autoApprove = autoApproveChoice ?? teamApproval?.policy === 'auto'
   const [groupId, setGroupId] = useState('')
   const [name, setName] = useState('')
@@ -578,6 +585,7 @@ export default function NewSessionModal({
               </select>
             </label>
             {teamGroups.warnings.map(warning => <p key={warning} role="status" className="mt-1 text-xs text-amber-400">{warning}</p>)}
+            {missingGroups && <MissingGroupsNotice projectPath={projectPath.trim()} onLeave={() => dismiss(false)} {...(onOpenTeamMembers ? { onOpen: onOpenTeamMembers } : {})} />}
             {(() => {
               const warning = capWarning(teamGroups.groups.find(group => group.id === groupId), claudeProfileId)
               return warning && <p role="status" data-testid="group-cap-warning" className="mt-1 text-xs text-amber-400">{warning}</p>

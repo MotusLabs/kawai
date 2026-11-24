@@ -74,6 +74,12 @@ export class CodexActivity {
     if (decision !== null && decision.number === this.decided) this.publish(decision.activity)
   }
 
+  /** A capacity recovery step of the open turn (capacityRecovery.ts): retry scheduled, or its attempt requesting. */
+  capacity(input: ChatActivityInput): void {
+    const decision = this.decide(input)
+    if (decision !== null) this.publish(decision.activity)
+  }
+
   /** A notification the session routed to the open turn. */
   notification(method: string, params: Record<string, unknown>): void {
     const input = notificationInput(method, params)

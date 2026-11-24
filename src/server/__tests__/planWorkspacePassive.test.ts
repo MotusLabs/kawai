@@ -125,6 +125,7 @@ function wire(bench: SupervisionBench): void {
         lastTurnEndAt: null, lastTaskMailAt: null,
       }),
       blocker: messageId => blockers.get(messageId) ?? null,
+      live: () => false,
     },
   }
   const manager = {

@@ -51,6 +51,7 @@ afterEach(() => {
 })
 
 describe('trusted providers may name their credential variables', () => {
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › User-level provider names its token variable
   test('a user-level provider names its token and balance variables', () => {
     writeCredentialedUserProvider()
     const { profiles, providers, errors } = resolveProfileCatalog({ homeDir })
@@ -59,7 +60,9 @@ describe('trusted providers may name their credential variables', () => {
     expect(providers.get('or2')).toMatchObject({ authTokenEnv: 'OR2_KEY', balanceKeyEnv: 'OR2_MANAGEMENT_KEY' })
   })
 
-  test.each(['authTokenEnv', 'balanceKeyEnv'])('a project providers.json setting %s is rejected naming the file and field', field => {
+  // Separate literal-title tests per setting: bun's JUnit records each-case
+  // titles substituted, so a %s title cannot carry a coverage citation.
+  const rejectsProjectCredentialSetting = (field: string): void => {
     writeCredentialedUserProvider()
     const file = writeProviders(projectDir, { mine: { [field]: 'GITHUB_TOKEN', models: { 'mine-a': {} } } })
     const { profiles, errors } = resolveProfileCatalog(ctx())
@@ -69,6 +72,14 @@ describe('trusted providers may name their credential variables', () => {
     expect(profiles.has('mine-a')).toBe(false)
     // Providers from other files remain usable.
     expect(profiles.get('or2-sonnet')?.authTokenEnv).toBe('OR2_KEY')
+  }
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Project file names a credential variable
+  test('a project providers.json setting authTokenEnv is rejected naming the file and field', () => {
+    rejectsProjectCredentialSetting('authTokenEnv')
+  })
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Project file names a credential variable
+  test('a project providers.json setting balanceKeyEnv is rejected naming the file and field', () => {
+    rejectsProjectCredentialSetting('balanceKeyEnv')
   })
 
   test.each([
@@ -83,13 +94,32 @@ describe('trusted providers may name their credential variables', () => {
     expect(profiles.has('leaky')).toBe(false)
   })
 
-  test.each(['my key', 'lower_case', '1LEADING_DIGIT', ''])('malformed variable name %p is rejected naming provider and field', name => {
+  // Separate literal-title tests per malformed name: bun's JUnit records
+  // each-case titles substituted, so a %p title cannot carry a coverage
+  // citation.
+  const rejectsMalformedVariableName = (name: string): void => {
     const file = writeProviders(homeDir, { or2: { authTokenEnv: name, models: { 'or2-a': {} } } })
     const { errors } = resolveProfileCatalog({ homeDir })
     expect(errors).toHaveLength(1)
     expect(errors[0]).toContain(file)
     expect(errors[0]).toContain('"or2"')
     expect(errors[0]).toContain('authTokenEnv')
+  }
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Malformed variable name
+  test('malformed variable name "my key" is rejected naming provider and field', () => {
+    rejectsMalformedVariableName('my key')
+  })
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Malformed variable name
+  test('malformed variable name "lower_case" is rejected naming provider and field', () => {
+    rejectsMalformedVariableName('lower_case')
+  })
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Malformed variable name
+  test('malformed variable name "1LEADING_DIGIT" is rejected naming provider and field', () => {
+    rejectsMalformedVariableName('1LEADING_DIGIT')
+  })
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › Malformed variable name
+  test('malformed variable name "" is rejected naming provider and field', () => {
+    rejectsMalformedVariableName('')
   })
 
   test('a user-level overlay of a credentialed provider keeps its credential names', () => {
@@ -102,6 +132,7 @@ describe('trusted providers may name their credential variables', () => {
 })
 
 describe("a credentialed provider's route comes only from trusted catalogs", () => {
+  // @covers: claude-session-profiles › A credentialed provider's route comes only from trusted catalogs › Project overlay redirects the credentialed provider
   test('a project overlay redirecting the provider is rejected whole', () => {
     writeCredentialedUserProvider()
     const file = writeProviders(projectDir, { or2: { env: { ANTHROPIC_BASE_URL: 'https://attacker.example' } } })
@@ -112,6 +143,7 @@ describe("a credentialed provider's route comes only from trusted catalogs", () 
     expect(profiles.get('or2-sonnet')?.env.ANTHROPIC_BASE_URL).toBe(OR_URL)
   })
 
+  // @covers: claude-session-profiles › A credentialed provider's route comes only from trusted catalogs › Project overlay blanks the base URL
   test('an empty base URL in a project overlay is rejected too', () => {
     writeCredentialedUserProvider()
     writeProviders(projectDir, { or2: { env: { ANTHROPIC_BASE_URL: '' } } })
@@ -120,6 +152,7 @@ describe("a credentialed provider's route comes only from trusted catalogs", () 
     expect(profiles.get('or2-sonnet')?.env.ANTHROPIC_BASE_URL).toBe(OR_URL)
   })
 
+  // @covers: claude-session-profiles › A credentialed provider's route comes only from trusted catalogs › Project overlay changes a model mapping
   test('a project overlay changing a model mapping applies', () => {
     writeCredentialedUserProvider()
     writeProviders(projectDir, { or2: { label: 'Mine', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: '~anthropic/claude-sonnet-4' } } })
@@ -187,6 +220,7 @@ describe("a credentialed provider's route comes only from trusted catalogs", () 
 })
 
 describe('a credentialed provider names no executable and takes a trusted base URL', () => {
+  // @covers: claude-session-profiles › A credentialed provider's route comes only from trusted catalogs › Credentialed provider names an executable
   test('a trusted file giving a credentialed provider an executable is refused whole, naming both', () => {
     writeProviders(projectDir, { mine: { models: { 'mine-a': {} } } })
     const file = writeProviders(homeDir, {
@@ -294,6 +328,7 @@ describe('every finish() path enforces the trusted invariants', () => {
     claude: { label: 'Claude', models: { default: { label: 'Default' } } },
   }
 
+  // @covers: claude-session-profiles › A credentialed provider's route comes only from trusted catalogs › Credentialed provider without a base URL
   test('holder placed (production path): a credentialed provider without a base URL is dropped', () => {
     const { profiles, errors } = resolveShippedBase({
       ...shippedWithDefault,
@@ -307,6 +342,7 @@ describe('every finish() path enforces the trusted invariants', () => {
     expect(profiles.get('default')?.providerId).toBe('claude')
   })
 
+  // @covers: claude-session-profiles › A credentialed provider's route comes only from trusted catalogs › Credentialed provider names an executable
   test('holder placed (production path): an executable re-homed onto a credentialed model is dropped', () => {
     // The executable reaches the credentialed provider across the two files
     // (a trusted profiles.json re-home) — the cross-file assembly the

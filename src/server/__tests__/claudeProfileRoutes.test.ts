@@ -18,12 +18,13 @@ afterEach(() => {
   fs.rmSync(tempHome, { recursive: true, force: true })
 })
 
+// @covers: claude-session-profiles › Profiles preserve chat permissions and credential privacy › Credentials remain server-side
 test('catalog returns identifiers and labels only', async () => {
   const response = await createClaudeProfileRoutes().request('/')
   expect(response.status).toBe(200)
   const data = await response.json()
   expect(data.errors).toEqual([])
-  expect(data.profiles).toHaveLength(16)
+  expect(data.profiles).toHaveLength(17)
   // providerId and providerLabel ride additively (task 2.1), runtime with
   // them (task 3.4); no env, base URL, executable, or credential names.
   for (const item of data.profiles) expect(Object.keys(item).sort()).toEqual(['id', 'label', 'providerId', 'providerLabel', 'runtime'])
@@ -102,6 +103,24 @@ test('catalog file failures are reported while the rest resolves', async () => {
   } finally {
     fs.rmSync(project, { recursive: true, force: true })
   }
+})
+
+// @covers: claude-session-profiles › The shipped catalog includes OpenRouter › Listed in the picker
+test('New Session offers the three OpenRouter models grouped under OpenRouter', async () => {
+  const response = await createClaudeProfileRoutes().request('/')
+  expect(response.status).toBe(200)
+  const data = await response.json()
+  expect(data.errors).toEqual([])
+  const openrouter = data.profiles.filter((item: { providerId: string }) => item.providerId === 'openrouter')
+  // The picker groups on providerLabel, so every entry carries the group.
+  for (const item of openrouter) expect(item.providerLabel).toBe('OpenRouter')
+  // The three tier models the shipped entry defines are offered beside any
+  // later flash additions to the same provider.
+  expect(
+    openrouter.map((item: { id: string }) => item.id).filter((id: string) =>
+      ['openrouter-haiku', 'openrouter-opus', 'openrouter-sonnet'].includes(id)
+    ).sort()
+  ).toEqual(['openrouter-haiku', 'openrouter-opus', 'openrouter-sonnet'])
 })
 
 test('creation validates profile IDs and refuses arbitrary launch options', () => {

@@ -1,6 +1,7 @@
 {
   "zai": {
     "label": "Z.AI",
+    "family": "glm",
     "limitResetTimeZone": "Asia/Shanghai",
     "env": {
       "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
@@ -23,6 +24,7 @@
   },
   "claude": {
     "label": "Claude",
+    "family": "claude",
     "models": {
       "default": {
         "label": "Default"
@@ -55,18 +57,22 @@
     "models": {
       "openrouter-opus": {
         "label": "OpenRouter Opus",
+        "family": "claude",
         "model": "opus"
       },
       "openrouter-sonnet": {
         "label": "OpenRouter Sonnet",
+        "family": "claude",
         "model": "sonnet"
       },
       "openrouter-haiku": {
         "label": "OpenRouter Haiku",
+        "family": "claude",
         "model": "haiku"
       },
       "openrouter-deepseek-flash": {
         "label": "OpenRouter DeepSeek V4.1 Flash",
+        "family": "deepseek",
         "model": "deepseek/deepseek-v4.1-flash-1017",
         "env": {
           "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek/deepseek-v4.1-flash-1017",
@@ -77,6 +83,7 @@
       },
       "openrouter-minimax-flash": {
         "label": "OpenRouter MiniMax M3.1 Flash",
+        "family": "minimax",
         "model": "minimax/minimax-m3.1-flash",
         "env": {
           "ANTHROPIC_DEFAULT_OPUS_MODEL": "minimax/minimax-m3.1-flash",

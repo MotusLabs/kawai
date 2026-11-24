@@ -71,6 +71,9 @@ describe('ChatSessionManager usage', () => {
     },
   }
 
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Report with both plan windows
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Report without window data
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Sessions share a profile
   test('pushed reports are stored per provider, shared by its sessions, and snapshotted', async () => {
     const { manager, handles, usage } = await createHarness(db)
     const first = manager.createSession({ projectPath: '/tmp/proj' })
@@ -94,6 +97,9 @@ describe('ChatSessionManager usage', () => {
       'five_hour',
       'seven_day',
     ])
+    // The held report carries its receipt time beside the windows and status.
+    expect(typeof usage[1].report?.receivedAt).toBe('string')
+    expect(Number.isNaN(Date.parse(usage[1]!.report!.receivedAt))).toBe(false)
     // The second session of the same profile sees the same report.
     expect(manager.getSnapshot(first.session.id)!.usage).toBe(usage[1].report)
     expect(manager.getSnapshot(second.session.id)!.usage).toBe(usage[1].report)
@@ -202,6 +208,75 @@ describe('ChatSessionManager usage', () => {
     manager.shutdown()
   })
 
+  // @covers: profile-limit-handling › A payment-required failure is a final credit limit › OpenRouter balance cannot cover the request
+  test("an OpenRouter turn's 402 assistant error records one final credit event for the profile and provider", async () => {
+    // The shipped entry's shape: a credentialed provider whose profile is
+    // openrouter-opus (fake sentinel key; the value never appears anywhere).
+    const originalOrKey = process.env.OPENROUTER_API_KEY
+    process.env.OPENROUTER_API_KEY = 'fake-or-key'
+    try {
+      fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
+      fs.writeFileSync(path.join(tempDir, '.kawai', 'providers.json'), JSON.stringify({
+        openrouter: {
+          label: 'OpenRouter',
+          authTokenEnv: 'OPENROUTER_API_KEY',
+          env: { ANTHROPIC_BASE_URL: 'https://openrouter.example.internal/api' },
+          models: { 'openrouter-opus': { label: 'OpenRouter Opus', model: 'opus' } },
+        },
+      }))
+      const { manager, handles } = await createHarness(db)
+      const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'openrouter-opus' })
+      if (!created.ok) throw new Error(created.error)
+      await manager.send(created.session.id, 'hello')
+      await spawned(handles)
+      // Claude Code wraps OpenRouter's 402 as error "unknown" with no
+      // api_retry before it (the spike's assistant frame).
+      handles[0]!.push({
+        type: 'assistant', error: 'unknown', parent_tool_use_id: null, session_id: 'sdk-1', uuid: 'a-uuid',
+        message: { id: 'msg_402', role: 'assistant', content: [{ type: 'text', text: 'API Error: 402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 9957.' }] },
+      } as unknown as SDKMessage)
+      await flush()
+      const events = manager.limitEvents.forProfile('openrouter-opus')
+      expect(events).toEqual([{
+        id: expect.any(String), profileId: 'openrouter-opus', sessionId: created.session.id, groupId: null, at: expect.any(String),
+        kind: 'unknown', final: true, status: 402, resetsAt: null, providerId: 'openrouter', window: 'credit',
+        message: expect.stringContaining('API Error: 402'),
+      }])
+      // The same single event is persisted for the provider: its cooldown
+      // and the credit baseline key on it.
+      expect(manager.limitEvents.forProvider('openrouter')).toEqual(events)
+      manager.shutdown()
+    } finally {
+      if (originalOrKey === undefined) delete process.env.OPENROUTER_API_KEY
+      else process.env.OPENROUTER_API_KEY = originalOrKey
+    }
+  })
+
+  // @covers: profile-limit-handling › A payment-required failure is a final credit limit › 402 under another error class
+  test('a billing_error 402 on another provider records a final credit event with no reset', async () => {
+    fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(tempDir, '.kawai', 'providers.json'), JSON.stringify({
+      zai: { label: 'Z.AI', models: { glm: { label: 'GLM', model: 'opus' } } },
+    }))
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await spawned(handles)
+    handles[0]!.push({
+      type: 'assistant', error: 'billing_error', parent_tool_use_id: null, session_id: 'sdk-1', uuid: 'a-uuid',
+      message: { id: 'msg_bill', role: 'assistant', content: [{ type: 'text', text: 'API Error: 402 pay up' }] },
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.limitEvents.forProfile('glm')).toEqual([{
+      id: expect.any(String), profileId: 'glm', sessionId: created.session.id, groupId: null, at: expect.any(String),
+      kind: 'billing_error', final: true, status: 402, message: 'API Error: 402 pay up',
+      resetsAt: null, providerId: 'zai', window: 'credit',
+    }])
+    expect(manager.limitEvents.forProvider('zai')).toEqual(manager.limitEvents.forProfile('glm'))
+    manager.shutdown()
+  })
+
   test("a zone-less reset in the error text is read in the profile's limitResetTimeZone", async () => {
     process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
     const project = path.join(tempDir, 'proj')
@@ -263,30 +338,42 @@ describe('ChatSessionManager usage', () => {
     expect(manager.getSnapshot(created.session.id)!.usage).toBe(usage[1].report)
   })
 
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › One pull per provider
   test('the pull fallback fills usage before any push and only once per provider', async () => {
+    // Sibling profiles of one provider with no quota endpoint: the SDK pull
+    // answers for the first spawn, and the second profile's claim resolves
+    // to the same already-pulled provider.
+    fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(tempDir, '.kawai', 'providers.json'), JSON.stringify({
+      zai: { label: 'Z.AI', models: { glm: { label: 'GLM', model: 'opus' }, 'glm-flash': { label: 'GLM Flash', model: 'sonnet' } } },
+    }))
     const { manager, handles, usage } = await createHarness(
       db,
       anyDirectory,
       async (opts) => ({ ...FULL_PULL, opts })
     )
-    const first = manager.createSession({ projectPath: '/tmp/proj' })
+    const first = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
     if (!first.ok) throw new Error('create failed')
     await manager.send(first.session.id, 'hello')
     await flush()
     expect(handles[0]!.usageCalls).toEqual([{ skipBehaviors: true }])
     expect(usage).toHaveLength(1)
+    expect(usage[0].providerId).toBe('zai')
     expect(usage[0].report?.windows).toHaveLength(2)
     expect(manager.getSnapshot(first.session.id)!.usage).toBe(usage[0].report)
 
-    // A second session of the same profile spawns later: no second pull.
-    const second = manager.createSession({ projectPath: '/tmp/proj' })
+    // A sibling profile's session spawns later: no second pull, and its
+    // snapshot holds the provider's one report.
+    const second = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm-flash' })
     if (!second.ok) throw new Error('create failed')
     await manager.send(second.session.id, 'hi')
     await flush()
     const calls = handles.flatMap((handle) => handle.usageCalls)
     expect(calls).toHaveLength(1)
+    expect(manager.getSnapshot(second.session.id)!.usage).toBe(manager.getSnapshot(first.session.id)!.usage)
   })
 
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › Session without plan limits
   test('a no-data pull suppresses later pulls until a push replaces the verdict', async () => {
     const { manager, handles, usage } = await createHarness(
       db,

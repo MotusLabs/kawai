@@ -34,8 +34,9 @@ export interface DecisionBench extends PlanBench {
   onTask: (session: string, planId: string | null, change?: string) => Promise<string>
 }
 
-export function createDecisionBench(world: PlanWorld): DecisionBench {
-  const bench = createPlanBench(world)
+/** `base` builds the decision services over an existing plan bench's database (the handoff command family's pause world). */
+export function createDecisionBench(world: PlanWorld, base?: PlanBench): DecisionBench {
+  const bench = base ?? createPlanBench(world)
   const mail = (bench.tasks as unknown as { mail: MailboxStore }).mail
   const getSession = (id: string) => bench.records.get(id)
   const taskService = new TaskService(bench.tasks, { getSession, homeDir: world.home, plans: bench.plans })

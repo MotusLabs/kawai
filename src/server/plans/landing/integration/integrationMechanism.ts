@@ -195,7 +195,7 @@ export function integrationMechanism(store: IntegrationStore, adapters: Integrat
       })
       executions.transition(effect.executionId, effect.change!, fresh, { state: 'landed', step: null })
     })
-    await afterLanded(deps, row, effect.executionId, sha)
+    await afterLanded(deps, row, effect.executionId, { head: sha, roundId: effect.roundId })
   }
 
   return {

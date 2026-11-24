@@ -259,6 +259,8 @@ describe('ExecutionService.start: landings-on-base (integration-candidates D8)',
 })
 
 describe('ExecutionService.start: no-hold (revision-control 3.3)', () => {
+  // @covers: plan-holds › A whole-plan hold refuses Start › Start under a plan hold
+  // @covers: plan-holds › A whole-plan hold refuses Start › Start under a changes hold
   test('a whole-plan hold refuses Start naming the hold; a changes hold starts with the changes unprovisioned', async () => {
     const target = approvedPlan(['ha', 'hb'])
     try {

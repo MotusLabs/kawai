@@ -52,6 +52,7 @@ function reads(): SupervisionReads {
         }
       },
       blocker: messageId => { blockerCalls.push(messageId); return 'group cap 1/1' },
+      live: () => false,
     },
   }
 }

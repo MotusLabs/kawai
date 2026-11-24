@@ -34,7 +34,9 @@ const CASES = 300
 
 describe('ConcurrencyPool PL1', () => {
   // @covers: openspec-visibility › Bound concurrent OpenSpec discovery › A full reconciliation
-  test(`PL1: at most ${OPENSPEC_POOL_SIZE} run at once, each result reaches its own caller once, a throw releases its slot (${CASES} cases, seed 0x0a5e)`, async () => {
+  // The title is the template above unrolled to a literal (closeout task
+  // 7.1); the body still reads OPENSPEC_POOL_SIZE and CASES.
+  test('PL1: at most 3 run at once, each result reaches its own caller once, a throw releases its slot (300 cases, seed 0x0a5e)', async () => {
     expect(OPENSPEC_POOL_SIZE).toBe(3)
     expect(openspecListPool.size).toBe(3)
     const random = prng(SEED)

@@ -30,6 +30,7 @@ describe('UsageLimitStore', () => {
     })
   })
 
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › Stale data is not downgraded
   test('older data never overwrites newer', () => {
     const store = new UsageLimitStore()
     store.record('default', report({ receivedAt: '2026-10-07T14:00:00.000Z', status: 'warning' }))
@@ -92,6 +93,7 @@ describe('UsageLimitStore', () => {
     expect(noisy).toEqual([])
   })
 
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Profiles share a provider
   test('profiles share a provider: one key holds the report for every sibling model', () => {
     const store = new UsageLimitStore()
     // glm and glm-flash both resolve to zai; the store holds one entry per

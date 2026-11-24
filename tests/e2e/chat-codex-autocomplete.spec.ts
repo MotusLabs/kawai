@@ -124,6 +124,46 @@ test('Codex autocomplete selects without sending, refreshes both browsers, and i
     await input.press('Enter')
     await expect(input).toHaveValue('/explore ')
     await expect(page.locator('[data-chat-role="user"]')).toHaveCount(0)
+    // task-748ad131 A2: a new slash token owns its highlight and Escape state
+    // from its first render. The CI failure at the wrap assert above was a
+    // race: the old reset ran in a passive effect whose update React defers
+    // to a Scheduler task, so keys that beat that task acted on the previous
+    // token's index or dismissal. Dispatching the choosing key, the reopening
+    // input and the next keys in one page task (draining only microtasks, so
+    // React's sync work still commits between events) makes that ordering
+    // deterministic through the real composer, store, menu and scheduler. It
+    // returns the draft after each step.
+    const inOneTask = (before: string[], after: string[]) => input.evaluate(async (element, { before, after }) => {
+      const textarea = element as HTMLTextAreaElement
+      const drain = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
+      const values: string[] = []
+      const press = async (key: string) => {
+        textarea.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+        await drain()
+        values.push(textarea.value)
+      }
+      for (const key of before) await press(key)
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '/')
+      textarea.setSelectionRange(1, 1)
+      textarea.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '/' }))
+      await drain()
+      values.push(textarea.value)
+      for (const key of after) await press(key)
+      return values
+    }, { before, after })
+    await input.fill('/')
+    await input.press('ArrowUp')
+    await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'true')
+    expect(await inOneTask(['Tab'], ['ArrowDown', 'ArrowDown'])).toEqual(['/review ', '/', '/', '/'])
+    await expect(page.getByRole('option', { name: /explore/ })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'false')
+    await input.press('Enter')
+    await expect(input).toHaveValue('/explore ')
+    await input.fill('/expl'); await input.press('Escape')
+    await expect(page.getByRole('listbox', { name: 'Slash commands' })).toHaveCount(0)
+    expect(await inOneTask([], ['Enter'])).toEqual(['/', '/explore '])
+    await expect(input).toHaveValue('/explore ')
+    await expect(page.locator('[data-chat-role="user"]')).toHaveCount(0)
     await input.fill('/'); await page.getByRole('option', { name: /review/ }).hover()
     await expect(page.getByRole('option', { name: /review/ })).toHaveAttribute('aria-selected', 'true')
     await page.getByRole('option', { name: /review/ }).click()

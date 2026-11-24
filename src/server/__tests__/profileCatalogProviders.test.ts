@@ -93,6 +93,7 @@ describe('providers.json parsing and validation', () => {
     expect(profiles.get('fine')?.providerId).toBe('ok')
   })
 
+  // @covers: claude-session-profiles › Profiles preserve chat permissions and credential privacy › Catalog files carry no credentials
   test('credentials are refused at the provider and model levels', () => {
     writeProviders(homeDir, {
       leaky: { env: { ANTHROPIC_AUTH_TOKEN: 'secret' }, models: {} },

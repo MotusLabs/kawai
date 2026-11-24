@@ -67,6 +67,7 @@ describe('limit signals', () => {
     expect(assistantLimitSignal('rate_limit', 'API Error: 429 x', null)).toMatchObject({ window: null })
   })
 
+  // @covers: profile-limit-handling › Limit events are recorded per profile › Reset written in the error text
   test('a zone-less reset in the error text is read in the profile zone', () => {
     const glm = 'API Error: Server is temporarily limiting requests (not your usage limit) · [1308][Usage limit reached for 5 hour. Your limit will reset at 2026-10-13 17:17:00][2026101316]'
     expect(textResetsAt(glm, 'Asia/Shanghai')).toBe('2026-10-13T09:17:00.000Z')

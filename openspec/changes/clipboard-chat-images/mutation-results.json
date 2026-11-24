@@ -1,0 +1,496 @@
+[
+  {
+    "id": "M-count",
+    "file": "src/shared/chatImages.ts",
+    "old": "export const CHAT_IMAGE_MAX_COUNT = 4",
+    "new": "export const CHAT_IMAGE_MAX_COUNT = 5",
+    "tests": [
+      "src/server/__tests__/chatImageContract.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S0/S2/S3/S7: image wire bounds preserve optional old text frames"
+    ]
+  },
+  {
+    "id": "M-id",
+    "file": "src/shared/chatImages.ts",
+    "old": "typeof value === 'string' && /^[a-f0-9]{64}\\.(png|jpg|gif|webp)$/.test(value)",
+    "new": "typeof value === 'string'",
+    "tests": [
+      "src/server/__tests__/chatImageContract.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S0/S2/S3/S7: image wire bounds preserve optional old text frames"
+    ]
+  },
+  {
+    "id": "M-paste",
+    "file": "src/client/stores/chatImageDrafts.ts",
+    "old": "if (!files.length) return",
+    "new": "return\n    if (!files.length) return",
+    "tests": [
+      "src/client/__tests__/chatImagePasteTable.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "P2: readable-supported / fits -> Ordered previews once; no clipboard text representation inserted; zero uploads and turns",
+      "P3: readable-supported / exceeds -> Error; existing draft unchanged; zero uploads and turns",
+      "P4: readable-invalid / * -> Error; no invalid preview or turn"
+    ]
+  },
+  {
+    "id": "M-isolation",
+    "file": "src/client/stores/chatImageDrafts.ts",
+    "old": "drafts: { ...state.drafts, [id]: images }",
+    "new": "drafts: { [id]: images }",
+    "tests": [
+      "src/client/__tests__/chatImageModel.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "Q1/Q3: seeded draft and submission model preserves isolation and never replays (seed 1a6e2026, 200x40)"
+    ]
+  },
+  {
+    "id": "M-resend",
+    "file": "src/client/stores/chatImageSends.ts",
+    "old": "['uploading', 'awaiting-result'].includes(p.state)",
+    "new": "false",
+    "tests": [
+      "src/client/__tests__/chatImageDrafts.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "L1/L2/L5/L6/L7/L9: a lost image-send answer never resends or clears newer edits"
+    ]
+  },
+  {
+    "id": "M-newer",
+    "file": "src/client/stores/chatImageSends.ts",
+    "old": "if ((state.revisions[pending.sessionId] ?? 0) === pending.revision)",
+    "new": "if (true)",
+    "tests": [
+      "src/client/__tests__/chatImageDrafts.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "L1/L2/L5/L6/L7/L9: a lost image-send answer never resends or clears newer edits",
+      "L5/H8: a replaced plan context is a newer draft even when text and images are unchanged"
+    ]
+  },
+  {
+    "id": "M-native",
+    "file": "src/server/chat/images/nativeImages.ts",
+    "old": "return images\n}",
+    "new": "return images.slice(0, 1)\n}",
+    "tests": [
+      "src/server/__tests__/chatImageRuntime.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "H5/H11/Q5: native replay retains image-only and mixed messages once without wrappers or bytes"
+    ]
+  },
+  {
+    "id": "M-empty-replay",
+    "file": "src/server/chat/images/nativeImages.ts",
+    "old": "if (!Array.isArray(content)) return []",
+    "new": "return []\n  if (!Array.isArray(content)) return []",
+    "tests": [
+      "src/server/__tests__/chatImageRuntime.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "H5/H11/Q5: native replay retains image-only and mixed messages once without wrappers or bytes",
+      "H5: a native Codex wrapper retains original asset identity after pixel normalization"
+    ]
+  },
+  {
+    "id": "M-signature",
+    "file": "src/server/chat/images/ChatImageStore.ts",
+    "old": "if (!mediaType || mediaType !== declaredType) throw Error('Unsupported image type or mismatched image signature.')",
+    "new": "if (!mediaType) throw Error('Unsupported image type or mismatched image signature.')",
+    "tests": [
+      "src/server/__tests__/chatImages.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "U3/U5: direct store calls reject invalid size and mismatched signatures"
+    ]
+  },
+  {
+    "id": "M-scoped",
+    "file": "src/server/chat/images/ChatImageStore.ts",
+    "old": "return path.join(this.dir, sessionId)",
+    "new": "return path.join(this.dir, \"a\")",
+    "tests": [
+      "src/server/__tests__/chatImages.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "U7/H3/H6/H7: immutable assets survive reopen and archive and refuse foreign or symlinked reads"
+    ]
+  },
+  {
+    "id": "M-publication",
+    "file": "src/server/chat/images/ChatImageStore.ts",
+    "old": "await fs.link(temporary, target)",
+    "new": "await Promise.resolve()",
+    "tests": [
+      "src/server/__tests__/chatImages.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "U7/H3/H6/H7: immutable assets survive reopen and archive and refuse foreign or symlinked reads",
+      "U6/U7: failed publication exposes no partial asset and a fresh store sees complete publication"
+    ]
+  },
+  {
+    "id": "M-kill",
+    "file": "src/server/chat/images/ChatImageStore.ts",
+    "old": "this.deleted.add(sessionId)",
+    "new": "return\n    this.deleted.add(sessionId)",
+    "tests": [
+      "src/server/__tests__/chatImages.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "U7/H3/H6/H7: immutable assets survive reopen and archive and refuse foreign or symlinked reads",
+      "H2: kill waits for pending writes and cannot leave a resurrected namespace"
+    ]
+  },
+  {
+    "id": "M-text-paste",
+    "file": "src/client/stores/chatImageDrafts.ts",
+    "old": "hasImages: imageItems.length > 0 || fallback.length > 0",
+    "new": "hasImages: true",
+    "tests": [
+      "src/client/__tests__/chatImagePasteTable.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "P1: text / * -> Normal selection-aware text paste; zero uploads and turns"
+    ]
+  },
+  {
+    "id": "M-capacity",
+    "file": "src/client/stores/chatImageDrafts.ts",
+    "old": "current.length + files.length > CHAT_IMAGE_MAX_COUNT",
+    "new": "false",
+    "tests": [
+      "src/client/__tests__/chatImagePasteTable.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "P3: readable-supported / exceeds -> Error; existing draft unchanged; zero uploads and turns"
+    ]
+  },
+  {
+    "id": "M-format",
+    "file": "src/client/stores/chatImageDrafts.ts",
+    "old": "!CHAT_IMAGE_TYPES.includes(file.type as typeof CHAT_IMAGE_TYPES[number])",
+    "new": "false",
+    "tests": [
+      "src/client/__tests__/chatImagePasteTable.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "P4: readable-invalid / * -> Error; no invalid preview or turn"
+    ]
+  },
+  {
+    "id": "M-protected",
+    "file": "src/client/components/chat/ChatComposer.tsx",
+    "old": "if (!pasted.files.length) useChatImageDrafts.getState().error(sessionId, 'The browser did not provide image data. Copy the image itself and try again.')",
+    "new": "if (!pasted.files.length) return",
+    "tests": [
+      "src/client/__tests__/chatImagePasteTable.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "P5: protected-image / * -> Explain absent bytes; existing draft unchanged"
+    ]
+  },
+  {
+    "id": "M-session",
+    "file": "src/server/routes/chatImages.ts",
+    "old": "!sessions.has(sessionId) ? 404 : sessions.isArchived(sessionId) ? 409 : null",
+    "new": "null",
+    "tests": [
+      "src/server/__tests__/chatImageOracleTables.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "U1: Session missing -> 404 JSON error; no asset or agent",
+      "U2: Session archived, including during body read -> 409 JSON error; no addressable asset or agent"
+    ]
+  },
+  {
+    "id": "M-body",
+    "file": "src/shared/chatImages.ts",
+    "old": "5 * 1024 * 1024",
+    "new": "10 * 1024 * 1024",
+    "tests": [
+      "src/server/__tests__/chatImageContract.test.ts",
+      "src/server/__tests__/chatImageOracleTables.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S0/S2/S3/S7: image wire bounds preserve optional old text frames",
+      "U3: Body limit or actual image size exceeded -> 413 JSON error; no addressable asset"
+    ]
+  },
+  {
+    "id": "M-request",
+    "file": "src/shared/chatImages.ts",
+    "old": "typeof requestId !== 'string' || !requestId.trim()",
+    "new": "false",
+    "tests": [
+      "src/server/__tests__/chatImageContract.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S0/S2/S3/S7: image wire bounds preserve optional old text frames"
+    ]
+  },
+  {
+    "id": "M-empty",
+    "file": "src/shared/chatImages.ts",
+    "old": "return 'Write a message or paste an image before sending.'",
+    "new": "return null",
+    "tests": [
+      "src/server/__tests__/chatImageContract.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S0/S2/S3/S7: image wire bounds preserve optional old text frames"
+    ]
+  },
+  {
+    "id": "M-correlation",
+    "file": "src/server/chat/ChatConnections.ts",
+    "old": "if (accepted) connection.send(accepted)",
+    "new": "if (false && accepted) connection.send(accepted)",
+    "tests": [
+      "src/server/__tests__/chatImageSend.integration.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S0-S5/S7: production connection and manager validate whole image sends before emitting or enqueueing"
+    ]
+  },
+  {
+    "id": "M-uploads",
+    "file": "src/client/stores/chatImageSends.ts",
+    "old": "if (!response.ok || !isChatImageId(result.image?.id)) throw Error(result.error ?? 'Image upload failed.')",
+    "new": "if (false) throw Error('ignored')",
+    "tests": [
+      "src/client/__tests__/chatImageModel.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "L3: uploading + upload failure -> Error; keep snapshot recoverable; no provider send; settle attempt"
+    ]
+  },
+  {
+    "id": "M-refusal",
+    "file": "src/client/stores/chatImageSends.ts",
+    "old": "state.attempt({ ...pending, state: 'refused', error: message.message })",
+    "new": "state.forget(pending.requestId)",
+    "tests": [
+      "src/client/__tests__/chatImageModel.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "L4: awaiting-result or unconfirmed + correlated refusal -> Keep/restore snapshot, separately if newer; settle attempt",
+      "Q1/Q3: seeded draft and submission model preserves isolation and never replays (seed 1a6e2026, 200x40)"
+    ]
+  },
+  {
+    "id": "M-disconnect",
+    "file": "src/client/stores/chatImageSends.ts",
+    "old": "state.attempt({ ...pending, state: 'unconfirmed' })",
+    "new": "state.forget(pending.requestId)",
+    "tests": [
+      "src/client/__tests__/chatImageModel.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "L6: awaiting-result + disconnect -> Mark unconfirmed; preserve snapshot; no resend",
+      "L7: unconfirmed + reconnect -> Keep explicit unconfirmed state; attach history; zero resends",
+      "Q1/Q3: seeded draft and submission model preserves isolation and never replays (seed 1a6e2026, 200x40)"
+    ]
+  },
+  {
+    "id": "M-unavailable",
+    "file": "src/client/components/chat/ChatMessageImages.tsx",
+    "old": "if (failed || image.unavailable)",
+    "new": "if (false)",
+    "tests": [
+      "src/client/__tests__/chatImageDrafts.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "H3/H5/H6/H7: archived image-only rows use scoped HTTP assets and show read failures"
+    ]
+  },
+  {
+    "id": "M-reset",
+    "file": "src/client/components/chat/ChatSurface.tsx",
+    "old": "if (clear) useChatImageDrafts.getState().error",
+    "new": "if (false) useChatImageDrafts.getState().error",
+    "tests": [
+      "src/client/__tests__/chatImageHistoryTable.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "H9: Local reset command with images -> Visible refusal; draft retained; no replacement chat"
+    ]
+  },
+  {
+    "id": "M-slash",
+    "file": "src/client/components/chat/ChatComposer.tsx",
+    "old": "const chooseCommand = (name: string) => {",
+    "new": "const chooseCommand = (name: string) => { onSubmit(name);",
+    "tests": [
+      "src/client/__tests__/chatImageHistoryTable.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "H10: Slash menu choice with images -> Command inserted; images retained; no send"
+    ]
+  },
+  {
+    "id": "M-multipart",
+    "file": "src/server/routes/chatImages.ts",
+    "old": "if (files.length !== 1 || !(files[0] instanceof File) || files[0].size === 0)",
+    "new": "if (false)",
+    "tests": [
+      "src/server/__tests__/chatImageOracleTables.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "U4: Malformed multipart or empty/missing file -> 400 JSON error; no addressable asset"
+    ]
+  },
+  {
+    "id": "M-storage-error",
+    "file": "src/server/routes/chatImages.ts",
+    "old": "c.json({ error: 'Could not store the image. Try again.' }, 500)",
+    "new": "c.json({ error: 'Could not store the image. Try again.' }, 200)",
+    "tests": [
+      "src/server/__tests__/chatImageOracleTables.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "U6: Storage failure -> JSON error; no successful reference returned"
+    ]
+  },
+  {
+    "id": "M-driver-refusal",
+    "file": "src/server/chat/ChatConnections.ts",
+    "old": "if (!result.ok) {\n            connection.send",
+    "new": "if (false) {\n            connection.send",
+    "tests": [
+      "src/server/__tests__/chatImageOracleTables.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S4: Driver refuses before admission -> Correlated refusal; full draft recoverable"
+    ]
+  },
+  {
+    "id": "M-codex-input",
+    "file": "packages/agent-runtime/src/images.ts",
+    "old": "...images.map(image =>",
+    "new": "...images.slice(0, 0).map(image =>",
+    "tests": [
+      "src/server/__tests__/chatImageRuntime.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S6/Q2: Codex receives native localImage inputs with no fabricated text"
+    ]
+  },
+  {
+    "id": "M-send-refs",
+    "file": "src/client/stores/chatImageSends.ts",
+    "old": "images: references.map(({ id }) => ({ id }))",
+    "new": "images: []",
+    "tests": [
+      "src/client/__tests__/chatImageDrafts.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "L1/L2/L5/L6/L7/L9: a lost image-send answer never resends or clears newer edits"
+    ]
+  },
+  {
+    "id": "M-url-release",
+    "file": "src/client/stores/chatImageDrafts.ts",
+    "old": "URL.revokeObjectURL(url); urls.delete(url)",
+    "new": "urls.delete(url)",
+    "tests": [
+      "src/client/__tests__/chatImageDrafts.test.tsx"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "H1-H4: two hosts share previews and unmounting either does not dispose the session draft"
+    ]
+  },
+  {
+    "id": "M-context",
+    "file": "src/server/chat/provider/claudeRuntimeViews.ts",
+    "old": "pastedContent: [workspaceContextBlock(context)]",
+    "new": "pastedContent: []",
+    "tests": [
+      "src/server/__tests__/chatImageRuntime.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "H8: Claude carries native images and the captured plan context together"
+    ]
+  },
+  {
+    "id": "M-claude-input",
+    "file": "packages/agent-runtime/src/claude/turns.ts",
+    "old": "content: images.length ? [",
+    "new": "content: false ? [",
+    "tests": [
+      "src/server/__tests__/chatImageRuntime.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S5/Q2: Claude receives native ordered image occurrences with optional text",
+      "H8: Claude carries native images and the captured plan context together"
+    ]
+  },
+  {
+    "id": "M-unavailable-chat",
+    "file": "src/server/chat/ChatConnections.ts",
+    "old": "if (!this.manager.has(sessionId))",
+    "new": "if (false)",
+    "tests": [
+      "src/server/__tests__/chatImageOracleTables.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "S1: Chat unavailable or existing start/context check fails -> Correlated refusal; full draft recoverable"
+    ]
+  },
+  {
+    "id": "M-mixed-tool-result",
+    "file": "src/server/chat/transcriptReplay.ts",
+    "old": "        const blockType = blockRecord.type",
+    "new": "        const blockType = blockRecord.type\n        if (images.length && blockType === 'tool_result') continue",
+    "tests": [
+      "src/server/__tests__/chatImageRuntime.test.ts"
+    ],
+    "killed": true,
+    "failingTitles": [
+      "H5: mixed native image and tool-result blocks replay both without duplicate IDs"
+    ]
+  }
+]

@@ -5,6 +5,9 @@
 // workspace owns no tables; every function here is a pure projection, so the
 // connection layer can recompute on the same triggers the mailbox and task
 // views already use and diff before pushing.
+// The snapshot's `setupAvailable` (starter-team-setup D2) reads the project
+// groups directory at snapshot time, so a run's publish withdraws the offer.
+import { setupAvailable } from './teamSetup'
 import type { ChatApprovalPolicy, ChatPendingRequest } from '../../shared/chat'
 import { resolveSpawnApproval } from '../../shared/spawnApproval'
 import type {
@@ -24,12 +27,17 @@ import type { TeamTaskSummary } from '../../shared/teamTasks'
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { acceptanceItems, taskImpact, type PendingAcceptance } from './attentionAcceptance'
+import { handoffAttentionFacts, handoffAttentionItems, handoffFollowUpItems, type HandoffAttentionFact, type HandoffFollowUpFact } from './handoffAttention'
 import { exhaustionAttentionItems, type ExhaustionFact } from './workspaceExhaustion'
 import { CAPACITY_CONSTRAINT_KINDS, capacityConstraintLabel, morningSummary } from './workspaceSummary'
 import {
   decisionQuestionItems, planConditionItems, planFixItems, planPromotionItems, planStallItems, planStopItems,
   type PlanAttentionFact, type PlanSummaryRows,
 } from './planAttention'
+import {
+  planCheckpointDecisionItems, planHoldOverdueItems, planPauseOverdueItems, revisionControlFactsOf, type RevisionControlAttentionFact,
+} from '../plans/planAttention'
+import { revisionControlOf } from '../plans/revisionControl/revisionControlServices'
 import type { GroupCatalog } from './groupCatalog'
 import { taskOwner } from './taskStatusRights'
 import type { TeamIdentity } from './teamIdentity'
@@ -105,6 +113,8 @@ export function memberRows(
         : { parkIfResetWithinMs: group.onLimit.parkIfResetWithinMs, otherwise: group.onLimit.otherwise },
       ...(group.effort !== undefined ? { effort: group.effort } : {}),
       ...(group.profileEffort !== undefined ? { profileEffort: { ...group.profileEffort } } : {}),
+      ...(group.autoCompactWindow !== undefined ? { autoCompactWindow: group.autoCompactWindow } : {}),
+      ...(group.profileAutoCompactWindow !== undefined ? { profileAutoCompactWindow: { ...group.profileAutoCompactWindow } } : {}),
       warnings: [...group.warnings],
       sources: sources.map(({ file, layer, inEffect }) => ({ file, layer, inEffect })),
       members,
@@ -209,6 +219,12 @@ export interface AttentionInput {
   exhaustion?: ExhaustionFact[]
   /** Each open plan's attention facts, gathered once per snapshot (plan-supervision D13). */
   plans?: PlanAttentionFact[]
+  /** Each open plan's holds and pauses, from the one revision-control reader (revision-control D13). */
+  revisionControl?: RevisionControlAttentionFact[]
+  /** Pending publication handoffs with their parties' liveness (owner-publication-handoff D8). */
+  handoffs?: HandoffAttentionFact[]
+  /** Published handoffs of open tasks with their follow-up facts (owner-publication-handoff D5, D8). */
+  handoffFollowUps?: HandoffFollowUpFact[]
 }
 
 /** One attention source: a pure function over the input (D5's registry). */
@@ -283,6 +299,10 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }
 /** Unacknowledged outbound violations (execution-safety-recovery D10; workspaceOutbound.ts). */
 const outboundItems: AttentionSource = ({ outboundViolations, nameOf }) => outboundAttentionItems(outboundViolations, nameOf)
 
+/** Prepared revisions awaiting their next actor, and published ones awaiting follow-up (owner-publication-handoff D8; handoffAttention.ts). */
+const handoffItems: AttentionSource = ({ handoffs, handoffFollowUps }) =>
+  [...handoffAttentionItems(handoffs ?? []), ...handoffFollowUpItems(handoffFollowUps ?? [])]
+
 /** Context-exhausted sessions awaiting a decision (chat-context-exhaustion D8; workspaceExhaustion.ts). */
 const exhaustionItems: AttentionSource = ({ exhaustion, taskTitle, nameOf }) =>
   exhaustionAttentionItems(exhaustion ?? [], taskTitle, nameOf)
@@ -295,6 +315,9 @@ const exhaustionItems: AttentionSource = ({ exhaustion, taskTitle, nameOf }) =>
 export const ATTENTION_SOURCES: readonly AttentionSource[] = [
   requestItems, uncertainItems, staffingItems, acceptanceItems, outboundItems, exhaustionItems,
   planStopItems, planStallItems, decisionQuestionItems, planFixItems, planConditionItems, planPromotionItems,
+  // revision-control D13: the owner's overdue holds and pauses, and the checkpoint decisions.
+  planHoldOverdueItems, planPauseOverdueItems, planCheckpointDecisionItems,
+  handoffItems,
 ]
 
 /** Every attention item the current state yields, in a stable order. */
@@ -303,6 +326,13 @@ export function attentionItems(
   sources: readonly AttentionSource[] = ATTENTION_SOURCES,
 ): AttentionItem[] {
   return sources.flatMap(source => source(input)).sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** Each open plan's holds and pauses (revision-control D13): closed plans' holds go quiet (D4). */
+export function revisionControlFacts(manager: Pick<ChatSessionManager, 'plans'>, teamId: string, now: Date = new Date()): RevisionControlAttentionFact[] {
+  const control = revisionControlOf(manager.plans)
+  if (control === null) return []
+  return revisionControlFactsOf(manager.plans.store.openPlans(teamId), (planId, at) => control.read(teamId, planId, at), now)
 }
 
 /**
@@ -348,10 +378,20 @@ export class WorkspaceRead {
       // Acceptance follows the closing right, so it awaits the owner (group-mail-task-affinity D7).
       const creatorId = taskOwner(summary)
       const creator = creatorId ? records.find(record => record.sessionId === creatorId && record.archivedAt == null) : undefined
+      const live = manager.tasks.handoffs.live
+      const claimant = summary.assignment?.claimedBy ?? null
+      // Table F (owner-publication-handoff D8): who owns a failing result's fixes.
+      const fixes = result.reviewVerdict !== 'fail' ? undefined : {
+        submitterLive: submittedBy?.sessionId ? live(submittedBy.sessionId) : true,
+        liveClaimant: claimant && live(claimant) ? { sessionId: claimant, name: nameOf(claimant) } : null,
+        executionOwns: ownedByExecution(summary.id),
+        liveOwner: creatorId && live(creatorId) ? { sessionId: creatorId, name: nameOf(creatorId) } : null,
+      }
       return [{
         resultId: result.id, taskId: summary.id, submitter: submittedBy ? actorName(submittedBy) : 'Human',
         submitterId: submittedBy?.sessionId ?? null, needsReevaluation: result.needsReevaluation,
         reviewVerdict: result.reviewVerdict, liveCreator: creator ? { sessionId: creator.sessionId, name: creator.name } : null,
+        ...(fixes ? { fixes } : {}),
       }]
     })
     const attention = attentionItems({
@@ -360,6 +400,8 @@ export class WorkspaceRead {
       outboundViolations: manager.outboundAudit.violationGroups(teamId),
       // The plan sources' facts, gathered over the supervision reads (plan-supervision D13).
       plans: manager.planAttentionFacts?.(teamId) ?? [],
+      revisionControl: revisionControlFacts(manager, teamId),
+      ...handoffAttentionFacts(manager, teamId, nameOf),
       exhaustion: manager.exhaustionEpisodes(teamId).map(episode => {
         const record = records.find(row => row.sessionId === episode.sessionId)
         const task = episode.taskId ? store.get(episode.taskId) : null
@@ -387,6 +429,7 @@ export class WorkspaceRead {
         manager.groupProfileCounts(teamId, groupId), approvalDefault),
       approvalDefault,
       autoRequestedBy: autoRequestedBy(catalog, approvalDefault),
+      setupAvailable: setupAvailable(team.groupsRoot),
       summary: morningSummary({
         now,
         sessions,

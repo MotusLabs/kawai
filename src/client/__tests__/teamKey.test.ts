@@ -28,6 +28,14 @@ describe('teamKeyOf', () => {
     expect(teamKeyOf('/home/coder/kawai/src/', [kawai])).toBe('/home/coder/kawai')
   })
 
+  test('a repository nested inside another owns its own paths', () => {
+    const outer = repository('/p/outer/.git', [worktree('/p/outer', true)])
+    const inner = repository('/p/outer/vendor/inner/.git', [worktree('/p/outer/vendor/inner', true)])
+    expect(teamKeyOf('/p/outer/vendor/inner/x', [outer, inner])).toBe('/p/outer/vendor/inner')
+    expect(teamKeyOf('/p/outer/vendor/inner/x', [inner, outer])).toBe('/p/outer/vendor/inner')
+    expect(teamKeyOf('/p/outer/src', [inner, outer])).toBe('/p/outer')
+  })
+
   test('a path outside every repository keys by its own directory', () => {
     expect(teamKeyOf('/tmp/notes/', [kawai])).toBe('/tmp/notes')
     expect(teamKeyOf('/home/coder/kawai-other', [kawai])).toBe('/home/coder/kawai-other')

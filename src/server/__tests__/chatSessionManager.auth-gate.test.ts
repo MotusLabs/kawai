@@ -160,6 +160,7 @@ describe('ChatSessionManager', () => {
       expect((await manager.createAvailableSession({ projectPath: '/tmp/proj' })).ok).toBe(true)
       expect(probes).toBe(1)
     })
+    // @covers: claude-session-profiles › Profiles preserve chat permissions and credential privacy › Authentication without configured credentials
     test('refuses creation with an actionable error when no auth exists', async () => {
       const { manager, registry } = await createHarness(db)
       const result = manager.createSession({ projectPath: '/tmp/proj' })
@@ -189,6 +190,7 @@ describe('ChatSessionManager', () => {
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
     })
 
+    // @covers: claude-session-profiles › Profiles preserve chat permissions and credential privacy › Gateway token authentication
     test('accepts ANTHROPIC_AUTH_TOKEN from the environment', () => {
       process.env.ANTHROPIC_AUTH_TOKEN = 'gateway-token'
       expect(hasClaudeAuth()).toBe(true)
@@ -248,6 +250,7 @@ describe('ChatSessionManager', () => {
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
     })
 
+    // @covers: claude-session-profiles › A credentialed provider authenticates only with its own variable › Key variable missing
     test('a credentialed provider needs its own key variable, whatever host login exists', async () => {
       writeCredentialedProviderCatalog(tempDir)
       // A host claude.ai login and a server API key exist; neither counts.

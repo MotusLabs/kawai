@@ -6,6 +6,7 @@
 import type { ResumeCheckpoint } from '../contract.js'
 import type { AgentCallbacks, BeforeSubmit, CodexAuditHooks, CodexPermissions, Effort, LaunchInput, Logger, ToolObservation, ToolSet, WireRecorder, CodexThreadOpened } from '../options.js'
 import type { OwnedProcess, OwnedSpawnRequest, TerminateOptions } from '../process/ownedProcess.js'
+import type { CapacityClock } from './capacityRetry.js'
 
 export interface CodexSessionOptions {
   launch: LaunchInput
@@ -35,4 +36,8 @@ export interface CodexSessionOptions {
   /** Private per-method deadlines, forwarded to every generation's transport (task-5906f19c A7). */
   requestTimeoutsMs?: Readonly<Record<string, number>>
   spawn?(request: OwnedSpawnRequest): OwnedProcess
+  /** Only `'bounded'` enables capacity recovery (capacityRecovery.ts). */
+  capacityRecovery?: 'bounded' | 'off'
+  /** Private: the capacity policy's clock, random source and timers (default systemCapacityClock). */
+  capacityClock?: CapacityClock
 }

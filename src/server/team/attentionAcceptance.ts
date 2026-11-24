@@ -4,8 +4,11 @@
 // work goes back to its submitter), and who closes the task (the human, or the
 // live agent session that created it). A task a running execution owns is a
 // source only for failing findings: WorkspaceRead leaves its acceptance out,
-// because Kawai accepts it on landing.
-import { attentionItemId } from '../../shared/teamWorkspace'
+// because Kawai accepts it on landing. A failing result's owner follows
+// owner-publication-handoff Table F: its live submitter, else the live
+// claimant, else Kawai for an execution-owned task, else the task's live
+// agent owner, else the human (`fixesOwner`).
+import { attentionItemId, type AttentionItem } from '../../shared/teamWorkspace'
 import type { AttentionInput, AttentionSource } from './workspaceRead'
 
 /** A submitted, unaccepted outstanding result of a live task. */
@@ -21,6 +24,43 @@ export interface PendingAcceptance {
   reviewVerdict: 'pass' | 'fail' | null
   /** The task's owner (group-mail-task-affinity D7; the creating agent unless transferred) when it is a live (present, not archived) agent session; null otherwise. */
   liveCreator: { sessionId: string; name: string } | null
+  /** Table F's facts for failing findings; absent, the submitter owns the wait (F1). */
+  fixes?: FixesFacts
+}
+
+/** Table F's liveness facts, each read with the handoff liveness predicate (live: present, not archived, not exhausted). */
+export interface FixesFacts {
+  submitterLive: boolean
+  /** The outstanding assignment's live claimant. */
+  liveClaimant: { sessionId: string; name: string } | null
+  executionOwns: boolean
+  /** The task's live agent owner. */
+  liveOwner: { sessionId: string; name: string } | null
+}
+
+/** F1–F5: who owns a failing result's wait for fixes, and what they do next. */
+export function fixesOwner(pending: Pick<PendingAcceptance, 'submitter' | 'submitterId' | 'fixes'>): Pick<AttentionItem, 'owner' | 'nextAction' | 'requiresHuman' | 'cause'> {
+  const reviewed = `Review of the result submitted by ${pending.submitter} requested fixes`
+  const facts = pending.fixes
+  // F1: a live submitter (the human submitter is always present).
+  if (pending.submitterId === null || !facts || facts.submitterLive) {
+    return {
+      owner: pending.submitterId
+        ? { kind: 'session', id: pending.submitterId, label: pending.submitter }
+        : { kind: 'human', id: null, label: pending.submitter },
+      nextAction: 'Wait for fixes', requiresHuman: false, cause: reviewed,
+    }
+  }
+  const archived = `${reviewed}; the submitter ${pending.submitter} is archived`
+  if (facts.liveClaimant) {
+    return { owner: { kind: 'session', id: facts.liveClaimant.sessionId, label: facts.liveClaimant.name }, nextAction: 'Wait for fixes', requiresHuman: false, cause: archived }
+  }
+  const unheld = `${archived} and no session is running the task`
+  if (facts.executionOwns) return { owner: { kind: 'kawai', id: null, label: 'Kawai' }, nextAction: 'Wait for Kawai to dispatch the fix', requiresHuman: false, cause: unheld }
+  if (facts.liveOwner) {
+    return { owner: { kind: 'session', id: facts.liveOwner.sessionId, label: facts.liveOwner.name }, nextAction: 'Hand off for fixes', requiresHuman: false, cause: unheld }
+  }
+  return { owner: { kind: 'human', id: null, label: 'Human' }, nextAction: 'Hand off for fixes', requiresHuman: true, cause: unheld }
 }
 
 /** The task scope an item carries: the id, plus the title when it is known. */
@@ -44,14 +84,9 @@ export const acceptanceItems: AttentionSource = ({ pendingAcceptance, taskTitle 
       return {
         id: attentionItemId('fixes-requested', pending.resultId),
         kind: 'fixes-requested' as const,
-        cause: `Review of the result submitted by ${pending.submitter} requested fixes`,
-        owner: pending.submitterId
-          ? { kind: 'session' as const, id: pending.submitterId, label: pending.submitter }
-          : { kind: 'human' as const, id: null, label: pending.submitter },
+        ...fixesOwner(pending),
         impact,
-        nextAction: 'Wait for fixes',
         link,
-        requiresHuman: false,
       }
     }
     const creator = pending.liveCreator

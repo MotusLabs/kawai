@@ -228,6 +228,7 @@ describe('ChatSessionManager OpenRouter pull recording (follow-up N3)', () => {
   const keyPulls = (fetchCalls: Array<{ url: string }>) =>
     fetchCalls.filter((call) => call.url.endsWith('/api/v1/key')).length
 
+  // @covers: chat-usage-limits › An OpenRouter key's caps and budgets render as meters › Uncapped key without a balance key
   test('a pull with meters, then a pull with zero meters: the provider shows no meters', async () => {
     let pulls = 0
     const { manager, usage, fetchCalls } = await createPullHarness({

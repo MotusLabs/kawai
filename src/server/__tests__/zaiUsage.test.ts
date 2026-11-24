@@ -43,6 +43,7 @@ describe('zaiQuotaUrl', () => {
     }
   )
 
+  // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › Scheme and port are preserved while unrelated URL parts are discarded
   test('keeps the scheme and port, but drops URL userinfo and model routing', () => {
     expect(zaiQuotaUrl('http://user:password@gateway.test:8080/api/anthropic/?route=glm#model'))
       .toBe('http://gateway.test:8080/api/monitor/usage/quota/limit')
@@ -50,6 +51,7 @@ describe('zaiQuotaUrl', () => {
 })
 
 describe('fetchZaiUsage', () => {
+  // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › Provider report is marked
   test('sends the raw token as Authorization and parses the capture', async () => {
     const { impl, calls } = fetchSaying(jsonResponse(CAPTURE))
     const pull = await fetchZaiUsage(`${BASE}/api/anthropic/?route=glm#model`, 'sk-glm-token', impl)

@@ -13,6 +13,7 @@
 import type { ExecutionState } from './planExecution'
 import type { PlanContent, PlanRevisionStatus } from './plans'
 import type { TaskStatus } from './teamTasks'
+import type { ImplementationContract } from './implementationContract'
 
 export type CardAddressee = 'lead' | 'owner'
 export type DecisionKind = 'answer' | 'own-call' | 'override'
@@ -134,6 +135,67 @@ export interface PlanDecisionCardView {
   fixes: Array<{ decisionId: string; taskId: string; status: FixStatus }>
   /** The affected tasks' result commits since the current decision. */
   commits: Array<{ taskId: string; commits: string[] }>
+  publication?: DecisionPublicationView
+}
+
+export interface PublicationBindingRef {
+  taskId: string
+  handoffId: string
+  baseRevision: number
+  payloadHash: string
+  bindingHash: string
+}
+
+export interface PublicationContent {
+  direction: string
+  acceptance: string | null
+  contract: ImplementationContract | null
+}
+
+export interface PublicationReview {
+  link: PublicationBindingRef
+  planId: string
+  change: string
+  approvedPlanRevision: number
+  execution: {
+    id: string
+    revision: number
+    revisionSeq: number
+    changeGeneration: number
+    attemptId: string
+  } | null
+  taskTitle: string
+  baseIdentity: string
+  baseContentHash: string
+  before: PublicationContent
+  after: PublicationContent
+  requester: { sessionId: string; groupId: string | null }
+  preparedRationale: string
+  notify: true
+  baseCommit: string | null
+  evidenceRefs: string[]
+  availability: 'ready' | 'stale' | 'decided'
+  unavailableReason: string | null
+}
+
+export interface DecisionPublicationReceipt {
+  planId: string
+  cardId: string
+  decisionId: string
+  commandId: string
+  handoffId: string
+  taskId: string
+  baseRevision: number
+  publishedRevision: number
+  payloadHash: string
+  bindingHash: string
+  publishedAt: string
+  noticeMessageIds: string[]
+  wakeupMessageId: string | null
+}
+
+export interface DecisionPublicationView extends PublicationBindingRef {
+  receipt: DecisionPublicationReceipt | null
 }
 
 /** The current decision: the highest `seq` (D3); null while open. */

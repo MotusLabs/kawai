@@ -72,6 +72,7 @@ describe('targets and mail (D6)', () => {
     expect(service.sides(teamId, outcome.pause.id)).toEqual({ noActiveWork: ['ui'], landingInProgress: [] })
   })
 
+  // @covers: plan-pause › The owner pauses the work a hold covers › Two developers are asked to pause
   test('two developers are asked to pause: one pause, two targets, one mail on each change task (spec scenario)', async () => {
     const { planId, executionId } = await wired.executionWith(['api', 'ui'])
     const api = await wired.inFlight(executionId, 'api')
@@ -170,6 +171,7 @@ describe('targets and mail (D6)', () => {
     expect(wired.pauseMails(api.taskId)).toHaveLength(1)
   })
 
+  // @covers: plan-pause › An unclaimed instruction is withdrawn › A spawning instruction
   test('a spawning instruction waits for its claim, then one mail (the claim is the once-marker)', async () => {
     const { planId, executionId } = await wired.executionWith(['api'])
     const api = await wired.inFlight(executionId, 'api', 'dev', 'spawning')
@@ -249,6 +251,7 @@ describe('targets and mail (D6)', () => {
     expect(pauseTargetState(record, facts).state).toBe('paused')
   })
 
+  // @covers: plan-pause › An unclaimed instruction is withdrawn › A queued instruction
   test('a queued instruction is withdrawn through the stop branch: cancelled mail, superseded assignment, Paused at once', async () => {
     const { planId, executionId } = await wired.executionWith(['api'])
     const api = await wired.inFlight(executionId, 'api', 'dev', 'queued')
@@ -267,6 +270,7 @@ describe('targets and mail (D6)', () => {
     expect(wired.pauseMails(api.taskId)).toHaveLength(0)
   })
 
+  // @covers: plan-pause › The owner pauses the work a hold covers › Kawai-held steps are not targets
   test('Kawai-held steps and a task-less change are listed as having no active work, not targeted', async () => {
     const { planId, executionId } = await wired.executionWith(['api', 'ui', 'ops', 'docs'])
     await wired.inFlight(executionId, 'api')
@@ -336,6 +340,7 @@ describe('targets and mail (D6)', () => {
     expect(wired.pauseMails(api.taskId)).toEqual([expect.objectContaining({ toId: 'dev3', priority: 'urgent' })])
   })
 
+  // @covers: plan-pause › Parked, cooling, and landing holders are named, not forced › A merge has started
   test('a started update or merge lists as landing in progress and is left alone', async () => {
     const { planId, executionId } = await wired.executionWith(['api', 'ui'])
     await wired.inFlight(executionId, 'api')

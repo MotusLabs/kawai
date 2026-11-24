@@ -90,6 +90,8 @@ export interface PauseTickDeps {
   readiness: (sessionId: string) => { ready: boolean; reason: string | null }
   /** The live holder facts (`pauseHolderFacts`). */
   factsOf: (sessionId: string) => PauseHolderRuntimeFacts
+  /** Re-push the plan's detail after a recorded Paused or a closed pause (DV3); absent where no view subscribes. */
+  announce?: (planId: string) => void
   now?: () => Date
 }
 
@@ -112,14 +114,18 @@ function pausePass(deps: PauseTickDeps, pause: PlanPause, groupsRoot: string, no
   deps.deliverOwed(teamIdOf(pause), groupsRoot, pause.id)
   const execution = deps.executions.execution(pause.executionId)
   const finished = execution !== null && execution.state !== 'running'
+  let changed = false
   for (const target of deps.pauses.targets(pause.id)) {
     if (target.decision !== null || target.pausedAt !== null) continue
     const { record, facts } = derivePauseTarget(deps, pause, target, finished, now)
     // D8's recording rule, nothing else records Paused: the guarded write
     // arbitrates a repeat, so the first tick's fact is the one that stands.
-    if (workOnOrigin(record) && facts.readiness.ready) deps.pauses.recordPaused(pause.id, target.change, target.checkpointId)
+    if (workOnOrigin(record) && facts.readiness.ready) changed = deps.pauses.recordPaused(pause.id, target.change, target.checkpointId).written || changed
   }
-  deps.pauses.closeIfSettled(pause.id, finished)
+  changed = deps.pauses.closeIfSettled(pause.id, finished) || changed
+  // DV3: a recorded Paused (or a closed pause) re-pushes the plan's detail;
+  // a tick that wrote nothing pushes nothing.
+  if (changed) deps.announce?.(pause.planId)
 }
 
 const teamIdOf = (pause: PlanPause): string => pause.teamId

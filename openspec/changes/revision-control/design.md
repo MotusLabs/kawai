@@ -700,6 +700,7 @@ Order rule: effect, paused, pausing, hold, uncertain-delivery, then the shipped 
 | AT8 | target decided | none |
 | AT9 | execution stopped or finished | none; the targets read cancelled |
 | AT10 | target Pausing for another cause, deadline not passed | none |
+| AT11 | open plan, active hold, deadline not passed | none (added 2026-11-18 by the 9.3 completeness test: AT1–AT4 left this hold cell unmatched) |
 
 Completeness: every combination of plan open × {hold active, released, extended} × deadline passed, and of target state {Pausing·other, Pausing·holder-killed, Pausing·checkpoint-push-failed, Paused, decided} × deadline passed × execution running, matches exactly one row; a closed plan is AT4 whatever the rest.
 

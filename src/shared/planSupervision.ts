@@ -6,7 +6,8 @@
 // - `SupervisionCause`, `SupervisionStall`, progress and activity, and the
 //   derived `ChangeSupervision`;
 // - the cause and stop-reason labels, rendering an unknown kind verbatim
-//   (causes are append-only: `revision-control` adds `hold`).
+//   (causes are append-only: `revision-control` adds `paused`, `pausing`,
+//   and `hold` after `effect`).
 // `changeSupervision(input, now)` owns the outcome precedence, the waits, and
 // both stalls; `failureSignature` the repeating-failure key. The report
 // (`blockedDependents`, `planReport`) lives in `planReport.ts`.
@@ -14,6 +15,8 @@ import type { CandidateState } from './planIntegration'
 import { agentHeldStage, type AttemptKind, type AttemptStatus, type ChangeState, type ChangeStep, type CiCheck, type RoundOutcome, type StopDetail } from './planExecution'
 import { ciClass, flakyChecks, runsByName } from './planExecutionGates'
 import type { DiagnosisSignal } from './reviewConvergence'
+import type { HoldScope, PausingCause } from './planRevisionControl'
+import type { HandoffNextActor } from './taskHandoffs'
 
 export type SupervisionOutcome = 'landed' | 'running' | 'waiting' | 'stalled' | 'stopped' | 'cancelled' | 'not-started'
 export const SUPERVISION_OUTCOMES: readonly SupervisionOutcome[] = ['landed', 'running', 'waiting', 'stalled', 'stopped', 'cancelled', 'not-started']
@@ -23,6 +26,12 @@ export type SupervisionWait =
   | { kind: 'dependency'; changes: string[]; stopped: string[] }
   | { kind: 'parallel-limit'; limit: number | null }
   | { kind: 'effect'; effect: string; state: string; tries: number; nextAt: string | null }
+  /** revision-control D13: an undecided Paused target, awaiting the owner's decision. */
+  | { kind: 'paused'; pauseId: string; awaiting: 'decision' }
+  /** revision-control D13: a Pausing target and its D8 causes. */
+  | { kind: 'pausing'; pauseId: string; causes: PausingCause[] }
+  /** revision-control D13: the active holds covering the change, with their scope and deadline. */
+  | { kind: 'hold'; holds: Array<{ id: string; scope: HoldScope; deadline: string }> }
   | { kind: 'uncertain-delivery'; messageId: string | null }
   | { kind: 'staffing'; blocker: string | null }
   | { kind: 'parked'; session: string | null; profile: string | null; until: string | null; cooling: boolean }
@@ -35,12 +44,15 @@ export type SupervisionWait =
   | { kind: 'landing-slot'; holderKind: string | null; holderId: string | null }
   /** review-convergence decision 8: after Amend, the owner publishes this task revision. */
   | { kind: 'contract-revision'; taskId: string; revision: number }
+  /** owner-publication-handoff D9: the task's pending handoff awaits its next actor (W1–W4); appended last, never read by the scheduler. */
+  | { kind: 'owner-publication'; handoffId: string; state: 'open' | 'stale'; baseRevision: number; nextActor: HandoffNextActor }
 
 /** The agent-held stages (D11) and the steps Kawai holds between ticks. */
 export type SupervisionStage = AttemptKind | 'review' | 'kawai'
 
 export type SupervisionStall =
-  | { kind: 'no-progress'; episodeKey: string; anchorAt: string; deadlineAt: string; idle: boolean }
+  /** `holderGone` (owner-publication-handoff D9): the holder is archived or killed (S5); absent otherwise. */
+  | { kind: 'no-progress'; episodeKey: string; anchorAt: string; deadlineAt: string; idle: boolean; holderGone?: true }
   | { kind: 'repeating-failure'; episodeKey: string; signature: string; rounds: [string, string] }
   /** An open diagnosis (review-convergence decision 8): its id is the episode; `awaitingRevision` is the task revision the owner is asked to publish after Amend. */
   | { kind: 'convergence'; episodeKey: string; signals: DiagnosisSignal[]; cardId: string; awaitingRevision: number | null }
@@ -125,6 +137,12 @@ export interface SupervisionInput {
   waitEndedAt: string | null
   /** The change's open diagnosis (review-convergence decision 8); `awaitingRevision` is set once Amend applied. */
   diagnosis: { id: string; signals: DiagnosisSignal[]; cardId: string; taskId: string | null; awaitingRevision: number | null } | null
+  /** revision-control D13: the active holds covering the change; absent or empty when none does. */
+  holds?: Array<{ id: string; scope: HoldScope; deadline: string }>
+  /** revision-control D13: the change's undecided pause target — Paused only from a recorded `paused_at` (I2); absent or null when none. */
+  pause?: { pauseId: string; state: 'paused' } | { pauseId: string; state: 'pausing'; causes: PausingCause[] } | null
+  /** owner-publication-handoff D9: the change's task's pending handoff with its next actor; absent or null when none. */
+  handoff?: { id: string; state: 'open' | 'stale'; baseRevision: number; nextActor: HandoffNextActor } | null
 }
 
 export interface ChangeSupervision {
@@ -210,7 +228,11 @@ function convergenceStall(input: SupervisionInput): Extract<SupervisionStall, { 
   return { kind: 'convergence', episodeKey: diagnosis.id, signals: diagnosis.signals, cardId: diagnosis.cardId, awaitingRevision: diagnosis.awaitingRevision }
 }
 
-/** D10's ten running-stage waits, in order; every applicable one. */
+/**
+ * D10's running-stage waits, in order, every applicable one: effect, then
+ * revision-control D13's paused, pausing, and hold, then uncertain-delivery
+ * and the rest (S2's append-only rule).
+ */
 function stageWaits(input: SupervisionInput, now: Date): SupervisionWait[] {
   const waits: SupervisionWait[] = []
   const nowIso = now.toISOString()
@@ -220,6 +242,10 @@ function stageWaits(input: SupervisionInput, now: Date): SupervisionWait[] {
       break
     }
   }
+  const pause = input.pause ?? null
+  if (pause?.state === 'paused') waits.push({ kind: 'paused', pauseId: pause.pauseId, awaiting: 'decision' })
+  if (pause?.state === 'pausing') waits.push({ kind: 'pausing', pauseId: pause.pauseId, causes: pause.causes })
+  if (input.holds && input.holds.length > 0) waits.push({ kind: 'hold', holds: input.holds })
   const instruction = input.instruction
   const holder = instruction?.holder ?? null
   if (instruction?.state === 'uncertain') waits.push({ kind: 'uncertain-delivery', messageId: instruction.messageId })
@@ -240,6 +266,9 @@ function stageWaits(input: SupervisionInput, now: Date): SupervisionWait[] {
   if (input.step === 'releasing' && input.memberRelease) waits.push({ kind: 'member-release', ...input.memberRelease })
   if (input.step === 'conditions' && input.conditions.length > 0) waits.push({ kind: 'condition', conditions: input.conditions })
   if (input.step === 'awaiting-slot') waits.push({ kind: 'landing-slot', holderKind: input.slotHolder?.kind ?? null, holderId: input.slotHolder?.id ?? null })
+  // Appended last (owner-publication-handoff D9): an earlier wait stays the cause.
+  const handoff = input.handoff ?? null
+  if (handoff !== null) waits.push({ kind: 'owner-publication', handoffId: handoff.id, state: handoff.state, baseRevision: handoff.baseRevision, nextActor: handoff.nextActor })
   return waits
 }
 
@@ -258,7 +287,7 @@ function noProgress(input: SupervisionInput, stage: SupervisionStage, progressAt
   const idle = holder !== null && holderIdle(holder)
   if (idle) deadline = Math.min(deadline, Date.parse(later(anchorAt, holder.lastTurnEndAt)!) + NO_PROGRESS_IDLE_MS)
   if (now.getTime() < deadline) return null
-  return { kind: 'no-progress', episodeKey, anchorAt, deadlineAt: new Date(deadline).toISOString(), idle }
+  return { kind: 'no-progress', episodeKey, anchorAt, deadlineAt: new Date(deadline).toISOString(), idle, ...(holder?.gone ? { holderGone: true as const } : {}) }
 }
 
 function stageOf(input: SupervisionInput): SupervisionStage {
@@ -310,7 +339,8 @@ export function changeSupervision(input: SupervisionInput, now: Date): ChangeSup
     if (unlanded.length > 0) {
       waits.push({ kind: 'dependency', changes: unlanded.map(entry => entry.change), stopped: unlanded.filter(entry => entry.outcome === 'stopped').map(entry => entry.change) })
     }
-    const effect = stageWaits({ ...input, instruction: null, openCards: [], step: null }, now)[0]
+    // A waiting change reads only its effect here; the revision-control waits are running-stage (D13).
+    const effect = stageWaits({ ...input, instruction: null, openCards: [], step: null, holds: [], pause: null, handoff: null }, now)[0]
     if (effect) waits.push(effect)
     if (waits.length === 0) waits.push({ kind: 'parallel-limit', limit: input.parallelLimit })
     return { ...base, outcome: 'waiting', cause: waits[0]!, alsoApplying: waits.slice(1) }
@@ -367,6 +397,10 @@ export function causeLabel(cause: SupervisionCause | { kind: string }): string {
     case 'dependency': return known.stopped.length > 0 ? `Blocked by stopped ${list(known.stopped)}` : `Waiting on ${list(known.changes)}`
     case 'parallel-limit': return known.limit === null ? 'Waiting for a parallel slot' : `Waiting for a parallel slot (limit ${known.limit})`
     case 'effect': return `Waiting on Kawai's ${known.effect} (${known.state}, try ${known.tries}${known.nextAt ? `, next ${known.nextAt}` : ''})`
+    case 'paused': return `Paused (${known.pauseId}): waiting for the owner's decision`
+    case 'pausing': return `Pausing (${known.pauseId})${known.causes.length > 0 ? `: ${list(known.causes.map(cause => cause.kind))}` : ''}`
+    // A hold cause without its holds (an older peer's shape) renders its kind verbatim, like an unknown one.
+    case 'hold': return Array.isArray(known.holds) ? `Held by ${list(known.holds.map(hold => `${hold.id} (${hold.scope}, review by ${hold.deadline})`))}` : known.kind
     case 'uncertain-delivery': return 'Waiting on an uncertain delivery'
     case 'staffing': return known.blocker ? `Waiting for staffing: ${known.blocker}` : 'Waiting for staffing'
     case 'parked': return `${known.cooling ? 'Profile cooling' : 'Holder parked'}${known.until ? ` until ${known.until}` : ''}`
@@ -379,7 +413,18 @@ export function causeLabel(cause: SupervisionCause | { kind: string }): string {
     case 'member-release': return `Waiting for ${known.member} to be released: ${known.reason}`
     case 'condition': return `Waiting for acceptance conditions: ${list(known.conditions)}`
     case 'contract-revision': return `Waiting for the owner to publish revision ${known.revision} of task ${known.taskId}`
+    case 'owner-publication': return ownerPublicationLabel(known)
     case 'landing-slot': return known.holderId ? `Waiting for the landing slot, held by ${known.holderKind ?? 'holder'} ${known.holderId}` : 'Waiting for the landing slot'
     default: return String((cause as { kind: string }).kind)
   }
+}
+
+/** The owner-publication wait's line, naming its next actor (W1–W4). */
+function ownerPublicationLabel(wait: Extract<SupervisionWait, { kind: 'owner-publication' }>): string {
+  const actor = wait.nextActor
+  const who = actor.kind === 'owner' ? `the task owner ${actor.sessionId}` : actor.kind === 'requester' ? `the requester ${actor.sessionId}`
+    : actor.kind === 'requester-group' ? `the requester's group ${actor.group}` : 'the human'
+  return wait.state === 'open'
+    ? `Waiting for ${who} to publish prepared revision ${wait.handoffId} (base revision ${wait.baseRevision})`
+    : `Waiting for ${who} to ${actor.kind === 'human' ? 'decline' : 're-prepare or withdraw'} stale handoff ${wait.handoffId} (base revision ${wait.baseRevision})`
 }

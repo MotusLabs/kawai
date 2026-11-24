@@ -14,8 +14,8 @@ import { alive, codexDriver, pids, refusal, sent, stopDrivers, waitFor } from '.
 afterEach(stopDrivers)
 
 describe('Codex driver: the first public-factory path', () => {
-  test('the ./codex entry exports exactly createCodexDriver and hasCodexLogin', () => {
-    expect(Object.keys(codexEntry).sort()).toEqual(['createCodexDriver', 'hasCodexLogin'])
+  test('the ./codex entry exports exactly createCodexDriver, hasCodexLogin and the capacity continuation', () => {
+    expect(Object.keys(codexEntry).sort()).toEqual(['CODEX_CAPACITY_CONTINUATION', 'CODEX_CAPACITY_CONTINUATION_VERSION', 'createCodexDriver', 'hasCodexLogin', 'isCodexCapacityContinuation'])
   })
 
   // @covers: agent-runtime › Session start and turn results are distinct › Successful turn

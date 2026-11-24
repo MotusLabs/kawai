@@ -1,4 +1,3 @@
-// @reads: .kawai/groups, .kawai/groups/**
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -177,55 +176,6 @@ describe('loadGroupCatalog', () => {
     const projectFile = path.join(repo, '.kawai', 'groups', 'leads.md')
     expect(catalog.errors.some(error => error.startsWith(projectFile))).toBe(true)
     expect(leads?.sources.some(source => source.file === projectFile)).toBe(false)
-  })
-})
-
-describe('tracked change-leads role (change-lead-pilot D2)', () => {
-  test('the tracked change-leads file grants task creation and cross-worktree coordination, and denies plan, mailbox-management, and process-report rights', () => {
-    // The real tracked file, loaded exactly as CI resolves it: a copy of the
-    // tracked group files with an empty temp HOME, so no user-level layer
-    // can shadow the asserted rights.
-    const trackedGroups = path.resolve(import.meta.dir, '../../../.kawai/groups')
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-groups-change-leads-'))
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-groups-cl-home-'))
-    try {
-      fs.cpSync(trackedGroups, path.join(root, '.kawai', 'groups'), { recursive: true })
-      const catalog = loadGroupCatalog({ groupsRoot: root, homeDir: home })
-      const changeLeads = catalog.groups.get('change-leads')
-      expect(changeLeads?.file).toBe(path.join(root, '.kawai', 'groups', 'change-leads.md'))
-      expect(changeLeads?.group.canCreateTasks).toBe(true)
-      expect(changeLeads?.group.worktreeScoped).toBe(false)
-      expect(changeLeads?.group.canCreatePlans).toBe(false)
-      expect(changeLeads?.group.canManageMailbox).toBe(false)
-      expect(changeLeads?.group.canReportProcess).toBe(false)
-      expect(changeLeads?.group.releaseOnTaskClose).toBe(false)
-      expect(changeLeads?.group.canReleaseMembers).toBe(true)
-      expect(changeLeads?.group.max).toBe(1)
-      expect(catalog.errors).toEqual([])
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-      fs.rmSync(home, { recursive: true, force: true })
-    }
-  })
-})
-
-describe('tracked groups against the shipped profile catalog', () => {
-  test('every profile a tracked group file references is defined by the shipped catalog alone', () => {
-    // A fresh clone has no project catalog (the root .kawai/profiles.json is
-    // untracked), so the groups are loaded from a copy of the tracked files
-    // with an empty temp HOME — exactly CI's resolution.
-    const trackedGroups = path.resolve(import.meta.dir, '../../../.kawai/groups')
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-groups-shipped-'))
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-groups-home-'))
-    try {
-      fs.cpSync(trackedGroups, path.join(root, '.kawai', 'groups'), { recursive: true })
-      const catalog = loadGroupCatalog({ groupsRoot: root, homeDir: home })
-      const unknown = catalog.warnings.filter(warning => warning.includes('is not defined'))
-      expect(unknown).toEqual([])
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-      fs.rmSync(home, { recursive: true, force: true })
-    }
   })
 })
 

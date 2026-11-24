@@ -12,6 +12,7 @@ import { mapRow } from './messageRow'
 import { MessageEventLog, storeActor, type StoreActor } from './messageEvents'
 import { retryMessage } from './mailboxRetry'
 import { ParkedCancel, actionReason, type CancelResult } from './parkedCancel'
+import { MailboxCommitObservers } from './mailboxCommitObservers'
 export type { CancelResult } from './parkedCancel'
 
 import type {
@@ -42,7 +43,7 @@ export class MailboxStore {
   /**
    * New messages only (manual-task-stall-alerts D2): called from `enqueue`
    * with the inserted row, never for a claim, push, delivery, or any other
-   * transition. It runs inside the caller's transaction, before commit, so
+   * transition. Ordinary callers may enqueue inside their transaction, so
    * a listener must defer its work and re-read the row.
    */
   subscribeEnqueued(listener: (message: TeamMessage) => void): () => void {
@@ -51,12 +52,24 @@ export class MailboxStore {
   }
 
   private changed(id: string, changed: boolean): boolean {
-    if (changed) {
-      const message = this.get(id)
-      if (message) for (const listener of this.listeners) listener(message.teamId, message)
-    }
+    if (changed) this.observers.observe(id, 'changed')
     return changed
   }
+
+  private emitObservation(id: string, kind: 'changed' | 'enqueued', committed: boolean): void {
+    const message = this.get(id)
+    if (!message) return
+    const announce = (listener: () => void) => {
+      if (!committed) return listener()
+      try { listener() } catch { /* persisted mail remains available to the dispatcher on restart */ }
+    }
+    if (kind === 'changed') for (const listener of this.listeners) announce(() => listener(message.teamId, message))
+    else for (const listener of this.enqueuedListeners) announce(() => listener(message))
+  }
+
+  private readonly observers: MailboxCommitObservers
+  writeWithCommittedObservations<T>(write: () => T): T { return this.observers.write(write) }
+  get deferringCommitObservations(): boolean { return this.observers.deferring }
 
   private readonly statements: Record<keyof typeof mailboxSql, ReturnType<Database['prepare']>>
   private readonly dynamicStatements = new Map<string, ReturnType<Database['prepare']>>()
@@ -67,6 +80,7 @@ export class MailboxStore {
     recipientExists?: (id: string) => boolean
     recipientFlagged?: (id: string) => boolean
   } = {}) {
+    this.observers = new MailboxCommitObservers(db, (id, kind, committed) => this.emitObservation(id, kind, committed))
     this.events = new MessageEventLog(db)
     this.parkedCancel = new ParkedCancel({
       // Every writing transaction begins IMMEDIATE: in rollback-journal mode a
@@ -145,7 +159,7 @@ export class MailboxStore {
     } else insert()
     this.changed(id, true)
     const message = this.get(id)!
-    for (const listener of this.enqueuedListeners) listener(message)
+    this.observers.observe(id, 'enqueued')
     // A new row: nothing was overwritten; the hop-limit reason is the one written.
     this.events.record({
       messageId: id, teamId: message.teamId, kind: overLimit ? 'dead-lettered' : 'sent',

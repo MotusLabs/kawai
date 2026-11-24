@@ -117,41 +117,97 @@ async function runRow(row: Row) {
 }
 
 describe('real-tmux retry decision table (check-time-optimization D2)', () => {
-  for (const row of ROWS) {
-    const title = `${row.id}: main ${row.main}, F=${row.failing.length}, retries ${row.retries ? 'on' : 'off'}, ${row.rerunFails.length > 0 ? 'a rerun fails' : 'reruns pass'} → ${row.step}`
-    // The table's rows cover each scenario: RT3 (one timing failure), RT4
-    // (the rerun fails too), RT5 (three fail), RT1 (main-batch failure),
-    // RT6 (retries off).
-    // @covers: dev-checks › A failed real-tmux file is retried once › One timing failure
-    // @covers: dev-checks › A failed real-tmux file is retried once › The rerun fails too
-    // @covers: dev-checks › A failed real-tmux file is retried once › Three real-tmux files fail
-    // @covers: dev-checks › A failed real-tmux file is retried once › A main-batch failure
-    // @covers: dev-checks › A failed real-tmux file is retried once › Retries turned off
-    test(title, async () => {
-      const { ran, reruns, outcome, thrown } = await runRow(row)
-      expect(reruns).toEqual(row.reruns)
-      if (row.main === 'fail') {
-        // No real-tmux file runs after a main-batch failure.
-        expect(ran).toEqual(['main batch'])
-      } else {
-        // Every real-tmux file ran its first attempt, and every rerun came
-        // after the last of them.
-        const firsts = ran.filter((label) => label.startsWith('real-tmux: '))
-        expect(firsts).toEqual(TMUX.map((file) => `real-tmux: ${file}`))
-        const lastFirst = ran.lastIndexOf(`real-tmux: ${TMUX[TMUX.length - 1]}`)
-        ran.forEach((label, index) => {
-          if (label.startsWith('real-tmux rerun: ')) expect(index).toBeGreaterThan(lastFirst)
-        })
-      }
-      if (row.step === 'pass') {
-        expect(thrown).toBeUndefined()
-        expect(outcome?.retries).toEqual(row.recorded!)
-      } else {
-        expect(thrown).toBeInstanceOf(Error)
-        for (const part of row.message ?? []) expect(thrown!.message).toContain(part)
-      }
-    })
+  // One literal call per table row, unrolled from the template loop by the
+  // check-time-optimization closeout (task 7.1); each title is the row's
+  // rendered text, and the assertions are the loop's unchanged. Each row
+  // carries the scenario annotation its outcome exercises.
+  const expectRow = async (row: Row) => {
+    const { ran, reruns, outcome, thrown } = await runRow(row)
+    expect(reruns).toEqual(row.reruns)
+    if (row.main === 'fail') {
+      // No real-tmux file runs after a main-batch failure.
+      expect(ran).toEqual(['main batch'])
+    } else {
+      // Every real-tmux file ran its first attempt, and every rerun came
+      // after the last of them.
+      const firsts = ran.filter((label) => label.startsWith('real-tmux: '))
+      expect(firsts).toEqual(TMUX.map((file) => `real-tmux: ${file}`))
+      const lastFirst = ran.lastIndexOf(`real-tmux: ${TMUX[TMUX.length - 1]}`)
+      ran.forEach((label, index) => {
+        if (label.startsWith('real-tmux rerun: ')) expect(index).toBeGreaterThan(lastFirst)
+      })
+    }
+    if (row.step === 'pass') {
+      expect(thrown).toBeUndefined()
+      expect(outcome?.retries).toEqual(row.recorded!)
+    } else {
+      expect(thrown).toBeInstanceOf(Error)
+      for (const part of row.message ?? []) expect(thrown!.message).toContain(part)
+    }
   }
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › A main-batch failure
+  test('RT1: main fail, F=1, retries on, reruns pass → fail', async () => {
+    await expectRow(ROWS[0]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › A main-batch failure
+  test('RT1: main fail, F=0, retries off, reruns pass → fail', async () => {
+    await expectRow(ROWS[1]!)
+  })
+
+  test('RT2: main pass, F=0, retries on, reruns pass → pass', async () => {
+    await expectRow(ROWS[2]!)
+  })
+
+  test('RT2: main pass, F=0, retries off, reruns pass → pass', async () => {
+    await expectRow(ROWS[3]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › One timing failure
+  test('RT3: main pass, F=1, retries on, reruns pass → pass', async () => {
+    await expectRow(ROWS[4]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › One timing failure
+  test('RT3: main pass, F=2, retries on, reruns pass → pass', async () => {
+    await expectRow(ROWS[5]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › The rerun fails too
+  test('RT4: main pass, F=1, retries on, a rerun fails → fail', async () => {
+    await expectRow(ROWS[6]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › The rerun fails too
+  test('RT4: main pass, F=2, retries on, a rerun fails → fail', async () => {
+    await expectRow(ROWS[7]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › Three real-tmux files fail
+  test('RT5: main pass, F=3, retries on, reruns pass → fail', async () => {
+    await expectRow(ROWS[8]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › Three real-tmux files fail
+  test('RT5: main pass, F=7, retries on, reruns pass → fail', async () => {
+    await expectRow(ROWS[9]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › Three real-tmux files fail
+  test('RT5: main pass, F=3, retries off, reruns pass → fail', async () => {
+    await expectRow(ROWS[10]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › Retries turned off
+  test('RT6: main pass, F=1, retries off, reruns pass → fail', async () => {
+    await expectRow(ROWS[11]!)
+  })
+
+  // @covers: dev-checks › A failed real-tmux file is retried once › Retries turned off
+  test('RT6: main pass, F=2, retries off, reruns pass → fail', async () => {
+    await expectRow(ROWS[12]!)
+  })
 
   test('a signal-refused real-tmux batch propagates instead of being collected', async () => {
     let thrown: unknown

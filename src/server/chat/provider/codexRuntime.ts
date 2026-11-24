@@ -39,9 +39,11 @@
 //   exit reports Kawai's message with its code or signal.
 import { isAbsolute } from 'node:path'
 import { createCodexDriver } from '@motuslabs/agent-runtime/codex'
-import type { AgentEvent, CodexAgentDriver, CodexDriverOptions, Effort } from '@motuslabs/agent-runtime'
+import type { AgentEvent, CodexAgentDriver, CodexDriverOptions, Effort, ImageInput } from '@motuslabs/agent-runtime'
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import type { ChatApprovalDecision, ChatApprovalPolicy, ChatBackgroundTask, ChatCommandState, ChatPeerMessage, ChatPendingRequest, ChatQuestion, ChatQuestionAnswer, ChatWorker } from '../../../shared/chat'
+import { publicChatImage, type TrustedChatImage } from '../images/ChatImageStore'
+import type { ChatImage } from '../../../shared/chatImages'
 import type { SessionStatus } from '../../../shared/types'
 import { logger } from '../../logger'
 import { formatEnvelope } from '../../team/envelope'
@@ -70,6 +72,7 @@ export function createCodexChatDriver(options: CodexSessionDriverOptions, create
 
 class CodexChatDriver implements ChatAgentDriver {
   private readonly boot: RuntimeBoot<CodexAgentDriver>
+  private readonly images = new Map<string, ChatImage[]>()
   private killed = false
   private dead = false
   private threadId: string | null
@@ -144,9 +147,12 @@ class CodexChatDriver implements ChatAgentDriver {
     if (inner && isAbsolute(this.projectPath)) inner.setSkillDirectory?.(this.projectPath)
   }
 
-  send(text: string): void {
-    if (this.killed) return
-    this.submit(text, crypto.randomUUID())
+  send(text: string, images?: TrustedChatImage[]): void | Promise<import('./driver').ChatSendOutcome> {
+    if (this.killed) { if (images?.length) throw Error('This session was killed; the message was not sent.'); return }
+    const id = crypto.randomUUID()
+    if (images?.length) this.images.set(id, images.map(publicChatImage))
+    const sent = this.submit(text, id, undefined, images)
+    if (images?.length) return sent.then(ok => ok ? { ok: true } : { ok: false, error: 'Codex refused the image turn before admission.' })
   }
 
   deliver(envelope: ChatPeerMessage): void {
@@ -272,13 +278,14 @@ class CodexChatDriver implements ChatAgentDriver {
    * text-only, as the source driver's deliver and answer paths were; a human
    * send omits it and keeps the catalog's skill inputs.
    */
-  private submit(text: string, messageUuid: string, codexSkills?: 'none'): Promise<boolean> {
+  private submit(text: string, messageUuid: string, codexSkills?: 'none', images?: TrustedChatImage[]): Promise<boolean> {
+    const imageInput = images?.map(image => ({ type: 'localImage' as const, path: image.path }))
     const epoch = this.interrupts
     const live = this.boot.booting || this.waiting > 0 ? null : this.boot.live
     let job: Promise<boolean>
     if (live) {
       // C2: handed over before any host callback below can move the project or send again.
-      job = this.forward(live, text, messageUuid, codexSkills, epoch)
+      job = this.forward(live, text, messageUuid, codexSkills, epoch, imageInput)
     } else {
       // A spawn refusal (a registered CODEX_HOME) throws here, before anything is accepted.
       const ready = this.ensure()
@@ -293,7 +300,7 @@ class CodexChatDriver implements ChatAgentDriver {
       job = ready.then(async (inner) => {
         await previous
         // A send still waiting for its driver when an interrupt landed, or whose preparation threw, is withdrawn.
-        const forwarded = inner && !this.killed && epoch === this.interrupts && !this.refused.has(messageUuid) ? this.forward(inner, text, messageUuid, 'none', epoch) : null
+        const forwarded = inner && !this.killed && epoch === this.interrupts && !this.refused.has(messageUuid) ? this.forward(inner, text, messageUuid, 'none', epoch, imageInput) : null
         release()
         return forwarded ? forwarded : false
       }, (error: unknown) => {
@@ -307,6 +314,7 @@ class CodexChatDriver implements ChatAgentDriver {
       this.emit({ type: 'error', message: `Codex refused the turn: ${error instanceof Error ? error.message : String(error)}` })
       throw error
     }).finally(() => {
+      this.images.delete(messageUuid)
       this.efforts.delete(messageUuid)
       this.refused.delete(messageUuid)
       this.sending -= 1
@@ -326,20 +334,20 @@ class CodexChatDriver implements ChatAgentDriver {
   }
 
   /** Calls the package's send now (it captures its skill inputs there); settles true once accepted. */
-  private async forward(inner: CodexAgentDriver, text: string, messageUuid: string, codexSkills: 'none' | undefined, epoch: number): Promise<boolean> {
+  private async forward(inner: CodexAgentDriver, text: string, messageUuid: string, codexSkills: 'none' | undefined, epoch: number, images?: ImageInput[]): Promise<boolean> {
     const steer = inner.state === 'active'
-    const mode = codexSkills ? { codexSkills } : {}
+    const mode = { ...(codexSkills ? { codexSkills } : {}), ...(images?.length ? { images } : {}) }
     try {
       const handle = await inner.send(text, { messageUuid, ...mode, ...(steer ? { continuation: 'steer' as const } : {}) }).catch((error: unknown) => {
-        // A steer prepared for a turn that ended meanwhile goes as a new turn, with the same skill mode.
-        if (steer && (error as { code?: unknown } | null)?.code === 'turn-ended') return inner.send(text, { messageUuid, ...mode })
+        // A steer prepared for a turn that ended meanwhile goes as a new turn, same skill mode, unless an interrupt superseded it.
+        if (steer && epoch === this.interrupts && (error as { code?: unknown } | null)?.code === 'turn-ended') return inner.send(text, { messageUuid, ...mode })
         throw error
       })
       void this.owned.track('turn', handle.result)
       return true
     } catch (error) {
       // An interrupt the package found this send still waiting for withdraws it, as one waiting for its driver is.
-      if (epoch !== this.interrupts && (error as { code?: unknown } | null)?.code === 'interrupted') return false
+      if (epoch !== this.interrupts && ['interrupted', 'turn-ended'].includes(String((error as { code?: unknown } | null)?.code))) return false
       // The refusal our beforeSubmit gave a send whose preparation threw: the caller already has that error.
       if (this.refused.has(messageUuid) && error instanceof AgentRuntimeError && error.category === 'context') return false
       throw error
@@ -471,7 +479,7 @@ class CodexChatDriver implements ChatAgentDriver {
         // A delivery's peer message was shown when deliver() opened its turn.
         if (this.peers.delete(event.messageUuid)) break
         if (this.silent.delete(event.messageUuid)) break
-        this.emit({ type: 'user_message', turnId: event.turnId, text: event.text, messageUuid: event.messageUuid }, event.at)
+        this.emit({ type: 'user_message', turnId: event.turnId, text: event.text, messageUuid: event.messageUuid, ...(this.images.has(event.messageUuid) ? { images: this.images.get(event.messageUuid) } : {}) }, event.at)
         break
       }
       case 'error':

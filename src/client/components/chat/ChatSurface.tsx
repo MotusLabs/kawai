@@ -64,6 +64,8 @@ import { AsideRow } from './ChatRow'
 import { agentLabelOf } from './transcriptLayout'
 import { useHistoryAnchor } from './useHistoryAnchor'
 import { useRevealRow } from './useRevealRow'
+import { useChatImageDrafts } from '../../stores/chatImageDrafts'
+import { submitImageDraft } from '../../stores/chatImageSends'
 
 const EMPTY = emptyTranscript()
 /** Stable empty list so an absent directory never re-renders (getSnapshot caching). */
@@ -109,6 +111,8 @@ export default function ChatSurface({
 }) {
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
   const connected = connectionStatus === 'connected'
+  const connectedRef = useRef(connected)
+  connectedRef.current = connected
   const archived = session.archivedAt != null
   const end = useRef<HTMLDivElement>(null)
   // Attachment ownership (chatAttachment.ts): holds follow this component's
@@ -182,6 +186,13 @@ export default function ChatSurface({
   }, [subscribe, sendMessage, session.projectPath, session.id, onResetCreated])
   const submitText = (trimmed: string) => {
     const clear = CLEAR_COMMAND.exec(trimmed)
+    if (useChatImageDrafts.getState().drafts[session.id]?.length) {
+      if (clear) useChatImageDrafts.getState().error(session.id, 'Remove the attached images before starting a new chat.')
+      else void submitImageDraft({ sessionId: session.id, text: trimmed,
+        scope: onSubmitContext?.() ?? null, send: sendMessage, connected: () => connectedRef.current,
+      })
+      return false
+    }
     if (clear) {
       if (!subscribe) {
         // The composer already cleared its draft; restore the command after

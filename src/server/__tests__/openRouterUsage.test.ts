@@ -94,6 +94,7 @@ describe('endpoint selection and URLs', () => {
 })
 
 describe('parseOpenRouterKey', () => {
+  // @covers: chat-usage-limits › An OpenRouter key's caps and budgets render as meters › Capped key
   test('Capped key: one key_limit meter with $0.04 left, 20% used, no reset, no period', () => {
     const parsed = parseOpenRouterKey(CAPPED_KEY, RECEIVED)
     expect(parsed).not.toBeNull()
@@ -111,6 +112,7 @@ describe('parseOpenRouterKey', () => {
     expect(parsed.remainingUsd).toBe(0.04)
   })
 
+  // @covers: chat-usage-limits › An OpenRouter key's caps and budgets render as meters › Daily budget
   test('Daily budget: a 24-hour period and the reported reset; weekly carries 7 days', () => {
     const parsed = parseOpenRouterKey(
       {
@@ -166,6 +168,7 @@ describe('parseOpenRouterKey', () => {
     for (const window of parsed?.report.windows ?? []) expect(window.periodMs).toBeUndefined()
   })
 
+  // @covers: chat-usage-limits › An OpenRouter key's caps and budgets render as meters › Unknown budget scope
   test('Unknown budget scope: the raw scope value labels the meter', () => {
     const parsed = parseOpenRouterKey(
       { budgets: [{ scope: 'team_pool', limit_usd: 10, spend_usd: 2.5, remaining_usd: 7.5, reset_interval: null }] },
@@ -198,6 +201,7 @@ describe('parseOpenRouterKey', () => {
     expect(parsed?.remainingUsd).toBe(2.5)
   })
 
+  // @covers: chat-usage-limits › An OpenRouter key's caps and budgets render as meters › Uncapped key without a balance key
   test('Uncapped key: no budgets and a null limit produce no meter', () => {
     const parsed = parseOpenRouterKey({ limit: null, limit_remaining: null, budgets: [] }, RECEIVED)
     expect(parsed?.report.windows).toEqual([])
@@ -205,6 +209,7 @@ describe('parseOpenRouterKey', () => {
     expect(parsed?.remainingUsd).toBeNull()
   })
 
+  // @covers: chat-usage-limits › An exhausted OpenRouter meter reports a limited status › Cap spent
   test('Cap spent: remaining 0 reports a limited status', () => {
     const parsed = parseOpenRouterKey(
       { budgets: [{ scope: 'key_limit', limit_usd: 0.05, spend_usd: 0.05, remaining_usd: 0, reset_interval: null, resets_at: null }] },
@@ -269,6 +274,7 @@ describe('parseOpenRouterKey', () => {
 })
 
 describe('parseOpenRouterCredits', () => {
+  // @covers: chat-usage-limits › Account credits render when a balance key is configured › Management key configured
   test('Management key configured: $40 purchased, $15.57 used → Credits · $24.43 left at ~39%', () => {
     const meter = parseOpenRouterCredits({ data: { total_credits: 40, total_usage: 15.57 } })
     expect(meter?.window).toEqual({
