@@ -6,8 +6,7 @@ import { diagnosisRationale } from '../decisions/diagnosisCards'
 import { DiagnosisStore } from './diagnosisStore'
 import { dispatchFix, dispatchUpdateAttempt, type DispatchDeps, type FixAttemptInput } from './executionDispatch'
 import type { AttemptRow } from './executionRows'
-import { fixFindings } from './fixFindings'
-
+import { fixFindings, revisionFixNotes } from './fixFindings'
 /** The fix attempt's re-send, texts rebuilt at send time from the round the attempt answers — the manifest keeps only ids. */
 export async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: string; change: string; group: string }, newest: AttemptRow): Promise<void> {
   const changeRow = deps.executions.change(input.executionId, input.change)
@@ -24,9 +23,7 @@ export async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: 
   // second republish after the attempt was minted is still the round's
   // answer), a failed round its failing checks and the verdict's findings.
   if (round?.outcome === 'superseded') {
-    const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
-    const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
-    notes = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
+    notes = revisionFixNotes(deps.tasks.store, changeRow.taskId, newest.manifest.update)
   } else if (round === null) {
     // A fix row that answers no round is an adaptation's (plan-pause Adapt,
     // plan-revision-apply's Apply): it names the revisions its manifest pins.

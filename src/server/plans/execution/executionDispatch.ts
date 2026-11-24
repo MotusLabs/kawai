@@ -157,8 +157,8 @@ export interface FixAttemptInput {
   reassign?: string | null
   failingChecks: Array<{ name: string; conclusion: string; link: string | null }>
   findingsIds: string[]
-  /** review-findings-ledger D7: built by fixFindings from the fold. */
-  findings: FixFindings
+  /** review-findings-ledger D7: built by fixFindings from the fold — a thunk is read inside the send transaction (the live ledger at render). */
+  findings: FixFindings | (() => FixFindings)
   continueFrom: string
   fixRounds: number
   /** A diagnosis outcome's rationale, which the fix handoff carries (review-convergence decision 7). */
@@ -201,10 +201,7 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: Omit<FixAttemp
   }
   // The pins this mint was decided on; the insert re-checks them after the git reads (invariant AL, review F6).
   const read = { newestId: newest?.id ?? null, roundId: round?.id ?? null, taskRevision: deps.tasks.store.get(taskId)?.revision ?? 1 }
-  const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
-  const startCommit = head.ok ? head.stdout.trim() : changeRow.baselineCommit
-  const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: changeRow.worktree })
-  const artifacts = await artifactsAt(changeRow.worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : [])
+  const { startCommit, artifacts } = await gatherStartFacts(changeRow.worktree, changeRow.baselineCommit)
   return commitAttemptInsert(insertDeps(deps), { executionId: input.executionId, change: input.change, kind, reassign: input.reassign ?? null }, read, {
     taskId, baseline: changeRow.baselineCommit, startCommit, artifacts,
     answers: {
@@ -219,6 +216,19 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: Omit<FixAttemp
     },
     ...(input.update !== undefined ? { update: input.update } : {}),
   })
+}
+
+/** The git facts a fix or update row records: the worktree's head (the baseline when unreadable) and its artifacts' hashes. */
+export async function gatherStartFacts(worktree: string, baselineCommit: string): Promise<{ startCommit: string; artifacts: Record<string, string> }> {
+  const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: worktree })
+  const startCommit = head.ok ? head.stdout.trim() : baselineCommit
+  const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: worktree })
+  return { startCommit, artifacts: await artifactsAt(worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : []) }
+}
+
+/** A failure of a send's `within` hook: not a refusal, so it passes `refusable` untouched and is rethrown as it was. */
+class WithinFailure {
+  constructor(readonly error: unknown) {}
 }
 
 /**
@@ -242,27 +252,43 @@ export async function dispatchFixAttempt(deps: DispatchDeps, input: FixAttemptIn
  * (plan-pause Adapt, Apply's adapt) — has no result to hand off from: it is
  * a plain keyed dispatch, as the owed implement attempt's is. Either commits
  * with its stamp in the send transaction, its route, instruction, and key
- * built there (P4, AL2; reviews F1, F7).
+ * built there (P4, AL2; reviews F1, F7). `within` runs in the
+ * send's transaction once the send is written — the caller's transition
+ * and closure commit with it or not at all (the F8 challenge's diagnosis
+ * seam); its failure rolls the send back and is rethrown as it was. True
+ * when the send committed.
  */
-export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, attempt: { id: string; number: number; manifestHash: string }): Promise<void> {
+export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, attempt: { id: string; number: number; manifestHash: string }, within?: () => void): Promise<boolean> {
   const caller = kawaiCaller(deps.team, input.executionId)
-  await refusable('fix', async () => commitAttemptSend(sendDeps(deps), input, attempt.id, context => {
-    const instruction = fixInstruction({
-      ...context.base(input.continueFrom),
-      failingChecks: input.failingChecks,
-      findings: input.findings,
-      fixRounds: input.fixRounds,
-      fixRoundLimit: context.execution.maxFailedFixRounds,
-      diagnosis: input.diagnosis ?? null,
-      continueFrom: input.continueFrom,
-    })
-    const { taskId } = context.change
-    return context.round === null
-      ? deps.assignments.dispatchWithin(caller, { taskId, target: { kind: 'group', id: context.group }, instruction, requestKey: context.requestKey, ...context.profiles }).assignment.id
-      : fixHandoffWithin({ assignments: deps.assignments, store: deps.tasks.store }, caller, taskId, {
-        resultId: context.round.resultId, group: context.group, instructions: instruction, requestKey: context.requestKey, ...context.profiles,
-      }).id
-  }))
+  try {
+    return await refusable('fix', async () => commitAttemptSend(sendDeps(deps), input, attempt.id, context => {
+      const id = fixSend(deps, caller, input, context)
+      try { within?.() } catch (error) { throw new WithinFailure(error) }
+      return id
+    }))
+  } catch (error) {
+    if (error instanceof WithinFailure) throw error.error
+    throw error
+  }
+}
+
+/** The fix's instruction and handoff, built from the send context's rows. */
+function fixSend(deps: DispatchDeps, caller: SystemCaller, input: FixAttemptInput, context: SendContext): string {
+  const instruction = fixInstruction({
+    ...context.base(input.continueFrom),
+    failingChecks: input.failingChecks,
+    findings: typeof input.findings === 'function' ? input.findings() : input.findings,
+    fixRounds: input.fixRounds,
+    fixRoundLimit: context.execution.maxFailedFixRounds,
+    diagnosis: input.diagnosis ?? null,
+    continueFrom: input.continueFrom,
+  })
+  const { taskId } = context.change
+  return context.round === null
+    ? deps.assignments.dispatchWithin(caller, { taskId, target: { kind: 'group', id: context.group }, instruction, requestKey: context.requestKey, ...context.profiles }).assignment.id
+    : fixHandoffWithin({ assignments: deps.assignments, store: deps.tasks.store }, caller, taskId, {
+      resultId: context.round.resultId, group: context.group, instructions: instruction, requestKey: context.requestKey, ...context.profiles,
+    }).id
 }
 
 /**
@@ -292,10 +318,11 @@ export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
   })
   if (attempt === null) return
   const caller = kawaiCaller(deps.team, input.executionId)
+  // The conflict is rendered from the persisted row, as the owed re-send renders it (AL3).
   await refusable('update', async () => commitAttemptSend(sendDeps(deps), input, attempt.id, context => fixHandoffWithin(
     { assignments: deps.assignments, store: deps.tasks.store }, caller, context.change.taskId, {
       resultId: input.round.resultId, group: context.group, requestKey: context.requestKey, ...context.profiles,
-      instructions: updateInstruction(input.update, { revision: context.execution.revision, manifestHash: context.attempt.manifestHash }),
+      instructions: updateInstruction(context.attempt.manifest.update ?? { base: '', files: [] }, { revision: context.execution.revision, manifestHash: context.attempt.manifestHash }),
     }).id))
 }
 

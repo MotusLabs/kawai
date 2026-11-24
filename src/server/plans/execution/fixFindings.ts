@@ -6,6 +6,8 @@
 // today's text for a round decided on a text row before the upgrade.
 // `reviewAsk` is the review handoff's findings block: the contract
 // identity, the open findings to dispose of, and the structured form.
+// `revisionFixNotes` is D9's republication text, shared by the immediate
+// and the owed send.
 import { blocking, type LedgerRow } from '../../../shared/findingsLedger'
 import type { TaskStore } from '../../team/taskStore'
 
@@ -77,4 +79,21 @@ export function reviewAsk(store: TaskStore, taskId: string, resultId: string): s
       : null,
     `Submit structured findings with task_submit_findings on task ${taskId} for result ${resultId}: items (each with level P0/P1/P2, clause, evidence as file:line, impact, and reproduction when you have one) and a disposition for every open finding. The verdict is derived from the ledger; text alone is refused.`,
   ].filter((line): line is string => line !== null)
+}
+
+/**
+ * D9's republication notes: the task's current revision and its rationale,
+ * and, for a revision applied once a failed branch update settled, the base
+ * head and the conflicting files. The immediate send and the owed re-send
+ * both build them here, the conflict read from the attempt's manifest (AL3,
+ * review F8).
+ */
+export function revisionFixNotes(store: Pick<TaskStore, 'get' | 'revisions'>, taskId: string | null, update?: { base: string; files: string[] }): string[] {
+  const task = taskId === null ? null : store.get(taskId)
+  const rationale = task === null || task === undefined ? null : store.revisions(task.id).at(-1)?.rationale ?? null
+  const notes = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
+  if (update !== undefined) {
+    notes.push(`GitHub's update of the branch with the base did not merge cleanly (base head ${update.base}${update.files.length > 0 ? `; conflicting files: ${update.files.join(', ')}` : ''}). Merge the base branch as part of this attempt.`)
+  }
+  return notes
 }

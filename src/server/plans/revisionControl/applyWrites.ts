@@ -134,8 +134,10 @@ function adapt(deps: ApplyWritesDeps, input: ApplyWritesInput, entry: DeltaChang
   const newest = deps.store.attempts(input.execution.id, entry.change).at(-1) ?? null
   if (!answeredByRound) {
     supersedeStanding(deps, taskId, `apply:${input.commandId}`)
-    const answers = newest !== null && newest.kind === 'fix' && owed(deps, changeRow, newest) ? newest.manifest.answers : undefined
-    reissue(deps, input, changeRow, 'fix', { id: taskId, revision: taskRevision }, answers)
+    // An owed fix keeps what it owed: its answers and a D9 conflict it names (AL3, review F8).
+    const carried = newest !== null && newest.kind === 'fix' && owed(deps, changeRow, newest)
+      ? { answers: newest.manifest.answers, update: newest.manifest.update } : {}
+    reissue(deps, input, changeRow, 'fix', { id: taskId, revision: taskRevision }, carried)
   }
   return { taskId, taskRevision }
 }
@@ -187,7 +189,7 @@ function supersedeStanding(deps: ApplyWritesDeps, taskId: string, by: string): v
  * head refuses, retryable, with nothing written.
  */
 function reissue(deps: ApplyWritesDeps, input: ApplyWritesInput, changeRow: ChangeRow, kind: AttemptKind, task: { id: string; revision: number },
-  answers?: AttemptManifest['answers']): void {
+  { answers, update }: Partial<Pick<AttemptManifest, 'answers' | 'update'>> = {}): void {
   const fresh = deps.store.change(input.execution.id, changeRow.change)!
   if (fresh.state !== 'implementing' || fresh.step !== null) {
     if (!deps.store.transition(input.execution.id, changeRow.change, fresh, { state: 'implementing', step: null })) {
@@ -213,6 +215,7 @@ function reissue(deps: ApplyWritesDeps, input: ApplyWritesInput, changeRow: Chan
     artifacts: facts !== null && facts.ok ? facts.artifacts : {},
     roleProfiles: input.target.content.roles.find(role => role.group === (changeRow.groupOverride ?? entry.group))?.profiles ?? [],
     ...(answers !== undefined ? { answers } : {}),
+    ...(update !== undefined ? { update } : {}),
   }
   const manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
   deps.store.insertAttempt({ executionId: input.execution.id, change: changeRow.change, kind, assignmentId: null, manifest, manifestHash })
