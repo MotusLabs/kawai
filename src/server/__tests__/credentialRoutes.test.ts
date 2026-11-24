@@ -127,6 +127,7 @@ describe('table U — the write-only credential surface', () => {
     expect(fs.existsSync(path.join(home, '.kawai'))).toBe(false)
   })
 
+  // @covers: provider-credentials › Imported credentials live in the server-owned store › Unsafe permissions refuse every access
   test('U5: every mutation on a malformed or unsafe store refuses with fixed text and the prior bytes stand', async () => {
     // | U5 | any mutation on a malformed/unsafe store | fixed reason; prior bytes stand |
     fs.mkdirSync(path.join(home, '.kawai'), { recursive: true, mode: 0o700 })
@@ -177,6 +178,31 @@ describe('table U — the write-only credential surface', () => {
     expect(outcome).toMatchObject({ applied: true, durable: false, message: OUTCOME_TEXT.notDurable })
     expect(fsyncs).toBe(2)
     expect(JSON.stringify(outcome)).not.toContain(SENTINEL)
+  })
+
+  // @covers: provider-credentials › Imported credentials live in the server-owned store › Secret-source changes retain the name first
+  test('a secret-source PUT whose real SQLite retain step fails refuses with fixed text and leaves the store file untouched', async () => {
+    await put('KEPT', { value: 'kept' })
+    const before = fs.readFileSync(storeFile())
+    const setAppSetting = db.setAppSetting.bind(db)
+    db.setAppSetting = (key: string, value: string) => {
+      if (key === 'registered_secret_names') throw new Error(`disk full ${SENTINEL}`)
+      setAppSetting(key, value)
+    }
+    try {
+      for (const run of [() => put('PCS_RETAIN', { value: SENTINEL, kind: 'secret-source' }), () => reclassify('KEPT', 'secret-source')]) {
+        const response = await run()
+        const text = await response.text()
+        expect(response.status).toBe(500)
+        expect((JSON.parse(text) as CredentialRefusal).code).toBe('retain-collaborator-failed')
+        expect(text).not.toContain(SENTINEL)
+        expect(fs.readFileSync(storeFile())).toEqual(before)
+      }
+    } finally {
+      db.setAppSetting = setAppSetting
+    }
+    expect(credentials.store.resolve('PCS_RETAIN')).toBeUndefined()
+    expect((await list()).rows.find(row => row.name === 'KEPT')).toMatchObject({ kind: 'launch-env' })
   })
 
   test('U7: the retired /api/settings/chat-provider-env answers 404', async () => {
