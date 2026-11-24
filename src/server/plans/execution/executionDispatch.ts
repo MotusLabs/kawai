@@ -252,11 +252,14 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInpu
     ...(input.update !== undefined ? { update: input.update } : {}),
   }
   const manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
-  const attempt = deps.executions.insertAttempt({
-    executionId: input.executionId, change: input.change, kind, assignmentId: null,
-    manifest, manifestHash,
-  })
-  return { id: attempt.id, number: attempt.number, manifestHash }
+  // Appended only while the newest row is still the one read before the git reads: an Apply's row
+  // (Restart's implement, Adapt's fix) is never hidden behind a stale one (review F6); DC1 replaces the rest.
+  return deps.executions.db.transaction(() => {
+    if (deps.executions.change(input.executionId, input.change)?.state === 'cancelled') return null
+    if (deps.executions.attempts(input.executionId, input.change).at(-1)?.id !== newest?.id) return null
+    const attempt = deps.executions.insertAttempt({ executionId: input.executionId, change: input.change, kind, assignmentId: null, manifest, manifestHash })
+    return { id: attempt.id, number: attempt.number, manifestHash }
+  })()
 }
 
 /**

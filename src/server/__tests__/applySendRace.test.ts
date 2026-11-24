@@ -9,7 +9,10 @@
 //   successor with the same answers (the same defect class);
 // - Adapt between the first task attachment and the first attempt mints one
 //   owed fix: the in-flight implement dispatch yields, and the change gets a
-//   fix naming the new plan and task revisions (F3).
+//   fix naming the new plan and task revisions (F3);
+// - a fix or update attempt whose git reads straddle a Restart or Adapt
+//   never appends a stale row after the Apply's: the executor sends the
+//   Apply's row at the new revision (round 3, F6).
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -206,4 +209,71 @@ describe('Adapt before the first attempt (F3)', () => {
     expect(rows[0]!.kind).toBe('fix')
     expect(wired.tasks.store.assignmentsOf(taskId!).map(entry => entry.id)).toEqual([rows[0]!.assignmentId!])
   })
+})
+
+/** A fix or update mint paused at its git reads while an Apply under `choice` commits; `minted` is the row the Apply's own transaction appends (null: Adapt on a passed round appends none). */
+async function mintMeetsApply(kind: 'fix' | 'update', choice: 'restart' | 'adapt', minted: 'implement' | 'fix' | null): Promise<void> {
+  const { planId, executionId } = await wired.running()
+  const taskId = await inFlight(executionId)
+  const roundId = wired.answerNewestRow(executionId, 'ui', 1)
+  const round = wired.executions.round(roundId)!
+  if (kind === 'fix') {
+    wired.bench.db.db.prepare("UPDATE plan_execution_rounds SET outcome = 'fail' WHERE id = ?").run(roundId)
+    const gating = wired.executions.change(executionId, 'ui')!
+    expect(wired.executions.transition(executionId, 'ui', gating, { state: 'implementing', step: null })).not.toBeNull()
+  } else {
+    wired.bench.db.db.prepare("UPDATE plan_execution_rounds SET outcome = 'pass' WHERE id = ?").run(roundId)
+  }
+  const next = await wired.approveNext(planId, reword(`${choice} the UI (${kind})`))
+  const before = wired.tasks.store.assignmentsOf(taskId).length
+  const latch = pauseAtHead()
+  const send = kind === 'fix'
+    ? dispatchFixAttempt(deps(), {
+      executionId, change: 'ui', group: 'middle-devs', failingChecks: [{ name: 'lint', conclusion: 'failure', link: null }], findingsIds: [],
+      findings: { blocking: [], blockingText: '', others: 0, legacyTexts: [] }, continueFrom: 'round-commit', fixRounds: 1,
+    })
+    : dispatchUpdateAttempt(deps(), { executionId, change: 'ui', round, update: { base: 'base-head', files: ['a.ts'] } })
+  let applied: string | null = null
+  try {
+    await latch.entered
+    expect(await wired.applyAs({ executionId, choices: { ui: choice } })).toMatchObject({ ok: true })
+    const row = wired.executions.attempts(executionId, 'ui').at(-1)!
+    if (minted !== null) {
+      expect({ kind: row.kind, revision: row.manifest.plan.revision, assignmentId: row.assignmentId }).toEqual({ kind: minted, revision: next.revision, assignmentId: null })
+      applied = row.id
+    }
+  } finally {
+    latch.release()
+    try { await send } finally { latch.restore() }
+  }
+  // The late mint yielded to the Apply's row, which is still the newest.
+  if (applied !== null) expect(wired.executions.attempts(executionId, 'ui').at(-1)!.id).toBe(applied)
+  expect(wired.tasks.store.assignmentsOf(taskId).length).toBe(before)
+  const executor = wired.executor()
+  await executor.tick(wired.teamId)
+  await executor.tick(wired.teamId)
+  const rows = wired.executions.attempts(executionId, 'ui')
+  const sent = rows.at(-1)!
+  expect({ id: applied ?? sent.id, revision: sent.manifest.plan.revision, staleSent: rows.filter(row => row.manifest.plan.revision !== next.revision && row.kind === kind && row.assignmentId !== null).length })
+    .toEqual({ id: sent.id, revision: next.revision, staleSent: 0 })
+  expect(sent.assignmentId).not.toBeNull()
+  // Every assignment that went out is the stamp of a row at the new revision; with the Apply's own row, exactly that one.
+  const added = wired.tasks.store.assignmentsOf(taskId).slice(before).map(entry => entry.id)
+  expect(added.map(id => rows.find(row => row.assignmentId === id)?.manifest.plan.revision)).toEqual(added.map(() => next.revision))
+  if (minted !== null) expect(added).toEqual([sent.assignmentId!])
+}
+
+describe('an attempt mint meets an Apply that minted its own row (F6)', () => {
+  // @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
+  test('F6 probe: an update mint paused at its git reads, then Restart: no stale update follows the Apply implement row, and two executor ticks send that row once at the new revision', () => mintMeetsApply('update', 'restart', 'implement'))
+
+  // @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
+  test('F6 a fix mint paused at its git reads, then Restart: no stale fix follows the Apply implement row, and two executor ticks send that row once at the new revision', () => mintMeetsApply('fix', 'restart', 'implement'))
+
+  // @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
+  // @covers: plan-revision-apply › Each choice publishes or dispatches as recorded › Adapt notifies the developer
+  test('F6 a fix mint paused at its git reads, then Adapt: no stale fix follows the Apply fix row, and two executor ticks send that row once at the new revision', () => mintMeetsApply('fix', 'adapt', 'fix'))
+
+  // @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
+  test('F6 an update mint paused at its git reads, then Adapt on the passed round: the Apply appends no row, the late row is never sent, and every send names the new revision', () => mintMeetsApply('update', 'adapt', null))
 })
