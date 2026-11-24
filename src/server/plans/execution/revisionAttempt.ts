@@ -12,11 +12,31 @@
 // a hold release, a yield's successor, and a second Adapt's carried row all
 // name the same facts.
 import type { ChangePatch } from './executionPatch'
-import type { RoundRow } from './executionRows'
+import type { ChangeRow, RoundRow } from './executionRows'
 import type { RoundDeps } from './executionRounds'
 import { commitAttemptInsert, routeOf } from './attemptSend'
 import { gatherStartFacts, type DispatchDeps } from './executionDispatch'
 import { dispatchOwedFix } from './owedFix'
+
+/**
+ * The settled branch update a landing follow-on hands D9 (review F9): the
+ * change's generation the follow-on read and the done update-branch effect
+ * it applies. Until D9's transaction commits the change stays `landing` /
+ * `updating`, so an interrupted mint leaves that follow-on eligible and the
+ * next tick re-derives the conflict and mints again.
+ */
+export interface LandingGuard {
+  generation: number
+  effectId: string | null
+}
+
+function landingStands(store: RoundDeps['executions'], executionId: string, change: ChangeRow, landing: LandingGuard): boolean {
+  if (change.state !== 'landing' || change.step !== 'updating' || change.generation !== landing.generation || !change.owns) return false
+  if (store.execution(executionId)?.state !== 'running') return false
+  if (landing.effectId === null) return true
+  const effect = store.effect(landing.effectId)
+  return effect !== null && effect.state === 'done' && effect.kind === 'update-branch' && effect.change === change.change
+}
 
 /** D9: the round's result is pinned to a task revision older than the task's current one. */
 export function revisionPending(deps: Pick<RoundDeps, 'tasks'>, taskId: string | null, round: RoundRow): boolean {
@@ -35,7 +55,7 @@ export function revisionPending(deps: Pick<RoundDeps, 'tasks'>, taskId: string |
  * true when the round was answered here or by a write that raced the git
  * reads (a Restart's row, a concurrent mint), which then stands alone.
  */
-export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update?: { base: string; files: string[] }, close?: { patch: ChangePatch; within: () => void }): Promise<boolean> {
+export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update?: { base: string; files: string[] }, close?: { patch: ChangePatch; within: () => void }, landing?: LandingGuard): Promise<boolean> {
   const store = deps.executions
   if (!revisionPending(deps, changeRow.taskId, round)) return false
   const before = store.change(changeRow.executionId, changeRow.change)
@@ -55,12 +75,19 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
     if (current.outcome === 'superseded' || store.rounds(changeRow.executionId, changeRow.change).at(-1)?.id !== round.id) return null
     if (!revisionPending(deps, changeRow.taskId, current)) return null
     if ((store.attempts(changeRow.executionId, changeRow.change).at(-1)?.id ?? null) !== newestId) return null
+    // From a settled branch update (review F9): the change still settling
+    // that update at the generation the follow-on read, its effect done, and
+    // the execution running and owning it — else nothing is written, and the
+    // follow-on (or the write that moved the change) decides next.
+    if (landing !== undefined && !landingStands(store, changeRow.executionId, change, landing)) return null
     store.supersedeRound(round.id)
     // A7: the superseded round's live round-effect rows never run after it.
     store.cancelLiveRoundEffects(changeRow.executionId, round.id)
     // A diagnosis closed by the revision (review-convergence DX1) closes in
     // the same transaction, with its patch (the count back at 0).
-    store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null, ...close?.patch })
+    // From landing, the exit releases the slot and the pass marker clears
+    // here, with the mint — never before it (review F9).
+    store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null, ...(landing !== undefined ? { passedAt: null } : {}), ...close?.patch })
     close?.within()
     if (facts === null) return null
     const taskId = change.taskId!

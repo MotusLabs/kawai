@@ -228,7 +228,9 @@ describe('the conflict across the D9 fix row\'s replacements (F8 challenge witne
     expect({ round: wired.executions.round(c.round.id)!.outcome, rows: c.minted().length, sent: c.sent().length, state: wired.executions.change(c.executionId, 'ui')!.state })
       .toEqual({ round: 'pass', rows: 0, sent: 0, state: 'gating' })
     await c.ticks()
-    // The planner's revision stage re-fires; its conflict is re-derived by the next landing's update.
+    // The planner's revision stage re-fires (this direct call has no landing
+    // context; from a settled update the follow-on stays eligible instead and
+    // re-derives the conflict — combinedConflictRecoveryProbe, landingRevisionGuard).
     sentFix(c, 2)
     expect(wired.executions.round(c.round.id)!.outcome).toBe('superseded')
   })

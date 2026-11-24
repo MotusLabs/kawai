@@ -27,6 +27,7 @@ import { ExecutionConflict } from './executionPatch'
 import { EffectPinConflict } from './executionEffectStore'
 import { cleanMergeCheck } from '../landing/cleanMerge'
 import { authorizingRound, type LandedStep } from './landingRound'
+import type { LandingGuard } from './revisionAttempt'
 
 export interface LandingDeps {
   team: TeamIdentity
@@ -48,7 +49,7 @@ export interface LandingDeps {
    * replaces the update attempt with its own fix attempt naming the base head
    * and files. Resolves false when no revision is pending.
    */
-  revisionAttempt: (changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update: { base: string; files: string[] }) => Promise<boolean>
+  revisionAttempt: (changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update: { base: string; files: string[] }, landing?: LandingGuard) => Promise<boolean>
   /**
    * D13's update attempt (revision-control PR E, A1): the failed branch
    * update's fix handoff, carried by its kind-'update' attempt row — minted,
@@ -212,17 +213,21 @@ async function fetchHeads(adapters: Pick<LandingAdapters, 'fetch'>, cwd: string,
  * attempt when a newer task revision waited for the update (D9), else the
  * update attempt naming the files, or the failed check when none conflict.
  */
-async function failedUpdate(deps: LandingDeps, row: ChangeRow, updateRound: RoundRow | null, update: { base: string; files: string[] }): Promise<void> {
+async function failedUpdate(deps: LandingDeps, row: ChangeRow, updateRound: RoundRow | null, update: { base: string; files: string[] }, effectId: string | null): Promise<void> {
   const store = deps.executions
   // Under a hold (revision-control 3.2) `passedAt` is kept and no attempt
   // dispatches — no owed marker for the update path: the release re-fires
   // the landing stage, which re-runs the update and re-derives the attempt.
   const held = deps.gate?.(row.change) === true
-  store.transition(row.executionId, row.change, row, { state: 'gating', step: null, ...(held ? {} : { passedAt: null }) })
-  if (held) return
   const round = updateRound ?? store.rounds(row.executionId, row.change).at(-1) ?? null
-  if (round === null) return
-  if (await deps.revisionAttempt(row, round, update)) return
+  // D9 first (review F9): the change stays `landing` until D9's mint, which
+  // exits landing and clears `passedAt` in its own transaction, so a crash
+  // before it leaves this follow-on eligible and the conflict is re-derived.
+  if (!held && round !== null && await deps.revisionAttempt(row, round, update, { generation: row.generation, effectId })) return
+  // The ordinary update path: the live guard re-read — a change D9's await
+  // let move (a Stop, a racing write) is left to that write.
+  const moved = store.transition(row.executionId, row.change, row, { state: 'gating', step: null, ...(held ? {} : { passedAt: null }) })
+  if (moved === null || held || round === null) return
   await deps.updateAttempt(row, round, update)
 }
 
@@ -309,7 +314,7 @@ export function mergeAdapter(adapters: LandingAdapters, ghOptions?: GhCommandOpt
  * the landing fact, accepts the task as Kawai, removes the worktree when
  * safe, and completes the execution and the plan when everything landed.
  */
-export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: string; change: string | null; executionId: string; roundId?: string | null; outcome: unknown }, adapters: LandingAdapters = landingAdapters): Promise<void> {
+export async function applyLandingOutcome(deps: LandingDeps, effect: { id?: string; kind: string; change: string | null; executionId: string; roundId?: string | null; outcome: unknown }, adapters: LandingAdapters = landingAdapters): Promise<void> {
   const store = deps.executions
   if (effect.change === null) return
   const outcome = effect.outcome as { merged?: boolean; baseMoved?: boolean; base?: string; mergeCommit?: string; head?: string; requested?: boolean; conflict?: boolean } | null
@@ -349,7 +354,7 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       if (!(await fetchHeads(adapters, cwd, [baseRef]))) return
       const prediction = await adapters.mergeTree(cwd, reviewedHead, base.sha)
       if (!prediction.ok) return
-      return failedUpdate(deps, fresh, updateRound, { base: base.sha, files: prediction.conflicts })
+      return failedUpdate(deps, fresh, updateRound, { base: base.sha, files: prediction.conflicts }, effect.id ?? null)
     }
     if (view.data.headRefOid === reviewedHead) {
       if (closed) return stopClosed()
@@ -375,7 +380,7 @@ export async function applyLandingOutcome(deps: LandingDeps, effect: { kind: str
       return
     }
     if (closed) return stopClosed()
-    return failedUpdate(deps, fresh, updateRound, { base: checked.base, files: [] })
+    return failedUpdate(deps, fresh, updateRound, { base: checked.base, files: [] }, effect.id ?? null)
   }
 
   if (effect.kind === 'merge' && outcome !== null) {
