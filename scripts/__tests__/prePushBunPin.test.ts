@@ -302,14 +302,14 @@ describe('V9: adversarial paths render classifier-safe', () => {
   const permanent = (stderr: string) => classifyEffectFailure({ argv: ['git', 'push'], exitCode: 1, stderr })
   const pathWith = (phrase: string) => `build ${phrase}.log`
 
-  // @covers: dev-checks › Pushes require a full check of the pushed tree › Paths in refusals print escaped
+  // @covers: dev-checks › Pushes require a full check of the pushed tree › Dirty and changed-during-check paths print escaped
   test('the phrase list is live transient wording, synced with the classifier', () => {
     for (const phrase of NETWORK_PHRASES) {
       expect(permanent(phrase)).toBe('transient')
     }
   })
 
-  // @covers: dev-checks › Pushes require a full check of the pushed tree › Paths in refusals print escaped
+  // @covers: dev-checks › Pushes require a full check of the pushed tree › Dirty and changed-during-check paths print escaped
   test('F1: a dirty mismatch whose path spells "timed out" refuses permanently', () => {
     // The reviewer's reproduction: these facts printed the raw path and
     // classified as refuse/transient, so Kawai scheduled retries for a
@@ -363,14 +363,16 @@ describe('V9: adversarial paths render classifier-safe', () => {
   })
 
   test.each([
-    ['a space', 'build timed out.log', 'build\\x20timed\\x20out.log'],
-    ['every whitespace', 'a b\tc', 'a\\x20b\\x09c'],
-    ['a carriage return', 'a\rb', 'a\\x0db'],
-    ['a control byte', 'a\x01b', 'a\\x01b'],
-    ['DEL', 'a\x7fb', 'a\\x7fb'],
-    ['a non-breaking space', 'a b', 'a\\xa0b'],
-    ['a line separator', 'a b', 'a\\u{2028}b'],
-  ])('renderPath escapes %s', (_name, raw, shown) => {
+    ['a space', 'build timed out.log', '//build\\x20timed\\x20out.log'],
+    ['every whitespace', 'a b\tc', '//a\\x20b\\x09c'],
+    ['a carriage return', 'a\rb', '//a\\x0db'],
+    ['a control byte', 'a\x01b', '//a\\x01b'],
+    ['DEL', 'a\x7fb', '//a\\x7fb'],
+    ['NEL (C1)', 'a\x85b', '//a\\x85b'],
+    ['CSI (C1)', 'a\x9bb', '//a\\x9bb'],
+    ['a non-breaking space', 'a b', '//a\\xa0b'],
+    ['a line separator', 'a b', '//a\\u{2028}b'],
+  ])('renderPath escapes %s under the // marker', (_name, raw, shown) => {
     expect(renderPath(raw)).toBe(shown)
   })
 })

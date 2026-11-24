@@ -45,7 +45,7 @@ The refusal avoids the network wording that `classifyEffectFailure` treats as tr
 
 - [The certificate is looser: a pass under the pin, not the running Bun, lets the push through] → The pass covers the exact tree under the Bun version that tree pins, which is what CI and every writer of that tree run. Platform and architecture still have to match.
 - [A writer cannot push from a host whose Bun differs from the pin without the pinned Bun installed] → The refusal names the command. Before this change, the same push ran an 18-minute check under the wrong Bun, or timed out inside Kawai.
-- [A dirty path whose name contains network wording makes a dirty refusal read as transient] → Path names are the writer's own. The fixed text of every refusal is tested against the classifier.
+- [A dirty path whose name contains network wording makes a dirty refusal read as transient] → Every path in the dirty and changed-during-the-check lists prints in an escaped, marked form (`\xHH`/`\u{HHHH}` for JS whitespace and every Unicode control character, backslashes doubled, a leading `//` no listed path can begin with, since porcelain paths are repository-relative), so the joined stderr carries no network wording and two listed paths never print the same. The hidden-entry refusal keeps its raw paths (a separate follow-up); its fixed text is tested against the classifier.
 
 ## Migration Plan
 

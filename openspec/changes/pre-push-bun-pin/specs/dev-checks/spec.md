@@ -43,9 +43,9 @@ The pre-push hook SHALL allow pushing a commit only when a full check passed for
 - **WHEN** the pushed commit's tree has no `.bun-version`, or its trimmed content is not a `MAJOR.MINOR.PATCH` version
 - **THEN** the hook accepts only a pass under the current Bun and otherwise behaves as without a pin, running the full check on a clean HEAD
 
-#### Scenario: Paths in refusals print escaped
-- **WHEN** a refusal or settlement line lists paths and one of them contains whitespace or a control character
-- **THEN** the hook prints that path with those characters escaped, and a path with neither prints unchanged
+#### Scenario: Dirty and changed-during-check paths print escaped
+- **WHEN** the dirty list of a refusal, or the changed-during-the-check list of a settlement, contains a path with whitespace or a control character
+- **THEN** the hook prints that path with those characters escaped in a marked form no listed path can equal, and a path with neither prints unchanged
 
 #### Scenario: Pass under another Bun version
 - **WHEN** the pushed commit's tree has a recorded full pass only under a Bun that is neither the current one nor the commit's pin

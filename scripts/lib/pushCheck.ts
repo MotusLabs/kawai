@@ -19,9 +19,11 @@
 // assume-unchanged) refuse every non-deletion ref: they hide edits from the
 // status and the key alike (CP1 F1). Every path a line lists (a dirty path,
 // or one that changed during the check) prints with its whitespace and
-// control characters escaped as `\xHH`, so a filename can never spell a
-// network error Kawai's effect classifier would retry on ("build timed
-// out.log" once read as transient, F1); every other path prints unchanged.
+// control characters escaped as `\xHH`/`\u{HHHH}` under a leading `//`, in
+// a form no listed path can equal, so a filename can never spell a network
+// error Kawai's effect classifier would retry on ("build timed out.log"
+// once read as transient, F1) and two paths never print the same; every
+// other path prints unchanged.
 // When any ref is refused, nothing is checked: the eligible refs are listed
 // as not checked (Q1). Otherwise at most one fallback runs — every eligible
 // ref is HEAD's commit, so they share HEAD's tree.
@@ -94,21 +96,39 @@ export function parseBunPin(content: string | null): string | null {
 }
 const MAX_LISTED = 10
 
-/** One path as a hook line prints it. Whitespace and control characters
- * become explicit `\xHH` escapes (or `\u{HHHH}` above the Latin-1 range) —
- * never an invisible or look-alike character — so the joined stderr of a
- * refusal cannot carry network wording and the reader sees exactly which
- * characters the name holds. A path with neither prints unchanged (A5), so
- * every refusal line keeps its wording before this existed. */
+/** A character that forces the escaped form: a Unicode control character
+ * (C0, DEL, or C1 U+007F-009F — the C1 range is controls too, F1) or JS
+ * whitespace (which includes NBSP, U+2028/2029, U+FEFF, but not U+0085). */
+function isSpecial(ch: string, code: number): boolean {
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f) || /\s/u.test(ch)
+}
+
+/** One path as a hook line prints it. A path holding JS whitespace or a
+ * Unicode control character (C0, DEL, C1) prints in an escaped, marked
+ * form: each such character as an explicit `\xHH` (or `\u{HHHH}` above the
+ * Latin-1 range), literal backslashes doubled, the whole form under a
+ * leading `//`. No listed path can begin with `/` — porcelain paths are
+ * repository-relative, and git refuses to add a path with a leading slash
+ * or an empty or dot component — so no ordinary path can equal an escaped
+ * form, and the token code is injective, so two listed paths never print
+ * the same (R3, F1). A path with neither prints unchanged (A5). The joined
+ * stderr of a refusal cannot carry network wording, and the reader sees
+ * exactly which characters the name holds. */
 export function renderPath(path: string): string {
-  let out = ''
+  let escaped = false
+  for (const ch of path) {
+    if (isSpecial(ch, ch.codePointAt(0)!)) {
+      escaped = true
+      break
+    }
+  }
+  if (!escaped) return path
+  let out = '//'
   for (const ch of path) {
     const code = ch.codePointAt(0)!
-    if (code < 0x20 || code === 0x7f || /\s/u.test(ch)) {
-      out += code <= 0xff ? `\\x${code.toString(16).padStart(2, '0')}` : `\\u{${code.toString(16)}}`
-    } else {
-      out += ch
-    }
+    if (ch === '\\') out += '\\\\'
+    else if (isSpecial(ch, code)) out += code <= 0xff ? `\\x${code.toString(16).padStart(2, '0')}` : `\\u{${code.toString(16)}}`
+    else out += ch
   }
   return out
 }
