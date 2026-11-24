@@ -82,9 +82,18 @@ manifest, the Bun pin, a hook, or a root config (the D2 escapes) runs
 `bun run check`; a message-only amend runs lint and typecheck when the
 index tree has a recorded pass, else `bun run check`. The pre-push hook
 (`scripts/pre-push.ts`) is the certificate: each pushed commit needs a
-recorded full pass for its tree, or HEAD at that commit and a clean working
-tree, where it runs `bun run check` itself; otherwise the push is refused,
-naming the commit and the command (deletions run nothing). `bun run check`
+recorded full pass for its tree on this platform and architecture, under
+the running Bun or the Bun the commit's own `.bun-version` pins (no other
+version). With no such pass and a pin that differs from the running Bun,
+the push is refused at once, naming both and `bun run check` under the
+pinned Bun, and no check runs. Otherwise HEAD at that commit and a clean
+working tree let it run `bun run check` itself; anything else is refused,
+naming the commit and the command (deletions run nothing). The dirty and
+changed-during-the-check path lists print each path with its whitespace and
+control characters escaped under a leading `//` — a form no listed path can
+begin with, since porcelain paths are repository-relative — so a filename
+can never read as the network error wording Kawai's push effect retries on;
+hidden-entry text stays raw. `bun run check`
 and the push refuse an index with skip-worktree or assume-unchanged entries,
 which hide edits from the key. So commit freely,
 and run `bun run check` on the clean committed tree before every result and
