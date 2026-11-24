@@ -229,6 +229,7 @@ describe('ChatSessionManager provider usage pull', () => {
   } as unknown as SDKMessage)
 
 
+  // @covers: chat-usage-limits › OpenRouter usage refreshes while sessions are live and after a costed turn › Several quick turns
   test('several quick costed turns cause one extra pull about 30 s after the first', async () => {
     jest.useFakeTimers()
     try {

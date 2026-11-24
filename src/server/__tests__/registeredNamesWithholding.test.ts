@@ -137,6 +137,7 @@ describe('every launch branch withholds the registered-name set (D5 composition 
     expect(launch.settings).toBeUndefined()
   })
 
+  // @covers: claude-session-profiles › Catalogs may cap the output reservation › Unset cap is neutralized
   test('the named-profile branch keeps its deletions and still filters registered names', () => {
     resolveClaudeLaunch('or2-sonnet', AMBIENT, ctx(), undefined, db)
     const launch = BRANCH_PROBES.namedProfile()
@@ -170,6 +171,7 @@ describe('every launch branch withholds the registered-name set (D5 composition 
     expect(launch.env?.HTTPS_PROXY).toBe('http://192.0.2.10:3128')
   })
 
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › User-level provider names its token variable
   test('the credentialed branch composes its token and filters every other registered name', () => {
     const launch = BRANCH_PROBES.credentialed()
     // The branch's own carve-outs (D5), named so the registered-absent claim

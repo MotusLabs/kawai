@@ -78,6 +78,7 @@ describe('named credential variables are withheld from every agent', () => {
     expect([...withheldCredentialNames(resolveProfileCatalog(ctx()))].sort()).toEqual(['OR2_KEY', 'OR2_MANAGEMENT_KEY'])
   })
 
+  // @covers: claude-session-profiles › Named credential variables are withheld from every agent › Another profile's session
   test("another provider's session cannot read either variable", () => {
     const launch = resolveClaudeLaunch('glm', serverEnv, ctx())
     expect(launch.env).not.toHaveProperty('OR2_KEY')
@@ -86,6 +87,7 @@ describe('named credential variables are withheld from every agent', () => {
     expect(launch.env?.ANTHROPIC_API_KEY).toBe('server-api-key')
   })
 
+  // @covers: claude-session-profiles › Named credential variables are withheld from every agent › Default launch without overrides
   test('a default launch without overrides passes an explicit filtered environment', () => {
     setProcessEnv('OR2_MANAGEMENT_KEY', 'from-process-env')
     const launch = resolveClaudeLaunch('default', {}, ctx())
@@ -102,6 +104,7 @@ describe('named credential variables are withheld from every agent', () => {
     expect(launch.env).not.toHaveProperty('OR2_MANAGEMENT_KEY')
   })
 
+  // @covers: claude-session-profiles › Named credential variables are withheld from every agent › Credentialed provider session
   test("a credentialed provider's session sends its own key as the bearer token", () => {
     const launch = resolveClaudeLaunch('or2-sonnet', serverEnv, ctx())
     expect(launch.env?.ANTHROPIC_AUTH_TOKEN).toBe('or-inference-sentinel')
@@ -113,6 +116,8 @@ describe('named credential variables are withheld from every agent', () => {
     expect(launch.model).toBe('sonnet')
   })
 
+  // @covers: claude-session-profiles › Named credential variables are withheld from every agent › Project settings cannot restore an API key
+  // @covers: claude-session-profiles › A credentialed provider's base URL is pinned on every launch › Token stays out of the flag settings
   test('project settings cannot restore an API key: the flag layer blanks it', () => {
     const launch = resolveClaudeLaunch('or2-sonnet', serverEnv, ctx())
     const settings = launch.settings as { env: Record<string, string> }
@@ -153,12 +158,14 @@ describe('named credential variables are withheld from every agent', () => {
 })
 
 describe("a credentialed provider's base URL is pinned on every launch", () => {
+  // @covers: claude-session-profiles › A credentialed provider's base URL is pinned on every launch › Project settings cannot redirect the base URL
   test('project settings cannot redirect the base URL: both layers carry the trusted URL', () => {
     const launch = resolveClaudeLaunch('or2-sonnet', serverEnv, ctx())
     expect(launch.env?.ANTHROPIC_BASE_URL).toBe(OR_URL)
     expect(settingsEnvOf(launch).ANTHROPIC_BASE_URL).toBe(OR_URL)
   })
 
+  // @covers: claude-session-profiles › A credentialed provider's base URL is pinned on every launch › User settings cannot redirect the base URL
   test('user settings cannot redirect the base URL either: the pin rides the flag layer of a minimal profile', () => {
     // A credentialed model that sets nothing itself still inherits the
     // provider's trusted base URL, and the pin reaches the flag layer.
@@ -173,6 +180,7 @@ describe("a credentialed provider's base URL is pinned on every launch", () => {
     expect(settingsEnvOf(launch)).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN')
   })
 
+  // @covers: claude-session-profiles › A credentialed provider's base URL is pinned on every launch › Project settings cannot add a proxy
   test('project settings cannot add a proxy: transports pin to the server values or empty', () => {
     const blank = Object.fromEntries(TRANSPORT_PIN_ENV.map(name => [name, '']))
     const quiet = resolveClaudeLaunch('or2-sonnet', { ...serverEnv, ...blank }, ctx())

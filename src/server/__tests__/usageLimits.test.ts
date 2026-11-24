@@ -221,6 +221,7 @@ const FULL_USAGE_REPORT = {
 }
 
 describe('parseUsageReport', () => {
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Report with a per-model weekly window
   test('a full limits array maps to windows keyed by kind, scoped by model', () => {
     expect(parseUsageReport(FULL_USAGE_REPORT, AT)).toEqual({
       status: 'warning', // the worst row severity

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatUsageReport } from '../../shared/chat'
 import { type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
@@ -120,6 +121,7 @@ describe('ChatSessionManager provider usage pull', () => {
     return { manager, handles, usage, fetchCalls }
   }
 
+  // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › Default route is never probed
   test('a profile with no base URL is never probed; the SDK pull answers', async () => {
     const { manager, handles, usage, fetchCalls } = await createProviderHarness({}, [])
     const created = manager.createSession({ projectPath: '/tmp/proj' })
@@ -133,6 +135,10 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
   })
 
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › Windows appear before the first message
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › Gateway-routed profile whose provider serves the quota endpoint
+  // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › API-key gateway profile shows provider usage
+  // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › Model API path does not prefix the quota endpoint
   test('a path-prefixed provider records usage on attach without a prompt or SDK pull', async () => {
     const { manager, handles, usage, fetchCalls } = await createProviderHarness(
       { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
@@ -162,6 +168,7 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(manager.getSnapshot(created.session.id)!.status).toBe('waiting')
   })
 
+  // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › Shared plan pulled once
   test('profiles share a provider: one pull serves sibling models', async () => {
     // glm and glm-flash are models of zai in this pinned catalog; the
     // sibling sessions share one pull, one report, and one refresh cadence
@@ -210,6 +217,52 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(manager.getSnapshot(second.session.id)!.usage?.windows[0]).toMatchObject({ key: 'zai:time_limit', percentUsed: 2 })
   })
 
+  // @covers: chat-usage-limits › Plan usage reports are kept per provider › Profiles share a provider
+  test("a pushed SDK report reaches its provider's live sibling sessions", async () => {
+    // Sibling profiles of one provider with no quota endpoint (plain
+    // profiles): a rate_limit_event pushed into one live sibling is held
+    // per provider, so the other sibling's snapshot carries the same
+    // report whatever profile emitted it.
+    const catalog = path.join(tempDir, 'catalog')
+    fs.mkdirSync(path.join(catalog, '.kawai'), { recursive: true })
+    fs.writeFileSync(
+      path.join(catalog, '.kawai', 'providers.json'),
+      JSON.stringify({ zai: { label: 'Z.AI', models: { glm: {}, 'glm-flash': {} } } })
+    )
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness({}, [], catalog)
+    const first = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!first.ok) throw new Error(first.error)
+    const second = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm-flash' })
+    if (!second.ok) throw new Error(second.error)
+    expect(await manager.start(first.session.id)).toEqual({ ok: true })
+    expect(await manager.start(second.session.id)).toEqual({ ok: true })
+    await flush()
+    // No quota endpoint: nothing is probed; the SDK pulls answer the spawns.
+    expect(fetchCalls).toEqual([])
+
+    const pushAt = Math.floor(Date.now() / 1000) + 2400
+    handles[0]!.push({
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'allowed',
+        unifiedWindows: {
+          five_hour: { utilization: 0.2237, resetsAt: pushAt },
+          seven_day: { utilization: 0.1712, resetsAt: pushAt },
+        },
+      },
+    } as unknown as SDKMessage)
+    await flush()
+    const held = manager.getSnapshot(first.session.id)!.usage!
+    expect(held.source).toBe('push')
+    expect(held.windows.map(window => window.key)).toEqual(['five_hour', 'seven_day'])
+    // The sibling sees the same held report, not a per-profile copy.
+    expect(manager.getSnapshot(second.session.id)!.usage).toBe(held)
+    // One broadcast per report; the push's carries the pushed data.
+    expect(usage.at(-1)!.providerId).toBe('zai')
+    expect(usage.at(-1)!.report).toBe(held)
+  })
+
+  // @covers: chat-usage-limits › Provider plan usage is pulled from the provider quota endpoint › Non-matching response records no data
   test.each([401, 403, 1001])('a provider auth code %s records no data and skips the SDK pull', async code => {
     const { manager, handles, usage } = await createProviderHarness(
       { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
@@ -225,6 +278,7 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(manager.getSnapshot(created.session.id)!.usage).toBeNull()
   })
 
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › Gateway-routed profile with an account login
   test('a base URL without the endpoint falls back to the host-login SDK pull', async () => {
     const { manager, handles, usage, fetchCalls } = await createProviderHarness(
       { ANTHROPIC_BASE_URL: 'https://other-gateway.test' },
@@ -238,6 +292,26 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(fetchCalls).toHaveLength(1) // probed exactly once
     expect(handles[0]!.usageCalls).toHaveLength(1) // then the SDK pull ran
     expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
+  })
+
+  // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › Session whose agent has not started
+  test('a session whose agent has not started shows no usage bar and pulls nothing', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2))],
+      undefined,
+      3_600_000
+    )
+    // Created but never started, and no configured team worker qualifies it:
+    // no pull runs and nothing is shown.
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await flush()
+
+    expect(fetchCalls).toEqual([])
+    expect(usage).toEqual([])
+    expect(manager.getSnapshot(created.session.id)!.usage).toBeNull()
+    expect(handles).toEqual([])
   })
 
   test.each([

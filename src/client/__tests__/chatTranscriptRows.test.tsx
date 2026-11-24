@@ -223,6 +223,7 @@ describe('mixed transcript keeps every value and control (D3)', () => {
     return renderer
   }
 
+  // @covers: chat-sessions › A turn's cost is the provider-reported charge when streamed › OpenRouter turn
   test('OpenRouter turn: the provider-reported charge replaces the estimate, explained on hover', () => {
     const renderer = renderCompletion({ totalCostUsd: 0.042563, providerCostUsd: 0.001064075 })
     expect(textOf(renderer.root)).toContain('Turn complete · success · $0.0011 · 1 turns')
@@ -234,6 +235,7 @@ describe('mixed transcript keeps every value and control (D3)', () => {
     act(() => renderer.unmount())
   })
 
+  // @covers: chat-sessions › A turn's cost is the provider-reported charge when streamed › Provider without reported cost
   test('Provider without reported cost: the SDK estimate shows as before', () => {
     const renderer = renderCompletion({ totalCostUsd: 0.1234 })
     expect(textOf(renderer.root)).toContain('Turn complete · success · $0.1234 · 1 turns')
