@@ -100,9 +100,10 @@ async function runAuthority(from: number, to: number) {
   } finally { await runtime.teardown() }
 }
 
-// @covers: plan-decisions › Fresh approval publishes only the reviewed handoff › An unauthorized or malformed approval writes nothing
 // Each half of the full-properties profile takes about 24 s on the shared
 // workspace, past the runner's 20 s default; the bound is per test, not per case.
 const HALF_TIMEOUT_MS = 60_000
+
+// @covers: plan-decisions › Fresh approval publishes only the reviewed handoff › An unauthorized or malformed approval writes nothing
 test('I1 seed 0xDEC10001 — cases 1–80 require an exact eligible human approval', () => runAuthority(0, 80), HALF_TIMEOUT_MS)
 test('I1 seed 0xDEC10001 — cases 81–160 require an exact eligible human approval', () => runAuthority(80, 160), HALF_TIMEOUT_MS)
