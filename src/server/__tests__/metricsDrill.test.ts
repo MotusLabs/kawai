@@ -8,7 +8,8 @@
 // cursors, T14 another team's cursor, T15 tool streaks under later commits,
 // T17 `end`. Every refusal carries the tool-error envelope and no entries.
 import { expect, test } from 'bun:test'
-import { HOUR, TEAM } from './metricsSeed'
+import { readMetrics } from '../metrics/computeMetrics'
+import { END, HOUR, TEAM } from './metricsSeed'
 import { MAIL_SHARE_MESSAGES, STREAKS, big, useMetricsTools, type Outcome } from './metricsDrillHarness'
 
 const make = useMetricsTools()
@@ -65,6 +66,171 @@ test('T14: a live cursor used from a session of another team is refused as a tea
       const own = await call('chat-dev', DRILL, { cursor: first.value.next })
       expect(own.error, runtime).toBeNull()
       expect(own.value.entries).toHaveLength(10)
+    }
+  } finally { f.close() }
+})
+
+// @covers: team-process-metrics › Agents page metric drill lists › Unknown metric or list
+test('T3: drill metric velocity, toolStreaks on mail_share, and list breakdown are refused naming the allowed values', async () => {
+  const f = make()
+  try {
+    big(f)
+    for (const { call } of f.runtimes) {
+      refused(await call('chat-lead', DRILL, { window: '7d', metric: 'velocity', list: 'tasks' }), 'Allowed metrics: lead_time_p50, lead_time_p90,')
+      refused(await call('chat-lead', DRILL, { window: '7d', metric: 'mail_share', list: 'toolStreaks' }), 'Metrics with tool streaks: tool_abandoned_streaks.')
+      refused(await call('chat-lead', DRILL, { window: '7d', metric: 'mail_share', list: 'breakdown' }), 'Allowed lists: tasks, messages, toolStreaks.')
+    }
+  } finally { f.close() }
+})
+
+test('T4: a drill with slice group pages the sliced read\'s list; slice kind x is refused naming the kinds', async () => {
+  const f = make()
+  try {
+    big(f)
+    const sliced = f.reader.read(TEAM, '7d', { kind: 'group' })
+    const expected = sortedIds(sliced.metrics.find(m => m.id === 'task_mail_per_task')!.drill.messages)
+    for (const { runtime, call } of f.runtimes) {
+      const first = await call('chat-lead', DRILL, { window: '7d', slice: { kind: 'group' }, end: sliced.periodEnd, metric: 'task_mail_per_task', list: 'messages', limit: 200 })
+      expect(first.error, runtime).toBeNull()
+      expect(cursorOf(first.value.next).src).toEqual({ kind: 'live', window: '7d', slice: { kind: 'group' }, end: sliced.periodEnd })
+      const second = await call('chat-lead', DRILL, { cursor: first.value.next })
+      expect([...ids(first.value.entries), ...ids(second.value.entries)].slice(0, 400)).toEqual(expected.slice(0, 400))
+      refused(await call('chat-lead', DRILL, { window: '7d', slice: { kind: 'x' }, metric: 'mail_share', list: 'messages' }), 'Allowed: group, profile, groupFileHash, memoryFile.')
+    }
+  } finally { f.close() }
+})
+
+// @covers: team-process-metrics › Agents page metric drill lists › Short list ends on its first page
+test('T5: a drill on a metric with 12 task refs returns all 12, total 12, and a null cursor', async () => {
+  const f = make()
+  try {
+    for (let i = 0; i < 12; i++) { f.seed.task(`short-${i}`, 72); f.seed.status(`short-${i}`, 'active', 'done', 24) }
+    for (const { runtime, call } of f.runtimes) {
+      const page = await call('chat-lead', DRILL, { window: '7d', metric: 'lead_time_p50', list: 'tasks' })
+      expect(page.error, runtime).toBeNull()
+      expect([page.value.total, page.value.entries.length, page.value.next]).toEqual([12, 12, null])
+      expect(ids(page.value.entries)).toEqual(Array.from({ length: 12 }, (_, i) => `short-${i}`).sort())
+    }
+  } finally { f.close() }
+})
+
+test('T9: two drills whose end differ by 31 s each equal readAt at their own end', async () => {
+  const f = make()
+  try {
+    big(f)
+    f.seed.message({ id: 'msg-late', createdHoursAgo: 10 / 3600 })
+    const early = new Date(END - 31_000).toISOString(), late = new Date(END).toISOString()
+    for (const { runtime, call } of f.runtimes) {
+      for (const end of [early, late]) {
+        const page = await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages', limit: 200 })
+        const expected = sortedIds(readMetrics(f.seed.db, TEAM, '7d', null, Date.parse(end)).metrics.find(m => m.id === 'mail_share')!.drill.messages)
+        expect([page.value.total, ids(page.value.entries)], `${runtime} ${end}`).toEqual([expected.length, expected.slice(0, 200)])
+      }
+    }
+    expect(f.reader.readAt(TEAM, '7d', null, END - 31_000).metrics.find(m => m.id === 'mail_share')!.drill.messages).toHaveLength(MAIL_SHARE_MESSAGES)
+  } finally { f.close() }
+})
+
+// @covers: team-process-metrics › Agents page metric drill lists › Live pages keep their window end
+test('T10: page 2 read 1 h after page 1, records unchanged, equals the read at the cursor\'s end, not at now', async () => {
+  const f = make()
+  try {
+    big(f)
+    // At END this message is inside the 7d window; an hour later it is not.
+    f.seed.message({ id: 'msg-edge', createdHoursAgo: 7 * 24 - 0.5 })
+    const atEnd = sortedIds(readMetrics(f.seed.db, TEAM, '7d', null, END).metrics.find(m => m.id === 'mail_share')!.drill.messages)
+    expect(atEnd).toContain('msg-edge')
+    for (const { runtime, call } of f.runtimes) {
+      f.clock.now = END
+      const first = await call('chat-lead', DRILL, { window: '7d', metric: 'mail_share', list: 'messages', limit: 200 })
+      f.clock.now = END + HOUR
+      const second = await call('chat-lead', DRILL, { cursor: first.value.next })
+      expect(second.value.source, runtime).toEqual({ kind: 'live', window: '7d', end: new Date(END).toISOString() })
+      expect(second.value.total).toBe(atEnd.length)
+      expect([...ids(first.value.entries), ...ids(second.value.entries)]).toEqual(atEnd.slice(0, 400))
+    }
+  } finally { f.close() }
+})
+
+test('T11: limit 0, 201, and 1.5 on messages are refused naming 1–200; 51 on toolStreaks is refused naming 1–50', async () => {
+  const f = make()
+  try {
+    big(f)
+    for (const { runtime, call } of f.runtimes) {
+      for (const limit of [0, 201, 1.5]) refused(await call('chat-lead', DRILL, { window: '7d', metric: 'mail_share', list: 'messages', limit }), '1–200')
+      refused(await call('chat-lead', DRILL, { window: '7d', metric: 'tool_abandoned_streaks', list: 'toolStreaks', limit: 51 }), '1–50')
+      // The boundaries themselves are allowed.
+      expect((await call('chat-lead', DRILL, { window: '7d', metric: 'mail_share', list: 'messages', limit: 200 })).value.entries, runtime).toHaveLength(200)
+      expect((await call('chat-lead', DRILL, { window: '7d', metric: 'mail_share', list: 'messages', limit: 1 })).value.entries).toHaveLength(1)
+      expect((await call('chat-lead', DRILL, { window: '7d', metric: 'tool_abandoned_streaks', list: 'toolStreaks', limit: 50 })).value.entries).toHaveLength(50)
+    }
+  } finally { f.close() }
+})
+
+// @covers: team-process-metrics › Agents page metric drill lists › Cursor bound to its request
+test('T12: a cursor not base64url, v 2, an unknown field, a missing after, or a cursor sent with metric is refused', async () => {
+  const f = make()
+  try {
+    big(f)
+    for (const { call } of f.runtimes) {
+      const first = await call('chat-lead', DRILL, { window: '7d', metric: 'mail_share', list: 'messages', limit: 10 })
+      const raw = cursorOf(first.value.next)
+      const { after: _after, ...noAfter } = raw
+      const rows: Array<[unknown, string]> = [
+        [{ cursor: '!not-base64url' }, 'Invalid drill cursor'],
+        [{ cursor: encode({ ...raw, v: 2 }) }, 'Invalid drill cursor'],
+        [{ cursor: encode({ ...raw, extra: 1 }) }, 'Invalid drill cursor'],
+        [{ cursor: encode(noAfter) }, 'Invalid drill cursor'],
+        [{ cursor: encode({ ...raw, src: { ...raw.src, slice: undefined, reportId: 'x' } }) }, 'Invalid drill cursor'],
+        [{ cursor: first.value.next, metric: 'mail_share' }, 'A cursor carries its request'],
+        [{ cursor: first.value.next, limit: 20 }, 'A cursor carries its request'],
+      ]
+      for (const [args, reason] of rows) refused(await call('chat-lead', DRILL, args), reason)
+    }
+  } finally { f.close() }
+})
+
+// @covers: team-process-metrics › Agents page metric drill lists › Tool streaks keep their high-water mark
+test('T15: a live toolStreaks walk while three later streaks commit keeps the first page\'s high-water mark and equals the human pager\'s pages', async () => {
+  // One fixture per runtime: a walk's later commits must not seed the next runtime's first page.
+  for (const index of [0, 1]) {
+    const f = make()
+    try {
+      big(f)
+      const { runtime, call } = f.runtimes[index]!
+      const walk = (cursor: string | null, out: number[] = []): number[] => {
+        const page = f.reader.toolDrill(TEAM, '7d', null, 50, cursor)
+        out.push(...page.entries.map(e => e.factId))
+        return page.nextCursor ? walk(page.nextCursor, out) : out
+      }
+      const human = walk(null)
+      expect(human).toHaveLength(STREAKS)
+      // A streak closed after `end` but before the agent's now must not enter its walk.
+      f.streak(900, END + 5 * 60_000)
+      f.clock.now = END + 10 * 60_000
+      let outcome = await call('chat-lead', DRILL, { window: '7d', end: new Date(END).toISOString(), metric: 'tool_abandoned_streaks', list: 'toolStreaks' })
+      const seen: number[] = []
+      for (let pages = 1; ; pages++) {
+        expect(outcome.error, runtime).toBeNull()
+        expect(outcome.value.total, runtime).toBe(STREAKS)
+        seen.push(...outcome.value.entries.map((e: { factId: number }) => e.factId))
+        if (pages === 1) for (let i = 0; i < 3; i++) f.streak(1000 + i, END - HOUR / 2)
+        if (outcome.value.next === null) break
+        outcome = await call('chat-lead', DRILL, { cursor: outcome.value.next })
+      }
+      expect(seen, runtime).toEqual(human)
+    } finally { f.close() }
+  }
+})
+
+test('T17: an end later than now or not an ISO instant is refused naming end', async () => {
+  const f = make()
+  try {
+    big(f)
+    for (const { call } of f.runtimes) {
+      for (const end of [new Date(END + 1).toISOString(), '2026-10-16', 'yesterday', '2026-10-16T12:00:00Z']) {
+        refused(await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages' }), 'end must be an ISO instant')
+      }
     }
   } finally { f.close() }
 })

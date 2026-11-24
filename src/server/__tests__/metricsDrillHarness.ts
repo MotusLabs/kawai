@@ -10,6 +10,7 @@
 // abandoned tool streaks. Sessions `chat-lead` and `chat-dev` belong to TEAM,
 // `chat-other` to OTHER.
 import { afterEach } from 'bun:test'
+import { unknownToolMeasurement, type ToolMeasurementStatus } from '../../shared/processMetrics'
 import { MetricsReader } from '../metrics/computeMetrics'
 import { ObservationStore } from '../metrics/observations/store'
 import { ProcessReportService, type ReportCaller } from '../metrics/reportService'
@@ -34,6 +35,8 @@ export interface MetricsToolFixture {
   service: ProcessReportService
   /** The fake clock every component reads. */
   clock: { now: number }
+  /** The measurement status the reader overlays; replace `status` to change it. */
+  measurement: { status: ToolMeasurementStatus }
   services: MailboxServerServices
   /** Claude first, then Codex. */
   runtimes: ReadonlyArray<{ runtime: 'Claude' | 'Codex'; call: ToolCall }>
@@ -58,8 +61,9 @@ export function useMetricsTools(): () => MetricsToolFixture {
   return () => {
     const seed = new Seed()
     const clock = { now: END }
+    const measurement = { status: unknownToolMeasurement() }
     const store = new ObservationStore(seed.db, () => clock.now)
-    const reader = new MetricsReader(seed.db, () => clock.now)
+    const reader = new MetricsReader(seed.db, () => clock.now, undefined, () => measurement.status)
     const service = new ProcessReportService(seed.db, reader, { now: () => clock.now })
     const callers: Record<string, ReportCaller> = Object.fromEntries(Object.entries(TEAMS).map(([sessionId, teamId]) => [sessionId, {
       teamId, sessionId, group: { id: 'lead', canReportProcess: true } as GroupDefinition, groupIds: GROUPS,
@@ -93,7 +97,7 @@ export function useMetricsTools(): () => MetricsToolFixture {
       catch (error) { return { error: error instanceof Error ? error.message : String(error), value: null } }
     }
     return {
-      seed, store, reader, service, clock, services, table,
+      seed, store, reader, service, clock, measurement, services, table,
       runtimes: [{ runtime: 'Claude', call: viaClaude }, { runtime: 'Codex', call: viaCodex }],
       streak(i, at, resolution = 'abandoned', team = TEAM) {
         const closedAt = new Date(at).toISOString()
