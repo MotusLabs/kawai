@@ -37,29 +37,24 @@ async function failedRound() {
 
 /** The failed round's fix, as the gated fix step sends it; returns the new attempt and the instruction its handoff carried. */
 async function sendFix(executionId: string, taskId: string) {
-  const handoffs: Array<{ taskId: string; input: { kind: string; resultId: string; instructions: string; requestKey: string } }> = []
-  // The result handoff double records what it is asked and answers with an assignment id.
-  const results = {
-    handoff: async (_caller: unknown, task: string, input: { kind: string; resultId: string; instructions: string; requestKey: string }) => {
-      handoffs.push({ taskId: task, input })
-      return { assignment: { id: `assignment-fix-${handoffs.length}-${executionId}` } }
-    },
-  }
+  const before = wired.tasks.store.assignmentsOf(taskId).length
   const round = wired.executions.rounds(executionId, 'ui').at(-1)!
   await dispatchFixAttempt({
     team: wired.world.team, executions: wired.executions, plans: wired.bench.plans, tasks: wired.tasks,
-    assignments: wired.assignments, results: results as never,
+    // The fix handoff commits through the synchronous group dispatch (attemptSend.ts), never the async result service.
+    assignments: wired.assignments, results: {} as never,
   }, {
     executionId, change: 'ui', group: 'middle-devs', failingChecks: [{ name: 'unit-tests', conclusion: 'failure', link: null }],
     findingsIds: [], findings: fixFindings(wired.tasks.store, taskId, null), continueFrom: 'base-sha', fixRounds: 0,
   })
   const fix = wired.executions.attempts(executionId, 'ui').at(-1)!
   expect(fix.kind).toBe('fix')
+  const handoffs = wired.tasks.store.assignmentsOf(taskId).slice(before)
   expect(handoffs).toHaveLength(1)
   const generation = wired.executions.change(executionId, 'ui')!.generation
-  expect(handoffs[0]).toMatchObject({ taskId, input: { kind: 'fix', resultId: round.resultId, requestKey: `exec:${executionId}:ui:attempt:${fix.number}:${generation}` } })
-  expect(fix.assignmentId).toBe(`assignment-fix-1-${executionId}`)
-  return { fix, instruction: handoffs[0]!.input.instructions }
+  expect(handoffs[0]).toMatchObject({ taskId, handoffKind: 'fix', resultId: round.resultId, requestKey: `exec:${executionId}:ui:attempt:${fix.number}:${generation}` })
+  expect(fix.assignmentId).toBe(handoffs[0]!.id)
+  return { fix, instruction: handoffs[0]!.instruction }
 }
 
 describe('fix attempts name the execution\'s current revision', () => {

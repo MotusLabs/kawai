@@ -29,6 +29,7 @@ import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 import { renderContract } from '../../../shared/implementationContract'
 import { gitShowFile, snapshotContract, type ShowFile } from './contractSnapshot'
 import { currentOwedRow } from './owedSuccessor'
+import { commitAttemptSend, fixHandoffWithin } from './attemptSend'
 
 /** The system caller (D2): minted only inside this module. */
 function kawaiCaller(team: TeamIdentity, executionId: string): SystemCaller {
@@ -310,18 +311,15 @@ export async function dispatchFix(deps: DispatchDeps, input: FixAttemptInput, at
   // the stop branch, so a delivered review never holds the change. A fix
   // that answers no round — an adaptation's (plan-pause Adapt, Apply's
   // adapt) — has no result to hand off from: it is a plain keyed dispatch,
-  // as the owed implement attempt's is.
-  const outcome = round === null
-    ? await refusable('fix', () => deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
-      taskId, target: { kind: 'group', id: input.group }, instruction, requestKey,
-      ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-    }))
-    : await refusable('fix', () => deps.results.handoff(kawaiCaller(deps.team, input.executionId), taskId, {
-      kind: 'fix', resultId: round.resultId, target: { kind: 'group', id: input.group },
-      instructions: instruction, requestKey,
-      ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-    }))
-  deps.executions.setAttemptAssignment(attempt.id, outcome.assignment.id)
+  // as the owed implement attempt's is. Either commits with its stamp only
+  // while the attempt still names the execution's revision (P4, review F1).
+  const caller = kawaiCaller(deps.team, input.executionId)
+  const profiles = roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}
+  await refusable('fix', async () => commitAttemptSend(deps.executions, input, attempt.id, () => round === null
+    ? deps.assignments.dispatchWithin(caller, { taskId, target: { kind: 'group', id: input.group }, instruction, requestKey, ...profiles }).assignment.id
+    : fixHandoffWithin({ assignments: deps.assignments, store: deps.tasks.store }, caller, taskId, {
+      resultId: round.resultId, group: input.group, instructions: instruction, requestKey, ...profiles,
+    }).id))
 }
 
 /**
@@ -357,13 +355,11 @@ export async function dispatchUpdateAttempt(deps: DispatchDeps, input: {
   const fresh = deps.executions.change(input.executionId, input.change)
   if (fresh === null) return
   const requestKey = `exec:${input.executionId}:${input.change}:attempt:${attempt.number}:${fresh.generation}`
-  const outcome = await refusable('update', () => deps.results.handoff(kawaiCaller(deps.team, input.executionId), changeRow.taskId!, {
-    kind: 'fix', resultId: input.round.resultId, target: { kind: 'group', id: group },
-    instructions: updateInstruction(input.update),
-    requestKey,
-    ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-  }))
-  deps.executions.setAttemptAssignment(attempt.id, outcome.assignment.id)
+  await refusable('update', async () => commitAttemptSend(deps.executions, input, attempt.id, () => fixHandoffWithin(
+    { assignments: deps.assignments, store: deps.tasks.store }, kawaiCaller(deps.team, input.executionId), changeRow.taskId!, {
+      resultId: input.round.resultId, group, instructions: updateInstruction(input.update), requestKey,
+      ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
+    }).id))
 }
 
 /**
@@ -399,7 +395,8 @@ async function dispatchOwedImplement(deps: DispatchDeps, input: { executionId: s
   if (revision === null || entry === undefined) return
   const roleProfiles = revision.content.roles.find(role => role.group === input.group)?.profiles ?? []
   const requestKey = `exec:${input.executionId}:${input.change}:attempt:${newest.number}:${changeRow.generation}`
-  const outcome = await refusable('implement', () => deps.assignments.dispatch(kawaiCaller(deps.team, input.executionId), {
+  // The send commits with its stamp only while the row still names the execution's revision (P4, review F1).
+  await refusable('implement', async () => commitAttemptSend(deps.executions, input, newest.id, () => deps.assignments.dispatchWithin(kawaiCaller(deps.team, input.executionId), {
     taskId: changeRow.taskId!,
     target: { kind: 'group', id: input.group },
     instruction: implementInstruction({
@@ -420,8 +417,7 @@ async function dispatchOwedImplement(deps: DispatchDeps, input: { executionId: s
     }),
     requestKey,
     ...(roleProfiles.length > 0 ? { allowedProfiles: roleProfiles } : {}),
-  }))
-  deps.executions.setAttemptAssignment(newest.id, outcome.assignment.id)
+  }).assignment.id))
 }
 
 /**
