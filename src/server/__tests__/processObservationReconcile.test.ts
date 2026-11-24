@@ -10,6 +10,7 @@ import { ProcessObservationService } from '../metrics/observations/service';
 const at = '2026-10-18T00:00:00.000Z';
 const accepted = '2026-10-18T00:01:00.000Z';
 const nextPass = () => new Promise<void>(resolve => setTimeout(resolve, 5));
+// @covers: process-observations › Observation ingestion is idempotent and non-blocking › Recording fails
 test('post-commit acceptance and mailbox settlement survive recorder failure, recover once with identities', async () => {
   const db = schemaDb(), tasks = new TaskStore(db), mail = new MailboxStore(db);
   const service = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted), 0);
@@ -25,6 +26,13 @@ test('post-commit acceptance and mailbox settlement survive recorder failure, re
   expect(tasks.results.get(result.id)?.acceptedAt).toBe(accepted);
   expect(mail.get(message.id)?.state).toBe('cancelled');
   expect(service.recorder.failures).toBeGreaterThan(0);
+  // While the recorder failed, no acceptance row with a zero or fabricated
+  // duration exists, and coverage indicates the missing measurement: the
+  // recorder's unresolved gap (rendered as observation_gap by the export
+  // snapshot) is visible in collection health until recovery records the
+  // real acceptance below.
+  expect(service.store.forTeam('team').filter(row => row.kind === 'acceptance')).toEqual([]);
+  expect(service.health().gapSince).toBe(accepted);
   // Restoring collection (new service as on restart) reconciles committed sources.
   service.stop();
   const recovered = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted));
@@ -39,6 +47,7 @@ test('post-commit acceptance and mailbox settlement survive recorder failure, re
   expect(JSON.stringify(rows)).not.toContain('private');
   expect(recovered.store.forTeam('another-team')).toEqual([]);
   expect(recovered.recorder.failures).toBe(priorFailures);
+  expect(recovered.health().gapSince).toBeNull();
   db.close();
 });
 test('pruned usage rowids can be reused without losing or duplicating a later turn', () => {
@@ -53,6 +62,8 @@ test('pruned usage rowids can be reused without losing or duplicating a later tu
   expect(service.store.forTeam('team').filter(r => r.kind === 'usage')).toHaveLength(2);
   db.close();
 });
+// @covers: chat-turn-usage › Usage rows are retained for 90 days › Extended history
+// @covers: chat-turn-usage › Usage rows are retained for 90 days › Older pruned history cannot be restored
 test('75-day usage survives retention while older rows prune in bounded batches and coverage stays partial', () => {
   const db = schemaDb(), now = Date.parse(at), store = new ChatTurnUsageStore(db, () => now);
   const row = { sessionId: 's', turnId: 'recent', teamId: 'team', groupId: null, profileId: null, model: null, taskId: null, startId: null, ok: true, usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 }, numTurns: 1, endedAt: new Date(now - 75 * 86400000).toISOString() };
@@ -69,6 +80,7 @@ test('75-day usage survives retention while older rows prune in bounded batches 
   expect(inputs.usageHorizon).toBeGreaterThan(now - 90 * 86400000); // no invented coverage for previously pruned history
   db.close();
 });
+// @covers: process-observations › Primary completion is recorded result acceptance › Task reopened
 test('handoff and finding references survive replay, and reopen or repeated acceptance never recounts the first result', () => {
   const db = schemaDb(), mail = new MailboxStore(db), tasks = new TaskStore(db), assignments = new AssignmentStore(db, mail);
   const service = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted));
@@ -91,6 +103,17 @@ test('handoff and finding references survive replay, and reopen or repeated acce
   expect((db.prepare("SELECT sum(value) n FROM process_export_totals WHERE family='task_acceptance_duration_seconds' AND bucket='count'").get() as {
     n: number;
   }).n).toBe(1);
+  // After the reopen, a second result's acceptance is recorded as rework —
+  // never as a second first acceptance — and the first duration stays 60 s.
+  const rework = tasks.results.insert({ teamId: 'team', taskId: task.id, taskRevision: 1, summary: 'rework', commit: null, diff: null, worktree: null, tests: [], limitations: null, submittedBy: { kind: 'agent', sessionId: 'dev' } }, '2026-10-18T00:03:00Z');
+  tasks.results.markAccepted(rework.id, { kind: 'human', sessionId: null }, '2026-10-18T00:04:00Z');
+  service.reconcile.task(task.id);
+  expect(service.store.forTeam('team').filter(row => row.kind === 'acceptance').map(row => [row.resultId, row.data.first, row.data.durationSeconds])).toEqual([
+    [result.id, true, 60],
+    [rework.id, false, 240],
+  ]);
+  expect((db.prepare("SELECT sum(value) v FROM process_export_totals WHERE family='task_acceptance_duration_seconds' AND bucket='count'").get() as { v: number }).v).toBe(1);
+  expect((db.prepare("SELECT sum(value) v FROM process_export_totals WHERE family='task_acceptance_duration_seconds' AND bucket='sum'").get() as { v: number }).v).toBe(60);
   db.close();
 });
 test('detail retention drains a backlog in bounded subsequent ticks without waiting another hour', () => {
@@ -162,5 +185,49 @@ test('post-commit notifications coalesce into one debounced pass that stop cance
   await new Promise<void>(resolve => setTimeout(resolve, 40));
   expect(runs).toBe(1);
   expect(tasks).toEqual(['a', 'b']);
+  db.close();
+});
+// @covers: process-observations › Primary completion is recorded result acceptance › Integration acceptance
+test('an integration-branch landing accepted by the system ends the timer as an integration landing with no promotion fields', () => {
+  const db = schemaDb(), tasks = new TaskStore(db), service = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted));
+  const task = tasks.create({ teamId: 'team', title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } }, at);
+  const result = tasks.results.insert({ teamId: 'team', taskId: task.id, taskRevision: 1, summary: 's', commit: null, diff: null, worktree: null, tests: [], limitations: null, submittedBy: { kind: 'agent', sessionId: 'dev' } }, at);
+  db.prepare('INSERT INTO plan_execution_changes(execution_id,change,team_id,position,state,task_id,updated_at) VALUES (?,?,?,0,?,?,?)').run('exec', 'change', 'team', 'landed', task.id, accepted);
+  db.prepare('INSERT INTO plan_execution_rounds(id,execution_id,change,attempt_id,number,result_id,commit_sha,fix_round) VALUES (?,?,?,?,1,?,?,0)').run('attempt', 'exec', 'change', 'attempt', result.id, 'head');
+  db.prepare('INSERT INTO plan_change_landings(plan_id,change,execution_id,team_id,mechanism,head_sha,base_sha,merge_sha,landed_at,tree_verified) VALUES (?,?,?,?,?,?,?,?,?,1)').run('plan', 'change', 'exec', 'team', 'integration-branch', 'head', 'base', 'merge', accepted);
+  tasks.results.markAccepted(result.id, { kind: 'system', sessionId: null }, accepted);
+  service.reconcile.run();
+  const rows = service.store.forTeam('team').filter(row => row.kind === 'acceptance');
+  // The timer ends at that acceptance (creation to acceptance, 60 s) and the
+  // landing is identified as an integration landing, not a direct one.
+  expect(rows.map(row => [row.data.actorKind, row.data.mechanism, row.data.first, row.data.durationSeconds])).toEqual([
+    ['system', 'integration-landing', true, 60],
+  ]);
+  // The observation carries no promotion or default-branch field: the landing
+  // row's head/base/merge shas and tree verification stay out of the fact.
+  expect(Object.keys(rows[0]!.data).sort()).toEqual(['actorKind', 'durationSeconds', 'first', 'mechanism', 'revision']);
+  expect(rows[0]).toMatchObject({ taskId: task.id, resultId: result.id, taskRevision: 1 });
+  db.close();
+});
+// @covers: process-observations › History has bounded retention and visible coverage › Existing history
+test('an accepted task with no recorded intervals reads known facts and states its missing coverage', () => {
+  const db = schemaDb(), tasks = new TaskStore(db), service = new ProcessObservationService(db, () => ({}), () => Date.parse(accepted));
+  const task = tasks.create({ teamId: 'team', title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } }, at);
+  const result = tasks.results.insert({ teamId: 'team', taskId: task.id, taskRevision: 1, summary: 's', commit: null, diff: null, worktree: null, tests: [], limitations: null, submittedBy: { kind: 'agent', sessionId: 'dev' } }, at);
+  tasks.results.markAccepted(result.id, { kind: 'human', sessionId: null }, accepted);
+  tasks.setStatus(task.id, 'done');
+  service.reconcile.run();
+  const end = Date.parse(accepted) + 1000;
+  const inputs = loadMetricsInputs(db, 'team', Date.parse(at) - 86400000, end);
+  // Known facts remain usable: the task, its result and its acceptance read back.
+  expect(inputs.tasks.get(task.id)).toMatchObject({ status: 'done' });
+  expect(inputs.results.find(row => row.id === result.id)).toMatchObject({ acceptedAt: accepted });
+  // Missing coverage is stated, never backfilled: measured tool coverage
+  // begins at recording start, usage coverage is empty at the read end, and
+  // no interval detail is synthesized for the unrecorded work.
+  expect(inputs.toolInputs!.horizon).toBe(Date.parse(accepted));
+  expect(inputs.usageHorizon).toBe(end);
+  expect(inputs.toolInputs!.observations).toEqual([]);
+  expect(inputs.toolInputs!.closures).toEqual([]);
   db.close();
 });
