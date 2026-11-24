@@ -1,0 +1,31 @@
+# mutant V4-pool-bypassed
+# target: src/server/workspace/openspecPool.ts
+# before: export const pooledOpenspecRunner: OpenspecCommandRunner = createPooledOpenspecRunner(openspecListPool)
+# after:  export const pooledOpenspecRunner: OpenspecCommandRunner = (options) => runOpenspecList(options)
+# command: bun test src/server/__tests__/workspaceOpenspecComposition.integration.test.ts --timeout 60000
+# required: PC1 step 1 fails on the stub log peak (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/workspaceOpenspecComposition.integration.test.ts:
+107 |     await coordinator.reconcile()
+108 |     const worktreeCount = (coordinator.getSnapshot()?.repositories ?? []).flatMap((repository) => repository.worktrees).length
+109 |     expect(worktreeCount).toBe(WORKTREES)
+110 |     const step1 = takeRuns()
+111 |     expect(step1.runs).toBe(WORKTREES)
+112 |     expect(step1.peak).toBeLessThanOrEqual(3)
+                             ^
+error: expect(received).toBeLessThanOrEqual(expected)
+
+Expected: <= 3
+Received: 12
+
+      at <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/workspaceOpenspecComposition.integration.test.ts:112:24)
+(fail) workspace OpenSpec discovery, production composition (PC1) > PC1: 12 runs at most 3 at once, then none while unchanged, one after an edit, and all 12 after ten minutes [317.38ms]
+
+ 0 pass
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [500.00ms]
+
+verdict: KILLED (PC1 step 1 failed, as required)

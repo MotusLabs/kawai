@@ -12,7 +12,7 @@ import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { useTeamAuditStore } from '../stores/teamAuditStore'
 import { handlePlanWorkspaceMessage } from './planWorkspaceMessages'
 import { notifyDeliveredToHuman, notifyMailboxDeadLetter } from '../utils/teamMailboxNotification'
-import { handleTeamApprovalDefaultResult, handleTeamWorkspaceMessage } from './teamWorkspaceMessages'
+import { handleTeamApprovalDefaultResult, handleTeamWorkspaceMessage, handleTeamSetupMessage } from './teamWorkspaceMessages'
 import { routedTeamPath } from '../utils/teamKeyAliases'
 import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
@@ -45,6 +45,8 @@ export function handleTeamMessage(message: TeamMessage, _deps: MessageRouterDeps
     case 'team-workspace-snapshot':
     case 'team-workspace': handleTeamWorkspaceMessage(message); return
     case 'team-workspace-approval-default-result': handleTeamApprovalDefaultResult(message); return
+    case 'team-workspace-setup-preview-result':
+    case 'team-workspace-setup-result': handleTeamSetupMessage(message); return
     case 'team-messages-snapshot': messages.applySnapshot(routed(message, messages.views)); return
     case 'team-messages': messages.applyPush(routed(message, messages.views)); return
     case 'team-thread': messages.applyThread(routed(message, messages.views)); return
@@ -58,6 +60,7 @@ export function handleTeamMessage(message: TeamMessage, _deps: MessageRouterDeps
     case 'team-plan-workspace-checklist':
     case 'team-plan-workspace-document':
     case 'team-plan-workspace-artifacts':
+    case 'team-plan-workspace-bindings':
     case 'team-plan-workspace-result': handlePlanWorkspaceMessage(message); return
     // The Audit tab (execution-safety-recovery D9).
     case 'team-audit-page': audits.applyPage(routed(message, audits.views)); return

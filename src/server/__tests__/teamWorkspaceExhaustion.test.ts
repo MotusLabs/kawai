@@ -99,7 +99,7 @@ describe('the read model gathers each episode\'s facts', () => {
         assignmentsOf: () => state.dispatches.map(createdAt => ({ createdAt })),
         results: { get: () => null, outstandingSince: () => [], submittedBy: () => false },
         acknowledgements: { highest: () => null },
-      } },
+      }, handoffs: { store: { pendingForTeam: () => [], publishedOfOpenTasks: () => [] }, live: () => false } },
       mailbox: { store: { listForTeam: () => [], eventsFor: () => [], get: () => ({ state: state.dropped }) } },
       waitingFor: () => ({}),
       teamRecords: () => records,
@@ -112,7 +112,7 @@ describe('the read model gathers each episode\'s facts', () => {
       outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
       exhaustionEpisodes: () => [episode()],
     }
-    return new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
+    return new WorkspaceRead(manager as never).snapshot({ teamId: 'team', groupsRoot: '/nonexistent-kawai-groups-root' } as never)
       .attention.filter(item => item.kind === 'context-exhausted').map(item => item.id)
   }
   const open: State = { flagAt: FLAGGED, dropped: 'dead', status: 'active', dispatches: ['2026-10-18T08:00:00.000Z'] }

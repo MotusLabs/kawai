@@ -1008,6 +1008,10 @@ describe('ChatSessionDriver', () => {
     expect('usage' in completions()[2]!).toBe(false)
   })
 
+  // A client that never reads providerCostUsd (the "Older client" scenario)
+  // receives the estimate beside the charge: the field is additive, so the
+  // estimate stays on every completed turn, this one included.
+  // @covers: chat-sessions › A turn's cost is the provider-reported charge when streamed › Older client
   test("turn_completed carries the provider-reported cost summed over the turn's stream, beside the SDK estimate", async () => {
     const harness = createHarness()
     const fake = () => harness.fakes.at(-1)!
@@ -3615,6 +3619,7 @@ describe('ChatSessionDriver limit events', () => {
     expect(limits).toEqual([{ kind: 'rate_limit', final: false, status: 429, message: null, resetsAt: null, window: null }])
   })
 
+  // @covers: profile-limit-handling › Limit events are recorded per profile › Window recorded
   test('a failed assistant message is the final event, with the reset a rejected rate_limit_event announced', async () => {
     const { fake, limits } = await limitHarness()
     const reset = Math.floor(Date.now() / 1000) + 2400

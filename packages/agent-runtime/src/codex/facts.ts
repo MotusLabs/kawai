@@ -32,10 +32,11 @@ import type { TurnOutcome } from '../contract.js'
 import { codexLimitFailure } from '../usage/limits.js'
 import { codexQuotaReport, codexReadSnapshot } from '../usage/quota.js'
 import { addTokenUsage, codexRequestUsage, codexUpdateRequests, type CodexTokenBreakdown } from '../usage/tokens.js'
-import type { LimitEvent } from '../usage/types.js'
+import type { LimitEvent, LimitFailure } from '../usage/types.js'
 import { LimitWaits, OrderedEvents } from '../usage/waits.js'
 import { codexErrorCategory, codexErrorKind } from './auth.js'
 import { mapCodexNotification } from './events.js'
+import { isCodexCapacityError } from './capacityRetry.js'
 import type { CodexTurnState } from './turns.js'
 
 export interface FactsHost {
@@ -44,6 +45,8 @@ export interface FactsHost {
   callbacks: AgentCallbacks
   onToolObservation?(observation: ToolObservation): void
   auditHooks?: CodexAuditHooks
+  /** capacityRecovery 'bounded': `serverOverloaded` is model capacity, not a limit (no limit event, retrying or final). */
+  capacityBounded?: boolean
 }
 
 type TurnError = { message?: unknown; codexErrorInfo?: unknown } | null
@@ -162,7 +165,7 @@ export class CodexFacts {
 
   /** The final limit failure of a failed turn, reported once after its outcome is decided (F2). */
   finalLimit(error: TurnError): void {
-    this.publish(codexLimitFailure(error, true, this.snapshot))
+    this.publish(this.limitFailure(error, true))
   }
 
   terminalReason(error: TurnError): string | null {
@@ -245,11 +248,17 @@ export class CodexFacts {
 
   /** A retrying limit error: a non-final failure, and the turn's wait starts. */
   private retried(error: { message?: unknown; codexErrorInfo?: unknown }, turn: CodexTurnState | null): void {
-    const failure = codexLimitFailure(error, false, this.snapshot)
+    const failure = this.limitFailure(error, false)
     if (!failure) return
     // The wait is registered before any observer runs (a reentrant interrupt then ends it, after its start).
     const start = turn && !turn.settled ? this.waits.retried(turn.turnId, failure.window, failure.resetsAt) : null
     this.limitEvents.publish(failure, start)
+  }
+
+  /** A limit kind's failure, except model capacity under capacityRecovery 'bounded' (D1). */
+  private limitFailure(error: TurnError, final: boolean): LimitFailure | null {
+    if (this.host.capacityBounded && isCodexCapacityError(error)) return null
+    return codexLimitFailure(error, final, this.snapshot)
   }
 
   private endWait(turnId: string, cause: 'resumed' | 'cancelled' | 'process-ended'): void {

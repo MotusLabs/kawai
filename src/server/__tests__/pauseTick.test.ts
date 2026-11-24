@@ -198,6 +198,7 @@ describe("the executor tick's pause pass (D8)", () => {
     expect(stateOf(tickDeps(), pauseRow.id, 'api')).toEqual({ state: 'paused' })
   })
 
+  // @covers: plan-pause › Paused is recorded only when work is safe and the holder has stopped › Checkpoint pushed, holder still busy
   test('checkpoint pushed but the holder busy stays Pausing with the busy cause', async () => {
     const { planId, executionId } = await executionWith(['api'])
     await inFlight(executionId, 'api')
@@ -217,6 +218,7 @@ describe("the executor tick's pause pass (D8)", () => {
     expect(state.causes).toEqual([{ kind: 'busy' }, { kind: 'readiness', reason: 'it is busy' }])
   })
 
+  // @covers: plan-pause › Pausing never resolves a pending request › Pause beside a pending approval
   test('a pending approval stays pending and reads Pausing as request (R11)', async () => {
     const { planId, executionId } = await executionWith(['api'])
     await inFlight(executionId, 'api')
@@ -236,6 +238,7 @@ describe("the executor tick's pause pass (D8)", () => {
     ])
   })
 
+  // @covers: plan-pause › Paused is recorded only when work is safe and the holder has stopped › The holder is killed first
   test('an archived holder counts as ready and records Paused; a killed holder with nothing pushed reads holder-killed', async () => {
     const { planId, executionId } = await executionWith(['api', 'ui'])
     await inFlight(executionId, 'api')
@@ -258,6 +261,7 @@ describe("the executor tick's pause pass (D8)", () => {
     expect(state.ownerRequired).toBe(true)
   })
 
+  // @covers: plan-pause › Parked, cooling, and landing holders are named, not forced › A parked holder
   test('a parked or cooling holder reads provider-limit with its reset', async () => {
     const { planId, executionId } = await executionWith(['api', 'ui'])
     await inFlight(executionId, 'api')
@@ -307,6 +311,7 @@ describe("the executor tick's pause pass (D8)", () => {
     expect(pauses.target(pauseRow.id, 'api')!.pausedAt).toBe(first)
   })
 
+  // @covers: plan-pause › Pauses are visible to the owner and agents › Stop clears decisions
   test('a finished execution reads every undecided target cancelled and closes the pause', async () => {
     const { planId, executionId } = await executionWith(['api'])
     await inFlight(executionId, 'api')
@@ -380,6 +385,7 @@ describe("the executor tick's pause pass (D8)", () => {
     expect(pauses.target(pauseRow.id, 'api')!.holderSession).toBe('dev2')
   })
 
+  // @covers: plan-pause › An unclaimed instruction is withdrawn › A spawning instruction
   test('an unclaimed spawn still reads spawnUnclaimed (F5)', async () => {
     const { planId, executionId } = await executionWith(['api'])
     const api = await inFlight(executionId, 'api', 'dev', 'spawning')
@@ -395,6 +401,7 @@ describe("the executor tick's pause pass (D8)", () => {
 })
 
 describe('a restart between the claim and the tick (R18, the B5 pattern)', () => {
+  // @covers: plan-pause › Pause state survives restart › Restart with a paused execution
   test('the rebuilt pass re-derives from the rows alone: one mail, the first Paused fact stands', async () => {
     const { planId, executionId } = await executionWith(['api'])
     await inFlight(executionId, 'api')
@@ -449,6 +456,7 @@ describe('a restart between the claim and the tick (R18, the B5 pattern)', () =>
   // and before any checkpoint, with the holder busy — the first pass
   // recorded no Paused, and the rebuilt pass re-derives `pausing` from the
   // rows alone: no second mail, no Paused, whatever the passes.
+  // @covers: plan-pause › Pause state survives restart › Restart mid-pause
   test('a restart re-derivation sends no resume twice and records no second Paused', async () => {
     const { planId, executionId } = await executionWith(['api'])
     await inFlight(executionId, 'api')

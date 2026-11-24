@@ -1,6 +1,7 @@
 {
   "minimax": {
     "label": "MiniMax",
+    "family": "minimax",
     "model": "MiniMax-M3",
     "env": {
       "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
@@ -13,18 +14,21 @@
   },
   "mimo": {
     "label": "MiMo",
-    "model": "mimo-v2.6-pro",
+    "family": "mimo",
+    "model": "mimo-v2.6-pro[1m]",
+    "autoCompactWindow": 300000,
     "env": {
       "ANTHROPIC_BASE_URL": "https://api.xiaomimimo.com/anthropic",
-      "ANTHROPIC_MODEL": "mimo-v2.6-pro",
-      "ANTHROPIC_DEFAULT_SONNET_MODEL": "mimo-v2.6-flash",
-      "ANTHROPIC_DEFAULT_OPUS_MODEL": "mimo-v2.6-pro",
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "mimo-v2.6-pro",
-      "ANTHROPIC_DEFAULT_FABLE_MODEL": "mimo-v2.6-pro"
+      "ANTHROPIC_MODEL": "mimo-v2.6-pro[1m]",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "mimo-v2.6-flash[1m]",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "mimo-v2.6-pro[1m]",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "mimo-v2.6-pro[1m]",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL": "mimo-v2.6-pro[1m]"
     }
   },
   "kimi": {
     "label": "Kimi",
+    "family": "kimi",
     "model": "kimi-k3[1m]",
     "env": {
       "ANTHROPIC_BASE_URL": "https://api.moonshot.ai/anthropic",
@@ -38,11 +42,19 @@
   },
   "codex-sol": {
     "label": "Codex Sol",
+    "family": "gpt",
     "runtime": "codex",
-    "model": "gpt-6.1-sol"
+    "model": "gpt-6.2-sol"
+  },
+  "codex-astra": {
+    "label": "Codex Astra",
+    "family": "gpt",
+    "runtime": "codex",
+    "model": "gpt-6.2-astra"
   },
   "codex-luna": {
     "label": "Codex Luna",
+    "family": "gpt",
     "runtime": "codex",
     "model": "gpt-6-luna"
   }

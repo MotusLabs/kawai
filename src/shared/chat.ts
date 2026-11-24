@@ -8,6 +8,7 @@
 import type { ChatPeerTaskContext, RevisionNotice } from './teamTasks'
 import type { ChatHandoffPackage } from './team'
 import type { WorkspaceMessageContext } from './planWorkspace'
+import type { ChatImage } from './chatImages'
 import type {
   ChatQuestionAutoAnswer,
   ChatQuestionAutoAnswerHeldEvent,
@@ -198,6 +199,7 @@ export type ChatEvent =
   | (ChatTurnEventBase & {
       type: 'user_message'
       text: string
+      images?: ChatImage[]
       /**
        * The driver-minted client uuid of this message (plan-workspace §4):
        * the key replay joins on to re-attach the stored context. Every live
@@ -285,10 +287,12 @@ export type ChatEvent =
       text: string
       /**
        * Discriminator for notices other code acts on. `compacted` marks the
-       * compact_boundary notice; matching on this beats matching on its
-       * display text, which is free to change.
+       * compact_boundary notice; `capacity_recovery` marks a Codex capacity
+       * retry or its exhausted window (internal recovery, never human input).
+       * Matching on this beats matching on its display text, which is free
+       * to change.
        */
-      kind?: 'compacted'
+      kind?: 'compacted' | 'capacity_recovery'
     })
   | (ChatEventBase & { type: 'error'; message: string })
 
@@ -344,6 +348,10 @@ export interface ChatActivity {
   attempt?: number
   maxRetries?: number
   errorStatus?: number
+  /** retrying, Codex capacity recovery (codex-capacity-retry D6): the retry ordinal, no maxRetries, epoch ms next attempt (absent once none fits) and window close. */
+  retryOwner?: 'provider' | 'capacity'
+  nextRetryAt?: number
+  retryDeadline?: number
 }
 
 /**

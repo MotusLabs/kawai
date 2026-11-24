@@ -34,6 +34,7 @@ describe('TeamApprovalDefaults', () => {
   })
 
   // @covers: team-worktree-staffing › A team has a default approval policy for spawned members › A new install has no team default
+  // @covers: claude-session-profiles › Profiles preserve chat permissions and credential privacy › User-chosen policy sources
   test('no row reads as not set; set round-trips and upserts', () => {
     const store = new TeamApprovalDefaults(db.db, () => Date.parse('2026-11-04T10:00:00.000Z'))
     expect(store.get('/repo/.git')).toBeNull()

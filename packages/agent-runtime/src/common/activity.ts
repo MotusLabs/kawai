@@ -26,8 +26,13 @@ export interface ChatActivityState {
   unresolvedTools: ChatActivityToolCall[]
   /** Tool named by the latest tool_use block start (preparing_tool). */
   preparingTool?: string
-  /** Details of the latest system/api_retry frame (retrying). */
-  retry?: { attempt: number; maxRetries: number; errorStatus?: number }
+  /**
+   * Details of the latest retry (retrying): a system/api_retry frame or a
+   * provider retry notification (attempt and maxRetries), or a Codex capacity
+   * retry (owner `capacity`: its ordinal as attempt, no maximum, the epoch
+   * next retry time unless none fits, and the epoch window deadline).
+   */
+  retry?: { attempt: number; maxRetries?: number; errorStatus?: number; owner?: 'provider' | 'capacity'; ordinal?: number; nextRetryAt?: number; deadline?: number }
 }
 
 export function initialChatActivityState(): ChatActivityState {
@@ -42,6 +47,8 @@ export type ChatActivityInput =
   | { type: 'tool_call'; toolCallId: string; tool: string }
   | { type: 'tool_result'; toolCallId: string }
   | { type: 'api_retry'; attempt: number; maxRetries: number; errorStatus?: number }
+  /** A Codex capacity retry is scheduled (nextRetryAt) or expiring (none); epoch milliseconds. */
+  | { type: 'capacity_retry'; ordinal: number; nextRetryAt?: number; deadline: number }
   | { type: 'request_resolved' }
   | { type: 'turn_end' }
 
@@ -240,6 +247,17 @@ function applyInput(
           attempt: input.attempt,
           maxRetries: input.maxRetries,
           errorStatus: input.errorStatus,
+        },
+      }
+    case 'capacity_retry':
+      return {
+        ...withPhase(state, 'retrying'),
+        retry: {
+          attempt: input.ordinal,
+          owner: 'capacity',
+          ordinal: input.ordinal,
+          ...(input.nextRetryAt !== undefined ? { nextRetryAt: input.nextRetryAt } : {}),
+          deadline: input.deadline,
         },
       }
     case 'request_resolved':

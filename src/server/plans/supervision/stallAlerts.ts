@@ -57,7 +57,7 @@ export function stallBody(plan: { id: string; title: string }, change: ChangeSup
     `Kawai: change ${change.change} of plan "${plan.title}" (${plan.id}) is stalled: ${stall.kind}.`,
     stallLine(stall),
     `Stage: ${change.stage ? STAGE_LABELS[change.stage] ?? change.stage : 'none'}.`,
-    `Holder: ${holder ? `${holder.session} (group ${holder.group ?? 'none'}, profile ${holder.profile ?? 'none'})` : 'none'}.`,
+    `Holder: ${holder ? `${holder.session} (group ${holder.group ?? 'none'}, profile ${holder.profile ?? 'none'})${stall.kind === 'no-progress' && stall.holderGone ? ', archived' : ''}` : 'none'}.`,
     `Last progress: ${change.progress ? `${change.progress.kind} at ${change.progress.at}` : 'none'}.`,
     `Last activity: ${change.activity ? `${change.activity.kind} at ${change.activity.at}` : 'none'}.`,
     'Rounds:',

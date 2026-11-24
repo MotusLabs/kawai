@@ -27,6 +27,7 @@ import { toolCallDetail } from './toolCallLabel'
 import { timeoutAnswerLabels } from './autoAnswerLabels'
 import { isVisibleEntry, layoutRows, toolEntries } from './transcriptLayout'
 import { chatDayKey } from '../../utils/chatTimeFormat'
+import ChatMessageImages from './ChatMessageImages'
 
 type ToolResult = Extract<ChatEvent, { type: 'tool_result' }>
 
@@ -92,6 +93,7 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
             {event.workspaceContext && <p className="mb-1 text-chat-meta text-secondary"
               data-testid="message-workspace-context">{workspaceContextLabel(event.workspaceContext)}</p>}
             <p className="whitespace-pre-wrap break-words text-chat-body">{event.text}</p>
+            {sessionId && event.images?.length ? <ChatMessageImages sessionId={sessionId} images={event.images} /> : null}
           </> }
       case 'assistant_text':
         return { author: agentLabel, role: 'assistant', copyText: event.text, body: <Markdown content={event.text} /> }

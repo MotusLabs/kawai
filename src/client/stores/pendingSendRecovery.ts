@@ -16,6 +16,8 @@ import type { ServerMessage } from '@shared/types'
 import { useChatStore } from './chatStore'
 import { useSessionStore, type ConnectionStatus } from './sessionStore'
 import { pendingContextSends, pendingContextSendsFor, usePlanWorkspaceScopeStore } from './planWorkspaceScopeStore'
+import { consumeImageSendAnswer, markImageSendsUnconfirmed } from './chatImageSends'
+import { useChatImageDrafts } from './chatImageDrafts'
 
 /**
  * Settles a pending contextual send from its terminal answer frame, called
@@ -29,6 +31,7 @@ import { pendingContextSends, pendingContextSendsFor, usePlanWorkspaceScopeStore
  * answer never consumes another session's entry.
  */
 export function consumeSendAnswer(message: ServerMessage): void {
+  if (consumeImageSendAnswer(message)) return
   if (message.type === 'chat-send-result') {
     const pending = pendingContextSends.get(message.requestId)
     if (pending && pending.sessionId === message.sessionId) pendingContextSends.delete(message.requestId)
@@ -38,7 +41,7 @@ export function consumeSendAnswer(message: ServerMessage): void {
   const pending = pendingContextSends.get(message.requestId)
   if (!pending || pending.sessionId !== message.sessionId) return
   pendingContextSends.delete(message.requestId)
-  if ((useChatStore.getState().drafts[pending.sessionId] ?? '') === '') {
+  if ((useChatStore.getState().drafts[pending.sessionId] ?? '') === '' && !useChatImageDrafts.getState().drafts[pending.sessionId]?.length) {
     useChatStore.getState().setDraft(pending.sessionId, pending.text)
     usePlanWorkspaceScopeStore.getState().setScope(pending.sessionId, pending.scope)
   }
@@ -58,6 +61,7 @@ function tryRecover(sessionId: string): boolean {
   const oldest = pendingContextSendsFor(sessionId).find(entry => entry.eligible)
   if (!oldest) return false
   if ((useChatStore.getState().drafts[sessionId] ?? '') !== '') return false
+  if (useChatImageDrafts.getState().drafts[sessionId]?.length) return false
   pendingContextSends.delete(oldest.requestId)
   useChatStore.getState().setDraft(sessionId, oldest.text)
   usePlanWorkspaceScopeStore.getState().setScope(sessionId, oldest.scope)
@@ -76,6 +80,7 @@ const sessionsWithPending = (): string[] =>
  * survives the reconnect.
  */
 function markAllEligible(): void {
+  markImageSendsUnconfirmed()
   for (const entry of pendingContextSends.values()) entry.eligible = true
 }
 

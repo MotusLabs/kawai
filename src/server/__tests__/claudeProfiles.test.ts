@@ -101,6 +101,7 @@ describe('Claude profile resolution', () => {
     const codexRows = metadata.filter(profile => profile.runtime === 'codex')
     expect(codexRows.map(({ id, label, providerLabel }) => ({ id, label, providerLabel }))).toEqual([
       { id: 'codex-sol', label: 'Codex Sol', providerLabel: 'Codex' },
+      { id: 'codex-astra', label: 'Codex Astra', providerLabel: 'Codex' },
       { id: 'codex-luna', label: 'Codex Luna', providerLabel: 'Codex' },
     ])
     for (const row of codexRows) expect(row.providerId).toMatch(/^codex-home-[0-9a-f]{12}$/)
@@ -201,8 +202,8 @@ describe('Claude profile resolution', () => {
     expect(minimax.model).toBe('MiniMax-M3')
     expect(minimax.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.minimax.io/anthropic', ANTHROPIC_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_OPUS_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_SONNET_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_FABLE_MODEL: 'MiniMax-M3' })
     const mimo = resolveClaudeLaunch('mimo', {}, ctx)
-    expect(mimo.model).toBe('mimo-v2.6-pro')
-    expect(mimo.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_FABLE_MODEL: 'mimo-v2.6-pro' })
+    expect(mimo.model).toBe('mimo-v2.6-pro[1m]')
+    expect(mimo.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro[1m]', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro[1m]', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.6-pro[1m]', ANTHROPIC_DEFAULT_FABLE_MODEL: 'mimo-v2.6-pro[1m]' })
     const kimi = resolveClaudeLaunch('kimi', {}, ctx)
     expect(kimi.model).toBe('kimi-k3[1m]')
     // Extracted: asymmetric matchers mutate the received object, and the env
@@ -271,6 +272,35 @@ describe('Claude profile resolution', () => {
     expect(glm.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('1000000')
     expect(minimax.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
     expect(lan.env?.HOME).toBe('/test/home')
+  })
+
+  // @covers: claude-session-profiles › Catalogs may cap the output reservation › Provider caps output tokens
+  test('provider caps output tokens: the provider value wins over the inherited environment', () => {
+    const dir = path.join(tempHome, '.kawai')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      path.join(dir, 'providers.json'),
+      JSON.stringify({
+        capped: {
+          label: 'Capped',
+          env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000' },
+          models: { capped: {} },
+        },
+      })
+    )
+    const launch = resolveClaudeLaunch(
+      'capped',
+      // The inherited value stands for a conflicting project setting in the
+      // effective server environment the launch starts from.
+      { CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000' },
+      { homeDir: tempHome }
+    )
+    // The provider's cap wins; the inherited value never rides along.
+    expect(launch.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('8000')
+    // The flag settings layer carries the cap too: a blank there would let a
+    // lower-priority project setting win under it.
+    const settings = launch.settings as { env: Record<string, string> }
+    expect(settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('8000')
   })
 })
 

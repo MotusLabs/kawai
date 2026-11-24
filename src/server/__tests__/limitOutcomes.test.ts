@@ -215,6 +215,7 @@ describe('credit limits (openrouter-provider D8)', () => {
   }
   beforeEach(() => { records.set('dev', record('dev', { claudeProfileId: 'openrouter-opus' })) })
 
+  // @covers: profile-limit-handling › Credit limits never park work › Group parks short resets
   test('Group parks short resets: a credit limit forwards with a handoff package outside the cooling provider, never parks', async () => {
     group('devs', 'onLimit: { parkIfResetWithin: 3h, otherwise: forward }')
     const m = deliver()

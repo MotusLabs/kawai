@@ -1,0 +1,31 @@
+# mutant V4-cache-bypassed
+# target: src/server/workspace/workspaceCoordinator.ts
+# before:       ...(context ? { cache: context.cache, now: context.now } : {}),
+# after:        ...(context ? { now: context.now } : {}),
+# command: bun test src/server/__tests__/workspaceOpenspecComposition.integration.test.ts --timeout 60000
+# required: PC1 step 2 fails on the unchanged-pass run count (the mutant is killed)
+
+bun test v1.4.3 (c6da4a4d3)
+
+src/server/__tests__/workspaceOpenspecComposition.integration.test.ts:
+112 |     expect(step1.peak).toBeLessThanOrEqual(3)
+113 | 
+114 |     // Step 2: nothing changed, so nothing runs.
+115 |     now += 60_000
+116 |     await coordinator.reconcile()
+117 |     expect(takeRuns().runs).toBe(0)
+                                  ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 12
+
+      at <anonymous> (/home/coder/kawai/.worktrees/bounded-openspec-discovery/src/server/__tests__/workspaceOpenspecComposition.integration.test.ts:117:29)
+(fail) workspace OpenSpec discovery, production composition (PC1) > PC1: 12 runs at most 3 at once, then none while unchanged, one after an edit, and all 12 after ten minutes [2452.46ms]
+
+ 0 pass
+ 1 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [2.63s]
+
+verdict: KILLED (PC1 step 2 failed, as required)

@@ -17,14 +17,15 @@ The shipped default catalog, grouped by provider:
 | glm | GLM | Z.AI | starts on Opus; Sonnet and Haiku map to `glm-5.3-flash[1m]`, Opus and Fable to `glm-5.3[1m]` — provider env below |
 | glm-flash | GLM Flash | Z.AI | starts on Sonnet; Opus and Fable map to `glm-5.3[1m]`, Haiku to `glm-5.3-flash[1m]` — provider env below |
 | minimax | MiniMax | MiniMax | `https://api.minimax.io/anthropic`; starts on `MiniMax-M3`; every Claude tier maps to `MiniMax-M3` ([reference](https://platform.minimax.io/docs/token-plan/claude-code)) |
-| mimo | MiMo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus/Haiku/Fable to `mimo-v2.6-pro` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
+| mimo | MiMo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro[1m]`; Sonnet maps to `mimo-v2.6-flash[1m]`, Opus/Haiku/Fable to `mimo-v2.6-pro[1m]` (1M capacity); `autoCompactWindow` `300000` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
 | kimi | Kimi | Kimi | `https://api.moonshot.ai/anthropic`; starts on `kimi-k3[1m]`; every Claude tier maps to `kimi-k3[1m]`; auto-compact window `1000000` ([reference](https://platform.kimi.ai/docs/guide/claude-code-kimi#configuration-reference)) |
 | openrouter-opus | OpenRouter Opus | OpenRouter | starts on Opus; Opus and Fable map to `~anthropic/claude-opus-latest[1m]` — provider env below |
 | openrouter-sonnet | OpenRouter Sonnet | OpenRouter | starts on Sonnet; Sonnet maps to `~anthropic/claude-sonnet-latest[1m]` — provider env below |
 | openrouter-haiku | OpenRouter Haiku | OpenRouter | starts on Haiku; Haiku maps to `~anthropic/claude-haiku-latest` — provider env below |
 | openrouter-deepseek-flash | OpenRouter DeepSeek V4.1 Flash | OpenRouter | starts on `deepseek/deepseek-v4.1-flash-1017`; every alias maps to it — provider env below |
 | openrouter-minimax-flash | OpenRouter MiniMax M3.1 Flash | OpenRouter | starts on `minimax/minimax-m3.1-flash`; every alias maps to it — provider env below |
-| codex-sol | Codex Sol | Codex | Codex runtime on the host Codex login (default Codex home); model `gpt-6.1-sol` |
+| codex-sol | Codex Sol | Codex | Codex runtime on the host Codex login (default Codex home); model `gpt-6.2-sol` |
+| codex-astra | Codex Astra | Codex | Codex runtime on the host Codex login (default Codex home); model `gpt-6.2-astra` |
 | codex-luna | Codex Luna | Codex | Codex runtime on the host Codex login (default Codex home); model `gpt-6-luna` |
 
 Provider Z.AI carries the pair's shared routing at the provider level:
@@ -203,11 +204,12 @@ that has one, copy the entry there to offer OpenRouter:
       "ANTHROPIC_DEFAULT_FABLE_MODEL": "~anthropic/claude-opus-latest[1m]"
     },
     "models": {
-      "openrouter-opus": { "label": "OpenRouter Opus", "model": "opus" },
-      "openrouter-sonnet": { "label": "OpenRouter Sonnet", "model": "sonnet" },
-      "openrouter-haiku": { "label": "OpenRouter Haiku", "model": "haiku" },
+      "openrouter-opus": { "label": "OpenRouter Opus", "family": "claude", "model": "opus" },
+      "openrouter-sonnet": { "label": "OpenRouter Sonnet", "family": "claude", "model": "sonnet" },
+      "openrouter-haiku": { "label": "OpenRouter Haiku", "family": "claude", "model": "haiku" },
       "openrouter-deepseek-flash": {
         "label": "OpenRouter DeepSeek V4.1 Flash",
+        "family": "deepseek",
         "model": "deepseek/deepseek-v4.1-flash-1017",
         "env": {
           "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek/deepseek-v4.1-flash-1017",
@@ -218,6 +220,7 @@ that has one, copy the entry there to offer OpenRouter:
       },
       "openrouter-minimax-flash": {
         "label": "OpenRouter MiniMax M3.1 Flash",
+        "family": "minimax",
         "model": "minimax/minimax-m3.1-flash",
         "env": {
           "ANTHROPIC_DEFAULT_OPUS_MODEL": "minimax/minimax-m3.1-flash",
@@ -230,6 +233,47 @@ that has one, copy the entry there to offer OpenRouter:
   }
 }
 ```
+
+## Auto-compaction window
+
+Capacity and compaction are separate. A model's `[1m]` suffix tells Claude
+Code it has a 1M-token context; `autoCompactWindow` is when to compact. It is
+an optional JSON integer from 100000 to 1000000 on a legacy `profiles.json`
+entry, a provider, or a provider model; any other value (a string, boolean,
+null, fraction, or out-of-range number) rejects the whole file, as other
+invalid fields do. A model's value overrides its provider's, a nearer file's
+a farther one's, and a re-homed shipped key keeps its own. A project overlay
+that omits it inherits the base value; a user-level catalog replaces the
+shipped defaults, so it gets none unless it says so. Codex entries and
+executable-backed entries cannot carry it (a wrapper owns its own
+configuration).
+
+```json
+{ "mimo": { "label": "MiMo", "autoCompactWindow": 250000 } }
+```
+
+Roles can choose too: a group file's `autoCompactWindow: 250000` and
+`profileAutoCompactWindow: { mimo: 300000 }` (keyed like `profileEffort`;
+`provider/model` keys allowed). Precedence at each agent start or respawn:
+the role's entry for the member's profile, then the role default, then the
+catalog value, then the legacy `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env or the
+runtime's own default. Bad role values are warnings, never a rejected group.
+Edits reach the next process start, not a running agent.
+
+A selected value sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and clears
+`DISABLE_AUTO_COMPACT` and `DISABLE_COMPACT` in both the process env and the
+flag settings layer; when the profile's own model declaration carries `[1m]`
+it also clears `CLAUDE_CODE_DISABLE_1M_CONTEXT`. If any of those names is a
+registered secret name, the launch is refused before spawn, naming only the
+variables. With no selected value the launch is unchanged. Codex and
+executable-backed members ignore role windows. Limitations: an operator's own
+global `autoCompactEnabled: false` setting is not overridden, and larger
+windows can cost more per request.
+
+The configured window is not the displayed threshold: the context meter shows
+the window minus Claude Code's reserve once a context report arrives (for
+example 300000 configured, 267000 shown with a 33000 reserve), and the window
+itself, marked approximate, before that.
 
 ## Provider reset time zone
 
@@ -244,6 +288,28 @@ always wins; without the field the text is ignored.
 ```json
 { "glm": { "label": "GLM", "limitResetTimeZone": "Asia/Shanghai" } }
 ```
+
+## Model families
+
+A `family` names the model lineage a profile runs — `claude`, `gpt`, `glm`,
+`deepseek` — so a group with `crossModelReview: true` can send a review to a
+model other than its author's (`docs/routing/README.md`). It is accepted on a
+provider (the default for its models), on a provider's model, and on a
+`profiles.json` entry of either runtime; a model's own `family` wins over its
+provider's. A profile with neither is its own family, equal to its profile
+id, so two unlabelled aliases of one model count as different families: set
+`family` on every user-level entry that should match another.
+
+`family` is a trusted-tier field, like `codexHome` and `network`: only the
+shipped defaults and the user-level `~/.kawai/` files may set it. A project
+`.kawai/` file that sets it is rejected whole, because an agent that can
+write the project could otherwise relabel its own model to get around the
+review rule. The value must match `^[a-z0-9][a-z0-9-]*$`. The shipped
+catalogs name every model's family; OpenRouter's Claude aliases are
+`claude`, the Codex profiles `gpt`.
+
+Builds before `starter-team-setup` reject `family` as an unknown field:
+remove it from user-level files before downgrading.
 
 ## Provider usage
 

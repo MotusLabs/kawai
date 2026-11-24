@@ -27,6 +27,8 @@ import type { AgentEvent, BackgroundTask, ClaudeAgentDriver, ClaudeDriverOptions
 import { AgentRuntimeError } from '@motuslabs/agent-runtime'
 import type { ChatApprovalDecision, ChatApprovalPolicy, ChatBackgroundTask, ChatCommandState, ChatPeerMessage, ChatPendingRequest, ChatQuestion, ChatQuestionAnswer, ChatWorker } from '../../../shared/chat'
 import type { WorkspaceMessageContext } from '../../../shared/planWorkspace'
+import { publicChatImage, type TrustedChatImage } from '../images/ChatImageStore'
+import type { ChatImage } from '../../../shared/chatImages'
 import type { SessionStatus } from '../../../shared/types'
 import { TEAM_ALLOWED_TOOLS, type TeamToolSpec } from '../../team/mailboxTools'
 import { formatEnvelope } from '../../team/envelope'
@@ -64,6 +66,7 @@ export function createClaudeChatDriver(options: ClaudeChatDriverOptions, create:
 
 class ClaudeChatDriver implements ChatAgentDriver {
   private readonly boot: RuntimeBoot<ClaudeAgentDriver>
+  private readonly images = new Map<string, ChatImage[]>()
   private killed = false
   private dead = false
   private sessionId: string | null
@@ -149,9 +152,12 @@ class ClaudeChatDriver implements ChatAgentDriver {
     this.projectPath = path
   }
 
-  send(text: string): void {
-    if (this.killed) return
-    void this.submit(text, crypto.randomUUID())
+  send(text: string, images?: TrustedChatImage[]): void | Promise<ChatSendOutcome> {
+    if (this.killed) { if (images?.length) throw Error(KILLED); return }
+    const id = crypto.randomUUID()
+    if (images?.length) this.images.set(id, images.map(publicChatImage))
+    const sent = this.submit(text, id, undefined, images)
+    if (images?.length) return sent
   }
 
   /**
@@ -159,11 +165,12 @@ class ClaudeChatDriver implements ChatAgentDriver {
    * pre-submit decision for this UUID, so a refusal opens, emits and
    * enqueues nothing; the live user event carries the context.
    */
-  sendWorkspaceContext(text: string, context: WorkspaceMessageContext): Promise<ChatSendOutcome> {
+  sendWorkspaceContext(text: string, context: WorkspaceMessageContext, images?: TrustedChatImage[]): Promise<ChatSendOutcome> {
     if (this.killed) return Promise.resolve({ ok: false, error: KILLED })
     const messageUuid = crypto.randomUUID()
     this.contexts.set(messageUuid, context)
-    return this.submit(text, messageUuid, context)
+    if (images?.length) this.images.set(messageUuid, images.map(publicChatImage))
+    return this.submit(text, messageUuid, context, images)
   }
 
   deliver(envelope: ChatPeerMessage): void {
@@ -276,7 +283,9 @@ class ClaudeChatDriver implements ChatAgentDriver {
    * Kawai's own decision, no error event and no owned failure; any other
    * failure keeps its error event and stays owned raw.
    */
-  private submit(text: string, messageUuid: string, context?: WorkspaceMessageContext): Promise<ChatSendOutcome> {
+  private submit(text: string, messageUuid: string, context?: WorkspaceMessageContext, images?: TrustedChatImage[]): Promise<ChatSendOutcome> {
+    // Capture native values before any asynchronous startup or admission.
+    const imageInput = images?.map(image => ({ type: 'base64' as const, mediaType: image.mediaType, data: image.bytes.toString('base64') }))
     // A refused profile or registered name throws here, before anything is accepted.
     const ready = this.ensure()
     const epoch = this.interrupts
@@ -288,12 +297,12 @@ class ClaudeChatDriver implements ChatAgentDriver {
       this.echoes.submitted(messageUuid)
       let handle: Awaited<ReturnType<ClaudeAgentDriver['send']>>
       try {
-        handle = await inner.send(text, { messageUuid, ...(context ? { context: context as never } : {}), continuation: 'queue' })
+        handle = await inner.send(text, { messageUuid, ...(context ? { context: context as never } : {}), ...(imageInput?.length ? { images: imageInput } : {}), continuation: 'queue' })
       } catch (error) {
         this.echoes.settled(messageUuid, null)
         throw error
       }
-      this.echoes.settled(messageUuid, { turnId: handle.turnId, text, ...(context ? { context } : {}) })
+      this.echoes.settled(messageUuid, { turnId: handle.turnId, text, images: this.images.get(messageUuid), ...(context ? { context } : {}) })
       void this.owned.track('turn', handle.result.finally(() => this.echoes.forget(messageUuid, handle.turnId)))
       return { ok: true }
     })
@@ -305,6 +314,7 @@ class ClaudeChatDriver implements ChatAgentDriver {
       void this.owned.track('send', Promise.reject(error))
       return { ok: false, error: message }
     }).finally(() => {
+      this.images.delete(messageUuid)
       this.contexts.delete(messageUuid)
       this.refusals.delete(messageUuid)
       this.peers.delete(messageUuid)
@@ -438,7 +448,7 @@ class ClaudeChatDriver implements ChatAgentDriver {
         // A queued send shows where it was admitted.
         if (!this.echoes.shown(event.messageUuid)) break
         const context = this.contexts.get(event.messageUuid)
-        this.emit({ type: 'user_message', turnId: event.turnId, text: event.text, messageUuid: event.messageUuid, ...(context ? { workspaceContext: context } : {}) }, event.at)
+        this.emit({ type: 'user_message', turnId: event.turnId, text: event.text, messageUuid: event.messageUuid, ...(context ? { workspaceContext: context } : {}), ...(this.images.has(event.messageUuid) ? { images: this.images.get(event.messageUuid) } : {}) }, event.at)
         break
       }
       case 'error':

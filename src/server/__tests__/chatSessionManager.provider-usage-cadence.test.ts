@@ -185,6 +185,7 @@ describe('ChatSessionManager provider usage pull', () => {
     return created.session.id
   }
 
+  // @covers: chat-usage-limits › OpenRouter usage refreshes while sessions are live and after a costed turn › OpenRouter pulls stop without live sessions
   test('archiving the last live session stops the OpenRouter pulls', async () => {
     jest.useFakeTimers()
     let created: ChatSessionManager | undefined

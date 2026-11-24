@@ -15,6 +15,8 @@ interface HeaderProps {
   tailscaleIp: string | null
   /** Server build version from /api/server-info, shown on hover. */
   version?: string | null
+  /** The heading: the current context name (chat-context-name D3). */
+  contextLabel: string
 }
 
 const statusDot: Record<ConnectionStatus, string> = {
@@ -30,6 +32,7 @@ export default function Header({
   onOpenSettings,
   tailscaleIp,
   version = null,
+  contextLabel,
 }: HeaderProps) {
   const [copied, setCopied] = useState(false)
   const shortcutModifier = useSettingsStore((state) => state.shortcutModifier)
@@ -48,14 +51,15 @@ export default function Header({
 
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-elevated px-3">
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <h1
-          className="text-sm font-semibold tracking-tight text-primary text-balance"
+          className="min-w-0 truncate text-sm font-semibold tracking-tight text-primary"
           title={version ? `Kawai v${version}` : undefined}
+          data-testid="context-heading"
         >
-          KAWAI
+          {contextLabel}
         </h1>
-        <div className="flex items-center gap-1.5 text-xs text-muted">
+        <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted">
           <span className={`h-2 w-2 rounded-full ${statusDot[connectionStatus]}`} />
           {tailscaleIp && (
             <button
@@ -70,7 +74,7 @@ export default function Header({
         </div>
       </div>
 
-      <div className="flex items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1.5">
         {/* Persistent while an update exists — a durability signal, not a
             toast; it clears only when the running base is current again. */}
         {updateTarget && (

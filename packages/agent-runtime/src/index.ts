@@ -19,6 +19,7 @@ export type {
   ProcessExitReceipt,
   ResumeCheckpoint,
   SubmitOptions,
+  ImageInput,
   TaskOutput,
   TurnHandle,
   TurnOutcome,

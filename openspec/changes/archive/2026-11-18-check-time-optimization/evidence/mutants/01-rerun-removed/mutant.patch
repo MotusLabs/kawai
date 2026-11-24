@@ -1,0 +1,13 @@
+diff --git a/scripts/runPlan.ts b/scripts/runPlan.ts
+index 0159db65..ea62e22a 100644
+--- a/scripts/runPlan.ts
++++ b/scripts/runPlan.ts
+@@ -176,7 +176,7 @@ export async function runBatchesAndPublish(input: BatchRunInput): Promise<BatchR
+     const rerun = input.retry.planRerun(batch)
+     console.error(`[test-runner] WARNING: rerunning ${batch.file ?? batch.label} once, alone, after its failure`)
+     try {
+-      await input.runCommand(rerun.cmd, input.env, rerun.label)
++      // MUTANT rerun-removed: the rerun command never runs.
+     } catch (error) {
+       if (error instanceof BatchRefusedError) throw error
+       stillFailing.push(

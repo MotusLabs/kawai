@@ -20,6 +20,25 @@
 // it prefers to the front of the candidates.
 import type { RouteCandidate, RouteGroup } from '../../../shared/routing'
 
+/** The cross-model filter one review handoff carries through eligibility (starter-team-setup D6). */
+export interface CrossModelFilter {
+  /** The authors' model families, sorted, de-duplicated. */
+  families: readonly string[]
+  /** Agent authors whose profile is neither recorded nor in a session record. */
+  unknownAuthors: readonly string[]
+  /** The catalog's family of a worker profile (id fallback, D4). */
+  familyOf: (profileId: string) => string
+}
+
+/** Why a worker profile may not take a filtered review; null when it may. */
+export function crossModelReason(filter: CrossModelFilter, profileId: string): { kind: 'cross-model'; detail: string } | null {
+  if (filter.unknownAuthors.length > 0) {
+    return { kind: 'cross-model', detail: `unknown author ${filter.unknownAuthors.join(', ')}` }
+  }
+  const family = filter.familyOf(profileId)
+  return filter.families.includes(family) ? { kind: 'cross-model', detail: `family ${family}` } : null
+}
+
 export type MemberExclusionKind =
   | 'busy'
   | 'pending-card'
@@ -32,6 +51,8 @@ export type MemberExclusionKind =
   | 'outside-role'
   | 'worker-choice'
   | 'profile-cooling'
+  /** A cross-model review's author family (starter-team-setup D6). */
+  | 'cross-model'
 
 export interface MemberExclusion {
   sessionId: string
@@ -215,6 +236,12 @@ export interface EligibilityState {
    * within the role, never widens it; null narrows nothing.
    */
   workerChoice?: { selector: string; profiles: readonly string[] } | null
+  /**
+   * A cross-model review's authors (starter-team-setup D6): profiles of an
+   * author's family, or every profile while an author is unknown, are
+   * filtered out before any rule; null narrows nothing.
+   */
+  crossModel?: CrossModelFilter | null
   /** Each profile's effective cooldown end (ISO) in force at `now`; absent = not cooling. */
   cooldowns?: Readonly<Record<string, string | null>>
   /** Evaluation time, epoch ms. */
@@ -282,6 +309,8 @@ export function evaluateEligibility(state: EligibilityState): EligibilityResult 
     else if (state.excludeProvider !== undefined && provider(profileId) === state.excludeProvider) {
       reasons.push({ kind: 'excluded-profile', detail: `provider ${state.excludeProvider}` })
     }
+    const cross = state.crossModel ? crossModelReason(state.crossModel, profileId) : null
+    if (cross !== null) reasons.push(cross)
     return reasons
   }
 

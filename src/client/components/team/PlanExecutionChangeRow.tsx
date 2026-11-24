@@ -10,6 +10,7 @@
 // reads the open P0/P1 count after each review of the window, and an open
 // diagnosis's signals with a link to its card.
 import { useEffect, useRef, useState } from 'react'
+import { scrollWithinContainer } from '../../utils/scrollWithinContainer'
 import type { SendClientMessage } from '@shared/types'
 import type { ExecutionChangeView, PlanExecutionView } from '@shared/planExecution'
 import { CHANGE_STATE_LABELS, CHANGE_STEP_LABELS } from '@shared/planExecutionProgress'
@@ -50,8 +51,8 @@ export default function PlanExecutionChangeRow({ teamPath, connected, onSend, ro
   const retryBusy = useTeamPlanStore(state => Object.values(state.views[teamPath]?.pending ?? {}).includes('retry'))
   useEffect(() => {
     if (!revealed) return
-    rowRef.current?.scrollIntoView({ block: 'center' })
-    rowRef.current?.focus()
+    scrollWithinContainer(rowRef.current)
+    rowRef.current?.focus({ preventScroll: true })
   }, [revealed])
   const waiting = waitingLabel(row)
   const round = row.latestRound

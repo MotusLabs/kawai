@@ -183,7 +183,7 @@ describe('afterLanded cancels the landed change\'s live landing-kind rows (A7, O
       updateAttempt: async () => { throw new Error('the integration table never dispatches an update attempt') },
       taskStatusOf: taskId => h.tasks.store.get(taskId)?.status ?? null,
     }
-    await afterLanded(deps, row, executionId, commit)
+    await afterLanded(deps, row, executionId, { head: commit, roundId: ffRow.roundId })
     expect(h.executions.effect(live.id)).toMatchObject({ state: 'cancelled' })
     expect(h.executions.effect(ffRow.id)).toMatchObject({ state: 'done' })
   }, 30_000)

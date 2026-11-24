@@ -21,6 +21,7 @@ export const decisionSchemas = {
     options: z.array(z.string()).optional(),
     context: z.string().optional(),
     plan_id: z.string().optional(),
+    publication_handoff_id: z.string().optional(),
   }),
   decision_record: z.object({
     plan_id: z.string().min(1),
@@ -35,7 +36,7 @@ export const decisionSchemas = {
 }
 
 export const decisionDescriptions: Record<(typeof DECISION_TOOL_NAMES)[number], string> = {
-  decision_ask: 'Ask a decision on plan work instead of guessing or asking the human in prose. The plan comes from your session: your plan task, your fix task, or — in the plan\'s Lead role — plan_id. question 1–2000 characters, up to 8 options (1–300 each), context up to 4000. Addressed to the Lead role when the plan has one and you are outside it (it gets the question as mail), else to the owner. The answer arrives as mail in the question\'s thread; continue other work or end your turn meanwhile.',
+  decision_ask: 'Ask a decision on plan work instead of guessing or asking the human in prose. Ordinary questions use your plan task, fix task, or — in the plan\'s Lead role — plan_id, and go to the Lead role when configured and you are outside it, else to the owner. question 1–2000 characters, up to 8 options (1–300 each), context up to 4000. To ask the owner to review and publish an exact edit, supply publication_handoff_id from your own notifying task_request_publication. This uses the handoff\'s persisted plan task and requires the current owner route. Review and approval happen in the Plans view. Continue other work or end your turn meanwhile.',
   decision_record: 'Record a decision on a plan (Lead role). With card_id: answer a card addressed to your group — option_index (1-based) or a new choice text, and a rationale; the answer reaches the asker. A reply to the question is refused while the card is open, so decide it here. Without card_id: record your own call — question, choice, rationale. affected_tasks defaults to the card\'s task. First decision wins; only the owner overrides it.',
 }
 
@@ -45,8 +46,12 @@ export function decisionHandlers(decisions: DecisionService, sessionId: string) 
   return {
     decision_ask: async (input: unknown) => {
       const parsed = decisionSchemas.decision_ask.parse(input)
-      const { card, guidance } = await decisions.ask(caller, parsed)
-      return { card_id: card.id, addressed_to: card.addressedTo, ...(card.addressedGroup ? { addressed_group: card.addressedGroup } : {}), guidance }
+      const outcome = await decisions.ask(caller, parsed)
+      const { card, guidance } = outcome
+      const result = { card_id: card.id, addressed_to: card.addressedTo, ...(card.addressedGroup ? { addressed_group: card.addressedGroup } : {}), guidance }
+      if (!('publication' in outcome)) return result
+      const link = outcome.publication
+      return { ...result, publication: { handoff_id: link.handoffId, task_id: link.taskId, base_revision: link.baseRevision, payload_hash: link.payloadHash }, replayed: outcome.replayed }
     },
     decision_record: async (input: unknown) => {
       const parsed = decisionSchemas.decision_record.parse(input)

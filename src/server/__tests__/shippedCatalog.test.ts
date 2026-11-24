@@ -1,4 +1,4 @@
-// @reads: .kawai/groups, .kawai/groups/**
+// @reads: config/groups, config/groups/**
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -67,10 +67,12 @@ describe('grouped shipped default on a fresh HOME', () => {
     expect(profiles.get('sonnet')).toEqual({ label: 'Claude Sonnet', model: 'claude-sonnet-5-5', env: {}, providerId: 'claude' })
     expect(profiles.get('haiku')).toEqual({ label: 'Claude Haiku', model: 'claude-haiku-5-5', env: {}, providerId: 'claude' })
     expect(profiles.get('minimax')?.env.ANTHROPIC_BASE_URL).toBe('https://api.minimax.io/anthropic')
-    expect(profiles.get('mimo')?.model).toBe('mimo-v2.6-pro')
+    expect(profiles.get('mimo')?.model).toBe('mimo-v2.6-pro[1m]')
+    expect(profiles.get('mimo')?.autoCompactWindow).toBe(300000)
     expect(profiles.get('kimi')?.model).toBe('kimi-k3[1m]')
   })
 
+  // @covers: claude-session-profiles › The shipped catalog includes OpenRouter › OpenRouter configuration
   test('the three tier OpenRouter models resolve to provider openrouter with its key names and mappings', () => {
     const { profiles, providers, errors } = resolveProfileCatalog(freshHomeCtx())
     expect(errors).toEqual([])
@@ -119,7 +121,8 @@ describe('grouped shipped default on a fresh HOME', () => {
     const { profiles, errors } = resolveProfileCatalog(freshHomeCtx())
     expect(errors).toEqual([])
     for (const [id, label, model] of [
-      ['codex-sol', 'Codex Sol', 'gpt-6.1-sol'],
+      ['codex-sol', 'Codex Sol', 'gpt-6.2-sol'],
+      ['codex-astra', 'Codex Astra', 'gpt-6.2-astra'],
       ['codex-luna', 'Codex Luna', 'gpt-6-luna'],
     ]) {
       // Codex entries sit outside every provider: the provider id is the
@@ -172,8 +175,8 @@ describe('grouped shipped default on a fresh HOME', () => {
     expect([...profiles.keys()]).toEqual(['only', 'default'])
   })
 
-  test('the tracked group files name profile ids the shipped catalog resolves', () => {
-    const groupsDir = path.resolve(process.cwd(), '.kawai', 'groups')
+  test('the shipped group templates name profile ids the shipped catalog resolves', () => {
+    const groupsDir = path.resolve(process.cwd(), 'config', 'groups')
     const files = fs.readdirSync(groupsDir).filter(name => name.endsWith('.md'))
     expect(files.length).toBeGreaterThan(0)
     const { profiles, errors } = resolveProfileCatalog(freshHomeCtx())

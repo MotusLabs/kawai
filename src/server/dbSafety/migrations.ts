@@ -44,6 +44,9 @@ import { reviewFindingsMigration } from '../team/findingSchema'
 import { reviewConvergenceMigration } from '../plans/execution/convergenceSchema'
 import { taskStallMigration } from '../team/taskStallSchema'
 import { CREATE_TEAM_APPROVAL_DEFAULTS_SQL } from '../team/teamApprovalDefaults'
+import { resultAuthorMigration } from '../team/resultAuthorMigration'
+import { taskHandoffMigration } from '../team/taskHandoffSchema'
+import { decisionPublicationMigration } from '../plans/decisions/decisionPublicationSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -133,6 +136,14 @@ export const MIGRATIONS: readonly Migration[] = [
   // group-mail-task-affinity D1, D7: the affinity task on group mail and the
   // task owner, backfilled from the creator for agent tasks.
   taskAffinityMigration,
+  // starter-team-setup D5: each result's submitting profile. Additive,
+  // nullable, no backfill: older rows resolve through the session record.
+  resultAuthorMigration,
+  // owner-publication-handoff D1: handoffs, their events and wakeup keys,
+  // the draft's handoff link and lineage, and the revision's handoff
+  // association. Additive, nullable, no backfill.
+  taskHandoffMigration,
+  decisionPublicationMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

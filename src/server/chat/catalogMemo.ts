@@ -158,3 +158,12 @@ export function providerOf(profileId: string, ctx: ProfileCatalogContext = {}): 
 export function providerLabelOf(providerId: string, ctx: ProfileCatalogContext = {}): string | null {
   return resolvedCatalog(ctx).providerLabels().get(providerId) ?? null
 }
+
+/**
+ * A profile's model family (starter-team-setup D4), from the shared memo.
+ * Families come from the trusted tiers alone, so the project path never
+ * changes the answer; an unknown profile is its own family.
+ */
+export function modelFamilyOf(profileId: string, ctx: ProfileCatalogContext = {}): string {
+  return resolvedCatalog(ctx).catalog.families.get(profileId) ?? profileId
+}

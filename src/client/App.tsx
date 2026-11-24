@@ -12,6 +12,7 @@ import ChatView from './components/chat/ChatView'
 import TeamWorkspaceView from './components/team/TeamWorkspaceView'
 import { useUpdateStore } from './stores/updateStore'
 import NewSessionModal from './components/NewSessionModal'
+import { openTeamMembers } from './components/chat/MissingGroupsNotice'
 import BranchBrowserModal from './components/BranchBrowserModal'
 import CreateWorktreeModal from './components/CreateWorktreeModal'
 import SettingsModal from './components/SettingsModal'
@@ -32,7 +33,8 @@ import { useWebSocket } from './hooks/useWebSocket'
 import { invalidateSnapshotCache } from './terminal/snapshotCache'
 import { useVisualViewport } from './hooks/useVisualViewport'
 import { sortSessions } from './utils/sessions'
-import { pageTitle } from './utils/pageTitle'
+import { workspaceName } from './utils/pageTitle'
+import { brandLabels, contextName } from './utils/contextName'
 import { buildWorkspaceView } from './utils/workspaceView'
 import { requestChatArchive } from './utils/chatArchive'
 import { flushSync } from 'react-dom'
@@ -348,6 +350,22 @@ export default function App() {
   // workspace snapshot exists; navigation falls back to the flat order
   // otherwise (older server or before the first snapshot).
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot)
+  // The heading and browser title name the current context
+  // (chat-context-name D3): the Team route's repository, else that of the
+  // session the pane renders — a chat or terminal, else a hibernating session
+  // (always local) — else the server workspace. One value feeds both, and
+  // filters reach it only by moving the selection.
+  const contextLabels = useMemo(() => {
+    const displayed = selectedSession
+      ? { projectPath: selectedSession.projectPath, remote: selectedSession.remote === true }
+      : selectedHibernatingSession
+        ? { projectPath: selectedHibernatingSession.projectPath, remote: false }
+        : null
+    return brandLabels(
+      contextName({ teamKey: teamLocation?.teamKey, session: displayed, repositories: workspaceSnapshot?.repositories }),
+      workspaceName(serverInfo),
+    )
+  }, [teamLocation?.teamKey, selectedSession, selectedHibernatingSession, workspaceSnapshot, serverInfo])
   const showWorkspaceView = workspaceSnapshot !== null || archivedCount > 0
   const collapsedSectionIds = useWorkspaceStore((state) => state.collapsedSectionIds)
   const archiveSectionExpanded = useWorkspaceStore((state) => state.archiveSectionExpanded)
@@ -931,8 +949,8 @@ export default function App() {
   }, [theme])
 
   useEffect(() => {
-    document.title = pageTitle(serverInfo)
-  }, [serverInfo])
+    document.title = contextLabels.title
+  }, [contextLabels.title])
 
   // Fetch server info (including Tailscale IP) on mount and on every
   // reconnect: after an update the server across the socket is a different
@@ -970,6 +988,7 @@ export default function App() {
           onOpenSettings={handleOpenSettings}
           tailscaleIp={serverInfo?.tailscaleIp ?? null}
           version={serverInfo?.version ?? null}
+          contextLabel={contextLabels.heading}
         />
         <SessionList
           sessions={sessions}
@@ -1062,6 +1081,11 @@ export default function App() {
           newSessionDismissRef.current = null
         }}
         onClose={() => setIsModalOpen(false)}
+        onOpenTeamMembers={projectPath => {
+          // A project with no session yet is undiscovered: ask for it first.
+          sendMessage({ type: 'workspace-refresh', projectPath })
+          openTeamMembers(projectPath)
+        }}
         onCreate={handleCreateSession}
         defaultProjectDir={effectiveDefaultProjectDir}
         commandPresets={commandPresets}

@@ -40,7 +40,7 @@ beforeEach(() => {
     getSession: id => bench.records.get(id), strategies: bench.strategies, homeDir: world.home,
     supervisionOf: (teamId, planId) => readPlanSupervisionDetail({
       db: bench.db.db, mail: bench.mail, executions, plans: bench.plans, decisions: bench.decisions,
-      conditionsOf: () => [], tasks: bench.tasks, runtime: { holder: () => null, blocker: () => null },
+      conditionsOf: () => [], tasks: bench.tasks, runtime: { holder: () => null, blocker: () => null, live: () => false },
     }, teamId, planId, new Date()),
   })
   const teamScopes = new TeamScopes({ teams: { hasTeam: async () => false } as unknown as SessionTeams, repositories: () => [world.team.teamId, world.otherTeam.teamId] })
