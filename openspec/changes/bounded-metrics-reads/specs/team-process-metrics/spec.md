@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Agents read metrics through a read-only tool
-The `kawai-team` server SHALL offer `team_metrics`, taking a window, an optional slice, and an optional `detail` of `compact` (default) or `full`, and returning the caller's team metrics with the values the Metrics tab computes. A compact read SHALL stay under 32 KB, keep every value, `n`, baseline, and flag, and mark each shortened list with its total. A full read SHALL return every drill row. Both SHALL change nothing, need no approval cards, and change no metric definition, guard pairing, or sample threshold.
+The `kawai-team` server SHALL offer `team_metrics` (a window, an optional slice, an optional `detail` of `compact` (default) or `full`), returning the caller's team metrics with the Metrics tab's values. A compact read SHALL stay under 32 KB, keep every value, `n`, baseline, and flag, and mark each shortened list with its total; a full read SHALL return every drill row. Neither SHALL change anything, need approval cards, or change a metric definition, guard pairing, or sample threshold.
 
 #### Scenario: Lead reads its team
 - **WHEN** the lead calls `team_metrics` with window `7d`

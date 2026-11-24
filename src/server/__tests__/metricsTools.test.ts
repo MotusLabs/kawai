@@ -9,7 +9,8 @@ import type { MetricValue, ProcessMetrics } from '../../shared/processMetrics'
 import { MetricsReader, readMetrics } from '../metrics/computeMetrics'
 import { METRICS_TOOL_NAMES, metricsHandlers } from '../metrics/metricsTools'
 import type { TeamMailbox } from '../team/TeamMailbox'
-import { TEAM_ALLOWED_TOOLS, createMailboxServer } from '../team/mailboxTools'
+import type { ReportToolDeps } from '../metrics/reportTools'
+import { TEAM_ALLOWED_TOOLS, createMailboxServer, teamToolTable } from '../team/mailboxTools'
 import { END, Seed, TEAM } from './metricsSeed'
 import { MAIL_SHARE_MESSAGES, big, useMetricsTools } from './metricsDrillHarness'
 
@@ -40,6 +41,7 @@ test('the tool returns the caller team\'s computeMetrics result and never anothe
   s.db.close()
 })
 
+// @covers: team-process-metrics › Agents read metrics through a read-only tool › Unknown window
 test('unknown windows and slices are refused naming the allowed ones; a team-less session reads nothing', async () => {
   const { s, deps } = setup()
   const tool = metricsHandlers(deps, 'chat-lead')
@@ -164,4 +166,17 @@ test('T9a: two team_metrics reads 1 s apart share one periodEnd; a fresh report 
       expect(report.value.periodEnd).toBe(new Date(f.clock.now).toISOString())
     }
   } finally { f.close() }
+})
+
+test('the metrics and report tool descriptions name detail, the truncation markers, team_metrics_drill, and its limits', () => {
+  const tools = Object.fromEntries(teamToolTable({} as TeamMailbox, 'chat-lead', {
+    metrics: { teamOf: () => TEAM, reader: {} as MetricsReader }, reports: {} as ReportToolDeps,
+  }).map(tool => [tool.name, tool.description]))
+  for (const marker of ['detail', 'projectionTruncated', '<key>Total', 'team_metrics_drill']) expect(tools.team_metrics).toContain(marker)
+  for (const marker of ['cursor', 'limit', '1–200', '1–50', 'tasks | messages | toolStreaks', 'tool_abandoned_streaks', 'periodEnd', 'reachable']) {
+    expect(tools.team_metrics_drill).toContain(marker)
+  }
+  expect(tools.process_reports_list).toContain('Snapshots are omitted')
+  for (const marker of ['detail', 'projectionTruncated', '<key>Total', 'team_metrics_drill']) expect(tools.process_report_get).toContain(marker)
+  expect(tools.process_report_submit).toContain('compact form')
 })

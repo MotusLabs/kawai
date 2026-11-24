@@ -222,6 +222,7 @@ test('T18: the human tool pager, report detail, and metrics snapshot answer iden
   } finally { f.close() }
 })
 
+// @covers: process-reports › Agents read report snapshots compactly › Stored snapshot unchanged
 test('P4: Table T agent reads leave every stored report and observation row byte-identical; a submission adds a whole report and changes no existing row', async () => {
   const f = make()
   try {
@@ -237,5 +238,20 @@ test('P4: Table T agent reads leave every stored report and observation row byte
     expect(after[0]).toHaveLength(prior[0]!.length + 1)
     expect([after[1], after[2]]).toEqual([prior[1], prior[2]])
     expect(messageRefs(f.service.store.report(TEAM, submitted.value.id)!.snapshot)).toBe(6998)
+  } finally { f.close() }
+})
+
+// @covers: process-reports › Reports are listed with their freshness › Missed daily report
+test('process_reports_list states the latest 1d report\'s age as 30 hours when none was submitted for 30 hours, as the tab does', async () => {
+  const f = make()
+  try {
+    f.service.submit({ teamId: TEAM, sessionId: 'chat-lead', group: { id: 'lead', canReportProcess: true }, groupIds: new Set(['lead']) } as never,
+      { window: '1d', summary: 'Daily.' })
+    f.clock.now += 30 * 3600_000
+    for (const { runtime, call } of f.runtimes) {
+      const listed = await call('chat-lead', 'process_reports_list', {})
+      expect(listed.value.freshness.find((x: { window: string }) => x.window === '1d').ageHours, runtime).toBe(30)
+    }
+    expect(f.service.list(TEAM).freshness.find(x => x.window === '1d')!.ageHours).toBe(30)
   } finally { f.close() }
 })
