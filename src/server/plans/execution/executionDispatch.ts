@@ -29,7 +29,7 @@ import { effectiveExtraChecks } from '../../../shared/planExecutionGates'
 import { renderContract } from '../../../shared/implementationContract'
 import { gitShowFile, snapshotContract, type ShowFile } from './contractSnapshot'
 import { currentOwedRow } from './owedSuccessor'
-import { commitAttemptSend, fixHandoffWithin } from './attemptSend'
+import { commitAttemptInsert, commitAttemptSend, fixHandoffWithin } from './attemptSend'
 
 /** The system caller (D2): minted only inside this module. */
 function kawaiCaller(team: TeamIdentity, executionId: string): SystemCaller {
@@ -204,7 +204,6 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInpu
   const revision = deps.plans.revision(execution.planId, execution.revision)
   const entry = revision?.content.changes.find(candidate => candidate.change === input.change)
   if (revision === null || entry === undefined) return null
-  const roleProfiles = revision.content.roles.find(role => role.group === input.group)?.profiles ?? []
   const round = deps.executions.rounds(input.executionId, input.change).at(-1) ?? null
   const taskId = changeRow.taskId
 
@@ -225,41 +224,27 @@ export async function ensureFixAttempt(deps: DispatchDeps, input: FixAttemptInpu
     && newest.manifest.answers.roundId === round?.id) {
     return { id: newest.id, number: newest.number, manifestHash: newest.manifestHash }
   }
+  // The pins this mint was decided on; the insert re-checks them after the git reads (invariant AL, review F6).
+  const read = { newestId: newest?.id ?? null, roundId: round?.id ?? null, taskRevision: deps.tasks.store.get(taskId)?.revision ?? 1 }
   const head = await runGitAsync(['rev-parse', 'HEAD'], { cwd: changeRow.worktree })
   const startCommit = head.ok ? head.stdout.trim() : changeRow.baselineCommit
   const files = await runGitAsync(['ls-tree', '-r', '--name-only', startCommit], { cwd: changeRow.worktree })
   const artifacts = await artifactsAt(changeRow.worktree, startCommit, files.ok ? files.stdout.trim().split('\n').filter(Boolean) : [])
-  const manifest: AttemptManifest = {
-    version: 1,
-    plan: { id: execution.planId, revision: execution.revision, contentHash: execution.contentHash },
-    execution: input.executionId,
-    task: { id: taskId, revision: deps.tasks.store.get(taskId)?.revision ?? 1 },
-    validation: { reportId: execution.reportId, inputHash: execution.inputHash },
-    baseline: changeRow.baselineCommit,
-    startCommit,
-    artifacts,
-    roleProfiles,
-    answers: {
-      resultId: round?.resultId ?? '',
-      roundId: round?.id ?? '',
-      failingChecks: input.failingChecks.map(check => ({
-        name: check.name, source: 'actions' as const, conclusion: check.conclusion, link: check.link,
-        startedAt: null, completedAt: null,
-        ...(check.link?.match(/\/runs\/(\d+)/) ? { runId: Number(check.link.match(/\/runs\/(\d+)/)![1]) } : {}),
-      })),
-      findingsIds: input.findingsIds,
-    },
-    ...(input.update !== undefined ? { update: input.update } : {}),
-  }
-  const manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
-  // Appended only while the newest row is still the one read before the git reads: an Apply's row
-  // (Restart's implement, Adapt's fix) is never hidden behind a stale one (review F6); DC1 replaces the rest.
-  return deps.executions.db.transaction(() => {
-    if (deps.executions.change(input.executionId, input.change)?.state === 'cancelled') return null
-    if (deps.executions.attempts(input.executionId, input.change).at(-1)?.id !== newest?.id) return null
-    const attempt = deps.executions.insertAttempt({ executionId: input.executionId, change: input.change, kind, assignmentId: null, manifest, manifestHash })
-    return { id: attempt.id, number: attempt.number, manifestHash }
-  })()
+  return commitAttemptInsert({ executions: deps.executions, plans: deps.plans, taskRevisionOf: id => deps.tasks.store.get(id)?.revision ?? null },
+    { ...input, kind }, read, {
+      taskId, baseline: changeRow.baselineCommit, startCommit, artifacts,
+      answers: {
+        resultId: round?.resultId ?? '',
+        roundId: round?.id ?? '',
+        failingChecks: input.failingChecks.map(check => ({
+          name: check.name, source: 'actions' as const, conclusion: check.conclusion, link: check.link,
+          startedAt: null, completedAt: null,
+          ...(check.link?.match(/\/runs\/(\d+)/) ? { runId: Number(check.link.match(/\/runs\/(\d+)/)![1]) } : {}),
+        })),
+        findingsIds: input.findingsIds,
+      },
+      ...(input.update !== undefined ? { update: input.update } : {}),
+    })
 }
 
 /**

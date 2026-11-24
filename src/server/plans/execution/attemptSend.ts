@@ -1,11 +1,18 @@
-// The durable send of an attempt row (plan-revision-apply P4/A7, review F1).
-// A row's manifest names the revision current when it was minted; its
-// assignment may commit only while that is still the execution's revision.
-// The guard, the synchronous dispatch, and the stamp run in one transaction,
-// so no await separates them: an Apply that commits first leaves the row
-// unsent, and the next pass's owed step mints its successor at the current
-// revision (DC1, owedSuccessor.ts) and sends that once. No lease or epoch
+// The attempt lifecycle's one enforcement point (plan-revision-apply P4/A7,
+// invariant AL; reviews F1 and F6): an attempt row is inserted or sent only
+// in one transaction that re-reads the execution, the change, its newest
+// attempt and round, and the task revision — never on state read before an
+// await. A send commits only while the row is the newest and its manifest
+// names the execution's revision; an Apply that commits first leaves it
+// unsent, and the owed step's successor (DC1, owedSuccessor.ts) goes once.
+// An insert that follows git reads appends only while the row, round, and
+// task revision it was decided on are still current — a row an Apply
+// minted (Restart's, Adapt's) or a direction it republished wins — and pins
+// the manifest to the execution's revision at commit. No lease or epoch
 // (I4): the execution row itself is the arbiter.
+import { createHash } from 'node:crypto'
+import { manifestHashInput, type AttemptKind, type AttemptManifest } from '../../../shared/planExecution'
+import type { PlanStore } from '../planStore'
 import { handoffInstruction } from '../../team/TaskResultService'
 import type { AssignmentService } from '../../team/AssignmentService'
 import type { SystemCaller } from '../../team/systemCaller'
@@ -32,6 +39,49 @@ export function commitAttemptSend(executions: ExecutionStore, input: { execution
     if (newest.manifest.plan.revision !== execution.revision || newest.manifest.plan.contentHash !== execution.contentHash) return false
     executions.setAttemptAssignment(attemptId, send())
     return true
+  })()
+}
+
+/** What an insert after awaits read first: the newest attempt, the newest round, and the task's revision. */
+export interface AttemptInsertRead { newestId: string | null; roundId: string | null; taskRevision: number }
+
+/** The manifest's facts gathered before the transaction (git reads); the pins are taken at commit. */
+export type AttemptInsertFacts = Pick<AttemptManifest, 'baseline' | 'startCommit' | 'artifacts' | 'answers' | 'update'> & { taskId: string }
+
+/**
+ * Insert an attempt row whose facts were gathered across awaits. One
+ * transaction: null, writing nothing, when the execution is gone, the change
+ * is cancelled or landed, or the newest attempt, the newest round, or the
+ * task revision differs from `read`; else the row is inserted with the
+ * execution's current revision, content hash, validation report, and the
+ * current revision's role profiles for `group`.
+ */
+export function commitAttemptInsert(deps: { executions: ExecutionStore; plans: Pick<PlanStore, 'revision'>; taskRevisionOf: (taskId: string) => number | null },
+  input: { executionId: string; change: string; group: string; kind: AttemptKind }, read: AttemptInsertRead, facts: AttemptInsertFacts,
+): { id: string; number: number; manifestHash: string } | null {
+  return deps.executions.db.transaction(() => {
+    const execution = deps.executions.execution(input.executionId)
+    const change = deps.executions.change(input.executionId, input.change)
+    if (execution === null || change === null || change.state === 'cancelled' || change.state === 'landed') return null
+    if ((deps.executions.attempts(input.executionId, input.change).at(-1)?.id ?? null) !== read.newestId) return null
+    if ((deps.executions.rounds(input.executionId, input.change).at(-1)?.id ?? null) !== read.roundId) return null
+    if (deps.taskRevisionOf(facts.taskId) !== read.taskRevision) return null
+    const revision = deps.plans.revision(execution.planId, execution.revision)
+    const { taskId, ...rest } = facts
+    const manifest: AttemptManifest = {
+      version: 1,
+      plan: { id: execution.planId, revision: execution.revision, contentHash: execution.contentHash },
+      execution: input.executionId,
+      task: { id: taskId, revision: read.taskRevision },
+      validation: { reportId: execution.reportId, inputHash: execution.inputHash },
+      baseline: rest.baseline, startCommit: rest.startCommit, artifacts: rest.artifacts,
+      roleProfiles: revision?.content.roles.find(role => role.group === input.group)?.profiles ?? [],
+      ...(rest.answers !== undefined ? { answers: rest.answers } : {}),
+      ...(rest.update !== undefined ? { update: rest.update } : {}),
+    }
+    const manifestHash = createHash('sha256').update(manifestHashInput(manifest)).digest('hex')
+    const attempt = deps.executions.insertAttempt({ executionId: input.executionId, change: input.change, kind: input.kind, assignmentId: null, manifest, manifestHash })
+    return { id: attempt.id, number: attempt.number, manifestHash }
   })()
 }
 
