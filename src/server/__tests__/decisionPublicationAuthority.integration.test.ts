@@ -101,5 +101,7 @@ async function runAuthority(from: number, to: number) {
 }
 
 // @covers: plan-decisions › Fresh approval publishes only the reviewed handoff › An unauthorized or malformed approval writes nothing
-test('I1 seed 0xDEC10001 — cases 1–80 require an exact eligible human approval', () => runAuthority(0, 80))
-test('I1 seed 0xDEC10001 — cases 81–160 require an exact eligible human approval', () => runAuthority(80, 160))
+test('I1 seed 0xDEC10001 — cases 1–40 require an exact eligible human approval', () => runAuthority(0, 40))
+test('I1 seed 0xDEC10001 — cases 41–80 require an exact eligible human approval', () => runAuthority(40, 80))
+test('I1 seed 0xDEC10001 — cases 81–120 require an exact eligible human approval', () => runAuthority(80, 120))
+test('I1 seed 0xDEC10001 — cases 121–160 require an exact eligible human approval', () => runAuthority(120, 160))
