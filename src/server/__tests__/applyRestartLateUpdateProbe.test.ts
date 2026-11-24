@@ -1,3 +1,6 @@
+// The round-3 reviewer's F6 reproduction (plan-revision-apply A3/CH5), kept as
+// committed with only its debug print dropped: a Restart commits while an older
+// update attempt's git reads run, and the executor still sends the restart row.
 import { expect, spyOn, test } from 'bun:test'
 import * as git from '../git/gitCommand'
 import { dispatchUpdateAttempt, type DispatchDeps } from '../plans/execution/executionDispatch'
@@ -5,11 +8,12 @@ import { TaskResultService } from '../team/TaskResultService'
 import { TaskService } from '../team/TaskService'
 import { applyBench } from './applyBench'
 
+// @covers: plan-revision-apply › The execution keeps its revision history › Manifests keep their revision
 test('CH5 dispatches the owed restart when an older update completes its Git reads later', async () => {
   const wired = await applyBench('apply-restart-late-update')
   try {
     const { planId, executionId } = await wired.running()
-    const { taskId } = await wired.inFlightByKawai(executionId, 'ui', 'dev')
+    await wired.inFlightByKawai(executionId, 'ui', 'dev')
     const change = wired.executions.change(executionId, 'ui')!
     expect(wired.executions.transition(executionId, 'ui', change, { state: 'implementing', baselineCommit: 'base-sha' })).not.toBeNull()
     const roundId = wired.answerNewestRow(executionId, 'ui', 1)
@@ -51,13 +55,10 @@ test('CH5 dispatches the owed restart when an older update completes its Git rea
     }
     const state = wired.executions.change(executionId, 'ui')!
     expect(state.state).toBe('implementing')
-    const attempts = wired.executions.attempts(executionId, 'ui').map(row => ({ id: row.id, kind: row.kind, plan: row.manifest.plan.revision, assignment: row.assignmentId }))
-    const planned = wired.planFor().dispatches.filter(row => row.change === 'ui')
     const executor = wired.executor()
     await executor.tick(wired.teamId)
     await executor.tick(wired.teamId)
     const owedAfterTicks = wired.executions.attempts(executionId, 'ui').find(row => row.id === owedId)
-    console.log({ attempts, planned, owedAssignmentAfterTwoTicks: owedAfterTicks?.assignmentId })
     expect(owedAfterTicks?.assignmentId).not.toBeNull()
   } finally {
     wired.close()
