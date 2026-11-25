@@ -56,3 +56,23 @@ changing any output. These resolutions bind the executable tables.
   headroom for a routed provider. Its source stays recorded.
 - **B11 (F6).** Window age is the window's own observation time. A status-only
   observation stores no windows and never changes a window's age.
+
+## Clarifications recorded with the binding
+
+The Lead recorded Tables S and F as binding in decision-760c0f6f (task note
+`note-a0493f93`), adding two clarifications:
+
+- **(a) The B3 drain transient is reachable.** It is the state with no
+  reasons left, a standalone reader, and a request in flight. It then sees a
+  timeout, a settlement or a shutdown. B3, B4 and S11 govern it. The
+  completeness test classifies it as covered, not unreachable.
+- **B12 (F1).** Headroom needs a window that this process observed under the
+  candidate's effective key, including its in-memory credential identity, as
+  it stood at the cutoff.
+  - A window observed with another or an unknown credential at the same
+    `provider@host` never establishes headroom. Capacity stays unknown until
+    a poll runs under that key.
+  - Vetoes stay alias-wide (B9).
+  - The in-memory hash falls under I2/P4.
+  - It is persisted only as an HMAC under a per-process salt, the
+    `account_scope` column.

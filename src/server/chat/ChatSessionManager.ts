@@ -95,6 +95,10 @@ import { codexLoginErrorMessage } from './codex/codexAuth'
 import { codexLimitProviderId } from './codex/codexLimits'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
+import { ManagerQuota } from './quota/managerQuota'
+import type { QuotaPull, WorkerSubscription } from './quota/QuotaReaderService'
+import type { QuotaTarget } from './quota/quotaTarget'
+import type { TeamIdentity } from '../team/teamIdentity'
 import { fetchOpenRouterUsage, isOpenRouterBaseUrl, type OpenRouterUsagePull } from './openRouterUsage'
 import { ambientProviderLabel, ambientProviderOf, catalogCtx } from '../team/cooldowns'
 import { storedLoginKey } from '../team/routing/sharedLogins'
@@ -455,10 +459,12 @@ export class ChatSessionManager {
    * skipped for the store lifetime. In memory only — a restart re-probes.
    */
   private readonly providerUsageProfiles = new Set<string>()
-  /** Refresh timer per routed profile (provider usage pull design D5). */
-  private readonly providerUsageTimers = new Map<string, ReturnType<typeof setInterval>>()
-  /** Provider usage refresh cadence (provider usage pull design D5). */
-  private readonly providerUsageRefreshMs: number
+  /**
+   * The quota reader service and its history (process-quota-history-and-
+   * incident-advice D1): session cadences, configured-worker readers, and
+   * one request in flight per account key.
+   */
+  readonly quota: ManagerQuota
   /**
    * Balance-key values whose credits pull was already refused (openrouter
    * D6): each value logs once. Bounded — cleared when it grows past 64.
@@ -1088,7 +1094,6 @@ export class ChatSessionManager {
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
     this.directory = new SessionDirectory(options.db.db)
-    this.providerUsageRefreshMs = options.providerUsageRefreshMs ?? 10 * 60 * 1000
     // Outbound audit (execution-safety-recovery D3/D6): one store and one
     // repository-facts resolver for every session; observers are per session.
     this.outboundStore = new OutboundStore(options.db.db)
@@ -1127,6 +1132,8 @@ export class ChatSessionManager {
       outbound: this.outbound,
       onResolved: (sessionId) => {
         this.dispatcher?.notify()
+        // A newly known team brings its group files' workers to the quota reader (D1).
+        this.quota?.reconcileSoon()
         const record = this.records.get(sessionId)
         // The directory keys by team, so it can only record once the team is known.
         if (record) this.syncDirectory(sessionId)
@@ -1148,6 +1155,7 @@ export class ChatSessionManager {
     this.usageLimits.subscribe((providerId, report) =>
       this.options.onUsage?.(providerId, report)
     )
+    this.quota = this.composeQuota(options)
     // An account-notice change fans out to every session mapped to that
     // credentials path (notification strip design D5).
     this.accountNotices.subscribe((credentialsPath) => {
@@ -2375,6 +2383,7 @@ export class ChatSessionManager {
     // Provider usage refreshes die with the server: timers stop now, and the
     // in-flight continuations check isShutDown before publishing.
     this.stopProviderUsageRefresh()
+    this.quota.shutdown()
     for (const [id, driver] of this.drivers) {
       driver.shutdown()
       this.retired.retire(id, driver)
@@ -3253,7 +3262,7 @@ export class ChatSessionManager {
   private async claimProviderUsagePull(record: ChatSessionRecord): Promise<boolean> {
     const providerId = this.providerIdOf(record.sessionId)
     if (this.providerUsageProfiles.has(providerId)) {
-      this.ensureProviderUsageRefresh(providerId)
+      this.quota.service.armSession(providerId)
       return false
     }
     if (!this.usageLimits.claimPull(providerId)) return false
@@ -3261,9 +3270,13 @@ export class ChatSessionManager {
     // No provider base URL: the endpoint is never contacted, and the SDK
     // pull answers as before.
     if (!target) return true
-    const pull = await this.fetchProviderUsage(target)
+    // Through the reader service: a request already in flight for the same
+    // account (a worker poll) is joined, never doubled (P1).
+    const pull = await this.quota.service.request({ providerId, ...target })
     // Shutdown settles every callback: nothing publishes past it.
     if (this.isShutDown) return false
+    // Abandoned at the reader's timeout: as unreachable, the SDK pull applies.
+    if (!pull) return true
     if (pull.ok && 'remainingUsd' in pull) {
       // The OpenRouter endpoint answered (openrouter-provider D6): its own
       // data decides, and no outcome of these pulls ever enables the
@@ -3271,7 +3284,7 @@ export class ChatSessionManager {
       this.providerUsageProfiles.add(providerId)
       this.recordOpenRouterPull(providerId, pull)
       this.noteOpenRouterCreditsRefused(providerId, pull, target.balanceKey)
-      this.ensureProviderUsageRefresh(providerId)
+      this.quota.service.armSession(providerId)
       return false
     }
     if (!pull.ok && (pull.outcome === 'refused' || pull.outcome === 'failed')) {
@@ -3287,13 +3300,13 @@ export class ChatSessionManager {
       })
       this.providerUsageProfiles.add(providerId)
       this.usageLimits.recordNoData(providerId)
-      this.ensureProviderUsageRefresh(providerId)
+      this.quota.service.armSession(providerId)
       return false
     }
     if (pull.ok) {
       this.providerUsageProfiles.add(providerId)
       this.usageLimits.record(providerId, pull.report)
-      this.ensureProviderUsageRefresh(providerId)
+      this.quota.service.armSession(providerId)
       return false
     }
     if (pull.outcome === 'provider-refused') {
@@ -3355,7 +3368,90 @@ export class ChatSessionManager {
 
   private recordProviderReport(record: ChatSessionRecord, report: ChatUsageReport): void {
     if (this.keepsOwnEndpointPullsOnly(record)) return
-    this.usageLimits.record(this.providerIdOf(record.sessionId), report)
+    const providerId = this.providerIdOf(record.sessionId)
+    this.usageLimits.record(providerId, report)
+    // Quota history (D3): an agent report on a profile routed through a base
+    // URL may describe the host login, never the routed account (F5).
+    const target = this.providerUsageTarget(record)
+    this.quota.recordAgentReport(
+      this.teams.teamOf(record.sessionId)?.teamId ?? null,
+      { providerId, baseUrl: target?.baseUrl ?? null },
+      target ? 'host-login' : 'routed',
+      report
+    )
+  }
+
+  /**
+   * The reader service and its history (process-quota-history-and-incident-
+   * advice D1): reads through the manager's own pull, session targets and
+   * publishing exactly as before, worker pulls published to the same store,
+   * and worker subscriptions from every known team's group files.
+   */
+  private composeQuota(options: ChatSessionManagerOptions): ManagerQuota {
+    const quota = new ManagerQuota({
+      db: options.db.db,
+      cadenceMs: options.providerUsageRefreshMs ?? 10 * 60 * 1000,
+      read: target => target.baseUrl
+        ? this.fetchProviderUsage({ ...target, baseUrl: target.baseUrl })
+        : Promise.resolve({ ok: false, outcome: 'not-provider', reason: 'no base URL' }),
+      sessionTarget: providerId => this.sessionQuotaTarget(providerId),
+      sessionTeams: providerId => [...new Set(this.liveSessionsOf(providerId)
+        .flatMap(record => this.teams.teamOf(record.sessionId)?.teamId ?? []))],
+      onSessionPull: (providerId, target, pull) => this.publishSessionPull(providerId, target, pull),
+      publishWorkerReport: (providerId, report) => {
+        if (this.isShutDown) return
+        // A worker pull proves the provider quota-serving: a later spawn arms
+        // its session cadence instead of claiming the host-login SDK pull.
+        this.providerUsageProfiles.add(providerId)
+        this.usageLimits.record(providerId, report)
+      },
+      configuredWorkers: () => this.configuredQuotaWorkers(),
+    })
+    quota.start()
+    return quota
+  }
+
+  /**
+   * Every configured team worker's effective quota target: for each team
+   * configuration the server knows, each profile its group files list,
+   * resolved at that groups root the way `loginKeyOf` resolves it. Teams come
+   * from the tracked sessions (live or archived, every groups root a bare
+   * repository's worktrees give) and from the durable session directory, so
+   * killing a team's last chat or a restart never drops its workers. A
+   * profile that does not resolve is skipped.
+   */
+  private configuredQuotaWorkers(): WorkerSubscription[] {
+    const teams = new Map<string, TeamIdentity>()
+    const add = (team: TeamIdentity | undefined) => {
+      if (team) teams.set(`${team.teamId}\0${team.groupsRoot}`, team)
+    }
+    for (const id of this.records.keys()) add(this.teams.teamOf(id))
+    const known = this.options.db.db.prepare('SELECT DISTINCT team_id FROM team_session_directory').all() as Array<{ team_id: string }>
+    for (const { team_id: teamId } of known) {
+      // A repository team resolves its groups root from its id; a plain
+      // directory's id is the directory itself.
+      add(this.teams.identityFor(teamId) ?? (existsSync(teamId) ? { teamId, groupsRoot: teamId } : undefined))
+    }
+    const desired: WorkerSubscription[] = []
+    for (const team of teams.values()) {
+      const profiles = new Set<string>()
+      for (const { group } of this.teams.catalogForTeam(team).groups.values()) {
+        for (const profile of group.profiles) profiles.add(profile.profileId)
+      }
+      for (const profileId of profiles) {
+        let env: Record<string, string>
+        try {
+          env = this.launchEnvOf(profileId, team.groupsRoot)
+        } catch {
+          continue
+        }
+        const baseUrl = env.ANTHROPIC_BASE_URL?.trim() || null
+        const token = env.ANTHROPIC_AUTH_TOKEN?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined
+        const providerId = providerOf(profileId, catalogCtx(this.options.profileCatalogHome, team.groupsRoot))
+        desired.push({ teamId: team.teamId, target: { providerId, baseUrl, token } })
+      }
+    }
+    return desired
   }
 
   /**
@@ -3398,48 +3494,30 @@ export class ChatSessionManager {
   }
 
   /**
-   * Provider usage has no pushes (provider pull design D5): a timer per
-   * routed provider re-pulls on a fixed cadence while at least one session
-   * on any of the provider's models has a started agent. A tick without a
-   * qualifying session makes no request and stops the timer; the next
-   * spawn of a routed provider restarts it.
+   * Provider usage has no pushes (provider pull design D5): the reader
+   * service keeps one timer per routed provider re-pulling on a fixed cadence
+   * while at least one session on any of the provider's models has a started
+   * agent (`sessionQuotaTarget`); a tick without one stops it, and the next
+   * spawn of a routed provider re-arms it. The pull runs with one live
+   * session's credentials (providers-and-workers 5.2); an archived sibling
+   * never serves it. `undefined`: no live session; null: no base URL.
    */
-  private ensureProviderUsageRefresh(providerId: string): void {
-    if (this.providerUsageTimers.has(providerId)) return
-    const timer = setInterval(
-      () => this.refreshProviderUsage(providerId),
-      this.providerUsageRefreshMs
-    )
-    timer.unref?.()
-    this.providerUsageTimers.set(providerId, timer)
+  private sessionQuotaTarget(providerId: string): QuotaTarget | null | undefined {
+    const record = this.liveSessionsOf(providerId)[0]
+    if (!record) return undefined
+    const target = this.providerUsageTarget(record)
+    return target ? { providerId, ...target } : null
   }
 
-  private refreshProviderUsage(providerId: string): void {
-    if (!this.hasLiveSessionOf(providerId)) {
-      const timer = this.providerUsageTimers.get(providerId)
-      if (timer) clearInterval(timer)
-      this.providerUsageTimers.delete(providerId)
+  /** Publish one session-cadence pull: a failed refresh keeps the held report (store semantics). */
+  private publishSessionPull(providerId: string, target: QuotaTarget, pull: QuotaPull): void {
+    if (this.isShutDown || !pull.ok) return
+    if ('remainingUsd' in pull) {
+      this.recordOpenRouterPull(providerId, pull)
+      this.noteOpenRouterCreditsRefused(providerId, pull, target.balanceKey)
       return
     }
-    // The pull runs with one live session's credentials (providers-and-workers
-    // 5.2); any live session of the provider resolves the same endpoint. An
-    // archived sibling never serves the pull.
-    const record = this.liveSessionsOf(providerId)[0]
-    if (!record) return
-    const target = this.providerUsageTarget(record)
-    if (!target) return
-    void this.fetchProviderUsage(target).then((pull) => {
-      // Shutdown settles every callback (an in-flight refresh dies with it);
-      // a failed refresh keeps the held report (store semantics); a lost
-      // routing just skips the tick.
-      if (this.isShutDown || !pull.ok) return
-      if ('remainingUsd' in pull) {
-        this.recordOpenRouterPull(providerId, pull)
-        this.noteOpenRouterCreditsRefused(providerId, pull, target.balanceKey)
-        return
-      }
-      this.usageLimits.record(providerId, pull.report)
-    })
+    this.usageLimits.record(providerId, pull.report)
   }
 
   /** Every non-archived session on one of the provider's models with a live driver (started agent). */
@@ -3474,16 +3552,14 @@ export class ChatSessionManager {
     const timer = setTimeout(() => {
       this.postTurnPullTimers.delete(providerId)
       this.postTurnPullFiredAt.set(providerId, Date.now())
-      this.refreshProviderUsage(providerId)
+      this.quota.service.refreshSession(providerId)
     }, 30_000)
     timer.unref?.()
     this.postTurnPullTimers.set(providerId, timer)
   }
 
-  /** Stop every provider usage refresh timer (server shutdown). */
+  /** Stop every post-turn pull timer (server shutdown); the reader service stops its own. */
   private stopProviderUsageRefresh(): void {
-    for (const timer of this.providerUsageTimers.values()) clearInterval(timer)
-    this.providerUsageTimers.clear()
     for (const timer of this.postTurnPullTimers.values()) clearTimeout(timer)
     this.postTurnPullTimers.clear()
   }

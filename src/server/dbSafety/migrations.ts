@@ -47,6 +47,7 @@ import { CREATE_TEAM_APPROVAL_DEFAULTS_SQL } from '../team/teamApprovalDefaults'
 import { resultAuthorMigration } from '../team/resultAuthorMigration'
 import { taskHandoffMigration } from '../team/taskHandoffSchema'
 import { decisionPublicationMigration } from '../plans/decisions/decisionPublicationSchema'
+import { processAdviceMigration } from '../metrics/recommendations/schema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -144,6 +145,9 @@ export const MIGRATIONS: readonly Migration[] = [
   // association. Additive, nullable, no backfill.
   taskHandoffMigration,
   decisionPublicationMigration,
+  // process-quota-history-and-incident-advice D3/D5: durable per-team quota
+  // history and the incident advice stores. New tables only.
+  processAdviceMigration,
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

@@ -124,7 +124,10 @@ before code (state machine with recovery): task 0.1.
 Completeness: reasons × reader × in-flight × event; combinations not listed
 are unreachable: `none` with any event other than subscribe (no timer
 exists); in-flight with subscribe (subscribe on an armed key only increments
-the count — S13); `agent-only` with tick (no timer is armed for it, S9).
+the count — S13); `agent-only` with tick (no timer is armed for it, S9). One
+exception is reachable and covered: `none` with a standalone reader and a
+request in flight (the B3 drain left by S7). Its timeout, settlement or
+shutdown is governed by B3, B4 and S11 (decision-760c0f6f (a)).
 
 **Table F — headroom evidence.** Output: may the value establish routed
 headroom?
