@@ -10,7 +10,7 @@
 import { expect, test } from 'bun:test'
 import { readMetrics } from '../metrics/computeMetrics'
 import { END, HOUR, TEAM } from './metricsSeed'
-import { MAIL_SHARE_MESSAGES, STREAKS, T17_ANCIENT_ENDS, T17_ENDS, T17_REFUSED_ENDS, big, noMutation, t12Variants, useMetricsTools, type Outcome } from './metricsDrillHarness'
+import { MAIL_SHARE_MESSAGES, STREAKS, T17_ANCIENT_ENDS, T17_ENDS, T17_REFUSED_ENDS, big, noMutation, seedAncient, t12Variants, useMetricsTools, type Outcome } from './metricsDrillHarness'
 
 const make = useMetricsTools()
 const DRILL = 'team_metrics_drill'
@@ -247,6 +247,9 @@ test('T17: an end later than now or not an ISO instant is refused naming end; IS
   const f = make()
   try {
     big(f)
+    // Years 0000–0099 keep their four digits (Date.UTC would read 0099 as 1999), including year 0's leap day;
+    // two messages an hour before each end make a continuation whose source and cursor keep that end.
+    seedAncient(f)
     for (const { runtime, call } of f.runtimes) {
       for (const end of T17_REFUSED_ENDS) {
         refused(await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages' }), 'end must be an ISO instant')
@@ -260,15 +263,7 @@ test('T17: an end later than now or not an ISO instant is refused naming end; IS
         const expected = readMetrics(f.seed.db, TEAM, '7d', null, Date.parse(canonical)).metrics.find(m => m.id === 'mail_share')!.drill.messages
         expect(page.value.total).toBe(expected.length)
       }
-    }
-    // Years 0000–0099 keep their four digits (Date.UTC would read 0099 as 1999), including year 0's leap day;
-    // two messages an hour before each end make a continuation whose source and cursor keep that end.
-    const ancient = T17_ANCIENT_ENDS
-    for (const canonical of new Set(ancient.map(([, c]) => c))) {
-      for (const n of [1, 2]) f.seed.message({ id: `msg-${canonical}-${n}`, createdHoursAgo: (END - Date.parse(canonical)) / HOUR + n / 60 })
-    }
-    for (const { runtime, call } of f.runtimes) {
-      for (const [end, canonical] of ancient) {
+      for (const [end, canonical] of T17_ANCIENT_ENDS) {
         const page = await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages', limit: 1 })
         expect(page.error, `${runtime} ${end}`).toBeNull()
         expect([page.value.source, page.value.total], `${runtime} ${end}`).toEqual([{ kind: 'live', window: '7d', end: canonical }, 2])
@@ -279,5 +274,7 @@ test('T17: an end later than now or not an ISO instant is refused naming end; IS
         expect([...ids(page.value.entries), ...ids(second.value.entries)].sort()).toEqual([`msg-${canonical}-1`, `msg-${canonical}-2`])
       }
     }
+    // The fixture's I1 witness checked every call, continuations included: 13 refusals, 4 ends, 3 two-page ends per runtime.
+    expect(f.witnessed.calls).toBe(2 * (T17_REFUSED_ENDS.length + T17_ENDS.length + 2 * T17_ANCIENT_ENDS.length))
   } finally { f.close() }
 })

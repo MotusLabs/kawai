@@ -205,9 +205,15 @@ for reports, so decoding refuses it as an unknown field — T12).
   Table T, a hash of the stored report rows and observation rows before and
   after the call is equal, and each cached read the call may touch deep-equals
   its earlier clone; for T8, the new report holds the whole snapshot and
-  existing rows are unchanged. The witness (`noMutation` in
-  `metricsDrillHarness.ts`) also runs inside the stateful T1b and T10
-  fixtures, and P4 reads the T12 and T17 rows from the inputs those rows use.
+  existing rows are unchanged. The witness lives in the shared call path
+  of `metricsDrillHarness.ts`: every read-tool call (`team_metrics`,
+  `team_metrics_drill`, `process_reports_list`, `process_report_get`) under
+  either runtime, each walk page included, checks the stored rows, every
+  metrics object either `MetricsReader` cache has held (through the
+  read-only `cachedEntries`, never `read`/`readAt`), and each entry the call
+  computes against an independent `readMetrics` at its key's end, so T1b,
+  T10, T12, T17, and every other row run inside it. P4 seeds T17's ancient
+  windows and walks every T17 end with T17's page size.
 
 **Mutants each row must kill** (listed in tasks.md): a cache key without
 `end` (T9, T10); the cursor's team trusted (T14); `after` compared with `>=`

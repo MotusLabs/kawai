@@ -14,7 +14,7 @@ import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { readMetrics } from '../metrics/computeMetrics'
 import { END, TEAM } from './metricsSeed'
 import {
-  MAIL_SHARE_MESSAGES, OTHER, STREAKS, T17_ANCIENT_ENDS, T17_ENDS, T17_REFUSED_ENDS, big, noMutation, t12Variants, useMetricsTools,
+  MAIL_SHARE_MESSAGES, OTHER, STREAKS, T17_ANCIENT_ENDS, T17_ENDS, T17_REFUSED_ENDS, big, seedAncient, t12Variants, useMetricsTools,
   type MetricsToolFixture,
 } from './metricsDrillHarness'
 
@@ -232,7 +232,9 @@ function tableReads(id: string, theirs: string, cursors: { live: string; streaks
     // Rows T12 and T17 whole, from the inputs those rows use, so a variant added there is checked here too.
     ...t12Variants(cursors.live).map(([args, refused], i): Read => ({ label: `T12 variant ${i}`, name: DRILL, args, refused })),
     ...T17_REFUSED_ENDS.map((end): Read => ({ label: `T17 refused ${end}`, name: DRILL, args: { ...live, end }, refused: 'end must be an ISO instant' })),
-    ...[...T17_ENDS, ...T17_ANCIENT_ENDS].map(([end]): Read => ({ label: `T17 end ${end}`, name: DRILL, args: { ...live, end, limit: 5 } })),
+    ...T17_ENDS.map(([end]): Read => ({ label: `T17 end ${end}`, name: DRILL, args: { ...live, end, limit: 5 } })),
+    // As T17 reads them: a page of one and its continuation (seedAncient gives each end two messages).
+    ...T17_ANCIENT_ENDS.map(([end]): Read => ({ label: `T17 end ${end}`, name: DRILL, args: { ...live, end, limit: 1 }, walk: true })),
   ]
 }
 
@@ -313,21 +315,21 @@ test('P4: every read-only Table T call and refusal leaves every stored report an
   try {
     big(f)
     const [id] = reports(f)
+    seedAncient(f)
     const before = f.rows()
-    // The read the tab and agents share, cached at END: no agent read may change it.
+    // The read the tab and agents share, cached at END. The fixture's witness checks every call and page
+    // against the rows, every cached entry, and an independent read for each entry a call computes.
     const cached = f.reader.read(TEAM, '7d', null)
     const cachedBefore = structuredClone(cached)
-    const check = noMutation(f, cached)
     let calls = 0
-    const reads = await agentReads(f, id!, label => {
-      calls++
-      check(label)
-    })
+    const reads = await agentReads(f, id!, () => { calls++ })
     // Per runtime: the cursor setup, 30 reads, T12's 15 and T17's 20 variants,
-    // and the later pages of the six walks (T2 12, sliced 4, T5 1, T15 2,
-    // T16 2, report messages 12).
+    // and the later pages of the nine walks (T2 12, sliced 4, T5 1, T15 2,
+    // T16 2, report messages 12, and each ancient T17 end 1).
     expect(reads).toBe(30 + 15 + 20)
-    expect(calls).toBe(2 * (1 + reads + 33))
+    expect(calls).toBe(2 * (1 + reads + 36))
+    // Both cursor setup reads per runtime, then one witnessed call per read and page.
+    expect(f.witnessed.calls).toBe(calls + 2)
     expect(f.reader.read(TEAM, '7d', null)).toEqual(cachedBefore)
     const prior = JSON.parse(before) as unknown[][]
     const submitted = await f.runtimes[0]!.call('chat-lead', 'process_report_submit', { window: '7d', summary: 'Weekly.' })

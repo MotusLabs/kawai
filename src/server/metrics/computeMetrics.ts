@@ -111,6 +111,12 @@ export class MetricsReader {
     return readToolDrill(this.db,teamId,window,slice,pageSize,cursor,end)
   }
 
+  /** Every cached read as stored (the tests' I1 witness); touches neither cache. */
+  cachedEntries(): Array<{ cache: 'latest' | 'end'; key: string; at: number; metrics: ProcessMetrics }> {
+    return [...[...this.cache].map(([key, v]) => ({ cache: 'latest' as const, key, ...v })),
+      ...[...this.atEnd].map(([key, v]) => ({ cache: 'end' as const, key, ...v }))]
+  }
+
   private evict(at: number) {
     for (const cache of [this.cache, this.atEnd]) for (const [k, v] of cache) if (at - v.at >= METRICS_CACHE_MS) cache.delete(k)
   }

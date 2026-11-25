@@ -9,11 +9,12 @@
 // the seeded properties. `big()` seeds the 300-task 7d fixture whose
 // `mail_share` list holds 2,595 messages and whose window holds 120
 // abandoned tool streaks. Sessions `chat-lead` and `chat-dev` belong to TEAM,
-// `chat-other` to OTHER. The T12 and T17 drill variants and the I1
-// no-mutation witness live here so T12, T17, T1b, T10, and P4 share them.
+// `chat-other` to OTHER. The T12 and T17 drill variants live here so T12,
+// T17, and P4 share them; every read-tool call through either runtime runs
+// inside the whole-reader I1 witness (`witness`, design property P4).
 import { afterEach, expect } from 'bun:test'
-import { unknownToolMeasurement, type ToolMeasurementStatus } from '../../shared/processMetrics'
-import { MetricsReader } from '../metrics/computeMetrics'
+import { unknownToolMeasurement, type MetricSlice, type MetricWindow, type ToolMeasurementStatus } from '../../shared/processMetrics'
+import { MetricsReader, readMetrics } from '../metrics/computeMetrics'
 import { ObservationStore } from '../metrics/observations/store'
 import { ProcessReportService, type ReportCaller } from '../metrics/reportService'
 import type { GroupDefinition } from '../team/groupFile'
@@ -42,9 +43,11 @@ export interface MetricsToolFixture {
   /** The measurement status the reader overlays; replace `status` to change it. */
   measurement: { status: ToolMeasurementStatus }
   services: MailboxServerServices
-  /** Claude first, then Codex. */
+  /** Claude first, then Codex; each read-tool call runs inside the I1 witness. */
   runtimes: ReadonlyArray<{ runtime: 'Claude' | 'Codex'; call: ToolCall }>
-  /** The table handler with the runtimes' JSON round trip (fast seam for properties). */
+  /** Read-tool calls the I1 witness has checked. */
+  witnessed: { calls: number }
+  /** The table handler with the runtimes' JSON round trip (fast seam for properties; unwitnessed). */
   table: ToolCall
   /** One abandoned (or other) tool streak closed at `at`. */
   streak(i: number, at: number, resolution?: string, team?: string): void
@@ -77,6 +80,12 @@ export function useMetricsTools(): () => MetricsToolFixture {
       reports: { caller: async id => callers[id] ?? null, service },
     }
     const mailbox = {} as TeamMailbox
+    const rows = () => JSON.stringify(['process_reports', 'process_proposals', 'process_observations'].map(table =>
+      seed.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))
+    const watch = witness(reader, seed.db, rows)
+    // Every read-tool call through a runtime runs inside the witness; writes (process_report_submit) do not.
+    const witnessed = (runtime: string, call: ToolCall): ToolCall => (sessionId, name, args) =>
+      READ_TOOLS.has(name) ? watch.around(`${runtime} ${name} ${JSON.stringify(args)}`, () => call(sessionId, name, args)) : call(sessionId, name, args)
     const viaClaude: ToolCall = async (sessionId, name, args) => {
       const server = await createMailboxServer(mailbox, sessionId, services)
       servers.push(server as unknown as { instance: { close: () => Promise<void> } })
@@ -103,7 +112,8 @@ export function useMetricsTools(): () => MetricsToolFixture {
     }
     return {
       seed, store, reader, service, clock, measurement, services, table,
-      runtimes: [{ runtime: 'Claude', call: viaClaude }, { runtime: 'Codex', call: viaCodex }],
+      runtimes: [{ runtime: 'Claude', call: witnessed('Claude', viaClaude) }, { runtime: 'Codex', call: witnessed('Codex', viaCodex) }],
+      witnessed: watch.state,
       streak(i, at, resolution = 'abandoned', team = TEAM) {
         const closedAt = new Date(at).toISOString()
         store.record({ kind: 'tool_streak', sourceKey: `streak-${team}-${i}`, teamId: team, sessionId: `session-${i}`,
@@ -111,10 +121,7 @@ export function useMetricsTools(): () => MetricsToolFixture {
           data: { tool: 'Bash', toolKind: 'builtin', label: 'Bash', length: i % 7 + 1, resolution,
             firstAt: new Date(at - 500).toISOString(), closedAt } })
       },
-      rows() {
-        return JSON.stringify(['process_reports', 'process_proposals', 'process_observations'].map(table =>
-          seed.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))
-      },
+      rows,
       close() { seed.db.close() },
     }
   }
@@ -189,6 +196,13 @@ export const T17_ENDS = [['2026-10-16T12:00:00Z', '2026-10-16T12:00:00.000Z'], [
 export const T17_ANCIENT_ENDS = [['0099-10-16T12:00:00.000Z', '0099-10-16T12:00:00.000Z'], ['0099-10-16T13:00:00+01:00', '0099-10-16T12:00:00.000Z'],
   ['0000-02-29T12:00:00.000Z', '0000-02-29T12:00:00.000Z']] as const
 
+/** Row T17's two messages an hour before each ancient end, so each end's read has a continuation. */
+export function seedAncient(f: MetricsToolFixture): void {
+  for (const canonical of new Set(T17_ANCIENT_ENDS.map(([, c]) => c))) {
+    for (const n of [1, 2]) f.seed.message({ id: `msg-${canonical}-${n}`, createdHoursAgo: (END - Date.parse(canonical)) / HOUR + n / 60 })
+  }
+}
+
 /**
  * The I1 witness (design property P4): captures the stored report and
  * observation rows and a clone of each given cached object now; each call
@@ -201,5 +215,48 @@ export function noMutation(f: MetricsToolFixture, ...cached: unknown[]): (label:
   return label => {
     expect(f.rows() === rows, `${label}: stored rows unchanged`).toBe(true)
     cached.forEach((value, i) => expect(value, `${label}: cached read ${i} unchanged`).toEqual(clones[i]))
+  }
+}
+
+/** The agent read tools; every call of one through a runtime runs inside the I1 witness. */
+export const READ_TOOLS = new Set(['team_metrics', 'team_metrics_drill', 'process_reports_list', 'process_report_get'])
+
+/**
+ * The whole-reader I1 witness (design property P4), side-effect free: it
+ * reads the caches only through `MetricsReader.cachedEntries` and never
+ * through `read`/`readAt`. Around each call it asserts the stored report,
+ * proposal, and observation rows are byte-identical; every metrics object any
+ * cache has held since the fixture began still deep-equals the clone taken
+ * when it was first seen (in place, even after eviction or replacement); and
+ * every entry the call added or replaced with a newly computed object equals
+ * an independent `readMetrics` at the end its key names (a latest read: its
+ * time).
+ */
+function witness(reader: MetricsReader, db: Seed['db'], rows: () => string) {
+  const seen = new Map<object, unknown>()
+  const arm = () => { for (const e of reader.cachedEntries()) if (!seen.has(e.metrics)) seen.set(e.metrics, structuredClone(e.metrics)) }
+  const state = { calls: 0 }
+  return {
+    state,
+    async around(label: string, run: () => Promise<Outcome>): Promise<Outcome> {
+      arm()
+      const before = rows()
+      const held = new Map(reader.cachedEntries().map(e => [`${e.cache} ${e.key}`, e.metrics]))
+      const outcome = await run()
+      expect(rows() === before, `${label}: stored rows unchanged`).toBe(true)
+      for (const [metrics, clone] of seen) {
+        if (!Bun.deepEquals(metrics, clone, true)) expect(metrics, `${label}: a cached metrics object changed`).toEqual(clone as never)
+      }
+      for (const e of reader.cachedEntries()) {
+        // An entry holding an object seen before (a latest read reusing its end's entry) was checked when computed.
+        if (held.get(`${e.cache} ${e.key}`) === e.metrics || seen.has(e.metrics)) continue
+        const [team, window, slice, end] = JSON.parse(e.key) as [string, MetricWindow, MetricSlice | null, number?]
+        const expected = readMetrics(db, team, window, slice, e.cache === 'end' ? end! : e.at)
+        if (!Bun.deepEquals(e.metrics, expected, true)) expect(e.metrics, `${label}: new ${e.cache} entry ${e.key}`).toEqual(expected)
+      }
+      state.calls++
+      arm()
+      return outcome
+    },
   }
 }
