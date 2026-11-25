@@ -36,7 +36,9 @@ export interface AdviceHarness {
   /** Account scope per profile (B12); absent: unresolved. */
   scopes: Record<string, string>
   restrictions: Record<string, IncidentCandidate['restriction']>
+  /** Staffing's worktree holders (s1 is the incident's own session) and pending reservations. */
   occupants: string[]
+  pending: number
   changes: string[]
   /** Record a final limit of `profileId` on `providerId` for session s1 now. */
   limit(options?: { profileId?: string; providerId?: string; resetsAt?: string | null; window?: string | null; final?: boolean }): void
@@ -58,7 +60,7 @@ export function adviceHarness(options: { db?: SessionDatabase; evaluate?: Manage
     db, clock, limits, history, records: new Map<string, ChatSessionRecord>(),
     workers: [] as Worker[], group: { max: 4, live: 1 }, sharesLoginWith: {} as Record<string, string[]>,
     scopes: {} as Record<string, string>, restrictions: {} as Record<string, IncidentCandidate['restriction']>,
-    occupants: [] as string[], changes: [] as string[],
+    occupants: [] as string[], pending: 0, changes: [] as string[],
   } as AdviceHarness
   h.records.set('s1', {
     sessionId: 's1', name: 'dev', projectPath: '/repo/wt', sdkSessionId: null, claudeProfileId: 'glm', groupId: 'devs', taskId: null,
@@ -85,7 +87,7 @@ export function adviceHarness(options: { db?: SessionDatabase; evaluate?: Manage
     providerOf: profileId => h.workers.find(worker => worker.model === profileId)?.provider ?? profileId,
     scopeOf: profileId => h.scopes[profileId] ?? null,
     heldWork: id => ({ taskId: h.records.get(id)?.taskId ?? null, restriction: profileId => h.restrictions[profileId] ?? null }),
-    writerOccupants: () => h.occupants,
+    writerSlot: () => ({ occupants: h.occupants, pending: h.pending }),
     onChange: teamId => { h.changes.push(teamId) },
     ...(options.evaluate ? { evaluate: options.evaluate } : {}),
   })

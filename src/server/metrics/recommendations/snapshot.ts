@@ -8,7 +8,7 @@
 // restriction sources; nothing here is recomputed later from today's
 // configuration.
 import type { TeamCapacityAnswer } from '../../../shared/teamCapacity'
-import type { IncidentCandidate, IncidentSnapshot } from './evaluator'
+import type { IncidentCandidate, IncidentSnapshot, WriterFacts } from './evaluator'
 
 export interface SnapshotInput {
   limited: { profileId: string; providerId: string; window: string | null; resetsAt: string | null }
@@ -17,7 +17,7 @@ export interface SnapshotInput {
   capacity: TeamCapacityAnswer | null
   scopeOf: (profileId: string) => string | null
   restriction: (profileId: string) => IncidentCandidate['restriction']
-  writer: { required: boolean; occupants: string[] }
+  writer: WriterFacts
 }
 
 export function incidentSnapshot(input: SnapshotInput): IncidentSnapshot {

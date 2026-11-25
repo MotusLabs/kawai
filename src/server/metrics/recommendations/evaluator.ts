@@ -12,12 +12,14 @@
 // - E3: cooling at the cutoff (`cooldownFor` as frozen) is excluded.
 // - E4: a hard worker choice or a cross-model review restriction is excluded
 //   naming it.
-// - E5: a reached cap, or an occupied writer slot when the work needs the
-//   writer, is excluded naming it (release or hand off first).
+// - E5: a reached cap, or a writer slot another session holds or a pending
+//   reservation claims when the work needs the writer, is excluded naming it
+//   (release or hand off first). A slot only the limited session holds keeps
+//   the candidate listed, with release or handoff named as a prerequisite.
 // - E1/E6: every other candidate is listed; its headroom is `known` only with
 //   Table F row F1 evidence at the cutoff, else unknown, and no numeric saving
 //   is ever given (`savingsMs` null).
-// - E7: only evidence at or before the cutoff is read; later evidence makes a
+// - E7: only evidence observed and recorded at or before the cutoff is read; later evidence makes a
 //   later assessment, never a rewrite.
 import { createHash } from 'node:crypto'
 import type {
@@ -56,7 +58,22 @@ export interface IncidentSnapshot {
   }
   group: { id: string; max: number; live: number } | null
   candidates: IncidentCandidate[]
-  writer: { required: boolean; occupants: string[] }
+  writer: WriterFacts
+}
+
+/**
+ * The worktree's writer slot as staffing counted it at the incident (the
+ * router's `worktree-occupied` facts): other sessions holding it, pending
+ * reservations, and whether the incident's own session holds it.
+ */
+export interface WriterFacts {
+  required: boolean
+  /** Sessions other than the incident's holding the worktree. */
+  occupants: string[]
+  /** Spawn reservations for the worktree not yet executed. */
+  pending?: number
+  /** The incident's own session holds the slot: it must release or hand off before another writer runs. */
+  heldByIncident?: boolean
 }
 
 export interface EvaluationInput {
@@ -116,15 +133,22 @@ function exclusionOf(
   if (snapshot.group && snapshot.group.live >= snapshot.group.max) {
     return { kind: 'group-cap', detail: `${snapshot.group.live} of ${snapshot.group.max} live in ${snapshot.group.id}` }
   }
-  if (snapshot.writer.required && snapshot.writer.occupants.length > 0) {
-    return { kind: 'writer-slot', detail: `the writer slot is held by ${snapshot.writer.occupants.join(', ')}: release or hand off first` }
+  const { writer } = snapshot
+  const pending = writer.pending ?? 0
+  if (writer.required && (writer.occupants.length > 0 || pending > 0)) {
+    const held = [
+      ...(writer.occupants.length > 0 ? [`held by ${writer.occupants.join(', ')}`] : []),
+      ...(pending > 0 ? [`reserved by ${pending} pending spawn${pending === 1 ? '' : 's'}`] : []),
+    ]
+    return { kind: 'writer-slot', detail: `the writer slot is ${held.join(' and ')}: release or hand off first` }
   }
   return null
 }
 
 export function evaluateIncident(input: EvaluationInput): Evaluation {
   const { kind, snapshot, cutoff } = input
-  const observations = input.observations.filter(row => Date.parse(row.observedAt) <= cutoff)
+  // Available at the cutoff: observed by it and already recorded (a late write of an earlier reading is later evidence, E7).
+  const observations = input.observations.filter(row => Date.parse(row.observedAt) <= cutoff && Date.parse(row.recordedAt) <= cutoff)
   const limits = input.limits.filter(limit => Date.parse(limit.at) <= cutoff)
   const evidence: Array<Omit<EvidenceSummary, 'expired' | 'ordinal'>> = []
   const cited = new Set<string>()
@@ -170,6 +194,10 @@ export function evaluateIncident(input: EvaluationInput): Evaluation {
     unknowns.push(`${alternative.profileId} on ${alternative.providerId}: capacity unknown (${alternative.headroomReason}).`)
   }
   for (const alternative of alternatives.filter(entry => entry.exclusion)) facts.push(`${alternative.profileId} excluded: ${alternative.exclusion!.detail}.`)
+  // The limited writer still holds the worktree (E5): another worker runs only
+  // after it releases or hands off, so execution is never promised as immediate.
+  const handoffFirst = snapshot.writer.required && snapshot.writer.heldByIncident === true && listed.length > 0
+  if (handoffFirst) facts.push('The limited session holds the writer slot: it must release or hand off before another worker can execute.')
   unknowns.push('Handoff, context rebuilding, execution and rework costs are unknown, so no saving is estimated.')
   if (waitUntil === null && kind === 'quota') unknowns.push('The limited window gave no reset time.')
   assumptions.push('Routing facts are as they stood at the incident; later configuration is not substituted.')
@@ -177,7 +205,7 @@ export function evaluateIncident(input: EvaluationInput): Evaluation {
   if (small) assumptions.push(`Only ${input.comparisons} earlier comparison${input.comparisons === 1 ? '' : 's'} observed: the comparative metric stays insufficient.`)
   const summary = choice === 'resolved' ? 'The incident is over.'
     : choice === 'fresh-context' ? 'Recover context: compact or hand off to a fresh session; the account still has its allowance.'
-    : choice === 'switch' ? `Provisional: ${known.map(entry => entry.profileId).join(', ')} showed fresh capacity; switching may beat waiting${waitUntil ? ` until ${waitUntil}` : ''}.`
+    : choice === 'switch' ? `Provisional: ${known.map(entry => entry.profileId).join(', ')} showed fresh capacity; switching${handoffFirst ? ', once the limited session releases or hands off the writer slot,' : ''} may beat waiting${waitUntil ? ` until ${waitUntil}` : ''}.`
     : choice === 'wait' ? `No alternative is eligible; wait until ${waitUntil}.`
     : 'No eligible alternative has known capacity; switching is not shown as available.'
   const advice: ProcessAdvice = {

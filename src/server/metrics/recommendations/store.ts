@@ -84,6 +84,24 @@ export class RecommendationStore {
     return new Map(rows.map(row => [row.attention_id, row.id]))
   }
 
+  /**
+   * Attach an unresolved recommendation to an attention item (D6, R6): a plan
+   * stall raised after the quota episode opened. Only the attention link
+   * moves; the frozen snapshot and every assessment stay as they are (I3).
+   * Returns whether the link changed.
+   */
+  attach(id: string, attentionId: string): boolean {
+    return this.db.prepare(`UPDATE process_recommendations SET attention_id = ?
+      WHERE id = ? AND attention_id IS NOT ?`).run(attentionId, id, attentionId).changes > 0
+  }
+
+  /** The team's recommendation of an episode, or null. */
+  byEpisode(teamId: string, kind: RecommendationKind, episodeKey: string): StoredRecommendation | null {
+    const row = this.db.prepare('SELECT * FROM process_recommendations WHERE team_id = ? AND kind = ? AND episode_key = ?')
+      .get(teamId, kind, episodeKey) as RecommendationRow | null
+    return row ? mapRecommendation(row) : null
+  }
+
   /** One recommendation by id, any team (the evaluator's own read). */
   byId(id: string): StoredRecommendation | null {
     const row = this.db.prepare('SELECT * FROM process_recommendations WHERE id = ?').get(id) as RecommendationRow | null

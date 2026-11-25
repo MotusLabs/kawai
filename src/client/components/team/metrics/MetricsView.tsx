@@ -7,7 +7,9 @@
 // close ends it. Every control disables while disconnected. The report
 // sections (D6) sit above the families; a location naming a report
 // (`metrics/<window>/<report id>`) shows that report in their place. Incident
-// advice (process-quota-history-and-incident-advice D6) leads the families.
+// advice (process-quota-history-and-incident-advice D6) leads the families;
+// an advice link's target rides every open and refresh (`advice`), so the
+// snapshot carries it even when it is older than the newest listed.
 import { useEffect, useMemo, useState } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import {
@@ -77,6 +79,7 @@ export default function MetricsView({
 }) {
   const tab = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.metrics) ?? emptyTabViewState()
   const revealedAdvice = useMetricsStore(state => state.revealedAdvice[teamPath])
+  const advice = useMetricsStore(state => state.pinnedAdvice[teamPath]) ?? null
   const chosen = isMetricWindow(locationWindow) ? locationWindow : null
   const slice = sliceOf(tab.filters)
   const sliceKey = JSON.stringify(slice)
@@ -87,17 +90,17 @@ export default function MetricsView({
     if (!connected || !chosen) return
     const requested = JSON.parse(sliceKey) as MetricSlice | null
     useMetricsStore.getState().request(teamPath, { window: chosen, slice: requested })
-    sendMessage({ type: 'process-metrics-open', teamPath, window: chosen, slice: requested })
+    sendMessage({ type: 'process-metrics-open', teamPath, window: chosen, slice: requested, ...(advice ? { advice } : {}) })
     return () => {
       sendMessage({ type: 'process-metrics-close', teamPath })
       useMetricsStore.getState().close(teamPath)
     }
-  }, [teamPath, connected, connectionEpoch, chosen, sliceKey, sendMessage])
+  }, [teamPath, connected, connectionEpoch, chosen, sliceKey, sendMessage, advice])
 
   const refresh = () => {
     if (!chosen) return
     useMetricsStore.getState().request(teamPath, { window: chosen, slice })
-    sendMessage({ type: 'process-metrics-refresh', teamPath, window: chosen, slice })
+    sendMessage({ type: 'process-metrics-refresh', teamPath, window: chosen, slice, ...(advice ? { advice } : {}) })
   }
   const setSlice = (kind: string) => useTeamWorkspaceStore.getState().setFilters(teamPath, 'metrics', { slice: kind || undefined })
   const applyFile = () => useTeamWorkspaceStore.getState().setFilters(teamPath, 'metrics', { sliceFile: fileDraft.trim() || undefined })

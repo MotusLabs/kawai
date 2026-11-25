@@ -50,7 +50,8 @@ export type MetricsServerMessage = ({ type:'process-tool-drill-page'; teamPath:s
   unproposed: VersionChange[]
   /**
    * The team's newest `RECOMMENDATIONS_IN_SNAPSHOT` incident recommendations
-   * (process-quota-history-and-incident-advice D6), newest first, each with
+   * (process-quota-history-and-incident-advice D6), newest first, then the
+   * subscription's requested `advice` when it is older, each with
    * every assessment version and its frozen evidence; read from the stores,
    * never from Prometheus. Re-sent whenever an assessment is written.
    */
@@ -79,7 +80,11 @@ export const RECOMMENDATIONS_IN_SNAPSHOT = 20
 
 export type MetricsClientMessage =
   | { type:'process-tool-drill-page'; teamPath:string; window:MetricWindow; slice:MetricSlice|null; pageSize:number; cursor:string|null }
-  | { type: 'process-metrics-open' | 'process-metrics-refresh'; teamPath: string; window: MetricWindow; slice: MetricSlice | null }
+  /**
+   * `advice`: a recommendation an attention item's advice link opened; the
+   * snapshot carries it (team-bound) even when it is not among the newest.
+   */
+  | { type: 'process-metrics-open' | 'process-metrics-refresh'; teamPath: string; window: MetricWindow; slice: MetricSlice | null; advice?: string | null }
   | { type: 'process-metrics-close'; teamPath: string }
   /** Read one report by id and keep receiving it after commits, until closed. */
   | { type: 'process-report-open' | 'process-report-close'; teamPath: string; reportId: string }

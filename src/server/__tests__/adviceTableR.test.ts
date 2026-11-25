@@ -29,6 +29,8 @@ function restart(): AdviceHarness {
   h.advice.shutdown()
   const next = adviceHarness({ db: h.db })
   Object.assign(next, { workers: h.workers, scopes: h.scopes, records: h.records })
+  // Time keeps running across the restart.
+  next.clock.now = h.clock.now
   extra.push(h)
   h = next
   return next
@@ -127,21 +129,32 @@ describe('Table R through the advice service', () => {
   })
 
   // @covers: process-recommendations › Assessments are immutable and versioned › New evidence reverses advice
-  test('R3: later evidence that reverses the advice adds a withdrawn version and keeps the earlier one readable', () => {
+  test('R3: a later observed window that removes the alternative\'s headroom adds a withdrawn version and keeps the earlier one readable', () => {
     h = adviceHarness()
     team()
-    h.observe('kimi', 'moon', T0 - MIN)
+    const room = h.observe('kimi', 'moon', T0 - MIN, { percent: 40 })
     h.limit()
     h.drain()
+    const id = recommendations(h)[0]!.id
+    const before = h.advice.store.get(TEAM, id)!.assessments
+    expect(before).toHaveLength(1)
+    expect(before[0]!.advice.choice).toBe('switch')
+    // Positive evidence: kimi's own window now reads full.
     h.clock.now = T0 + 2 * MIN
-    h.observe('kimi', 'moon', h.clock.now, { outcome: 'failed' })
+    const full = h.observe('kimi', 'moon', h.clock.now, { percent: 100 })
     h.advice.historyWritten([TEAM])
     h.drain()
-    const [first, second] = recommendations(h)[0]!.assessments
-    expect(first!.advice.choice).toBe('switch')
-    expect(second).toMatchObject({ version: 2, state: 'withdrawn', advice: { choice: 'no-alternative' } })
-    expect(second!.advice.unknowns.join(' ')).toContain('later-failure')
-    expect(first!.evidence.length).toBeGreaterThan(0)
+    const detail = h.advice.store.get(TEAM, id)!
+    expect(detail.current).toMatchObject({ version: 2, state: 'withdrawn', advice: { choice: 'no-alternative' } })
+    const second = detail.assessments[1]!
+    // The new assessment explains the change: kimi's capacity is no longer known, because its window is exhausted.
+    expect(second.advice.alternatives.find(entry => entry.profileId === 'kimi')).toMatchObject({ listed: true, headroom: 'unknown', headroomReason: 'exhausted', observationId: full })
+    expect(second.advice.unknowns).toContain('kimi on moon: capacity unknown (exhausted).')
+    expect(second.advice.summary).toBe('No eligible alternative has known capacity; switching is not shown as available.')
+    // The earlier assessment and its evidence are unchanged under the same recommendation id.
+    expect(detail.assessments[0]).toEqual(before[0]!)
+    expect(detail.assessments[0]!.evidence.map(entry => entry.observationId)).toContain(room)
+    expect(detail.assessments[0]!.evidence.find(entry => entry.observationId === room)).toMatchObject({ expired: false, windows: [{ percentUsed: 40 }] })
   })
 
   test('R4: health gap recorded; managed work continues', () => {
@@ -172,6 +185,104 @@ describe('Table R through the advice service', () => {
     expect(recommendations(h)).toHaveLength(1)
     expect(rec!.assessments).toHaveLength(1)
     expect(rec!.assessments[0]!.cutoff).toBe(new Date(T0).toISOString())
+  })
+
+  // The first durability boundary: the limit store commits the event before
+  // its subscriber runs, so a crash there leaves only the event.
+  describe('R5 from a committed limit event alone', () => {
+    interface Case { name: string; setup: () => void; expected: number; versions?: number[] }
+    const run = (entry: Case) => {
+      h = adviceHarness()
+      team()
+      h.observe('kimi', 'moon', T0 - MIN)
+      // The subscriber is gone: the event commits with no advice callback.
+      h.advice.shutdown()
+      entry.setup()
+      expect(recommendations(h)).toEqual([])
+      expect(h.limits.forProvider('zai').length).toBeGreaterThan(0)
+      for (let boot = 0; boot < 2; boot++) {
+        restart()
+        h.advice.start()
+        h.drain()
+      }
+      const recs = recommendations(h)
+      expect(recs).toHaveLength(entry.expected)
+      if (entry.expected === 0) return
+      expect(recs[0]).toMatchObject({ kind: 'quota', providerId: 'zai', snapshotBasis: 'reconstructed', cutoff: new Date(T0).toISOString() })
+      // The first assessment is frozen at the first event; a later coalesced limit is later evidence (its own version, R3).
+      expect(recs[0]!.assessments.map(assessment => assessment.version)).toEqual(entry.versions ?? [1])
+      expect(recs[0]!.assessments[0]!.cutoff).toBe(new Date(T0).toISOString())
+      expect(recs[0]!.assessments[0]!.advice.choice).toBe('switch')
+    }
+
+    test('R5: a committed final limit with no recommendation is reconstructed at startup, once', () =>
+      run({ name: 'a final limit in force', setup: () => h.limit(), expected: 1 }))
+
+    const CASES: Case[] = [
+      { name: 'two final limits of the provider coalesce into one episode', setup: () => { h.limit(); h.clock.now += MIN; h.limit() }, expected: 1, versions: [1, 2] },
+      { name: 'a retried (non-final) attempt is no incident', setup: () => h.limit({ final: false }), expected: 0 },
+      { name: 'a final limit whose cooldown ended is not reconstructed', setup: () => { h.limit({ resetsAt: new Date(T0 + 2 * MIN).toISOString() }); h.clock.now = T0 + 3 * MIN }, expected: 0 },
+    ]
+    for (const entry of CASES) {
+      test(`${entry.name}: ${entry.expected} recommendation after restart, no duplicate assessment`, () => run(entry))
+    }
+
+    test('a session whose team resolves after startup gets its advice then', () => {
+      h = adviceHarness()
+      team()
+      h.advice.shutdown()
+      h.limit()
+      const record = h.records.get('s1')!
+      restart()
+      // Startup: the team is not known yet (resolution is asynchronous).
+      h.records.delete('s1')
+      h.advice.start()
+      h.drain()
+      expect(recommendations(h)).toEqual([])
+      h.records.set('s1', record)
+      h.advice.teamResolved('s1')
+      h.advice.teamResolved('s1')
+      h.drain()
+      expect(recommendations(h)).toHaveLength(1)
+      expect(recommendations(h)[0]!.assessments).toHaveLength(1)
+    })
+  })
+
+  // An open quota episode that predates its stall attaches to it whichever event comes next (R6).
+  describe('R6 when the stall is raised after the quota episode opened', () => {
+    const attentionId = 'plan-stall:exec-1:chg:ep-3'
+    const stall = () => {
+      h.db.db.prepare(`INSERT INTO plan_execution_changes (execution_id, change, team_id, position, state, task_id, updated_at)
+        VALUES ('exec-1', 'chg', ?, 0, 'implementing', 'task-7', ?)`).run(TEAM, new Date(h.clock.now).toISOString())
+      h.db.db.prepare(`INSERT INTO plan_stall_alerts (id, team_id, plan_id, execution_id, change, kind, episode_key, detail_json, raised_at)
+        VALUES ('alert-1', ?, 'plan-1', 'exec-1', 'chg', 'no-progress', 'ep-3', '{}', ?)`).run(TEAM, new Date(h.clock.now).toISOString())
+    }
+    const NEXT: Array<{ name: string; run: () => void }> = [
+      { name: 'another final limit of the still-cooling provider', run: () => h.limit() },
+      { name: 'a restart', run: () => { restart(); h.advice.start() } },
+      { name: 'a quota history write', run: () => h.advice.historyWritten([TEAM]) },
+      { name: 'a retried limit attempt', run: () => h.limit({ final: false }) },
+    ]
+    for (const next of NEXT) {
+      test(`attached on ${next.name}; one alert, no mail`, () => {
+        h = adviceHarness()
+        team()
+        h.records.get('s1')!.taskId = 'task-7'
+        h.limit()
+        h.drain()
+        expect(recommendations(h)[0]!.attentionId).toBeNull()
+        h.clock.now += MIN
+        stall()
+        next.run()
+        h.drain()
+        expect(recommendations(h).map(rec => rec.attentionId)).toEqual([attentionId])
+        expect(h.advice.store.attachedAdvice(TEAM)).toEqual(new Map([[attentionId, recommendations(h)[0]!.id]]))
+        // The frozen assessment is untouched (I3): only the link moved.
+        expect(recommendations(h)[0]!.assessments[0]!.version).toBe(1)
+        expect((h.db.db.prepare('SELECT COUNT(*) AS n FROM plan_stall_alerts').get() as { n: number }).n).toBe(1)
+        expect((h.db.db.prepare('SELECT COUNT(*) AS n FROM team_messages').get() as { n: number }).n).toBe(0)
+      })
+    }
   })
 
   // @covers: process-recommendations › Incident advice reuses existing episodes › Restart during a plan stall

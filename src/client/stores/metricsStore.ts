@@ -14,7 +14,9 @@
 // lands in `opened` (null when the team has none) and is dropped on close.
 // Incident recommendations ride the snapshot whole (read-only advice); an
 // attention item's advice link names the one to open in `revealedAdvice`, a
-// one-shot target the Metrics view takes once it lists that recommendation.
+// one-shot target the Metrics view takes once it lists that recommendation,
+// and in `pinnedAdvice`, which the view's subscription keeps asking for so the
+// snapshot carries it even when it is older than the newest listed.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { ToolStreakEntry, MetricSlice, MetricWindow, ProcessMetrics } from '@shared/processMetrics'
@@ -78,6 +80,8 @@ interface MetricsState {
   views: Record<string, MetricsView>
   /** Per team key: the recommendation an attention item's advice link asked to open (D6). */
   revealedAdvice: Record<string, string>
+  /** Per team key: the latest advice-link target, requested with every Metrics open and refresh. */
+  pinnedAdvice: Record<string, string>
   revealAdvice: (teamKey: string, recommendationId: string) => void
   /** The view opened it: the one-shot target is spent. */
   clearRevealedAdvice: (teamKey: string) => void
@@ -100,7 +104,11 @@ interface MetricsState {
 export const useMetricsStore = create<MetricsState>((set, get) => ({
   views: {},
   revealedAdvice: {},
-  revealAdvice: (teamKey, recommendationId) => set(state => ({ revealedAdvice: { ...state.revealedAdvice, [teamKey]: recommendationId } })),
+  pinnedAdvice: {},
+  revealAdvice: (teamKey, recommendationId) => set(state => ({
+    revealedAdvice: { ...state.revealedAdvice, [teamKey]: recommendationId },
+    pinnedAdvice: { ...state.pinnedAdvice, [teamKey]: recommendationId },
+  })),
   clearRevealedAdvice: teamKey => set(state => {
     if (!(teamKey in state.revealedAdvice)) return state
     const { [teamKey]: _spent, ...rest } = state.revealedAdvice

@@ -3,8 +3,8 @@
 // it off a coalescing queue — after the incident commits, after quota history
 // for its team is written, and after a limit or reset update — publishing
 // within the five-second target (one second of coalescing). The first
-// assessment reads evidence at the incident cutoff; later ones read it at
-// their evaluation time, so evidence that arrives after the incident makes a
+// assessment reads evidence observed and recorded by the incident cutoff;
+// later ones read it at their evaluation time, so evidence that arrives after the incident makes a
 // new version and never rewrites the first (E7, R3); a first assessment made
 // after its cutoff enqueues that next version itself.
 //
@@ -119,7 +119,7 @@ export class ProcessAdviceService {
         kind: rec.kind,
         snapshot: rec.snapshot,
         cutoff,
-        observations: this.deps.history.list(rec.teamId, { until: cutoffIso }),
+        observations: this.deps.history.list(rec.teamId, { until: cutoffIso, availableBy: cutoffIso }),
         limits: this.deps.limitsFor(providers),
         open: this.deps.isOpen(rec, cutoff),
         comparisons: this.deps.comparisons(rec.teamId, cutoffIso),

@@ -1143,6 +1143,8 @@ export class ChatSessionManager {
         this.dispatcher?.notify()
         // A newly known team brings its group files' workers to the quota reader (D1).
         this.quota?.reconcileSoon()
+        // Incidents still in force when the server stopped become advice once their team is known (R5).
+        this.advice?.teamResolved(sessionId)
         const record = this.records.get(sessionId)
         // The directory keys by team, so it can only record once the team is known.
         if (record) this.syncDirectory(sessionId)
@@ -3479,11 +3481,12 @@ export class ChatSessionManager {
         return target ? this.quota.scopeOf(target) : null
       },
       heldWork: id => this.heldWorkOf(id),
-      writerOccupants: (id) => {
+      writerSlot: (id) => {
         const record = this.records.get(id)
         const teamId = this.teams.teamOf(id)?.teamId
-        if (!record?.groupId || !teamId) return []
-        return this.teamMail.staffing.capacity(teamId, record.groupId, record.projectPath).worktreeOccupants.filter(other => other !== id)
+        if (!record?.groupId || !teamId) return { occupants: [], pending: 0 }
+        const facts = this.teamMail.staffing.capacity(teamId, record.groupId, record.projectPath)
+        return { occupants: facts.worktreeOccupants, pending: facts.worktreePending }
       },
       onChange: teamId => this.options.onProcessReportChange?.(teamId),
     })

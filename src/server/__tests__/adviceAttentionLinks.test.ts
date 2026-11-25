@@ -3,7 +3,8 @@
 // plan-stall item that has incident advice links to it — the same item, no
 // second alert — and an item without advice links nothing. Pure sources
 // first, then the real stores, then a real ChatSessionManager's workspace
-// read (exhaustionEpisodes and planAttentionFacts carry the advice store).
+// read (exhaustionEpisodes and planAttentionFacts carry the advice store),
+// whose Metrics subscription carries a linked target older than the newest 20.
 import { afterEach, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -11,6 +12,8 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ChangeSupervision } from '../../shared/planSupervision'
 import type { AttentionItem } from '../../shared/teamWorkspace'
+import type { ServerMessage } from '../../shared/types'
+import { ChatConnections } from '../chat/ChatConnections'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
 import { initDatabase, type SessionDatabase } from '../db'
@@ -152,4 +155,36 @@ test('through a real manager, a flagged session\'s context advice links from its
     attentionId: STALL_ID, cutoff: EPISODE, snapshot: {} as never, snapshotBasis: 'incident',
   }).recommendation.id
   expect(manager.planAttentionFacts(team.teamId).map(f => f.advice?.[STALL_ID])).toEqual([stallRec])
+
+  // The link's target outside the newest 20: the Metrics subscription that
+  // names it (the advice link's open) carries it; one that does not, omits it.
+  for (let index = 0; index < 20; index++) {
+    manager.advice.store.create({
+      teamId: team.teamId, kind: 'quota', episodeKey: `newer-${index}`, sessionId, taskId: null, groupId: 'devs', profileId: 'default',
+      providerId: `p${index}`, attentionId: null, cutoff: EPISODE, snapshot: {} as never, snapshotBasis: 'incident',
+    })
+  }
+  const other = manager.advice.store.create({
+    teamId: 'team-elsewhere', kind: 'quota', episodeKey: 'x', sessionId: null, taskId: null, groupId: null, profileId: null,
+    providerId: null, attentionId: null, cutoff: EPISODE, snapshot: {} as never, snapshotBasis: 'incident',
+  }).recommendation.id
+  expect([...manager.advice.store.attachedAdvice(team.teamId)].find(([id]) => id === STALL_ID)?.[1]).toBe(stallRec)
+  const router = new ChatConnections(manager)
+  const snapshotIds = async (advice?: string) => {
+    const sent: ServerMessage[] = []
+    const connection = { send: (message: ServerMessage) => sent.push(message) }
+    await router.handle(connection, { type: 'process-metrics-open', teamPath: repo, window: '7d', slice: null, ...(advice ? { advice } : {}) })
+    const snapshot = sent.find((message): message is Extract<ServerMessage, { type: 'process-metrics-snapshot' }> => message.type === 'process-metrics-snapshot')
+    return snapshot!.recommendations.map(rec => rec.id)
+  }
+  const plain = await snapshotIds()
+  expect(plain).toHaveLength(20)
+  expect(plain).not.toContain(stallRec)
+  const linked = await snapshotIds(stallRec)
+  expect(linked).toHaveLength(21)
+  expect(linked.at(-1)).toBe(stallRec)
+  expect(linked.slice(0, 20)).toEqual(plain)
+  // Another team's id adds nothing (R7); a listed one is not repeated.
+  expect(await snapshotIds(other)).toEqual(plain)
+  expect(await snapshotIds(plain[3])).toEqual(plain)
 })

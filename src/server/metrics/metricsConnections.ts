@@ -30,6 +30,8 @@ interface Subscription {
   teamId: string
   window: MetricWindow
   slice: MetricSlice | null
+  /** A recommendation an advice link asked for, carried even outside the newest (D6). */
+  advice: string | null
 }
 
 export class MetricsConnections {
@@ -99,15 +101,22 @@ export class MetricsConnections {
     connection.send({
       type: 'process-metrics-snapshot', teamPath, teamId, window, slice: subscription.slice, computedAt: metrics.computedAt, metrics,
       reports, freshness, unproposed: this.manager.reports.unproposed(teamId, window),
-      recommendations: this.recommendations(teamId),
+      recommendations: this.recommendations(teamId, subscription.advice),
     })
   }
 
-  /** The team's newest recommendations with their versions (empty without the advice service). */
-  private recommendations(teamId: string) {
+  /**
+   * The team's newest recommendations with their versions (empty without the
+   * advice service), plus the requested one when it is older. The read is
+   * team-bound: another team's id adds nothing (R7).
+   */
+  private recommendations(teamId: string, advice: string | null) {
     const store = this.manager.advice?.store
     if (!store) return []
-    return store.list(teamId, RECOMMENDATIONS_IN_SNAPSHOT).flatMap(rec => store.get(teamId, rec.id) ?? [])
+    const newest = store.list(teamId, RECOMMENDATIONS_IN_SNAPSHOT).flatMap(rec => store.get(teamId, rec.id) ?? [])
+    if (advice === null || newest.some(rec => rec.id === advice)) return newest
+    const requested = store.get(teamId, advice)
+    return requested ? [...newest, requested] : newest
   }
 
   /** A human proposal command: decide, or link/replace/unlink, by command key. */
@@ -174,7 +183,7 @@ export class MetricsConnections {
     }
     const views = this.subscriptions.get(connection) ?? new Map<string, Subscription>()
     this.subscriptions.set(connection, views)
-    const subscription = { teamId: team.teamId, window: message.window, slice }
+    const subscription = { teamId: team.teamId, window: message.window, slice, advice: typeof message.advice === 'string' ? message.advice : null }
     views.set(teamPath, subscription)
     this.send(connection, teamPath, subscription, message.type === 'process-metrics-refresh')
   }

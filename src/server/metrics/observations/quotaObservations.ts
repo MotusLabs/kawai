@@ -131,13 +131,19 @@ export class QuotaObservationStore {
     return ids
   }
 
-  /** A team's observations at or before `until` (ISO), oldest first; optionally one provider. */
-  list(teamId: string, options: { providerId?: string; until?: string; since?: string } = {}): QuotaObservation[] {
+  /**
+   * A team's observations at or before `until` (ISO, observation time), oldest
+   * first; optionally one provider, and only rows already recorded by
+   * `availableBy` (an assessment at a cutoff reads what was available then, E7).
+   */
+  list(teamId: string, options: { providerId?: string; until?: string; since?: string; availableBy?: string } = {}): QuotaObservation[] {
     const rows = this.db.prepare(`SELECT * FROM process_quota_observations
       WHERE team_id = $team AND ($provider IS NULL OR provider_id = $provider)
         AND ($until IS NULL OR observed_at <= $until) AND ($since IS NULL OR observed_at >= $since)
+        AND ($available IS NULL OR recorded_at <= $available)
       ORDER BY observed_at, recorded_at, id`).all({
       $team: teamId, $provider: options.providerId ?? null, $until: options.until ?? null, $since: options.since ?? null,
+      $available: options.availableBy ?? null,
     }) as Row[]
     return rows.map(mapRow)
   }

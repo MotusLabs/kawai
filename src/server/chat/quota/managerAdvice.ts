@@ -11,22 +11,39 @@
 //
 // A quota incident on a task of a plan change with a stall alert attaches to
 // that alert's attention id (`plan-stall:<execution>:<change>:<episode>`,
-// R6). The routing facts are frozen from `TeamCapacity.readTeam` — read-only
-// and fetch-free (I4) — when the incident commits (`snapshot_basis`
-// `incident`); a startup pass reconstructs incidents still in force that
-// have no recommendation (`reconstructed`). Quota history writes and limit
-// updates re-evaluate the team's open episodes. Nothing here sends mail,
+// R6); a stall raised after the episode opened is attached on the next limit
+// event, quota history write or startup. The routing facts are frozen from
+// `TeamCapacity.readTeam` — read-only and fetch-free (I4) — when the incident
+// commits (`snapshot_basis` `incident`). The limit event commits before its
+// subscriber runs, so a crash in between leaves a durable final event with no
+// recommendation: at startup, and again once each session's team resolves,
+// every final event still in force and every flagged context is replayed
+// through the same path (`reconstructed`, idempotent per episode, R5). Quota
+// history writes and limit updates re-evaluate the team's open episodes. Nothing here sends mail,
 // routes, or changes a login (X3, I1).
 import type { Database } from 'bun:sqlite'
 import type { TeamCapacityAnswer } from '../../../shared/teamCapacity'
 import type { ChatSessionRecord } from '../../db'
 import { logger } from '../../logger'
 import type { LimitEvent } from '../../../shared/routing'
-import type { IncidentCandidate } from '../../metrics/recommendations/evaluator'
+import type { IncidentCandidate, WriterFacts } from '../../metrics/recommendations/evaluator'
 import { ProcessAdviceService, type AdviceServiceDeps } from '../../metrics/recommendations/service'
 import { incidentSnapshot } from '../../metrics/recommendations/snapshot'
 import { RecommendationStore, type StoredRecommendation } from '../../metrics/recommendations/store'
 import type { QuotaObservationStore } from '../../metrics/observations/quotaObservations'
+import { LIMIT_EVENT_READ_WINDOW_MS } from '../../team/routing/limitEvents'
+
+/** A durable `profile_limit_events` row (the limit store's own table). */
+interface LimitEventRow {
+  id: string; profile_id: string; session_id: string; group_id: string | null; at: string; kind: LimitEvent['kind']; final: number
+  status: number | null; message: string | null; resets_at: string | null; provider_id: string | null; limit_window: string | null
+}
+
+const limitEventOf = (row: LimitEventRow): LimitEvent => ({
+  id: row.id, profileId: row.profile_id, sessionId: row.session_id, groupId: row.group_id, at: row.at, kind: row.kind,
+  final: row.final === 1, status: row.status, message: row.message, resetsAt: row.resets_at, providerId: row.provider_id,
+  window: row.limit_window,
+})
 
 export interface ManagerAdviceDeps {
   db: Database
@@ -47,8 +64,8 @@ export interface ManagerAdviceDeps {
   scopeOf: (profileId: string, projectPath: string) => string | null
   /** The task and hard restrictions of the group message the session holds. */
   heldWork: (sessionId: string) => { taskId: string | null; restriction: (profileId: string) => IncidentCandidate['restriction'] }
-  /** Writers other than the session holding its worktree. */
-  writerOccupants: (sessionId: string) => string[]
+  /** Staffing's writer facts for the session's worktree: every spawned holder (the session itself included) and pending reservations. */
+  writerSlot: (sessionId: string) => { occupants: string[]; pending: number }
   onChange?: (teamId: string) => void
   now?: () => number
   /** Test seam: the evaluator (production: `evaluateIncident`). */
@@ -81,11 +98,17 @@ export class ManagerAdvice {
   /** Startup: reconstruct incidents in force without a recommendation, then enqueue the open ones (R5). */
   start(): void {
     this.guard(() => {
-      for (const record of this.deps.records()) {
-        if (record.contextExhausted && !record.archivedAt) this.contextIncident(record.sessionId, 'reconstructed')
-      }
+      for (const record of this.deps.records()) this.reconstruct(record.sessionId)
       this.service.reconcile()
     })
+  }
+
+  /**
+   * The session's team is now known (startup resolution is asynchronous):
+   * reconstruct its incidents still in force (R5) and attach stalls (R6).
+   */
+  teamResolved(sessionId: string): void {
+    this.guard(() => this.reconstruct(sessionId))
   }
 
   /** The session's turn ended context-exhausted and the flag was just set. */
@@ -95,7 +118,10 @@ export class ManagerAdvice {
 
   /** Quota history was written for these teams: their open episodes may change. */
   historyWritten(teams: string[]): void {
-    for (const teamId of teams) this.service.enqueueTeam(teamId)
+    for (const teamId of teams) {
+      this.guard(() => this.attachStalls(teamId))
+      this.service.enqueueTeam(teamId)
+    }
   }
 
   shutdown(): void {
@@ -117,27 +143,75 @@ export class ManagerAdvice {
     const teamId = this.deps.teamOf(event.sessionId)
     if (!teamId) return
     if (!event.final) {
+      this.attachStalls(teamId)
       this.service.enqueueTeam(teamId)
       return
     }
+    this.quotaIncident(teamId, event, 'incident')
+  }
+
+  /**
+   * Replay the session's incidents still in force: its context flag, and its
+   * final limit events whose cooldown still runs, oldest first, so they
+   * coalesce exactly as they did live. An episode that already has a
+   * recommendation is left alone.
+   */
+  private reconstruct(sessionId: string): void {
+    const teamId = this.deps.teamOf(sessionId)
+    if (!teamId) return
+    const record = this.deps.record(sessionId)
+    if (record?.contextExhausted && !record.archivedAt) this.contextIncident(sessionId, 'reconstructed')
+    const since = new Date(this.now() - LIMIT_EVENT_READ_WINDOW_MS).toISOString()
+    const rows = this.deps.db.prepare(`SELECT * FROM profile_limit_events
+      WHERE session_id = ? AND final = 1 AND at >= ? ORDER BY at, id`).all(sessionId, since) as LimitEventRow[]
+    for (const row of rows) {
+      const event = limitEventOf(row)
+      const until = this.deps.limits.cooldownFor(event.profileId, event.providerId).until
+      if (until === null || Date.parse(until) <= this.now()) continue
+      this.quotaIncident(teamId, event, 'reconstructed')
+    }
+    this.attachStalls(teamId)
+  }
+
+  /** Attach the team's unresolved quota advice to its task's current plan stall (R6), whichever came first. */
+  private attachStalls(teamId: string): void {
+    let changed = false
+    for (const rec of this.store.unresolved()) {
+      if (rec.teamId !== teamId || rec.kind !== 'quota') continue
+      const attention = this.planStallAttention(rec.taskId)
+      if (attention && this.store.attach(rec.id, attention)) changed = true
+    }
+    if (changed) this.deps.onChange?.(teamId)
+  }
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)()
+  }
+
+  private quotaIncident(teamId: string, event: LimitEvent, basis: 'incident' | 'reconstructed'): void {
     const record = this.deps.record(event.sessionId)
     const projectPath = record?.projectPath ?? ''
     const providerId = event.providerId ?? this.deps.providerOf(event.profileId, projectPath)
+    const episodeKey = `quota:${providerId}:${event.id}`
     const open = this.store.openFor(teamId, 'quota', providerId)
     if (open) {
+      // A later final limit joins the open episode; a stall raised since it opened attaches now (R6).
+      const attention = this.planStallAttention(open.taskId)
+      if (attention && this.store.attach(open.id, attention)) this.deps.onChange?.(teamId)
       this.service.enqueue(open.id)
       return
     }
+    if (basis === 'reconstructed' && this.store.byEpisode(teamId, 'quota', episodeKey)) return
     const held = this.deps.heldWork(event.sessionId)
     this.service.incident({
-      teamId, kind: 'quota', episodeKey: `quota:${providerId}:${event.id}`, sessionId: event.sessionId, taskId: held.taskId,
+      teamId, kind: 'quota', episodeKey, sessionId: event.sessionId, taskId: held.taskId,
       groupId: event.groupId, profileId: event.profileId, providerId, attentionId: this.planStallAttention(held.taskId),
-      cutoff: event.at, snapshotBasis: 'incident',
+      cutoff: event.at, snapshotBasis: basis,
       snapshot: incidentSnapshot({
         limited: { profileId: event.profileId, providerId, window: event.window, resetsAt: event.resetsAt },
         groupId: event.groupId, capacity: this.deps.capacity(event.sessionId),
         scopeOf: profileId => this.deps.scopeOf(profileId, projectPath), restriction: held.restriction,
-        writer: { required: held.taskId !== null, occupants: this.deps.writerOccupants(event.sessionId) },
+        writer: this.writerFacts(event.sessionId, held.taskId !== null),
       }),
     })
   }
@@ -157,9 +231,18 @@ export class ManagerAdvice {
         limited: { profileId, providerId, window: null, resetsAt: null },
         groupId: record.groupId ?? null, capacity: this.deps.capacity(sessionId),
         scopeOf: id => this.deps.scopeOf(id, record.projectPath), restriction: held.restriction,
-        writer: { required: held.taskId !== null, occupants: this.deps.writerOccupants(sessionId) },
+        writer: this.writerFacts(sessionId, held.taskId !== null),
       }),
     })
+  }
+
+  /** The writer slot as routing counts it (occupants + pending), split into other holders and the incident's own hold (E5). */
+  private writerFacts(sessionId: string, required: boolean): WriterFacts {
+    const slot = this.deps.writerSlot(sessionId)
+    return {
+      required, occupants: slot.occupants.filter(id => id !== sessionId), pending: slot.pending,
+      heldByIncident: slot.occupants.includes(sessionId),
+    }
   }
 
   private isOpen(rec: StoredRecommendation, cutoff: number): boolean {

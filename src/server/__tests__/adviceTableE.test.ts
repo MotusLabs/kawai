@@ -121,6 +121,44 @@ const ROWS: Row[] = [
       expect(alternative('kimi')).toMatchObject({ listed: false, exclusion: { kind: 'writer-slot' } })
       expect(alternative('kimi').exclusion!.detail).toContain('release or hand off first')
       expect(recommendations(h)[0]!.assessments[0]!.advice.choice).not.toBe('switch')
+      // A pending reservation with no executed spawn occupies the slot as routing counts it (occupants + pending).
+      h.close()
+      h = adviceHarness()
+      team()
+      h.records.get('s1')!.taskId = 'task-1'
+      h.pending = 1
+      h.observe('kimi', 'moon', T0 - MIN)
+      h.limit()
+      h.drain()
+      expect(alternative('kimi')).toMatchObject({ listed: false, exclusion: { kind: 'writer-slot' } })
+      expect(alternative('kimi').exclusion!.detail).toBe('the writer slot is reserved by 1 pending spawn: release or hand off first')
+      expect(recommendations(h)[0]!.assessments[0]!.advice.choice).not.toBe('switch')
+      // Only the limited writer holds the slot: the alternative stays listed,
+      // and the advice names release or handoff first, promising no immediate execution.
+      h.close()
+      h = adviceHarness()
+      team()
+      h.records.get('s1')!.taskId = 'task-1'
+      h.occupants = ['s1']
+      h.observe('kimi', 'moon', T0 - MIN)
+      h.limit()
+      h.drain()
+      const held = recommendations(h)[0]!.assessments[0]!.advice
+      expect(alternative('kimi')).toMatchObject({ listed: true, exclusion: null, headroom: 'known' })
+      expect(held.choice).toBe('switch')
+      expect(held.facts).toContain('The limited session holds the writer slot: it must release or hand off before another worker can execute.')
+      expect(held.summary).toContain('once the limited session releases or hands off the writer slot')
+      // Without a task the writer slot is not required, so nothing is named.
+      h.close()
+      h = adviceHarness()
+      team()
+      h.occupants = ['s1', 's9']
+      h.pending = 2
+      h.observe('kimi', 'moon', T0 - MIN)
+      h.limit()
+      h.drain()
+      expect(alternative('kimi')).toMatchObject({ listed: true, exclusion: null })
+      expect(recommendations(h)[0]!.assessments[0]!.advice.facts.join(' ')).not.toContain('writer slot')
     },
   },
   {
@@ -148,17 +186,26 @@ const ROWS: Row[] = [
     id: 'E7', text: '| E7 | evidence arrives after the cutoff | not in this assessment; a new assessment cites it |',
     run() {
       team()
+      h.workers.push({ model: 'qwen', provider: 'cloud' })
+      h.scopes.qwen = 'scope-cloud'
       h.limit()
       // kimi first reports capacity 30 s after the incident, before the
-      // queued first evaluation runs (coalescing, or a restart, R5).
+      // queued first evaluation runs (coalescing, or a restart, R5). qwen's
+      // reading was observed 1 ms before the incident but recorded 30 s after
+      // it: it was not available at the cutoff either.
       h.clock.now = T0 + 30_000
       const later = h.observe('kimi', 'moon', h.clock.now)
+      const lateWrite = h.observe('qwen', 'cloud', T0 - 1)
       h.drain()
       const [first] = recommendations(h)
       expect(first!.assessments).toHaveLength(1)
       expect(first!.assessments[0]!.cutoff).toBe(new Date(T0).toISOString())
-      expect(first!.assessments[0]!.advice.alternatives.find(entry => entry.profileId === 'kimi')!.headroom).toBe('unknown')
+      for (const profileId of ['kimi', 'qwen']) {
+        expect(first!.assessments[0]!.advice.alternatives.find(entry => entry.profileId === profileId)!.headroom).toBe('unknown')
+      }
+      expect(first!.assessments[0]!.advice.choice).toBe('no-alternative')
       expect(first!.assessments[0]!.evidence.map(entry => entry.observationId)).not.toContain(later)
+      expect(first!.assessments[0]!.evidence.map(entry => entry.observationId)).not.toContain(lateWrite)
       // The late first assessment enqueued the next one itself (no further
       // trigger needed): the next coalesced pass cites the later evidence.
       h.clock.now = T0 + MIN
@@ -168,6 +215,8 @@ const ROWS: Row[] = [
       expect(rec!.assessments[0]).toEqual(first!.assessments[0]!)
       expect(rec!.assessments[1]!.advice.alternatives.find(entry => entry.profileId === 'kimi')!.headroom).toBe('known')
       expect(rec!.assessments[1]!.evidence.map(entry => entry.observationId)).toContain(later)
+      expect(rec!.assessments[1]!.advice.alternatives.find(entry => entry.profileId === 'qwen')!.headroom).toBe('known')
+      expect(rec!.assessments[1]!.evidence.map(entry => entry.observationId)).toContain(lateWrite)
       expect(rec!.assessments[1]!.state).toBe('strengthened')
     },
   },
