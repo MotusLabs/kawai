@@ -1,6 +1,7 @@
 // New-session dialog: project/worktree/branch selection, agent and chat
 // profile choice, and per-session approval policy. A chat for a project
-// whose team has no group files shows the missing-groups notice.
+// whose team is offered setup and has no group to choose, user-level groups
+// included, shows the missing-groups notice.
 import { useClaudeProfiles } from './chat/useClaudeProfiles'
 import { capWarning, useTeamGroups } from './chat/useTeamGroups'
 import MissingGroupsNotice from './chat/MissingGroupsNotice'
@@ -177,7 +178,10 @@ export default function NewSessionModal({
   const teamGroups = useTeamGroups(isOpen && kind === 'chat', projectPath)
   const teamApproval = teamGroups.approvalDefault?.projectPath === projectPath.trim() ? teamGroups.approvalDefault : null
   // starter-team-setup D2: the answer for the shown path only, so the notice follows path changes.
-  const missingGroups = teamGroups.setupAvailable?.projectPath === projectPath.trim() && teamGroups.setupAvailable.available
+  // starter-setup-with-user-level-groups: and only while that same answer offers no group — the options
+  // the picker below renders; "No group" is none — so a user-level group, which never withdraws the
+  // Members action, does not raise the notice.
+  const missingGroups = teamGroups.setupAvailable?.projectPath === projectPath.trim() && teamGroups.setupAvailable.available && teamGroups.groups.length === 0
   const autoApprove = autoApproveChoice ?? teamApproval?.policy === 'auto'
   const [groupId, setGroupId] = useState('')
   const [name, setName] = useState('')

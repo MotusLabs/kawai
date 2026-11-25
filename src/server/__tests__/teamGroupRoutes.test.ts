@@ -103,6 +103,37 @@ describe('team group routes', () => {
     expect(await available()).toBe(false)
   })
 
+  // starter-setup-with-user-level-groups (Table N, route evidence): one
+  // answer carries the groups the dialog offers and the project-only offer,
+  // so what the picker shows and whether it points to setup are read side by
+  // side from real user-level files.
+  // @covers: team-setup › The New Session dialog points a team without groups to setup › User-level groups hide the notice
+  test('a valid user-level group file is offered in the same answer that still offers setup', async () => {
+    fs.writeFileSync(path.join(home, '.kawai', 'groups', 'reviewers-sol.md'), '---\nlabel: Reviewers (Sol)\n---\nReview.')
+    expect(await get(`?projectPath=${encodeURIComponent(project)}`)).toEqual({
+      groups: [{ id: 'reviewers-sol', label: 'Reviewers (Sol)', description: '', profiles: [] }],
+      errors: [], warnings: [], approvalDefault: null, setupAvailable: true,
+    })
+  })
+
+  // @covers: team-setup › The New Session dialog points a team without groups to setup › Unparsed user-level files do not hide the notice
+  test('a user-level file that fails to parse offers no group, is reported by path, and leaves the setup offer', async () => {
+    fs.writeFileSync(path.join(home, '.kawai', 'groups', 'reviewers-sol.md'), '---\nlabel: x\n')
+    expect(await get(`?projectPath=${encodeURIComponent(project)}`)).toEqual({
+      groups: [],
+      errors: [`${path.join(home, '.kawai', 'groups', 'reviewers-sol.md')}: frontmatter is not closed by ---`],
+      warnings: [], approvalDefault: null, setupAvailable: true,
+    })
+  })
+
+  test('a project group file withdraws the setup offer while the user-level group stays offered', async () => {
+    fs.writeFileSync(path.join(home, '.kawai', 'groups', 'reviewers-sol.md'), '---\nlabel: Reviewers (Sol)\n---\nReview.')
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'lead.md'), '---\nlabel: Lead\n---\nPlan.')
+    const body = await get(`?projectPath=${encodeURIComponent(project)}`) as { groups: Array<{ id: string }>; setupAvailable: boolean }
+    expect(body.groups.map(group => group.id)).toEqual(['lead', 'reviewers-sol'])
+    expect(body.setupAvailable).toBe(false)
+  })
+
   test('a missing or nonexistent project yields no groups', async () => {
     expect(await get('')).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null, setupAvailable: false })
     expect(await get(`?projectPath=${encodeURIComponent(path.join(root, 'nope'))}`)).toEqual({ groups: [], errors: [], warnings: [], approvalDefault: null, setupAvailable: false })
