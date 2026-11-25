@@ -94,3 +94,21 @@ test('the store keeps the snapshot\'s recommendations for the requested view', (
   expect(useMetricsStore.getState().views['/repo']!.recommendations).toEqual([incident])
   expect(closedMetricsView().recommendations).toEqual([])
 })
+
+test('an attention item\'s advice link opens that recommendation once it is listed, and the one-shot target is spent', () => {
+  const revealed: number[] = []
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => { renderer = TestRenderer.create(<IncidentAdvice recommendations={[]} reveal="rec-1" onRevealed={() => revealed.push(1)} />) })
+  active.push(renderer)
+  // Not listed yet: nothing opens and the target waits.
+  expect(text(renderer, 'advice-detail')).toHaveLength(0)
+  expect(revealed).toEqual([])
+  act(() => renderer.update(<IncidentAdvice recommendations={[incident]} reveal="rec-1" onRevealed={() => revealed.push(1)} />))
+  expect(text(renderer, 'advice-detail')).toHaveLength(1)
+  expect(revealed).toEqual([1])
+  // The store's one-shot target clears per team.
+  useMetricsStore.getState().revealAdvice('/repo', 'rec-1')
+  expect(useMetricsStore.getState().revealedAdvice).toEqual({ '/repo': 'rec-1' })
+  useMetricsStore.getState().clearRevealedAdvice('/repo')
+  expect(useMetricsStore.getState().revealedAdvice).toEqual({})
+})

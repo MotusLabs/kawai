@@ -5,8 +5,9 @@
 // the facts, assumptions and unknowns, every assessment version, and the
 // frozen evidence (a pruned observation's link reads "expired"). Read from
 // the snapshot only: it needs no Prometheus, and nothing here approves,
-// applies or routes anything.
-import { useState } from 'react'
+// applies or routes anything. An attention item's advice link (D6) arrives as
+// `reveal`: once listed, that recommendation opens and scrolls into view.
+import { useEffect, useState } from 'react'
 import {
   ADVICE_CHOICE_LABELS, EXCLUSION_LABELS, type FrozenAlternative, type ProcessAssessment, type ProcessRecommendationDetail,
 } from '@shared/processRecommendations'
@@ -56,8 +57,21 @@ function AssessmentDetail({ assessment }: { assessment: ProcessAssessment }) {
   </div>
 }
 
-export default function IncidentAdvice({ recommendations }: { recommendations: readonly ProcessRecommendationDetail[] }) {
+export default function IncidentAdvice({ recommendations, reveal = null, onRevealed }: {
+  recommendations: readonly ProcessRecommendationDetail[]
+  /** A recommendation an attention item's advice link asked to open; taken once it is listed. */
+  reveal?: string | null
+  onRevealed?: () => void
+}) {
   const [openId, setOpenId] = useState<string | null>(null)
+  useEffect(() => {
+    if (reveal === null || !recommendations.some(rec => rec.id === reveal)) return
+    setOpenId(reveal)
+    onRevealed?.()
+    if (typeof document !== 'undefined' && typeof CSS !== 'undefined') {
+      document.querySelector(`[data-recommendation="${CSS.escape(reveal)}"]`)?.scrollIntoView?.({ block: 'nearest' })
+    }
+  }, [reveal, recommendations, onRevealed])
   const opened = recommendations.find(rec => rec.id === openId) ?? null
   return <section className="border border-border p-2" data-testid="incident-advice">
     <h3 className="font-medium">Incident advice</h3>

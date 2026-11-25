@@ -95,6 +95,12 @@ export interface AttentionItem {
   link: AttentionLink
   /** True when only the human can move it; false for agent-owned waits. */
   requiresHuman: boolean
+  /**
+   * Incident advice attached to this item (process-quota-history-and-
+   * incident-advice D6): a context-exhaustion or plan-stall item links to
+   * its recommendation in the Metrics tab — never a second alert.
+   */
+  advice?: { recommendationId: string }
 }
 
 /** The item identity D5 defines: kind-prefixed, stable across reconnects. */

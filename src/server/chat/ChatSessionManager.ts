@@ -110,7 +110,8 @@ import { TeamCapacity } from '../team/teamCapacity'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
 import type { BackgroundTaskRecord } from './chatBackgroundTasks'
-import type { ExhaustionEpisode } from '../team/exhaustionNotes'
+import type { AdvisedExhaustionEpisode } from '../team/workspaceExhaustion'
+import { attentionItemId } from '../../shared/teamWorkspace'
 import { planAttentionFacts, planSummaryRows, type PlanAttentionFact, type PlanAttentionReads, type PlanSummaryRowReads, type PlanSummaryRows } from '../team/planAttention'
 import { StallAlertStore } from '../plans/supervision/stallAlertStore'
 import { loadTeamGroups } from '../team/teamGroups'
@@ -1548,14 +1549,19 @@ export class ChatSessionManager {
   }
 
   /** The team's recorded context-exhaustion episodes (chat-context-exhaustion D8); the workspace reads them. */
-  exhaustionEpisodes(teamId: string): ExhaustionEpisode[] {
-    return this.teamMail.exhaustionNotes.episodes(teamId)
+  exhaustionEpisodes(teamId: string): AdvisedExhaustionEpisode[] {
+    // Each episode names the incident advice attached to its attention item (D6).
+    const advice = this.advice.store.attachedAdvice(teamId)
+    return this.teamMail.exhaustionNotes.episodes(teamId).map(episode => ({
+      ...episode,
+      recommendationId: advice.get(attentionItemId('context-exhausted', `${episode.sessionId}:${episode.flaggedAt}`)) ?? null,
+    }))
   }
 
   /** Each open plan's attention facts (plan-supervision D13); none without team services. */
   planAttentionFacts(teamId: string): PlanAttentionFact[] {
     const reads = this.planAttentionReads
-    return reads === null ? [] : planAttentionFacts(reads, teamId, new Date())
+    return reads === null ? [] : planAttentionFacts({ ...reads, advice: this.advice.store }, teamId, new Date())
   }
 
   /** The summary window's durable plan rows (plan-supervision D13). */

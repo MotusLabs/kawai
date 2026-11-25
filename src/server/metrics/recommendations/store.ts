@@ -73,6 +73,17 @@ export class RecommendationStore {
     return { recommendation: mapRecommendation(row), created: result.changes > 0 }
   }
 
+  /**
+   * The team's advice attached to existing attention items (D6): attention id
+   * to its newest recommendation id. The attention sources link to it; no
+   * second alert is ever raised.
+   */
+  attachedAdvice(teamId: string): Map<string, string> {
+    const rows = this.db.prepare(`SELECT id, attention_id FROM process_recommendations
+      WHERE team_id = ? AND attention_id IS NOT NULL ORDER BY created_at, id`).all(teamId) as Array<{ id: string; attention_id: string }>
+    return new Map(rows.map(row => [row.attention_id, row.id]))
+  }
+
   /** One recommendation by id, any team (the evaluator's own read). */
   byId(id: string): StoredRecommendation | null {
     const row = this.db.prepare('SELECT * FROM process_recommendations WHERE id = ?').get(id) as RecommendationRow | null

@@ -5,14 +5,18 @@
 // item resolves — derived at read time, nothing stored — once a newer
 // dispatch on the task is made, the task closes, the dropped message is
 // retried or discarded, the session's flag clears (or names a later
-// episode), or the session is killed.
+// episode), or the session is killed. An episode with incident advice links
+// to it (process-quota-history-and-incident-advice D6), no second alert.
 import { attentionItemId, type AttentionItem } from '../../shared/teamWorkspace'
 import { taskImpact } from './attentionAcceptance'
 import type { ExhaustionEpisode } from './exhaustionNotes'
 
+/** An episode with the id of the incident advice attached to it, when there is one (D6). */
+export type AdvisedExhaustionEpisode = ExhaustionEpisode & { recommendationId?: string | null }
+
 /** One episode with the facts its resolution reads, gathered by the manager-facing read. */
 export interface ExhaustionFact {
-  episode: ExhaustionEpisode
+  episode: AdvisedExhaustionEpisode
   /** The session's name; null once it is killed (no record). */
   sessionName: string | null
   /** The flag time the session's record holds now; null when it is not flagged. */
@@ -58,6 +62,7 @@ export function exhaustionAttentionItems(
         ? { kind: 'message' as const, id: episode.droppedId }
         : { kind: 'chat' as const, id: episode.sessionId },
       requiresHuman: !noted,
+      ...(episode.recommendationId ? { advice: { recommendationId: episode.recommendationId } } : {}),
     }
   })
 }

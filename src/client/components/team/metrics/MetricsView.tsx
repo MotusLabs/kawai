@@ -76,6 +76,7 @@ export default function MetricsView({
   onOpenThread: (threadId: string) => void
 }) {
   const tab = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.metrics) ?? emptyTabViewState()
+  const revealedAdvice = useMetricsStore(state => state.revealedAdvice[teamPath])
   const chosen = isMetricWindow(locationWindow) ? locationWindow : null
   const slice = sliceOf(tab.filters)
   const sliceKey = JSON.stringify(slice)
@@ -153,7 +154,8 @@ export default function MetricsView({
         sendMessage={sendMessage} connected={connected} connectionEpoch={connectionEpoch} nameOf={nameOf} onOpenReport={onOpenReport} />
     </div>}
     {snapshot && reportId === undefined && <div className="mt-2 flex flex-col gap-2">
-      {view && <IncidentAdvice recommendations={view.recommendations} />}
+      {view && <IncidentAdvice recommendations={view.recommendations} reveal={revealedAdvice ?? null}
+        onRevealed={() => useMetricsStore.getState().clearRevealedAdvice(teamPath)} />}
       <ToolMeasurement status={snapshot.toolMeasurement}/>
       {view&&byId.get('tool_abandoned_streaks')?.drill.toolStreaks&&<ToolDrill key={teamPath+chosen+sliceKey+snapshot.computedAt}
         teamPath={teamPath} view={view} inline={byId.get('tool_abandoned_streaks')!.drill.toolStreaks!}

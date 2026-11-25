@@ -12,7 +12,9 @@
 // cleanup runs on every reconnect) clears waiting slots, so a lost result
 // never leaves a card busy. A report outside the snapshot, opened by id,
 // lands in `opened` (null when the team has none) and is dropped on close.
-// Incident recommendations ride the snapshot whole (read-only advice).
+// Incident recommendations ride the snapshot whole (read-only advice); an
+// attention item's advice link names the one to open in `revealedAdvice`, a
+// one-shot target the Metrics view takes once it lists that recommendation.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { ToolStreakEntry, MetricSlice, MetricWindow, ProcessMetrics } from '@shared/processMetrics'
@@ -74,6 +76,11 @@ const sameRequest = (a: MetricsRequest | null, window: MetricWindow, slice: Metr
 
 interface MetricsState {
   views: Record<string, MetricsView>
+  /** Per team key: the recommendation an attention item's advice link asked to open (D6). */
+  revealedAdvice: Record<string, string>
+  revealAdvice: (teamKey: string, recommendationId: string) => void
+  /** The view opened it: the one-shot target is spent. */
+  clearRevealedAdvice: (teamKey: string) => void
   /** The tab asked for a window and slice (an open or a refresh). */
   request: (teamKey: string, request: MetricsRequest) => void
   close: (teamKey: string) => void
@@ -92,6 +99,13 @@ interface MetricsState {
 
 export const useMetricsStore = create<MetricsState>((set, get) => ({
   views: {},
+  revealedAdvice: {},
+  revealAdvice: (teamKey, recommendationId) => set(state => ({ revealedAdvice: { ...state.revealedAdvice, [teamKey]: recommendationId } })),
+  clearRevealedAdvice: teamKey => set(state => {
+    if (!(teamKey in state.revealedAdvice)) return state
+    const { [teamKey]: _spent, ...rest } = state.revealedAdvice
+    return { revealedAdvice: rest }
+  }),
   request: (teamKey, request) => set(state => {
     const view = state.views[teamKey] ?? closedMetricsView()
     return { views: { ...state.views, [teamKey]: { ...view, open: true, loading: true, requested: request,toolDrill:undefined } } }
