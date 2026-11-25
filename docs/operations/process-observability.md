@@ -134,21 +134,34 @@ in-memory usage store, which worker pulls now also fill.
 At a final limit event or a context-exhausted flag, Kawai records one
 recommendation per team, kind and episode with the routing facts frozen from
 `team_capacity`'s reader (caps, live counts, cooldowns, login sharing), the held
-message's worker choice and cross-model restriction, and writer occupancy. A
+message's worker choice and cross-model restriction, and the worktree's writer
+slot as staffing counts it (other holders and pending reservations). A
 coalescing queue (one second) evaluates it: alternatives on the limited
-account, cooling, restricted or capped are excluded by name; the rest are
-listed with headroom known only for a routed window at most ten minutes old,
-unreset, unvetoed by a later failure or limit of the account, and below 100%.
+account, cooling, restricted, capped, or blocked by another writer or a pending
+reservation of a task's worktree are excluded by name; when only the limited
+writer holds the slot, the advice says it must release or hand off first. The
+rest are listed with headroom known only for a routed window at most ten
+minutes old, unreset, unvetoed by a later failure or limit of the account, and
+below 100%. The first assessment reads only rows observed and recorded by the
+incident time; a reading written later, whatever its observation time, makes a
+later version.
 Advice is provisional: no numeric saving is claimed while handoff and rework
 costs are unknown, and fewer than ten observed handoffs keep the small-sample
 flag. Assessments are immutable versions: unchanged evidence writes nothing;
 later evidence writes the next version. Context advice attaches to the
 `context-exhausted` attention id, quota advice to a stall alert of the task's
-plan change when one exists; neither sends mail or raises another alert. That
+plan change when one exists, including a stall raised after the quota episode
+opened (attached on the next limit, history write or startup); neither sends
+mail or raises another alert. That
 attention item gains a **View advice** link that opens the recommendation in
-the Metrics tab; it is the same item, never a second alert. Advice is never
+the Metrics tab, even when it is older than the snapshot's newest twenty (the
+link's target rides the Metrics subscription); it is the same item, never a
+second alert. Advice is never
 "demonstrated" here: that needs an outcome baseline this change does not build.
-Evaluator failures record a gap in `process_recommendation_gaps`; startup
+Evaluator failures record a gap in `process_recommendation_gaps`. A limit
+event commits before its advice callback runs, so startup (and each session's
+team resolution) replays that session's final limit events still cooling and
+its context flag; an episode already recorded is not repeated. Startup then
 re-enqueues every unresolved or unassessed recommendation. The Metrics view
 lists the advice from the snapshot (no Prometheus); agents read it through
 `process_recommendations_list` and `process_recommendation_get`, and no tool
