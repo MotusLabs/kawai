@@ -62,7 +62,7 @@ const ROWS: Row[] = [
       // Exactly 10 minutes is fresh (B7); below 100% has room.
       const result = evidence(at + HEADROOM_FRESH_MS)
       expect(result).toMatchObject({ valid: true, reason: 'fresh', accountAlias: 'zai@zai.test' })
-      expect(result.windows.map(w => [w.key, w.percentUsed, w.ageMs])).toEqual([['zai:time_limit', 40, HEADROOM_FRESH_MS]])
+      expect(result.windows.map(w => [w.key, w.percentUsed, w.ageMs])).toEqual([['zai:time_limit', 40, HEADROOM_FRESH_MS], ['zai:unknown', 1, HEADROOM_FRESH_MS]])
       // 100% used shows no room.
       await step(MIN)
       const full = await poll(100)

@@ -5,12 +5,14 @@
 // polled it, the outcome, and each window with its own observation time. A
 // status-only report stores no windows, so it never freshens a window's age
 // (Table F row F6). No response body, error text or credential is ever
-// stored (I2): outcomes are an enum and windows are numbers and times.
+// stored (I2): outcomes are an enum, windows are approved kinds, numbers and
+// times (durableWindows.ts).
 // Rows are detail: they prune with the foundation's interval retention
 // (14 d), and recommendation evidence keeps its own frozen summaries (R9).
 import type { Database } from 'bun:sqlite'
 import { randomUUID } from 'node:crypto'
 import type { ChatUsageReport, ChatUsageStatus } from '../../../shared/chat'
+import { durableReportFields, durableWindows } from './durableWindows'
 
 export const QUOTA_OBSERVATION_OUTCOMES = ['supported', 'unavailable', 'auth-refused', 'failed', 'unsupported'] as const
 export type QuotaObservationOutcome = (typeof QUOTA_OBSERVATION_OUTCOMES)[number]
@@ -110,14 +112,9 @@ export class QuotaObservationStore {
   record(input: NewQuotaObservation): string[] {
     const report = input.report
     const observedAt = report?.receivedAt ?? input.observedAt
-    const windows: QuotaWindowObservation[] = (report?.windows ?? []).map(window => ({
-      key: String(window.key),
-      label: String(window.label),
-      percentUsed: Number(window.percentUsed),
-      resetsAt: window.resetsAt ?? null,
-      ...(typeof window.periodMs === 'number' ? { periodMs: window.periodMs } : {}),
-      observedAt,
-    }))
+    // No wire string is kept (I2): approved kinds and labels, enum-checked fields.
+    const windows: QuotaWindowObservation[] = durableWindows(report?.windows ?? []).map(window => ({ ...window, observedAt }))
+    const { source, status } = durableReportFields(report)
     const recordedAt = new Date(this.now()).toISOString()
     const insert = this.db.prepare(`INSERT INTO process_quota_observations
       (id, team_id, provider_id, account_alias, account_scope, account_basis, source, reason, outcome, status, windows_json, time_basis, observed_at, recorded_at)
@@ -126,8 +123,8 @@ export class QuotaObservationStore {
     this.db.transaction(() => {
       for (const teamId of new Set(input.teams)) {
         const id = `quota-${randomUUID()}`
-        insert.run(id, teamId, input.providerId, input.accountAlias, input.accountScope, input.accountBasis, report?.source ?? 'none',
-          input.reason, input.outcome, report?.status ?? null, JSON.stringify(windows), observedAt, recordedAt)
+        insert.run(id, teamId, input.providerId, input.accountAlias, input.accountScope, input.accountBasis, source,
+          input.reason, input.outcome, status, JSON.stringify(windows), observedAt, recordedAt)
         ids.push(id)
       }
     })()
@@ -152,7 +149,13 @@ export class QuotaObservationStore {
 
   /** Delete at most one batch recorded before the cutoff; returns how many went. */
   prune(cutoffIso: string, batch = QUOTA_PRUNE_BATCH): number {
-    return this.db.prepare(`DELETE FROM process_quota_observations WHERE id IN
-      (SELECT id FROM process_quota_observations WHERE recorded_at < ? LIMIT ?)`).run(cutoffIso, batch).changes
+    return pruneQuotaObservations(this.db, cutoffIso, batch)
   }
+}
+
+/** The retention pass's quota share: at most `limit` rows recorded before the cutoff (frozen evidence keeps its summaries, R9). */
+export function pruneQuotaObservations(db: Database, cutoffIso: string, limit: number): number {
+  if (limit <= 0) return 0
+  return db.prepare(`DELETE FROM process_quota_observations WHERE id IN
+    (SELECT id FROM process_quota_observations WHERE recorded_at < ? LIMIT ?)`).run(cutoffIso, limit).changes
 }

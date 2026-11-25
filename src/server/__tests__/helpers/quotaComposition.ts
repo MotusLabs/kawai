@@ -24,7 +24,9 @@ export const CADENCE_MS = 600_000
 export function quotaCapture(percentage: number, nextResetTime = 4_102_444_800_000): unknown {
   return {
     code: 200, msg: `Operation successful ${BODY_MARKER}`, success: true,
-    data: { limits: [{ type: 'TIME_LIMIT', percentage, nextResetTime }], level: 'pro' },
+    // An accepted answer whose unknown row kind echoes the credential and the
+    // body marker (P4): the live parser keeps the raw type; history must not.
+    data: { limits: [{ type: 'TIME_LIMIT', percentage, nextResetTime }, { type: `${QUOTA_TOKEN}_${BODY_MARKER}`, percentage: 1 }], level: 'pro' },
   }
 }
 
