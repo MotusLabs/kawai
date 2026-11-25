@@ -384,6 +384,7 @@ added. Every scenario has both where the core already covers it.
 - `openspec/specs/provider-credentials/spec.md`
 - `openspec/specs/claude-session-profiles/spec.md`
 - `tests/e2e/settings-provider.spec.ts`
+- `scripts/planBatches.ts`
 
 ### Verification
 - V1: Table C, U, and the binding M table are committed verbatim as table-driven tests next to the code; PM1, PM2, PC1, P1s, P2 run as seeded properties through `propertyCases`.
