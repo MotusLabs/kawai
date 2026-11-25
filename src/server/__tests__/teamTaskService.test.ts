@@ -342,6 +342,8 @@ describe('spawn-time registration', () => {
     const validationTools = ['plan_validate', 'plan_validation_get', 'plan_assess']
     expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), ...resultTools, 'task_transfer_owner', 'task_request_publication', 'task_settle_publication', 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review', 'strategy_impact_get', 'strategy_impact_propose', ...planTools, ...validationTools, 'decision_ask', 'decision_record', 'team_metrics', 'team_metrics_drill',
       'process_report_submit', 'process_reports_list', 'process_report_get', 'process_proposal_link',
+      // Incident advice (process-quota-history-and-incident-advice D6): read-only, registered only with a recommendations service.
+      'process_recommendations_list', 'process_recommendation_get',
       // task_checkpoint (revision-control D7) rides the same allowed list, registered only with a checkpoints service.
       'task_checkpoint', 'team_capacity']
       .map(name => `mcp__kawai-team__${name}`))

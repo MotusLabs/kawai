@@ -310,7 +310,7 @@ describe('Table S at the service seam', () => {
   test('S9: no request; one `unsupported` observation; no agent launched', () => runRow('S9'))
   test('S10: today\'s spawn pull unchanged', () => runRow('S10'))
   test('S11: timer cancelled; in-flight result discarded, nothing published', () => runRow('S11'))
-  test('S12: `UsageLimitStore` empty; one startup poll; history rows intact', () => runRow('S12'))
+  test('S12: UsageLimitStore empty; one startup poll; history rows intact', () => runRow('S12'))
   // @covers: chat-usage-limits › Background quota observation is bounded and credential-safe › Shared account polled once
   test('S13: one request; both teams\' histories get it', () => runRow('S13'))
   test('S14: old key unsubscribed, new key polled once', () => runRow('S14'))

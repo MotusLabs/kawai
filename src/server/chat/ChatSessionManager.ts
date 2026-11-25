@@ -95,6 +95,9 @@ import { codexLoginErrorMessage } from './codex/codexAuth'
 import { codexLimitProviderId } from './codex/codexLimits'
 import { resolveCodexHome } from './codexProfiles'
 import { fetchZaiUsage } from './zaiUsage'
+import { ManagerAdvice, type ManagerAdviceDeps } from './quota/managerAdvice'
+import { workerChoiceState } from '../team/routing/workerSelector'
+import { crossModelReason } from '../team/routing/workerEligibility'
 import { ManagerQuota } from './quota/managerQuota'
 import type { QuotaPull, WorkerSubscription } from './quota/QuotaReaderService'
 import type { QuotaTarget } from './quota/quotaTarget'
@@ -465,6 +468,8 @@ export class ChatSessionManager {
    * one request in flight per account key.
    */
   readonly quota: ManagerQuota
+  /** Incident advice (process-quota-history-and-incident-advice D4–D6). */
+  readonly advice: ManagerAdvice
   /**
    * Balance-key values whose credits pull was already refused (openrouter
    * D6): each value logs once. Bounded — cleared when it grows past 64.
@@ -1253,6 +1258,7 @@ export class ChatSessionManager {
     this.reports = new ProcessReportService(options.db.db, this.metrics, {
       onCommit: teamId => this.options.onProcessReportChange?.(teamId),
     })
+    this.advice = this.composeAdvice()
     this.turnUsageTracker = new TurnUsageTracker(this.turnUsage, {
       sessionTask: id => this.records.get(id)?.taskId ?? null,
       latestStart: id => this.provenance.latestStart(id),
@@ -2384,6 +2390,7 @@ export class ChatSessionManager {
     // in-flight continuations check isShutDown before publishing.
     this.stopProviderUsageRefresh()
     this.quota.shutdown()
+    this.advice.shutdown()
     for (const [id, driver] of this.drivers) {
       driver.shutdown()
       this.retired.retire(id, driver)
@@ -3217,6 +3224,7 @@ export class ChatSessionManager {
       metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
       reports: { caller: id => this.reportCaller(id), service: this.reports },
       capacity: this.capacity,
+      recommendations: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, store: this.advice.store },
     }
   }
 
@@ -3406,9 +3414,64 @@ export class ChatSessionManager {
         this.usageLimits.record(providerId, report)
       },
       configuredWorkers: () => this.configuredQuotaWorkers(),
+      onHistory: teams => this.advice?.historyWritten(teams),
     })
     quota.start()
     return quota
+  }
+
+  /**
+   * Incident advice over the router's own objects: the limit store, the
+   * team_capacity reader, the held message's worker choice and cross-model
+   * restriction, and staffing's writer occupancy (D4). Its changes republish
+   * the Metrics snapshot like a report commit.
+   */
+  private composeAdvice(): ManagerAdvice {
+    const advice = new ManagerAdvice({
+      db: this.options.db.db,
+      history: this.quota.history,
+      limits: this.teamMail.limits,
+      record: id => this.records.get(id),
+      records: () => this.records.values(),
+      teamOf: id => this.teams.teamOf(id)?.teamId ?? null,
+      capacity: (id) => {
+        const team = this.teams.teamOf(id)
+        const catalog = this.teams.catalogOf(id)
+        return team && catalog ? this.capacity.readTeam(team, catalog) : null
+      },
+      providerOf: (profileId, projectPath) => providerOf(profileId, this.catalogCtx(projectPath)),
+      scopeOf: (profileId, projectPath) => {
+        const target = this.quotaTargetFor(profileId, projectPath)
+        return target ? this.quota.scopeOf(target) : null
+      },
+      heldWork: id => this.heldWorkOf(id),
+      writerOccupants: (id) => {
+        const record = this.records.get(id)
+        const teamId = this.teams.teamOf(id)?.teamId
+        if (!record?.groupId || !teamId) return []
+        return this.teamMail.staffing.capacity(teamId, record.groupId, record.projectPath).worktreeOccupants.filter(other => other !== id)
+      },
+      onChange: teamId => this.options.onProcessReportChange?.(teamId),
+    })
+    advice.start()
+    return advice
+  }
+
+  /** The task and hard restrictions of the group mail a session holds (incident snapshot, E4). */
+  private heldWorkOf(sessionId: string): ReturnType<ManagerAdviceDeps['heldWork']> {
+    const record = this.records.get(sessionId)
+    const message = this.teamMail.mailbox.store.heldBy(sessionId).find(row => row.toKind === 'group' && row.toId)
+    const group = message?.toId ? this.teams.catalogOf(sessionId)?.groups.get(message.toId)?.group : undefined
+    const choice = message && group ? workerChoiceState(message.workerChoice, group, id => providerOf(id, this.catalogCtx(record?.projectPath))) : null
+    const cross = message && group ? this.teamMail.crossModelFor(message, group) : null
+    return {
+      taskId: record?.taskId ?? message?.taskId ?? null,
+      restriction: (profileId) => {
+        if (choice && !choice.profiles.includes(profileId)) return { kind: 'worker-choice', detail: `worker choice ${choice.selector}` }
+        const reason = cross ? crossModelReason(cross, profileId) : null
+        return reason ? { kind: 'review-restriction', detail: `cross-model review: ${reason.detail}` } : null
+      },
+    }
   }
 
   /**
@@ -3439,19 +3502,24 @@ export class ChatSessionManager {
         for (const profile of group.profiles) profiles.add(profile.profileId)
       }
       for (const profileId of profiles) {
-        let env: Record<string, string>
-        try {
-          env = this.launchEnvOf(profileId, team.groupsRoot)
-        } catch {
-          continue
-        }
-        const baseUrl = env.ANTHROPIC_BASE_URL?.trim() || null
-        const token = env.ANTHROPIC_AUTH_TOKEN?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined
-        const providerId = providerOf(profileId, catalogCtx(this.options.profileCatalogHome, team.groupsRoot))
-        desired.push({ teamId: team.teamId, target: { providerId, baseUrl, token } })
+        const target = this.quotaTargetFor(profileId, team.groupsRoot)
+        if (target) desired.push({ teamId: team.teamId, target })
       }
     }
     return desired
+  }
+
+  /** A profile's effective quota target at a groups root or project path; null when it does not resolve. */
+  private quotaTargetFor(profileId: string, root: string): QuotaTarget | null {
+    let env: Record<string, string>
+    try {
+      env = this.launchEnvOf(profileId, root)
+    } catch {
+      return null
+    }
+    const baseUrl = env.ANTHROPIC_BASE_URL?.trim() || null
+    const token = env.ANTHROPIC_AUTH_TOKEN?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined
+    return { providerId: providerOf(profileId, catalogCtx(this.options.profileCatalogHome, root)), baseUrl, token }
   }
 
   /**
@@ -3706,7 +3774,10 @@ export class ChatSessionManager {
         if (flagged) this.applyPatch(sessionId, { contextExhausted: null })
       } else if (event.terminalReason && EXHAUSTING_REASONS.includes(event.terminalReason)) {
         // One episode per flag: a repeated exhausted turn keeps the first flag.
-        if (!flagged) this.applyPatch(sessionId, { contextExhausted: { at: event.at || new Date().toISOString(), reason: event.terminalReason } })
+        if (!flagged) {
+          this.applyPatch(sessionId, { contextExhausted: { at: event.at || new Date().toISOString(), reason: event.terminalReason } })
+          this.advice.contextFlagged(sessionId)
+        }
         return true
       }
     } else if (event.type === 'notice' && event.kind === 'compacted' && flagged) {

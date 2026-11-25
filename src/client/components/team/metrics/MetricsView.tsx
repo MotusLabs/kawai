@@ -6,7 +6,8 @@
 // open per window and slice (a cached server read), Refresh recomputes, and
 // close ends it. Every control disables while disconnected. The report
 // sections (D6) sit above the families; a location naming a report
-// (`metrics/<window>/<report id>`) shows that report in their place.
+// (`metrics/<window>/<report id>`) shows that report in their place. Incident
+// advice (process-quota-history-and-incident-advice D6) leads the families.
 import { useEffect, useMemo, useState } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import {
@@ -18,6 +19,7 @@ import { emptyTabViewState, useTeamWorkspaceStore } from '../../../stores/teamWo
 import ToolDrill,{ToolMeasurement} from './ToolDrill'
 import MetricFamily from './MetricFamily'
 import MetricsReports from './MetricsReports'
+import IncidentAdvice from './IncidentAdvice'
 import type { NameOf } from './reportLabels'
 
 export const DEFAULT_METRICS_WINDOW: MetricWindow = '7d'
@@ -151,6 +153,7 @@ export default function MetricsView({
         sendMessage={sendMessage} connected={connected} connectionEpoch={connectionEpoch} nameOf={nameOf} onOpenReport={onOpenReport} />
     </div>}
     {snapshot && reportId === undefined && <div className="mt-2 flex flex-col gap-2">
+      {view && <IncidentAdvice recommendations={view.recommendations} />}
       <ToolMeasurement status={snapshot.toolMeasurement}/>
       {view&&byId.get('tool_abandoned_streaks')?.drill.toolStreaks&&<ToolDrill key={teamPath+chosen+sliceKey+snapshot.computedAt}
         teamPath={teamPath} view={view} inline={byId.get('tool_abandoned_streaks')!.drill.toolStreaks!}
