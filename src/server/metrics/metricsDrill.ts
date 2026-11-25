@@ -78,16 +78,24 @@ export function parseInstant(v: string): number | null {
   const m = INSTANT.exec(v)
   if (!m) return null
   const [y, mo, d, h, mi, s] = m.slice(1, 7).map(Number) as [number, number, number, number, number, number]
-  const days = new Date(Date.UTC(y, mo, 0)).getUTCDate()
-  if (mo < 1 || mo > 12 || d < 1 || d > days || h > 23 || mi > 59 || s > 59) return null
+  if (mo < 1 || mo > 12 || d < 1 || d > daysIn(y, mo) || h > 23 || mi > 59 || s > 59) return null
   let offset = 0
   if (m[8] !== 'Z') {
     const oh = Number(m[10]), om = Number(m[11])
     if (oh > 23 || om > 59) return null
     offset = (m[9] === '-' ? -1 : 1) * (oh * 60 + om) * 60_000
   }
-  const ms = Date.UTC(y, mo - 1, d, h, mi, s, Number((m[7] ?? '').padEnd(3, '0').slice(0, 3))) - offset
+  // setUTCFullYear keeps the literal year: Date.UTC reads 0–99 as 1900–1999.
+  const at = new Date(0)
+  at.setUTCFullYear(y, mo - 1, d)
+  at.setUTCHours(h, mi, s, Number((m[7] ?? '').padEnd(3, '0').slice(0, 3)))
+  const ms = at.getTime() - offset
   return Number.isFinite(ms) ? ms : null
+}
+/** Days in a month of the proleptic Gregorian calendar, by its literal year. */
+function daysIn(year: number, month: number): number {
+  if (month === 2) return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28
+  return [4, 6, 9, 11].includes(month) ? 30 : 31
 }
 const isList = (v: unknown): v is DrillList => typeof v === 'string' && (DRILL_LISTS as readonly string[]).includes(v)
 

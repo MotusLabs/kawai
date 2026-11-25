@@ -250,7 +250,8 @@ test('T17: an end later than now or not an ISO instant is refused naming end; IS
     big(f)
     for (const { runtime, call } of f.runtimes) {
       for (const end of [new Date(END + 1).toISOString(), '2026-10-16T12:00:01Z', '2026-10-16T13:00:00+00:59', '2026-10-16',
-        'yesterday', '2026-10-16T12:00Z', '2026-02-30T00:00:00Z', '2026-10-16T24:00:00Z', '2026-10-16T12:00:00', '2026-10-16T12:00:00+24:00']) {
+        'yesterday', '2026-10-16T12:00Z', '2026-02-30T00:00:00Z', '2026-10-16T24:00:00Z', '2026-10-16T12:00:00', '2026-10-16T12:00:00+24:00',
+        '0001-02-29T12:00:00Z', '1900-02-29T12:00:00Z', '0099-02-29T12:00:00Z']) {
         refused(await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages' }), 'end must be an ISO instant')
       }
       // Now itself, an offset form of an earlier instant, and a sub-second fraction.
@@ -262,6 +263,25 @@ test('T17: an end later than now or not an ISO instant is refused naming end; IS
         expect(cursorOf(page.value.next).src.end).toBe(canonical)
         const expected = readMetrics(f.seed.db, TEAM, '7d', null, Date.parse(canonical)).metrics.find(m => m.id === 'mail_share')!.drill.messages
         expect(page.value.total).toBe(expected.length)
+      }
+    }
+    // Years 0000–0099 keep their four digits (Date.UTC would read 0099 as 1999), including year 0's leap day;
+    // two messages an hour before each end make a continuation whose source and cursor keep that end.
+    const ancient = [['0099-10-16T12:00:00.000Z', '0099-10-16T12:00:00.000Z'], ['0099-10-16T13:00:00+01:00', '0099-10-16T12:00:00.000Z'],
+      ['0000-02-29T12:00:00.000Z', '0000-02-29T12:00:00.000Z']] as const
+    for (const canonical of new Set(ancient.map(([, c]) => c))) {
+      for (const n of [1, 2]) f.seed.message({ id: `msg-${canonical}-${n}`, createdHoursAgo: (END - Date.parse(canonical)) / HOUR + n / 60 })
+    }
+    for (const { runtime, call } of f.runtimes) {
+      for (const [end, canonical] of ancient) {
+        const page = await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages', limit: 1 })
+        expect(page.error, `${runtime} ${end}`).toBeNull()
+        expect([page.value.source, page.value.total], `${runtime} ${end}`).toEqual([{ kind: 'live', window: '7d', end: canonical }, 2])
+        expect(cursorOf(page.value.next).src.end).toBe(canonical)
+        const second = await call('chat-lead', DRILL, { cursor: page.value.next })
+        expect(second.error, `${runtime} ${end}`).toBeNull()
+        expect([second.value.source, second.value.total, second.value.next], `${runtime} ${end}`).toEqual([{ kind: 'live', window: '7d', end: canonical }, 2, null])
+        expect([...ids(page.value.entries), ...ids(second.value.entries)].sort()).toEqual([`msg-${canonical}-1`, `msg-${canonical}-2`])
       }
     }
   } finally { f.close() }
