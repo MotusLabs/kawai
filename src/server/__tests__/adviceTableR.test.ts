@@ -218,14 +218,12 @@ describe('Table R through the advice service', () => {
     test('R5: a committed final limit with no recommendation is reconstructed at startup, once', () =>
       run({ name: 'a final limit in force', setup: () => h.limit(), expected: 1 }))
 
-    const CASES: Case[] = [
-      { name: 'two final limits of the provider coalesce into one episode', setup: () => { h.limit(); h.clock.now += MIN; h.limit() }, expected: 1, versions: [1, 2] },
-      { name: 'a retried (non-final) attempt is no incident', setup: () => h.limit({ final: false }), expected: 0 },
-      { name: 'a final limit whose cooldown ended is not reconstructed', setup: () => { h.limit({ resetsAt: new Date(T0 + 2 * MIN).toISOString() }); h.clock.now = T0 + 3 * MIN }, expected: 0 },
-    ]
-    for (const entry of CASES) {
-      test(`${entry.name}: ${entry.expected} recommendation after restart, no duplicate assessment`, () => run(entry))
-    }
+    test('two final limits of the provider coalesce into one episode: 1 recommendation after restart, no duplicate assessment', () =>
+      run({ name: 'coalesce', setup: () => { h.limit(); h.clock.now += MIN; h.limit() }, expected: 1, versions: [1, 2] }))
+    test('a retried (non-final) attempt is no incident: 0 recommendation after restart, no duplicate assessment', () =>
+      run({ name: 'non-final', setup: () => h.limit({ final: false }), expected: 0 }))
+    test('a final limit whose cooldown ended is not reconstructed: 0 recommendation after restart, no duplicate assessment', () =>
+      run({ name: 'expired', setup: () => { h.limit({ resetsAt: new Date(T0 + 2 * MIN).toISOString() }); h.clock.now = T0 + 3 * MIN }, expected: 0 }))
 
     test('a session whose team resolves after startup gets its advice then', () => {
       h = adviceHarness()
@@ -257,32 +255,29 @@ describe('Table R through the advice service', () => {
       h.db.db.prepare(`INSERT INTO plan_stall_alerts (id, team_id, plan_id, execution_id, change, kind, episode_key, detail_json, raised_at)
         VALUES ('alert-1', ?, 'plan-1', 'exec-1', 'chg', 'no-progress', 'ep-3', '{}', ?)`).run(TEAM, new Date(h.clock.now).toISOString())
     }
-    const NEXT: Array<{ name: string; run: () => void }> = [
-      { name: 'another final limit of the still-cooling provider', run: () => h.limit() },
-      { name: 'a restart', run: () => { restart(); h.advice.start() } },
-      { name: 'a quota history write', run: () => h.advice.historyWritten([TEAM]) },
-      { name: 'a retried limit attempt', run: () => h.limit({ final: false }) },
-    ]
-    for (const next of NEXT) {
-      test(`attached on ${next.name}; one alert, no mail`, () => {
-        h = adviceHarness()
-        team()
-        h.records.get('s1')!.taskId = 'task-7'
-        h.limit()
-        h.drain()
-        expect(recommendations(h)[0]!.attentionId).toBeNull()
-        h.clock.now += MIN
-        stall()
-        next.run()
-        h.drain()
-        expect(recommendations(h).map(rec => rec.attentionId)).toEqual([attentionId])
-        expect(h.advice.store.attachedAdvice(TEAM)).toEqual(new Map([[attentionId, recommendations(h)[0]!.id]]))
-        // The frozen assessment is untouched (I3): only the link moved.
-        expect(recommendations(h)[0]!.assessments[0]!.version).toBe(1)
-        expect((h.db.db.prepare('SELECT COUNT(*) AS n FROM plan_stall_alerts').get() as { n: number }).n).toBe(1)
-        expect((h.db.db.prepare('SELECT COUNT(*) AS n FROM team_messages').get() as { n: number }).n).toBe(0)
-      })
+    const attachedAfter = (next: () => void) => {
+      h = adviceHarness()
+      team()
+      h.records.get('s1')!.taskId = 'task-7'
+      h.limit()
+      h.drain()
+      expect(recommendations(h)[0]!.attentionId).toBeNull()
+      h.clock.now += MIN
+      stall()
+      next()
+      h.drain()
+      expect(recommendations(h).map(rec => rec.attentionId)).toEqual([attentionId])
+      expect(h.advice.store.attachedAdvice(TEAM)).toEqual(new Map([[attentionId, recommendations(h)[0]!.id]]))
+      // The frozen assessment is untouched (I3): only the link moved.
+      expect(recommendations(h)[0]!.assessments[0]!.version).toBe(1)
+      expect((h.db.db.prepare('SELECT COUNT(*) AS n FROM plan_stall_alerts').get() as { n: number }).n).toBe(1)
+      expect((h.db.db.prepare('SELECT COUNT(*) AS n FROM team_messages').get() as { n: number }).n).toBe(0)
     }
+
+    test('attached on another final limit of the still-cooling provider; one alert, no mail', () => attachedAfter(() => h.limit()))
+    test('attached on a restart; one alert, no mail', () => attachedAfter(() => { restart(); h.advice.start() }))
+    test('attached on a quota history write; one alert, no mail', () => attachedAfter(() => h.advice.historyWritten([TEAM])))
+    test('attached on a retried limit attempt; one alert, no mail', () => attachedAfter(() => h.limit({ final: false })))
   })
 
   // @covers: process-recommendations › Incident advice reuses existing episodes › Restart during a plan stall
