@@ -144,7 +144,10 @@ costs are unknown, and fewer than ten observed handoffs keep the small-sample
 flag. Assessments are immutable versions: unchanged evidence writes nothing;
 later evidence writes the next version. Context advice attaches to the
 `context-exhausted` attention id, quota advice to a stall alert of the task's
-plan change when one exists; neither sends mail or raises another alert.
+plan change when one exists; neither sends mail or raises another alert. That
+attention item gains a **View advice** link that opens the recommendation in
+the Metrics tab; it is the same item, never a second alert. Advice is never
+"demonstrated" here: that needs an outcome baseline this change does not build.
 Evaluator failures record a gap in `process_recommendation_gaps`; startup
 re-enqueues every unresolved or unassessed recommendation. The Metrics view
 lists the advice from the snapshot (no Prometheus); agents read it through
