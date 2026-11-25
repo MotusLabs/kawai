@@ -121,13 +121,22 @@ before code (state machine with recovery): task 0.1.
 | S13 | worker (two teams, one key) | standalone | no | tick | one request; both teams' histories get it |
 | S14 | worker | standalone | * | config change of credential | old key unsubscribed, new key polled once |
 
-Completeness: reasons × reader × in-flight × event; combinations not listed
-are unreachable: `none` with any event other than subscribe (no timer
-exists); in-flight with subscribe (subscribe on an armed key only increments
-the count — S13); `agent-only` with tick (no timer is armed for it, S9). One
-exception is reachable and covered: `none` with a standalone reader and a
-request in flight (the B3 drain left by S7). Its timeout, settlement or
-shutdown is governed by B3, B4 and S11 (decision-760c0f6f (a)).
+Completeness (decision-ed5e5e77): reasons × reader × in-flight × event is
+4 × 2 × 2 × 11 = 176 combinations, every one in exactly one class of
+`quotaReaderTableSCompleteness.test.ts`: a row above, a bound rule (B1–B6,
+the B3 drain, P1) through a stated equivalence, or unreachable with its
+reason; each reachable class names its tests. Axes are pre-event, except
+that for the two settlement events the in-flight axis is the settled state
+(as S5/S6 record it); a settlement with another request current is a late
+answer to an abandoned attempt and is dropped (S4, P1). `unsubscribe` and
+`worker removed` both remove the key's worker reason; the pre-event reasons
+tell S7 from S8. A repeated subscribe on an armed key adds the team (S13);
+a subscribe during the B3 drain joins its request. B3 drains and B4 shutdown
+hold with no new request; B6 serves a worker only from a same-key session.
+Agent-only keys keep S9/S10 and record lifecycle changes. Unreachable: an
+agent-only request in flight, a tick or settlement of one, a timeout with
+nothing in flight, removing an absent worker reason, a restart with a
+request in flight (100 reachable, 76 unreachable).
 
 **Table F — headroom evidence.** Output: may the value establish routed
 headroom?

@@ -76,3 +76,32 @@ The Lead recorded Tables S and F as binding in decision-760c0f6f (task note
   - The in-memory hash falls under I2/P4.
   - It is persisted only as an HMAC under a per-process salt, the
     `account_scope` column.
+
+## Completeness ruling (decision-ed5e5e77, note-db07f142)
+
+Option A. The domain keeps all 176 combinations. Each one falls in exactly
+one class of `src/server/__tests__/quotaReaderTableSCompleteness.test.ts`:
+a literal row S1–S14, a bound rule applied through a stated equivalence, or
+an unreachable claim with its reason. Each reachable class names the exact
+tests that exercise it. The test fails on a gap, an ambiguous match, a
+literal row outside its own class, or a named test that does not exist.
+
+- **Pre-event versus settled.** The axes are pre-event. The exception is the
+  two settlement events: their in-flight axis is the settled state, as rows
+  S5 and S6 record it. "Yes" there can only be a late answer to an attempt
+  abandoned at the bound while a new current request runs. That answer is
+  dropped (S4, P1).
+- **Repeated subscriptions.** A repeated subscription on an armed key adds
+  only the team (B1, S13), and an in-flight settlement reaches the new team.
+  A subscription during the B3 drain joins the drained request.
+- **Drain and shutdown.** B3 drains and B4 shutdown apply even when no new
+  request starts.
+- **Credential change.** B5 keeps an old-key settlement under its own
+  identity and out of the live report.
+- **Session cadence.** B6 serves a worker key only from a session cadence
+  whose target resolves to the same effective key.
+- **Agent-only keys.** S9 and S10 semantics hold, and lifecycle changes
+  still record: a second team, removal and re-add, a restart and a
+  configuration change each record one `unsupported` observation.
+- **Count.** 100 combinations are reachable and 76 unreachable. S1–S14
+  outputs and the bound rules are unchanged.
