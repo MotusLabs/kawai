@@ -132,6 +132,8 @@ test('a Codex chat serves kawai-team send_message on its thread, refuses a forei
   expect(namespace.tools.map((tool: { name: string }) => tool.name)).toContain('send_message')
   // The manager's team services reach Codex too (dispatch-worker-choice D6).
   expect(namespace.tools.map((tool: { name: string }) => tool.name)).toContain('team_capacity')
+  // Incident advice reads register in Codex as in Claude (process-quota-history-and-incident-advice 4.5).
+  expect(namespace.tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['process_recommendations_list', 'process_recommendation_get']))
 
   expect((await manager.send(id, 'go')).ok).toBe(true)
   await until(() => replyTo(wire, 901) !== undefined)
