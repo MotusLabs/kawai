@@ -173,7 +173,7 @@ test('an accepted answer echoing the credential reaches the live usage trace red
   expect(composition.calls.length).toBeGreaterThanOrEqual(2)
   const trace = JSON.stringify([composition.usage, composition.manager.providerUsageOf('zai')])
   expect(trace).not.toContain(QUOTA_TOKEN)
-  expect(trace).toContain('[redacted]')
+  expect(trace).toContain('zai:unknown#1')
   expect(historyRows(composition.db).length).toBeGreaterThanOrEqual(2)
   expect(JSON.stringify(historyRows(composition.db))).not.toContain(QUOTA_TOKEN)
 })

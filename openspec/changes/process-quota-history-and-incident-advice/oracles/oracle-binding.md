@@ -40,7 +40,14 @@ changing any output. These resolutions bind the executable tables.
   each joining session. A settlement adds later recipients only while they
   still hold the key. No live path (worker settlement, spawn pull, session
   tick) publishes a key the provider no longer holds. Every pull has the
-  target's own credentials redacted before any caller sees it.
+  target's own credentials redacted before any caller sees it
+  (decision-1e654933). This covers every nonempty token and balance key,
+  matched case-insensitively:
+  - Approved kinds keep their key, and keep their label unless it carries a
+    credential; then they take the table label.
+  - Any other credential-bearing window becomes the opaque
+    `<prefix>unknown#n`, numbered past every key the report holds.
+  - Credential-bearing free text becomes `[redacted]`.
 - **B6 (S8, S10).** The session reason keeps today's fixed per-provider
   cadence and spawn pull (A2: the session tests stay unchanged). A worker key
   whose provider's session cadence resolves to the same key is served by

@@ -31,6 +31,15 @@ export interface DurableWindow {
   periodMs?: number
 }
 
+/**
+ * The table label of a key that is exactly an approved kind (`kind` or
+ * `kind#n`, never a scoped `model_scoped:<scope>`), else undefined. The live
+ * reader boundary keeps such keys as Kawai's own vocabulary (redactSecrets.ts).
+ */
+export function approvedWindowLabel(key: string): string | undefined {
+  return APPROVED_KINDS.get(key.replace(/#\d+$/, ''))
+}
+
 /** The approved kind a wire key names (`kind`, `kind#n`, `kind:<scope>` for model-scoped rows), or null. */
 function approvedKind(key: string): string | null {
   const base = key.replace(/#\d+$/, '')
