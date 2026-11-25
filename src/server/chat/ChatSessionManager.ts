@@ -100,7 +100,8 @@ import { workerChoiceState } from '../team/routing/workerSelector'
 import { crossModelReason } from '../team/routing/workerEligibility'
 import { ManagerQuota } from './quota/managerQuota'
 import type { QuotaPull, WorkerSubscription } from './quota/QuotaReaderService'
-import type { QuotaTarget } from './quota/quotaTarget'
+import { accountKeyOf, type QuotaTarget } from './quota/quotaTarget'
+import { teamGroupsRoots } from './quota/teamRoots'
 import type { TeamIdentity } from '../team/teamIdentity'
 import { fetchOpenRouterUsage, isOpenRouterBaseUrl, type OpenRouterUsagePull } from './openRouterUsage'
 import { ambientProviderLabel, ambientProviderOf, catalogCtx } from '../team/cooldowns'
@@ -462,6 +463,8 @@ export class ChatSessionManager {
    * skipped for the store lifetime. In memory only — a restart re-probes.
    */
   private readonly providerUsageProfiles = new Set<string>()
+  /** Per provider, the account key a worker pull proved quota-serving (it routes only a session on that key). */
+  private readonly workerRoutedKeys = new Map<string, string>()
   /**
    * The quota reader service and its history (process-quota-history-and-
    * incident-advice D1): session cadences, configured-worker readers, and
@@ -3269,11 +3272,14 @@ export class ChatSessionManager {
    */
   private async claimProviderUsagePull(record: ChatSessionRecord): Promise<boolean> {
     const providerId = this.providerIdOf(record.sessionId)
-    if (this.providerUsageProfiles.has(providerId)) {
+    if (this.providerUsageProfiles.has(providerId) || this.workerRoutedFor(record, providerId)) {
       this.quota.service.armSession(providerId)
       return false
     }
-    if (!this.usageLimits.claimPull(providerId)) return false
+    // A held report a worker pulled under another account says nothing about
+    // this session's: it pulls its own instead of reading the claim as spent (B5).
+    const foreign = this.workerRoutedKeys.has(providerId)
+    if (!foreign && !this.usageLimits.claimPull(providerId)) return false
     const target = this.providerUsageTarget(record)
     // No provider base URL: the endpoint is never contacted, and the SDK
     // pull answers as before.
@@ -3403,21 +3409,41 @@ export class ChatSessionManager {
         ? this.fetchProviderUsage({ ...target, baseUrl: target.baseUrl })
         : Promise.resolve({ ok: false, outcome: 'not-provider', reason: 'no base URL' }),
       sessionTarget: providerId => this.sessionQuotaTarget(providerId),
-      sessionTeams: providerId => [...new Set(this.liveSessionsOf(providerId)
-        .flatMap(record => this.teams.teamOf(record.sessionId)?.teamId ?? []))],
+      sessionTeams: target => this.sessionTeamsOn(target),
       onSessionPull: (providerId, target, pull) => this.publishSessionPull(providerId, target, pull),
-      publishWorkerReport: (providerId, report) => {
+      publishWorkerReport: (target, report) => {
         if (this.isShutDown) return
-        // A worker pull proves the provider quota-serving: a later spawn arms
-        // its session cadence instead of claiming the host-login SDK pull.
-        this.providerUsageProfiles.add(providerId)
-        this.usageLimits.record(providerId, report)
+        // A worker pull proves the provider quota-serving for its account: a
+        // later spawn on the same key arms its session cadence instead of
+        // claiming the host-login SDK pull; a session on another key pulls its own.
+        this.workerRoutedKeys.set(target.providerId, accountKeyOf(target))
+        this.usageLimits.record(target.providerId, report)
       },
       configuredWorkers: () => this.configuredQuotaWorkers(),
       onHistory: teams => this.advice?.historyWritten(teams),
     })
     quota.start()
     return quota
+  }
+
+  /**
+   * Teams of the provider's live sessions. The reader asks only for a key a
+   * live session holds — its own request, or a cadence whose session target
+   * resolves to that key (B6) — and a provider has one effective key at a
+   * time (credentials and base URLs are user-level, values from the server
+   * environment), so no per-session resolution is needed (or paid per tick).
+   */
+  private sessionTeamsOn(target: QuotaTarget): string[] {
+    return [...new Set(this.liveSessionsOf(target.providerId)
+      .flatMap(record => this.teams.teamOf(record.sessionId)?.teamId ?? []))]
+  }
+
+  /** Whether a worker pull proved the record's own account quota-serving. */
+  private workerRoutedFor(record: ChatSessionRecord, providerId: string): boolean {
+    const key = this.workerRoutedKeys.get(providerId)
+    if (key === undefined) return false
+    const own = this.providerUsageTarget(record)
+    return own !== null && accountKeyOf({ providerId, ...own }) === key
   }
 
   /**
@@ -3490,11 +3516,9 @@ export class ChatSessionManager {
     }
     for (const id of this.records.keys()) add(this.teams.teamOf(id))
     const known = this.options.db.db.prepare('SELECT DISTINCT team_id FROM team_session_directory').all() as Array<{ team_id: string }>
-    for (const { team_id: teamId } of known) {
-      // A repository team resolves its groups root from its id; a plain
-      // directory's id is the directory itself.
-      add(this.teams.identityFor(teamId) ?? (existsSync(teamId) ? { teamId, groupsRoot: teamId } : undefined))
-    }
+    // Every groups root of a known team, independent of surviving sessions:
+    // a bare repository's registered worktrees each carry group files.
+    for (const { team_id: teamId } of known) for (const groupsRoot of teamGroupsRoots(teamId)) add({ teamId, groupsRoot })
     const desired: WorkerSubscription[] = []
     for (const team of teams.values()) {
       const profiles = new Set<string>()

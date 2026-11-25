@@ -66,8 +66,12 @@ export interface QuotaReaderOptions {
   random?: () => number
   /** A live session's target for the provider; undefined when none is live, null when it has no base URL. */
   sessionTarget: (providerId: string) => QuotaTarget | null | undefined
-  /** Teams of the provider's live sessions. */
-  sessionTeams: (providerId: string) => string[]
+  /**
+   * Teams of the provider's live sessions. Asked only for a key a live session
+   * holds: a session's own request, or the session cadence when its target
+   * resolves to the key (`sessionServes`).
+   */
+  sessionTeams: (target: QuotaTarget) => string[]
   /** Publish a session-cadence pull (today's refresh semantics). */
   onSessionPull: (providerId: string, target: QuotaTarget, pull: QuotaPull) => void
   /** Every settled request and every `unsupported` worker configuration, before any caller sees it. */
@@ -84,6 +88,13 @@ interface WorkerEntry {
   disabled: boolean
 }
 
+/** The reason a request started under, widened when a session joins it. */
+interface Started {
+  reason: QuotaReason
+  teams: string[]
+  sessionJoined: boolean
+}
+
 export interface WorkerSubscription {
   teamId: string
   target: QuotaTarget
@@ -92,7 +103,7 @@ export interface WorkerSubscription {
 export class QuotaReaderService {
   private readonly workers = new Map<string, WorkerEntry>()
   private readonly sessions = new Map<string, ReturnType<typeof setInterval>>()
-  private readonly inFlight = new Map<string, { token: number; promise: Promise<QuotaPull | null> }>()
+  private readonly inFlight = new Map<string, { token: number; promise: Promise<QuotaPull | null>; started: Started }>()
   /** `teamId\0key` of each unsupported worker configuration already reported. */
   private readonly unsupported = new Set<string>()
   private sequence = 0
@@ -114,6 +125,20 @@ export class QuotaReaderService {
     return [...this.workers.keys()]
   }
 
+  /**
+   * Whether the target is the provider's current effective account: the key
+   * its live session cadence resolves to, or — with no live session — its
+   * only worker key. A settlement under a retired or a sibling key goes to
+   * history under its own identity and never replaces the live report (B5).
+   */
+  isCurrentAccount(target: QuotaTarget): boolean {
+    const key = accountKeyOf(target)
+    const session = this.options.sessionTarget(target.providerId)
+    if (session !== undefined) return session !== null && accountKeyOf(session) === key
+    const keys = [...this.workers.values()].filter(entry => entry.target.providerId === target.providerId).map(entry => entry.key)
+    return keys.length === 1 && keys[0] === key
+  }
+
   /** Whether the worker entry for this target has a timer armed. */
   workerArmed(target: QuotaTarget): boolean {
     return this.workers.get(accountKeyOf(target))?.timer != null
@@ -127,12 +152,17 @@ export class QuotaReaderService {
     if (this.stopped) return Promise.resolve(null)
     const key = accountKeyOf(target)
     const running = this.inFlight.get(key)
-    if (running) return running.promise
+    if (running) {
+      // A session joining a worker's request (a spawn pull, a session tick)
+      // shares its settlement: the session's teams get the observation too.
+      if (origin === 'session') running.started.sessionJoined = true
+      return running.promise
+    }
     const token = ++this.sequence
     const startedAt = this.now()
     // The reason is the one the request started under (B3): a worker removed
     // while it runs still has its settlement recorded as a worker's.
-    const started = this.reasonOf(key, target.providerId, origin === 'session')
+    const started: Started = { ...this.reasonOf(key, target, origin === 'session'), sessionJoined: false }
     const read = this.options.read(target).catch(
       (): QuotaPull => ({ ok: false, outcome: 'unreachable', reason: 'quota read failed' })
     )
@@ -152,24 +182,22 @@ export class QuotaReaderService {
       this.settle(key, target, pull, startedAt, started)
       return pull
     })
-    this.inFlight.set(key, { token, promise })
+    this.inFlight.set(key, { token, promise, started })
     return promise
   }
 
   /** The reasons holding a key; `sessionOrigin` marks a request a session made (spawn pull, session tick). */
-  private reasonOf(key: string, providerId: string, sessionOrigin = false): { reason: QuotaReason; teams: string[] } {
+  private reasonOf(key: string, target: QuotaTarget, sessionOrigin = false): { reason: QuotaReason; teams: string[] } {
     const worker = this.workers.get(key)
-    const session = sessionOrigin || this.sessionServes(key, providerId)
+    const session = sessionOrigin || this.sessionServes(key, target.providerId)
     const teams = new Set(worker?.teams ?? [])
-    if (session) for (const team of this.options.sessionTeams(providerId)) teams.add(team)
+    // Session teams only when a session holds this key (its own request, or B6).
+    if (session) for (const team of this.options.sessionTeams(target)) teams.add(team)
     const reason: QuotaReason = worker && session ? 'both' : worker ? 'worker' : 'session'
     return { reason, teams: [...teams] }
   }
 
-  private settle(
-    key: string, target: QuotaTarget, pull: QuotaPull | null, startedAt: number,
-    started: { reason: QuotaReason; teams: string[] }
-  ): void {
+  private settle(key: string, target: QuotaTarget, pull: QuotaPull | null, startedAt: number, started: Started): void {
     const outcome = quotaOutcomeOf(pull)
     const worker = this.workers.get(key)
     if (worker) {
@@ -177,8 +205,10 @@ export class QuotaReaderService {
       else if (outcome === 'unsupported') worker.disabled = true
       else worker.failures = 0
     }
-    const teams = new Set([...started.teams, ...this.reasonOf(key, target.providerId).teams])
-    this.options.onSettled({ target, reason: started.reason, teams: [...teams], outcome, pull, startedAt, settledAt: this.now() })
+    const now = this.reasonOf(key, target, started.sessionJoined)
+    const teams = new Set([...started.teams, ...now.teams])
+    const reason: QuotaReason = started.sessionJoined && started.reason === 'worker' ? 'both' : started.reason
+    this.options.onSettled({ target, reason, teams: [...teams], outcome, pull, startedAt, settledAt: this.now() })
   }
 
   // ------------------------------------------------------------------ sessions

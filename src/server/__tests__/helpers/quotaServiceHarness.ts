@@ -141,9 +141,13 @@ export function serviceHarness(shared?: SessionDatabase): ServiceHarness {
         ? fetchZaiUsage(target.baseUrl, target.token, fetchImpl)
         : Promise.resolve({ ok: false, outcome: 'not-provider', reason: 'no base URL' }),
       sessionTarget: providerId => harness.live.has(providerId) ? harness.live.get(providerId) : undefined,
-      sessionTeams: providerId => harness.live.has(providerId) ? ['team-live'] : [],
+      // The live session's team, when its account is the target's (same key).
+      sessionTeams: (target) => {
+        const live = harness.live.get(target.providerId)
+        return live && accountKeyOf(live) === accountKeyOf(target) ? ['team-live'] : []
+      },
       onSessionPull: (providerId, _target, pull) => { harness.sessionPulls.push({ providerId, pull }) },
-      publishWorkerReport: (providerId, report) => harness.usage.record(providerId, report),
+      publishWorkerReport: (target, report) => harness.usage.record(target.providerId, report),
       configuredWorkers: () => harness.desired,
       random: () => harness.random,
     })

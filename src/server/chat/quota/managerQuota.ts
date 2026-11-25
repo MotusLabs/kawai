@@ -4,7 +4,8 @@
 // callbacks — its session targets and publish paths stay its own, so session
 // behavior is unchanged — and this class turns every settlement into history
 // rows for the teams it serves. A worker pull that returns data is also
-// published to the live usage store, the way a session pull is. Worker
+// published to the live usage store, the way a session pull is, when it is
+// the provider's current effective account (a retired key's is not). Worker
 // subscriptions are recomputed from the teams' group files on every team
 // resolution and once a minute, so an edited group file or provider catalog
 // reaches the reader without a restart (S7, S14). History writes are
@@ -26,10 +27,11 @@ export interface ManagerQuotaDeps {
   cadenceMs: number
   read: (target: QuotaTarget) => Promise<QuotaPull>
   sessionTarget: (providerId: string) => QuotaTarget | null | undefined
-  sessionTeams: (providerId: string) => string[]
+  /** Teams of the provider's live sessions (asked only for a key a live session holds). */
+  sessionTeams: (target: QuotaTarget) => string[]
   onSessionPull: (providerId: string, target: QuotaTarget, pull: QuotaPull) => void
-  /** A worker-reason pull that returned a quota report (the provider is quota-serving). */
-  publishWorkerReport: (providerId: string, report: ChatUsageReport) => void
+  /** A worker-reason pull of the provider's current effective account that returned a quota report. */
+  publishWorkerReport: (target: QuotaTarget, report: ChatUsageReport) => void
   /** Every configured team worker's effective target, as group files list them now. */
   configuredWorkers: () => WorkerSubscription[]
   /** History rows were written for these teams (advice re-evaluation trigger). */
@@ -98,8 +100,11 @@ export class ManagerQuota {
 
   private settled(settlement: QuotaSettlement): void {
     const { target, reason, teams, outcome, pull } = settlement
-    if (reason !== 'session' && pull?.ok && !('remainingUsd' in pull) && pull.report.windows.length > 0) {
-      this.deps.publishWorkerReport(target.providerId, pull.report)
+    // Live publication only for the provider's current account (B5): a late
+    // settlement of a retired key, or a sibling key's, is history only.
+    if (reason !== 'session' && pull?.ok && !('remainingUsd' in pull) && pull.report.windows.length > 0 &&
+      this.service.isCurrentAccount(target)) {
+      this.deps.publishWorkerReport(target, pull.report)
     }
     if (teams.length === 0) return
     this.write(teams, target.providerId, () => this.history.record({

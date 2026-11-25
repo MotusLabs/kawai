@@ -50,6 +50,8 @@ export interface QuotaComposition {
   answers: Answer[]
   setFallback(answer: () => Answer): void
   writeGroup(frontmatter: string, name?: string): void
+  /** A server restart: the manager shuts down and a new one starts over the same database, fetch and environment. */
+  restart(): Promise<void>
   close(): Promise<void>
 }
 
@@ -87,7 +89,7 @@ function writeCatalog(home: string, tokenEnv = 'ZQ_TOKEN'): void {
  * provider environment (token values). Every request is recorded with its
  * Authorization header and answered from `answers`, then `fallback`.
  */
-export async function quotaComposition(options: { env?: Record<string, string> } = {}): Promise<QuotaComposition> {
+export async function quotaComposition(options: { env?: Record<string, string>; sdkPull?: boolean } = {}): Promise<QuotaComposition> {
   jest.useFakeTimers()
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-quota-')))
   const home = path.join(root, 'home')
@@ -107,28 +109,36 @@ export async function quotaComposition(options: { env?: Record<string, string> }
   const env = options.env ?? { ZQ_TOKEN: QUOTA_TOKEN }
   const handles: FakeHandle[] = []
   const usage: QuotaComposition['usage'] = []
-  const manager = await managedManager({
+  const build = () => managedManager({
     isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {}, authCheck: () => true,
     onUsage: (providerId, report) => usage.push({ providerId, report }),
-    queryFactory: fakeQueryFactory(handles),
+    // `sdkPull`: started agents answer the SDK usage pull, so a spawn claims the gap-fill pull.
+    queryFactory: options.sdkPull ? fakeQueryFactory(handles, () => Promise.resolve({ rate_limits_available: false })) : fakeQueryFactory(handles),
     getProviderEnv: () => env,
     profileCatalogHome: home,
     providerUsageFetch,
     providerUsageRefreshMs: CADENCE_MS,
   })
-  return {
-    root, home, project, db, manager, handles, calls, usage, answers,
+  const composition: QuotaComposition = {
+    root, home, project, db, manager: await build(), handles, calls, usage, answers,
     setFallback: answer => { fallback = answer },
     writeGroup: (frontmatter, name = 'devs') =>
       fs.writeFileSync(path.join(project, '.kawai', 'groups', `${name}.md`), `---\n${frontmatter}\n---\nBuild.`),
+    restart: async () => {
+      composition.manager.shutdown()
+      await composition.manager.retiredSettled()
+      composition.manager = await build()
+      await settle()
+    },
     close: async () => {
-      manager.shutdown()
-      await manager.retiredSettled()
+      composition.manager.shutdown()
+      await composition.manager.retiredSettled()
       jest.useRealTimers()
       db.close()
       fs.rmSync(root, { recursive: true, force: true })
     },
   }
+  return composition
 }
 
 /** Let real I/O (team resolution) and microtasks settle, advancing zero-delay timers between turns. */
@@ -152,6 +162,30 @@ export async function advance(ms: number): Promise<void> {
 /** Every quota history row, oldest first. */
 export function historyRows(db: SessionDatabase): Array<Record<string, unknown>> {
   return db.db.prepare('SELECT * FROM process_quota_observations ORDER BY observed_at, recorded_at, id').all() as Array<Record<string, unknown>>
+}
+
+/**
+ * Another project (its own team) under the composition root with a group
+ * file; `baseUrl` re-points profile `glm` there (credentials are user-level
+ * only), so its sessions use another account key of the same provider.
+ */
+export function extraProject(composition: QuotaComposition, name: string, frontmatter: string, baseUrl?: string): string {
+  const project = path.join(composition.root, name)
+  fs.mkdirSync(path.join(project, '.kawai', 'groups'), { recursive: true })
+  fs.writeFileSync(path.join(project, '.kawai', 'groups', 'devs.md'), `---\n${frontmatter}\n---\nBuild.`)
+  if (baseUrl) fs.writeFileSync(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({ glm: { env: { ANTHROPIC_BASE_URL: baseUrl } } }))
+  return project
+}
+
+/** Create a session in `projectPath` (the composition's project by default), on `claudeProfileId` if given, and resolve its team; returns its id. */
+export async function sessionIn(
+  composition: QuotaComposition, projectPath = composition.project, claudeProfileId?: string, groupId = 'devs'
+): Promise<string> {
+  const created = await composition.manager.createAvailableSession({ projectPath, groupId, ...(claudeProfileId ? { claudeProfileId } : {}) })
+  if (!created.ok) throw new Error(created.error)
+  await composition.manager.teams.resolvedTeamOf(created.session.id)
+  await settle()
+  return created.session.id
 }
 
 /** Create a session (never started) so the project's team is known; returns its id. */

@@ -246,7 +246,7 @@ const ROWS: Row[] = [
       const usage = new UsageLimitStore()
       const reborn = new ManagerQuota({
         db: h.db.db, cadenceMs: CADENCE_MS, read: async () => { restartReads += 1; return { ok: false, outcome: 'unreachable', reason: 'unreachable' } },
-        sessionTarget: () => undefined, sessionTeams: () => [], onSessionPull: () => {}, publishWorkerReport: (p, r) => usage.record(p, r),
+        sessionTarget: () => undefined, sessionTeams: () => [], onSessionPull: () => {}, publishWorkerReport: (t, r) => usage.record(t.providerId, r),
         configuredWorkers: () => [sub('team-a', ZAI)],
       })
       expect(usage.get('zai')).toBeNull()
