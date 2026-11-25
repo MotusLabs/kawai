@@ -241,6 +241,7 @@ describe('registered secret names stay withheld (provider-credentials delta scen
   })
 
   // @covers: provider-credentials › Registered secret names stay withheld › A disabled entry's variables stay withheld
+  // @covers: provider-credentials › Registered secret names stay withheld › A dropped entry's variables stay withheld
   test('an entry outside the resolved catalog in any state keeps its names withheld', () => {
     // Pre-§3 form: the "dropped" provider parses (its names register) but the
     // trusted invariants drop it, so no launch may inherit DROP_KEY. The
