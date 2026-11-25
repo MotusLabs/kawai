@@ -13,7 +13,6 @@ import {
 } from './helpers/quotaComposition'
 
 let composition: QuotaComposition | undefined
-const OTHER_ORIGIN = 'https://zai-b.test/api/anthropic'
 
 afterEach(async () => {
   await composition?.close()

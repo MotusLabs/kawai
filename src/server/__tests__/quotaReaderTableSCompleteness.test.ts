@@ -49,7 +49,6 @@ interface Class {
 
 const TABLE_S = 'quotaReaderTableS.test.ts'
 const CLASSES_FILE = 'quotaReaderTableSClasses.test.ts'
-const COMPOSITION = 'quotaReaderComposition.test.ts'
 const ACCOUNTS = 'quotaReaderAccounts.test.ts'
 const row = (title: string): Evidence => ({ file: TABLE_S, title })
 const cls = (title: string): Evidence => ({ file: CLASSES_FILE, title })

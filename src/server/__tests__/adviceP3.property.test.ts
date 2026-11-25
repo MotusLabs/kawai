@@ -10,7 +10,7 @@ import { afterEach, expect, test } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { evaluateIncident } from '../metrics/recommendations/evaluator'
 import { propertyCases } from './helpers/propertyCases'
-import { adviceHarness, MIN, T0, TEAM, type AdviceHarness } from './helpers/adviceHarness'
+import { adviceHarness, MIN, TEAM, type AdviceHarness } from './helpers/adviceHarness'
 
 const SEED = 0xA55E
 const CASES = 200

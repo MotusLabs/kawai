@@ -297,7 +297,7 @@ export class QuotaReaderService {
       entry.teams.add(teamId)
       next.set(key, entry)
     }
-    for (const id of [...this.unsupported]) if (!unsupported.has(id)) this.unsupported.delete(id)
+    for (const id of this.unsupported) if (!unsupported.has(id)) this.unsupported.delete(id)
     for (const [key, entry] of this.workers) {
       if (next.has(key)) continue
       if (entry.timer) clearTimeout(entry.timer)
