@@ -9,6 +9,14 @@
 // a file that appears meanwhile is kept and reported skipped. Nothing is
 // staged or committed.
 //
+// The preview (D3) is a read: beside the starter groups and the target it
+// names, per starter, the user-level group file the write would push out of
+// effect for this project (starter-setup-with-user-level-groups). That match
+// is metadata only — `<id>.md` under the group catalog's user-level
+// directory is a file — so a malformed file counts too: the project file
+// replaces it the same way. It never opens the file and never counts toward
+// the offer, which stays a project-files-only answer (D2).
+//
 // The whole run writes through one pinned directory chain (integration
 // R4/R5): `groupsRoot`, `.kawai`, and `groups` are opened once with
 // O_NOFOLLOW|O_DIRECTORY (created through the pinned parent when missing),
@@ -25,6 +33,7 @@ import leadTemplate from '../../../config/groups/lead.md' with { type: 'text' }
 import devsTemplate from '../../../config/groups/devs.md' with { type: 'text' }
 import reviewersTemplate from '../../../config/groups/reviewers.md' with { type: 'text' }
 import { parseGroupFile } from './groupFile'
+import { groupCatalogDirs } from './groupCatalog'
 import { AT_FDCWD, createExclusive, EEXIST, ELOOP, ENOENT, ENOTDIR, isSymlinkAt, linkAt, listDir, mkdirAt, openDirAt, PinnedFsError, unlinkAt } from './pinnedFs'
 import type { TeamSetupGroup, TeamSetupPreview, TeamSetupResult } from '../../shared/teamSetup'
 
@@ -83,16 +92,54 @@ export function starterGroups(): TeamSetupGroup[] {
 }
 
 /**
- * The preview (D3): the groups, the target directory, and one warning per
- * starter worker the team's resolved catalog does not define.
+ * The starter ids whose `<id>.md` is a file under the user-level groups
+ * directory, in starter order. Only the file's metadata is looked at: a
+ * malformed file is a match, while a directory, a missing path, or unreadable
+ * metadata is none — the lookup never throws.
  */
-export function setupPreview(groupsRoot: string, catalogProfiles: ReadonlySet<string>): TeamSetupPreview {
+function replacedUserGroups(userDir: string): string[] {
+  return STARTER_TEMPLATES.map(({ id }) => id).filter(id => {
+    try {
+      return fs.statSync(path.join(userDir, `${id}.md`)).isFile()
+    } catch {
+      return false
+    }
+  })
+}
+
+/**
+ * The user-level groups directory of the catalog that reads this team (the
+ * injected home, else the ambient one). Null when no home resolves: nothing
+ * can be named then, which must not fail the preview.
+ */
+function userGroupsDir(groupsRoot: string, homeDir: string | undefined): string | null {
+  try {
+    const [userDir] = groupCatalogDirs({ groupsRoot, ...(homeDir !== undefined ? { homeDir } : {}) })
+    return userDir ?? null
+  } catch {
+    return null
+  }
+}
+
+/** One starter group that replaces a user-level group file: the file, and the project file that replaces it. */
+const replacementWarning = (userDir: string, id: string) => `${id}.md replaces ${path.join(userDir, `${id}.md`)} for this project.`
+
+/**
+ * The preview (D3): the groups, the target directory, one warning per
+ * starter worker the team's resolved catalog does not define, then one per
+ * starter group that replaces a user-level group file.
+ */
+export function setupPreview(groupsRoot: string, catalogProfiles: ReadonlySet<string>, homeDir?: string): TeamSetupPreview {
   const groups = starterGroups()
   const missing = [...new Set(groups.flatMap(group => group.workers.map(worker => worker.profileId)))]
     .filter(profileId => !catalogProfiles.has(profileId))
+  const userDir = userGroupsDir(groupsRoot, homeDir)
   return {
     available: setupAvailable(groupsRoot), targetDir: groupsDirOf(groupsRoot), groups,
-    warnings: missing.map(profileId => `Profile ${profileId} is not defined in this team's catalog; its slots will not staff until it is.`),
+    warnings: [
+      ...missing.map(profileId => `Profile ${profileId} is not defined in this team's catalog; its slots will not staff until it is.`),
+      ...(userDir === null ? [] : replacedUserGroups(userDir).map(id => replacementWarning(userDir, id))),
+    ],
   }
 }
 
