@@ -401,6 +401,14 @@ describe('the preview through a real manager home', () => {
     fs.mkdirSync(path.join(base, '.kawai', 'groups'), { recursive: true })
     fs.writeFileSync(path.join(base, '.kawai', 'groups', name), content)
   }
+  // The fixture directory is the one repository the team views may address.
+  const startManager = (catalogHome: string) => {
+    real = new ChatSessionManager({
+      db: realDb, registry: new SessionRegistry(), onEvent: () => {}, profileCatalogHome: catalogHome,
+      availabilityProbe: async () => {}, workspaceRepositories: () => [project],
+    })
+    dispatch = new ChatConnections(real)
+  }
   const previewOf = async () => {
     messages = []
     await dispatch.handle(connection, { type: 'team-workspace-setup-preview', teamPath: project })
@@ -416,12 +424,7 @@ describe('the preview through a real manager home', () => {
     for (const base of [home, ambient, project]) fs.mkdirSync(base)
     process.env.HOME = ambient
     realDb = freshTestDatabase(path.join(dir, 'real.sqlite'))
-    // The fixture directory is the one repository the team views may address.
-    real = new ChatSessionManager({
-      db: realDb, registry: new SessionRegistry(), onEvent: () => {}, profileCatalogHome: home,
-      availabilityProbe: async () => {}, workspaceRepositories: () => [project],
-    })
-    dispatch = new ChatConnections(real)
+    startManager(home)
   })
   afterEach(() => {
     real.shutdown()
@@ -448,6 +451,13 @@ describe('the preview through a real manager home', () => {
     userFile(home, 'lead.md', VALID_GROUP)
     userFile(ambient, 'devs.md', VALID_GROUP)
     expect((await previewOf())?.warnings).toEqual(replacementWarnings(home, 'lead'))
+  })
+
+  test('an empty manager home is no override: the ambient HOME is named', async () => {
+    real.shutdown()
+    startManager('')
+    userFile(ambient, 'lead.md', VALID_GROUP)
+    expect((await previewOf())?.warnings).toEqual(replacementWarnings(ambient, 'lead'))
   })
 })
 

@@ -133,6 +133,8 @@ test('the preview warns which starter groups replace user-level group files, and
   expect(one(renderer, 'team-setup-confirm').props.disabled).toBe(false)
   act(() => one(renderer, 'team-setup-confirm').props.onClick())
   expect(sent.at(-1)).toEqual({ type: 'team-workspace-setup-run', teamPath: '/repo' })
+  // A renderer left mounted re-renders at every later reset of the stores, outside act.
+  act(() => renderer.unmount())
 })
 
 // @covers: team-setup › The setup previews the starter team before writing › Cancelling writes nothing

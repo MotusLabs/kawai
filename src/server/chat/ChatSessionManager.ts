@@ -1527,7 +1527,9 @@ export class ChatSessionManager {
    * group catalog reads).
    */
   groupCatalogHome(): string | undefined {
-    return this.options.profileCatalogHome
+    // An empty override is none, as everywhere else the option is read: the
+    // ambient home, never a directory resolved against the working directory.
+    return this.options.profileCatalogHome || undefined
   }
 
   groupProfileCounts(teamId: string, groupId: string): Record<string, number> {
