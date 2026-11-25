@@ -35,6 +35,8 @@ const PREVIEW: TeamSetupPreview = {
   warnings: ['Profile codex-sol is not defined in this team\'s catalog; its slots will not staff until it is.'],
 }
 
+/** Every renderer the running test mounted; afterEach unmounts them, inside act. */
+const mounted: TestRenderer.ReactTestRenderer[] = []
 let sent: ClientMessage[]
 beforeEach(() => {
   sent = []
@@ -42,6 +44,8 @@ beforeEach(() => {
   useTeamSetupStore.setState({ setups: {} })
 })
 afterEach(() => {
+  // A renderer left mounted re-renders at every later reset of the stores, outside act.
+  act(() => { for (const renderer of mounted.splice(0)) renderer.unmount() })
   useTeamWorkspaceDataStore.setState({ views: {}, approvalSaves: {} })
   useTeamSetupStore.setState({ setups: {} })
 })
@@ -51,6 +55,7 @@ const control = (available: boolean, connected = true) =>
 const mount = (available: boolean, connected = true) => {
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => { renderer = TestRenderer.create(control(available, connected)) })
+  mounted.push(renderer)
   return renderer
 }
 const row = (id: string): TeamMemberRow => ({
@@ -63,6 +68,7 @@ const panel = (members: TeamMemberRow[], available: boolean) => {
   act(() => {
     renderer = TestRenderer.create(<TeamMembersPanel loaded members={members} onOpenSession={() => {}} setupControl={control(available)} />)
   })
+  mounted.push(renderer)
   return renderer
 }
 const openPreview = (renderer: TestRenderer.ReactTestRenderer) => {
@@ -133,8 +139,6 @@ test('the preview warns which starter groups replace user-level group files, and
   expect(one(renderer, 'team-setup-confirm').props.disabled).toBe(false)
   act(() => one(renderer, 'team-setup-confirm').props.onClick())
   expect(sent.at(-1)).toEqual({ type: 'team-workspace-setup-run', teamPath: '/repo' })
-  // A renderer left mounted re-renders at every later reset of the stores, outside act.
-  act(() => renderer.unmount())
 })
 
 // @covers: team-setup › The setup previews the starter team before writing › Cancelling writes nothing
@@ -196,6 +200,7 @@ test('with no project group files, Set up team is the tab’s only group-file wr
     renderer = TestRenderer.create(<TeamMembersPanel loaded members={[row('reviewers-sol')]} onOpenSession={() => {}}
       setupControl={control(true)} />)
   })
+  mounted.push(renderer)
   const buttons = renderer.root.findAll(node => node.type === 'button').map(node => node.props['data-testid'] ?? textOf(node))
   expect(buttons).toEqual(['team-setup-open'])
 })
