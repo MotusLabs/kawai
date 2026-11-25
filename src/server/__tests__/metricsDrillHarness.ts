@@ -9,8 +9,9 @@
 // the seeded properties. `big()` seeds the 300-task 7d fixture whose
 // `mail_share` list holds 2,595 messages and whose window holds 120
 // abandoned tool streaks. Sessions `chat-lead` and `chat-dev` belong to TEAM,
-// `chat-other` to OTHER.
-import { afterEach } from 'bun:test'
+// `chat-other` to OTHER. The T12 and T17 drill variants and the I1
+// no-mutation witness live here so T12, T17, T1b, T10, and P4 share them.
+import { afterEach, expect } from 'bun:test'
 import { unknownToolMeasurement, type ToolMeasurementStatus } from '../../shared/processMetrics'
 import { MetricsReader } from '../metrics/computeMetrics'
 import { ObservationStore } from '../metrics/observations/store'
@@ -149,4 +150,56 @@ export function big(f: MetricsToolFixture): void {
     f.streak(500, END - 5 * HOUR, 'recovered')
     f.streak(501, END - 5 * HOUR, 'abandoned', OTHER)
   })()
+}
+
+const encodeCursor = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+const decodeCursor = (raw: string) => JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
+
+/**
+ * Row T12's refused requests, built from a live mail_share messages first
+ * page's `next` read at END: each with the reason its refusal names.
+ */
+export function t12Variants(next: string): Array<[Record<string, unknown>, string]> {
+  const raw = decodeCursor(next)
+  const { after: _after, ...noAfter } = raw
+  return [
+    [{ cursor: '!not-base64url' }, 'Invalid drill cursor'],
+    [{ cursor: encodeCursor({ ...raw, v: 2 }) }, 'Invalid drill cursor'],
+    [{ cursor: encodeCursor({ ...raw, extra: 1 }) }, 'Invalid drill cursor'],
+    [{ cursor: encodeCursor(noAfter) }, 'Invalid drill cursor'],
+    [{ cursor: encodeCursor({ ...raw, src: { ...raw.src, slice: undefined, reportId: 'x' } }) }, 'Invalid drill cursor'],
+    [{ cursor: encodeCursor({ ...raw, src: { ...raw.src, end: new Date(END + 1).toISOString() } }) }, 'Invalid drill cursor'],
+    // Every first-page argument beside a cursor, and an unknown one.
+    ...([['metric', 'mail_share'], ['list', 'messages'], ['limit', 20], ['window', '7d'], ['end', new Date(END).toISOString()],
+      ['report_id', 'report-x'], ['slice', { kind: 'group' }]] as const)
+      .map(([key, value]): [Record<string, unknown>, string] => [{ cursor: next, [key]: value }, 'A cursor carries its request']),
+    [{ cursor: next, extra: true }, 'Unrecognized key'],
+    [{ window: '7d', metric: 'mail_share', list: 'messages', fresh: true }, 'Unrecognized key'],
+  ]
+}
+
+/** Row T17's ends refused at clock END: later than now, not an ISO instant, or out of calendar range. */
+export const T17_REFUSED_ENDS = [new Date(END + 1).toISOString(), '2026-10-16T12:00:01Z', '2026-10-16T13:00:00+00:59', '2026-10-16',
+  'yesterday', '2026-10-16T12:00Z', '2026-02-30T00:00:00Z', '2026-10-16T24:00:00Z', '2026-10-16T12:00:00', '2026-10-16T12:00:00+24:00',
+  '0001-02-29T12:00:00Z', '1900-02-29T12:00:00Z', '0099-02-29T12:00:00Z']
+/** Row T17's accepted ends at clock END with their canonical instants: now itself, an offset form, and fractions. */
+export const T17_ENDS = [['2026-10-16T12:00:00Z', '2026-10-16T12:00:00.000Z'], ['2026-10-16T13:59:59+02:00', '2026-10-16T11:59:59.000Z'],
+  ['2026-10-16T11:59:59.5Z', '2026-10-16T11:59:59.500Z'], ['2026-10-16T07:29:59.123456-04:30', '2026-10-16T11:59:59.123Z']] as const
+/** Row T17's years 0000–0099, which keep their four digits (Date.UTC reads 0099 as 1999), and year 0's leap day. */
+export const T17_ANCIENT_ENDS = [['0099-10-16T12:00:00.000Z', '0099-10-16T12:00:00.000Z'], ['0099-10-16T13:00:00+01:00', '0099-10-16T12:00:00.000Z'],
+  ['0000-02-29T12:00:00.000Z', '0000-02-29T12:00:00.000Z']] as const
+
+/**
+ * The I1 witness (design property P4): captures the stored report and
+ * observation rows and a clone of each given cached object now; each call
+ * of the returned check asserts the rows are byte-identical and every
+ * object still deep-equals its clone.
+ */
+export function noMutation(f: MetricsToolFixture, ...cached: unknown[]): (label: string) => void {
+  const rows = f.rows()
+  const clones = cached.map(value => structuredClone(value))
+  return label => {
+    expect(f.rows() === rows, `${label}: stored rows unchanged`).toBe(true)
+    cached.forEach((value, i) => expect(value, `${label}: cached read ${i} unchanged`).toEqual(clones[i]))
+  }
 }

@@ -164,7 +164,7 @@ Every refusal uses the tool-error envelope of the unknown-window refusal
 |----|------|----------|
 | T1 | `team_metrics {window:'7d'}` | serialized < 32,000 bytes; every value, `n`, baseline, flag equals a `full` read in the same cache period; `mail_share.drill.messages` ≤ 50 with `messagesTotal` 2,595; `projectionTruncated` true |
 | T1a | same with `detail:'full'` | deep-equal to the tab's read of the same key (drill, breakdown, slices) |
-| T1b | compact and full while export is budget-unavailable | both carry `toolMeasurement.export.state` `budget-unavailable` |
+| T1b | compact and full while export is budget-unavailable | both carry `toolMeasurement.export.state` `budget-unavailable`; full keeps every drill entry; the P4 witness holds after each call |
 | T2 | drill `{window:'7d', end: T1.periodEnd, metric:'mail_share', list:'messages', limit:200}` walked to a null cursor | 13 pages; concatenation = sorted 2,595 ids once; every page total 2,595 |
 | T3 | drill `metric:'velocity'`; `list:'toolStreaks'` on `mail_share`; `list:'breakdown'` | refused naming `METRIC_IDS`; refused naming the metrics with tool streaks; refused naming the three lists |
 | T4 | drill with `slice:{kind:'group'}` | page entries equal the sliced read's list; refusal for `slice.kind:'x'` names the kinds |
@@ -174,14 +174,14 @@ Every refusal uses the tool-error envelope of the unknown-window refusal
 | T8 | `process_report_submit` (7d) | returned snapshot compact; stored row whole with 6,998 message refs |
 | T9a | two `team_metrics` reads 1 s apart, then a `fresh` report submission (fake clock) | both reads share one `periodEnd`; the submission reads at now, bypassing both caches |
 | T9 | two drills whose `end` differ by 31 s (fake clock) | each page equals `readAt` at its own end |
-| T10 | page 2 read 1 h after page 1 (fake clock, records unchanged) | page equals the read at the cursor's `end`, not at now |
+| T10 | page 2 read 1 h after page 1 (fake clock, records unchanged) | page equals the read at the cursor's `end`, not at now; one fixture per runtime, so page 2 recomputes through the expired cache, and page 1's retained read and the recomputed entry both equal the read at `end` (P4 witness on each page) |
 | T11 | `limit` 0, 201, 1.5 on `messages`; 51 on `toolStreaks` | refused naming 1–200; refused naming 1–50 |
 | T12 | cursor not base64url; `v:2`; an unknown field; missing `after`; cursor plus any first-page argument; an unknown tool argument; a live tool-streak cursor whose end differs from its inner cursor's | refused as invalid cursor, "a cursor carries its request", or an unrecognized key (one row each) |
 | T13 | `report_id` of another team, or unknown | refused `Unknown report: <id>` |
 | T14 | a live cursor used from a session of another team | refused as a team mismatch; no entries |
 | T15 | live `toolStreaks` walk while three later streaks commit | pages and total equal the first page's high-water mark; entries equal the human pager's for the same end and page size |
 | T16 | report `toolStreaks` on a snapshot with total 120, 50 stored | entries are the 50 stored, `total` 120, `reachable` 50, then `next` null |
-| T17 | `end` later than now, or not an ISO instant (out-of-range fields included) | refused naming `end`; an ISO instant with `Z` or an offset, with or without a fraction, reads at that instant |
+| T17 | `end` later than now, or not an ISO instant (out-of-range fields included) | refused naming `end`; an ISO instant with `Z` or an offset, with or without a fraction, reads at that instant, years 0000–0099 and year 0's leap day included, through a continuation that keeps the normalized `end` |
 | T18 | the human's `process-tool-drill-page` and report connection after agent walks | unchanged responses (connection tests stay green) |
 
 Unreachable: a report cursor with a `slice` (the cursor schema has no slice
@@ -203,8 +203,11 @@ for reports, so decoding refuses it as an unknown field — T12).
   equals the full list sorted by id. Seed `0xC0DE`, 300 cases.
 - **P4, stored records are unchanged by reads.** For every read-only row of
   Table T, a hash of the stored report rows and observation rows before and
-  after the call is equal; for T8, the new report holds the whole snapshot
-  and existing rows are unchanged.
+  after the call is equal, and each cached read the call may touch deep-equals
+  its earlier clone; for T8, the new report holds the whole snapshot and
+  existing rows are unchanged. The witness (`noMutation` in
+  `metricsDrillHarness.ts`) also runs inside the stateful T1b and T10
+  fixtures, and P4 reads the T12 and T17 rows from the inputs those rows use.
 
 **Mutants each row must kill** (listed in tasks.md): a cache key without
 `end` (T9, T10); the cursor's team trusted (T14); `after` compared with `>=`

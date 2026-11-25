@@ -10,7 +10,7 @@
 import { expect, test } from 'bun:test'
 import { readMetrics } from '../metrics/computeMetrics'
 import { END, HOUR, TEAM } from './metricsSeed'
-import { MAIL_SHARE_MESSAGES, STREAKS, big, useMetricsTools, type Outcome } from './metricsDrillHarness'
+import { MAIL_SHARE_MESSAGES, STREAKS, T17_ANCIENT_ENDS, T17_ENDS, T17_REFUSED_ENDS, big, noMutation, t12Variants, useMetricsTools, type Outcome } from './metricsDrillHarness'
 
 const make = useMetricsTools()
 const DRILL = 'team_metrics_drill'
@@ -133,23 +133,37 @@ test('T9: two drills whose end differ by 31 s each equal readAt at their own end
 
 // @covers: team-process-metrics › Agents page metric drill lists › Live pages keep their window end
 test('T10: page 2 read 1 h after page 1, records unchanged, equals the read at the cursor\'s end, not at now', async () => {
-  const f = make()
-  try {
-    big(f)
-    // At END this message is inside the 7d window; an hour later it is not.
-    f.seed.message({ id: 'msg-edge', createdHoursAgo: 7 * 24 - 0.5 })
-    const atEnd = sortedIds(readMetrics(f.seed.db, TEAM, '7d', null, END).metrics.find(m => m.id === 'mail_share')!.drill.messages)
-    expect(atEnd).toContain('msg-edge')
-    for (const { runtime, call } of f.runtimes) {
-      f.clock.now = END
+  // One fixture per runtime, so each runtime's page 2 meets an expired cache entry.
+  for (const index of [0, 1]) {
+    const f = make()
+    try {
+      big(f)
+      // At END this message is inside the 7d window; an hour later it is not.
+      f.seed.message({ id: 'msg-edge', createdHoursAgo: 7 * 24 - 0.5 })
+      const reference = readMetrics(f.seed.db, TEAM, '7d', null, END)
+      const atEnd = sortedIds(reference.metrics.find(m => m.id === 'mail_share')!.drill.messages)
+      expect(atEnd).toContain('msg-edge')
+      const { runtime, call } = f.runtimes[index]!
+      const before = noMutation(f)
       const first = await call('chat-lead', DRILL, { window: '7d', metric: 'mail_share', list: 'messages', limit: 200 })
+      before(`${runtime} page 1`)
+      // I1: keep page 1's cached read (a hit at END, no refresh) across the hour; page 2
+      // recomputes at the cursor's end through the expired cache and leaves both reads intact.
+      const old = f.reader.readAt(TEAM, '7d', null, END)
+      const check = noMutation(f, old)
       f.clock.now = END + HOUR
       const second = await call('chat-lead', DRILL, { cursor: first.value.next })
+      check(`${runtime} page 2`)
       expect(second.value.source, runtime).toEqual({ kind: 'live', window: '7d', end: new Date(END).toISOString() })
       expect(second.value.total).toBe(atEnd.length)
       expect([...ids(first.value.entries), ...ids(second.value.entries)]).toEqual(atEnd.slice(0, 400))
-    }
-  } finally { f.close() }
+      // The entry page 2 recomputed (read now as a hit, not a refresh) is the reference read at END.
+      const recomputed = f.reader.readAt(TEAM, '7d', null, END)
+      expect(recomputed.metrics, runtime).not.toBe(old.metrics)
+      expect(recomputed.metrics, runtime).toEqual(reference.metrics)
+      expect(old.metrics, runtime).toEqual(reference.metrics)
+    } finally { f.close() }
+  }
 })
 
 test('T11: limit 0, 201, and 1.5 on messages are refused naming 1–200; 51 on toolStreaks is refused naming 1–50', async () => {
@@ -174,22 +188,7 @@ test('T12: a cursor not base64url, v 2, an unknown field, a missing after, or a 
     big(f)
     for (const { call } of f.runtimes) {
       const first = await call('chat-lead', DRILL, { window: '7d', metric: 'mail_share', list: 'messages', limit: 10 })
-      const raw = cursorOf(first.value.next)
-      const { after: _after, ...noAfter } = raw
-      const rows: Array<[unknown, string]> = [
-        [{ cursor: '!not-base64url' }, 'Invalid drill cursor'],
-        [{ cursor: encode({ ...raw, v: 2 }) }, 'Invalid drill cursor'],
-        [{ cursor: encode({ ...raw, extra: 1 }) }, 'Invalid drill cursor'],
-        [{ cursor: encode(noAfter) }, 'Invalid drill cursor'],
-        [{ cursor: encode({ ...raw, src: { ...raw.src, slice: undefined, reportId: 'x' } }) }, 'Invalid drill cursor'],
-        [{ cursor: encode({ ...raw, src: { ...raw.src, end: new Date(END + 1).toISOString() } }) }, 'Invalid drill cursor'],
-        // Every first-page argument beside a cursor, and an unknown one.
-        ...([['metric', 'mail_share'], ['list', 'messages'], ['limit', 20], ['window', '7d'], ['end', new Date(END).toISOString()],
-          ['report_id', 'report-x'], ['slice', { kind: 'group' }]] as const)
-          .map(([key, value]): [unknown, string] => [{ cursor: first.value.next, [key]: value }, 'A cursor carries its request']),
-        [{ cursor: first.value.next, extra: true }, 'Unrecognized key'],
-        [{ window: '7d', metric: 'mail_share', list: 'messages', fresh: true }, 'Unrecognized key'],
-      ]
+      const rows = t12Variants(first.value.next)
       for (const [args, reason] of rows) refused(await call('chat-lead', DRILL, args), reason)
     }
   } finally { f.close() }
@@ -249,14 +248,11 @@ test('T17: an end later than now or not an ISO instant is refused naming end; IS
   try {
     big(f)
     for (const { runtime, call } of f.runtimes) {
-      for (const end of [new Date(END + 1).toISOString(), '2026-10-16T12:00:01Z', '2026-10-16T13:00:00+00:59', '2026-10-16',
-        'yesterday', '2026-10-16T12:00Z', '2026-02-30T00:00:00Z', '2026-10-16T24:00:00Z', '2026-10-16T12:00:00', '2026-10-16T12:00:00+24:00',
-        '0001-02-29T12:00:00Z', '1900-02-29T12:00:00Z', '0099-02-29T12:00:00Z']) {
+      for (const end of T17_REFUSED_ENDS) {
         refused(await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages' }), 'end must be an ISO instant')
       }
       // Now itself, an offset form of an earlier instant, and a sub-second fraction.
-      for (const [end, canonical] of [['2026-10-16T12:00:00Z', '2026-10-16T12:00:00.000Z'], ['2026-10-16T13:59:59+02:00', '2026-10-16T11:59:59.000Z'],
-        ['2026-10-16T11:59:59.5Z', '2026-10-16T11:59:59.500Z'], ['2026-10-16T07:29:59.123456-04:30', '2026-10-16T11:59:59.123Z']] as const) {
+      for (const [end, canonical] of T17_ENDS) {
         const page = await call('chat-lead', DRILL, { window: '7d', end, metric: 'mail_share', list: 'messages', limit: 5 })
         expect(page.error, `${runtime} ${end}`).toBeNull()
         expect(page.value.source).toEqual({ kind: 'live', window: '7d', end: canonical })
@@ -267,8 +263,7 @@ test('T17: an end later than now or not an ISO instant is refused naming end; IS
     }
     // Years 0000–0099 keep their four digits (Date.UTC would read 0099 as 1999), including year 0's leap day;
     // two messages an hour before each end make a continuation whose source and cursor keep that end.
-    const ancient = [['0099-10-16T12:00:00.000Z', '0099-10-16T12:00:00.000Z'], ['0099-10-16T13:00:00+01:00', '0099-10-16T12:00:00.000Z'],
-      ['0000-02-29T12:00:00.000Z', '0000-02-29T12:00:00.000Z']] as const
+    const ancient = T17_ANCIENT_ENDS
     for (const canonical of new Set(ancient.map(([, c]) => c))) {
       for (const n of [1, 2]) f.seed.message({ id: `msg-${canonical}-${n}`, createdHoursAgo: (END - Date.parse(canonical)) / HOUR + n / 60 })
     }

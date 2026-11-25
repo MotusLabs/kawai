@@ -12,7 +12,7 @@ import type { TeamMailbox } from '../team/TeamMailbox'
 import type { ReportToolDeps } from '../metrics/reportTools'
 import { TEAM_ALLOWED_TOOLS, createMailboxServer, teamToolTable } from '../team/mailboxTools'
 import { END, Seed, TEAM } from './metricsSeed'
-import { MAIL_SHARE_MESSAGES, big, useMetricsTools } from './metricsDrillHarness'
+import { MAIL_SHARE_MESSAGES, big, noMutation, useMetricsTools } from './metricsDrillHarness'
 
 const OTHER = '/other/.git'
 
@@ -140,10 +140,17 @@ test('T1b: compact and full team_metrics both carry toolMeasurement.export.state
     big(f)
     f.measurement.status = { export: { state: 'budget-unavailable', reason: 'family-budget', availableSince: null },
       recovery: { status: 'ok', quarantinedCount: 0, pendingCount: 0, checkedAt: new Date(END).toISOString() } }
+    // I1: the budget-unavailable read the calls share, captured before any projection.
+    const cached = f.reader.read(TEAM, '7d', null)
+    expect(cached.toolMeasurement.export.state).toBe('budget-unavailable')
+    const check = noMutation(f, cached)
     for (const { runtime, call } of f.runtimes) {
       for (const detail of ['compact', 'full']) {
         const read = await call('chat-lead', 'team_metrics', { window: '7d', detail })
+        check(`${runtime} ${detail}`)
         expect(read.value.toolMeasurement.export.state, `${runtime} ${detail}`).toBe('budget-unavailable')
+        const mail = read.value.metrics.find((m: MetricValue) => m.id === 'mail_share')
+        expect(detail === 'full' ? mail.drill.messages.length : mail.drill.messagesTotal, `${runtime} ${detail}`).toBe(MAIL_SHARE_MESSAGES)
       }
     }
   } finally { f.close() }
