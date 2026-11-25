@@ -5,7 +5,7 @@
 // fake timers. Rows S1, S2, S7, S9, S11 and S14 of Table S and the main
 // background scenarios run here; the remaining rows run at the service seam
 // (quotaReaderTableS.test.ts).
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, jest, test } from 'bun:test'
 import {
   advance, anchorSession, CADENCE_MS, historyRows, jsonResponse, QUOTA_TOKEN, QUOTA_TOKEN_B, quotaCapture,
   quotaComposition, settle, type QuotaComposition,
@@ -21,6 +21,28 @@ afterEach(async () => {
 const QUOTA_URL = 'https://zai.test/api/monitor/usage/quota/limit'
 
 describe('quota reader production composition', () => {
+
+  // @covers: process-observations › Quota observations preserve identity and freshness › Failed refresh
+  test('F6 through the manager: a status-only push records no windows, so the pushed windows keep their age', async () => {
+    composition = await quotaComposition()
+    composition.writeGroup('workers: [hostonly]')
+    const sessionId = await anchorSession(composition)
+    await composition.manager.send(sessionId, 'hello')
+    await settle()
+    const handle = composition.handles.at(-1)!
+    const resetsAt = Math.floor(Date.now() / 1000) + 7200
+    handle.push({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', unifiedWindows: { five_hour: { utilization: 0.2, resetsAt } } } } as never)
+    await settle()
+    // One jump: nothing here depends on the timers in between.
+    jest.advanceTimersByTime(19 * 60_000)
+    await settle()
+    handle.push({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning' } } as never)
+    await settle()
+    const rows = historyRows(composition.db).filter(row => row.reason === 'agent')
+    expect(rows.map(row => JSON.parse(String(row.windows_json)).length)).toEqual([1, 0])
+    // The live store merges the windows forward; history never does (B11).
+    expect(composition.manager.getSnapshot(sessionId)?.usage?.windows.map(window => window.key)).toEqual(['five_hour'])
+  })
   // @covers: chat-usage-limits › Usage is refreshed when no report has arrived › Eligible alternative without a live chat
   test('S1/S2: a configured worker with no live session is polled now and on the cadence, filling quota history without an agent', async () => {
     composition = await quotaComposition()

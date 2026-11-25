@@ -301,14 +301,52 @@ describe('Table S at the service seam', () => {
   test('S2: one request; next at cadence ± jitter', () => runRow('S2'))
   test('S3: no new request', () => runRow('S3'))
   test('S4: request abandoned; failure counted; backoff', () => runRow('S4'))
+  // @covers: chat-usage-limits › Background quota observation is bounded and credential-safe › Failing reader backs off
   test('S5: next delay 4 min (bounded at 30)', () => runRow('S5'))
   test('S6: backoff reset; windows replaced only if newer', () => runRow('S6'))
+  // @covers: chat-usage-limits › Background quota observation is bounded and credential-safe › Removing the last reason stops polling
   test('S7: timer removed; no further request', () => runRow('S7'))
   test('S8: cadence continues (session reason)', () => runRow('S8'))
   test('S9: no request; one `unsupported` observation; no agent launched', () => runRow('S9'))
   test('S10: today\'s spawn pull unchanged', () => runRow('S10'))
   test('S11: timer cancelled; in-flight result discarded, nothing published', () => runRow('S11'))
   test('S12: `UsageLimitStore` empty; one startup poll; history rows intact', () => runRow('S12'))
+  // @covers: chat-usage-limits › Background quota observation is bounded and credential-safe › Shared account polled once
   test('S13: one request; both teams\' histories get it', () => runRow('S13'))
   test('S14: old key unsubscribed, new key polled once', () => runRow('S14'))
+})
+
+describe('background observation outcomes', () => {
+  // @covers: chat-usage-limits › Background quota observation is bounded and credential-safe › Failing reader backs off
+  test('failed refreshes after a success keep the held windows at their original observation time', async () => {
+    h = serviceHarness()
+    live = true
+    h.auto = request => request.ok(30)
+    await h.reconcile([sub('team-a', ZAI)])
+    const held = h.usage.get('zai')!
+    h.auto = request => request.fail()
+    await step(CADENCE_MS * 1.1)
+    await step(MIN)
+    await step(2 * MIN)
+    const rows = h.quota.history.list('team-a')
+    expect(rows.map(row => row.outcome)).toEqual(['supported', 'failed', 'failed', 'failed'])
+    expect(rows.slice(1).every(row => row.windows.length === 0)).toBe(true)
+    expect(rows[0]!.windows[0]!.observedAt).toBe(held.receivedAt)
+    expect(h.usage.get('zai')).toEqual(held)
+  })
+
+  // @covers: chat-usage-limits › Background quota observation is bounded and credential-safe › Refused credentials are not stored
+  test('an authentication refusal records auth-refused without the body or the credential and starts nothing', async () => {
+    h = serviceHarness()
+    live = true
+    h.auto = request => request.fail(401)
+    await h.reconcile([sub('team-a', ZAI)])
+    const rows = h.quota.history.list('team-a')
+    expect(rows.map(row => [row.outcome, row.status, row.windows.length, row.source])).toEqual([['auth-refused', null, 0, 'none']])
+    expect(h.usage.get('zai')).toBeNull()
+    // Backs off as a failure (1 minute), and only the quota endpoint was called.
+    await step(MIN)
+    expect(h.requests.map(request => new URL(request.url).pathname)).toEqual([new URL(h.requests[0]!.url).pathname, new URL(h.requests[0]!.url).pathname])
+    expect(h.requests.every(request => request.url.startsWith('https://zai.test/'))).toBe(true)
+  })
 })

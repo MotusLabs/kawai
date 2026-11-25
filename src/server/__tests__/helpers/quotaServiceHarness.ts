@@ -34,7 +34,7 @@ export interface HeldRequest {
   signal: AbortSignal
   /** Ended by an answer, a failure, or an abort. */
   ended: boolean
-  ok(percent?: number): void
+  ok(percent?: number, resetMs?: number): void
   fail(status?: number): void
 }
 
@@ -55,6 +55,15 @@ export interface ServiceHarness {
   /** Jitter draw in [0, 1). */
   random: number
   reconcile(desired?: WorkerSubscription[]): Promise<void>
+  /** Called with the account key of each request before it is counted (P1 checks). */
+  beforeRequest: ((key: string) => void) | null
+  /** Open transport requests for one account key. */
+  openKey(key: string): HeldRequest[]
+  /**
+   * A process restart: the old manager stops, its open requests end with the
+   * process, and a new manager starts over the same database and fetch.
+   */
+  restart(): void
   /** Requests whose transport has not ended, for one account key. */
   open(target: QuotaTarget): HeldRequest[]
   /** Answer the oldest open request. */
@@ -71,9 +80,9 @@ export async function flush(turns = 20): Promise<void> {
 }
 
 /** Advance fake time in 1 s steps, letting microtasks run after each. */
-export async function step(ms: number): Promise<void> {
-  for (let done = 0; done < ms; done += 1_000) {
-    jest.advanceTimersByTime(Math.min(1_000, ms - done))
+export async function step(ms: number, chunk = 1_000): Promise<void> {
+  for (let done = 0; done < ms; done += chunk) {
+    jest.advanceTimersByTime(Math.min(chunk, ms - done))
     for (let i = 0; i < 6; i++) await Promise.resolve()
   }
   await flush(3)
@@ -83,10 +92,15 @@ export function sub(teamId: string, target: QuotaTarget): WorkerSubscription {
   return { teamId, target }
 }
 
-export function serviceHarness(): ServiceHarness {
+/**
+ * A harness over a fresh database, or over `shared` (left open on close and
+ * emptied of quota history first) so a long property can reuse one.
+ */
+export function serviceHarness(shared?: SessionDatabase): ServiceHarness {
   jest.useFakeTimers()
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-quota-svc-')))
-  const db = freshTestDatabase(path.join(root, 'test.db'))
+  const root = shared ? null : fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-quota-svc-')))
+  const db = shared ?? freshTestDatabase(path.join(root!, 'test.db'))
+  if (shared) shared.db.exec('DELETE FROM process_quota_observations')
   const usage = new UsageLimitStore()
   const requests: HeldRequest[] = []
   const logs: string[] = []
@@ -98,10 +112,10 @@ export function serviceHarness(): ServiceHarness {
     const signal = init?.signal as AbortSignal
     const request: HeldRequest = {
       url: String(url), auth: headers.Authorization, signal, ended: false,
-      ok(percent = 40) {
+      ok(percent = 40, resetMs?: number) {
         if (request.ended) return
         request.ended = true
-        resolve(jsonResponse(quotaCapture(percent)))
+        resolve(jsonResponse(quotaCapture(percent, resetMs)))
       },
       fail(status = 503) {
         if (request.ended) return
@@ -114,40 +128,55 @@ export function serviceHarness(): ServiceHarness {
       request.ended = true
       reject(new DOMException(`aborted ${BODY_MARKER}`, 'AbortError'))
     })
+    harness.beforeRequest?.(keyOfRequest(request))
     requests.push(request)
     harness.auto?.(request)
   })) as typeof fetch
-  const quota = new ManagerQuota({
-    db: db.db,
-    cadenceMs: CADENCE_MS,
-    read: target => target.baseUrl
-      ? fetchZaiUsage(target.baseUrl, target.token, fetchImpl)
-      : Promise.resolve({ ok: false, outcome: 'not-provider', reason: 'no base URL' }),
-    sessionTarget: providerId => harness.live.has(providerId) ? harness.live.get(providerId) : undefined,
-    sessionTeams: providerId => harness.live.has(providerId) ? ['team-live'] : [],
-    onSessionPull: (providerId, _target, pull) => { harness.sessionPulls.push({ providerId, pull }) },
-    publishWorkerReport: (providerId, report) => usage.record(providerId, report),
-    configuredWorkers: () => harness.desired,
-    random: () => harness.random,
-  })
-  // Observe settlements without changing what the manager does with them.
   const settlements: QuotaSettlement[] = []
-  const options = (quota.service as unknown as { options: { onSettled: (s: QuotaSettlement) => void } }).options
-  const onSettled = options.onSettled
-  options.onSettled = (settlement) => {
-    settlements.push(settlement)
-    onSettled(settlement)
+  const build = (): ManagerQuota => {
+    const quota = new ManagerQuota({
+      db: db.db,
+      cadenceMs: CADENCE_MS,
+      read: target => target.baseUrl
+        ? fetchZaiUsage(target.baseUrl, target.token, fetchImpl)
+        : Promise.resolve({ ok: false, outcome: 'not-provider', reason: 'no base URL' }),
+      sessionTarget: providerId => harness.live.has(providerId) ? harness.live.get(providerId) : undefined,
+      sessionTeams: providerId => harness.live.has(providerId) ? ['team-live'] : [],
+      onSessionPull: (providerId, _target, pull) => { harness.sessionPulls.push({ providerId, pull }) },
+      publishWorkerReport: (providerId, report) => harness.usage.record(providerId, report),
+      configuredWorkers: () => harness.desired,
+      random: () => harness.random,
+    })
+    // Observe settlements without changing what the manager does with them.
+    const options = (quota.service as unknown as { options: { onSettled: (s: QuotaSettlement) => void } }).options
+    const onSettled = options.onSettled
+    options.onSettled = (settlement) => {
+      settlements.push(settlement)
+      onSettled(settlement)
+    }
+    return quota
   }
+  const quota = build()
   Object.assign(harness, {
     db, quota, usage, requests, settlements, sessionPulls: [], logs, desired: [], live: new Map(), auto: null, random: 0.5,
+    beforeRequest: null,
+    openKey(key: string) {
+      return requests.filter(request => !request.ended && keyOfRequest(request) === key)
+    },
+    restart() {
+      harness.quota.shutdown()
+      for (const request of requests) request.ended = true
+      harness.usage = new UsageLimitStore()
+      harness.quota = build()
+      harness.quota.start()
+    },
     async reconcile(desired?: WorkerSubscription[]) {
       if (desired) harness.desired = desired
-      quota.reconcile()
+      harness.quota.reconcile()
       await flush()
     },
     open(target: QuotaTarget) {
-      const key = accountKeyOf(target)
-      return requests.filter(request => !request.ended && keyOfRequest(request) === key)
+      return harness.openKey(accountKeyOf(target))
     },
     async answerOldest(answer: (request: HeldRequest) => void) {
       const request = requests.find(candidate => !candidate.ended)
@@ -156,11 +185,13 @@ export function serviceHarness(): ServiceHarness {
       await flush()
     },
     close() {
-      quota.shutdown()
+      harness.quota.shutdown()
       for (const spy of spies) spy.mockRestore()
       jest.useRealTimers()
-      db.close()
-      fs.rmSync(root, { recursive: true, force: true })
+      if (root) {
+        db.close()
+        fs.rmSync(root, { recursive: true, force: true })
+      }
     },
   } satisfies Partial<ServiceHarness>)
   return harness
