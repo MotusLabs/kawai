@@ -271,6 +271,23 @@ entries never reach a Codex launch, and registered names are withheld from
 it too. A store that cannot be read composes as absent — the lower sources
 apply — and Settings shows why.
 
+**Transport variables on credentialed launches.** A profile whose provider
+names `authTokenEnv` pins its route: `ANTHROPIC_BASE_URL` and the transport
+variables `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`,
+`NODE_TLS_REJECT_UNAUTHORIZED`, and `NODE_EXTRA_CA_CERTS` are written into
+both the launch environment and the settings layer Kawai passes to Claude
+Code on its command line, so no user or project settings file can redirect
+the key. A store value never goes into that layer, so when the store holds
+a non-empty value for any transport variable, starting or resuming a
+credentialed chat refuses before anything runs, with an error naming the
+variables (never their values). To launch, clear the store entry, or store
+it blank to launch with that variable empty. Default, named
+non-credentialed, and wrapper launches are unaffected: they receive the
+store value in their environment only. A transport value from the server
+environment or `AGENTBOARD_CHAT_ENV` is still pinned on credentialed
+launches as before, which copies it onto the command line too — keep
+passwords out of transport variables used by credentialed profiles.
+
 **Write-only Settings.** `GET /api/settings/credentials` lists each
 variable's name, kind, state (set or blank), source, and marks (it overrides
 a lower source; it collides with a registered name and so is not

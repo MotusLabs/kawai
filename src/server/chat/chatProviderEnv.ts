@@ -13,6 +13,14 @@ import { registeredSecretNames } from './secretNameRegistry'
 
 export type ChatProviderEnv = Record<string, string>
 
+/** One credential resolution snapshot (provider-credential-store A1, r5):
+ * the overrides above the process env and the names whose value the
+ * credential store supplies, read together. */
+export interface ProviderEnvSnapshot {
+  env: ChatProviderEnv
+  storeSourced: ReadonlySet<string>
+}
+
 /** The legacy Settings validator's bounds, unchanged at that input boundary. */
 export const CHAT_PROVIDER_ENV_MAX_ENTRIES = 32
 export const CHAT_PROVIDER_ENV_MAX_VALUE_LENGTH = 4096

@@ -141,7 +141,7 @@ override a Codex variable (C2–C4, C9).
 | --- | --- | --- | --- | --- | --- | --- |
 | C1 | set | absent | absent | no | process value | process value |
 | C2 | * | set | absent | no | seed value | seed value |
-| C3 | * | * | launch-env set | no | store value | store value (W6) |
+| C3 | * | * | launch-env set | no | store value | store value (W6), except C11 |
 | C4 | * | * | launch-env blank | no | empty string | empty string |
 | C5 | * | * | secret-source set | yes (by construction) | store value | absent under its own name; reaches a launch only through a binding (W3) |
 | C6 | * | * | launch-env set | yes | store value | absent (W7, inert) — the credential listing marks the collision |
@@ -149,6 +149,7 @@ override a Codex variable (C2–C4, C9).
 | C8 | absent | absent | absent | * | absent | absent |
 | C9 | * | set (two variables) | launch-env for one of them | no | per variable | per variable: store for one, seed for the other ("A seed-only sibling key survives") |
 | C10 | * | * | store unreadable / unsafe / malformed | * | composes process env < seed, as if the store were absent; listing reports the fixed reason | same, minus registered names |
+| C11 | * | * | launch-env set, non-empty, for a `TRANSPORT_PIN_ENV` key | no | store value | Default, named, and wrapper launches: store value in the child env only. A credentialed launch refuses before SDK availability or spawn, naming the keys and no value (r5, decision-a15a8e4e), at creation and at every spawn or resume, from one snapshot. A blank entry pins empty (C4); process and seed values pin as before |
 
 Unreachable: a secret-source store entry whose name is not registered — the
 store's secret-source names are a registry source (S3), so C5 always has
@@ -339,7 +340,7 @@ added. Every scenario has both where the core already covers it.
 ## Implementation contract
 
 ### Acceptance
-- A1: In the composed server, every row of table C holds at the creation gate and for Claude launch delivery, shown by PC1 and PW2/PW3 through `ChatSessionManager` with the observed delivered or withheld variable. Codex launches follow D5's filtered process environment. Verify allowed unregistered process passthrough (C1), registered-name withholding (C5–C7), and seed and store entries unable to supply or override Codex variables (C2–C4/C9). PC1 checks C8 and C10 under both launch projections.
+- A1: In the composed server, every row of table C holds at the creation gate and for Claude launch delivery, shown by PC1 and PW2/PW3 through `ChatSessionManager` with the observed delivered or withheld variable. Codex launches follow D5's filtered process environment. Verify allowed unregistered process passthrough (C1), registered-name withholding (C5–C7), and seed and store entries unable to supply or override Codex variables (C2–C4/C9). PC1 checks C8 and C10 under both launch projections. A credential-bearing Claude profile refuses before SDK availability or spawn if an effective non-empty value for any TRANSPORT_PIN_ENV key comes from the credential store. The fixed refusal names the affected keys and contains no values. The rule uses fresh composition at every launch, including resume. On otherwise eligible launches, blank store entries pin empty. Existing process and seed pins, unrelated settings and the other launch branches retain their published behavior.
 - A2: `GET /api/settings/credentials` and every other read surface return name, kind, state, source, and marks only for any store contents (U1, P2); the retired `/api/settings/chat-provider-env` answers 404 (U7); mutations return the typed applied/durable outcome with fixed safe text (U2-U6).
 - A3: The startup migration behaves as the binding M table (after the blind reading) for every row, and PM1/PM2 hold; PW4 shows it on a disposable database copy through the real bootstrap.
 - A4: A secret-source store key is absent from every launch under its own name and stays withheld after reclassification to launch-env while registered ("Reclassification does not end withholding"), through the real registry collaborator (PW3).
@@ -385,10 +386,12 @@ added. Every scenario has both where the core already covers it.
 - `openspec/specs/claude-session-profiles/spec.md`
 - `tests/e2e/settings-provider.spec.ts`
 - `scripts/planBatches.ts`
+- `src/server/chat/provider/claudeDriverTypes.ts`
+- `src/server/chat/provider/claudeRuntimeLaunch.ts`
 
 ### Verification
 - V1: Table C, U, and the binding M table are committed verbatim as table-driven tests next to the code; PM1, PM2, PC1, P1s, P2 run as seeded properties through `propertyCases`.
-- V2: PW1-PW5 run through the production composition, and each named wiring mutant fails its test; the result lists each mutant with its failing title.
+- V2: PW1-PW5 run through the production composition, and each named wiring mutant fails its test; the result lists each mutant with its failing title. Composed tests cover all transport pin keys, their winning source, and blank precedence. Show the names-only refusal at creation and after a store change before respawn, plus the allowed child environment and flag-layer results for unaffected cases. Extend P1s to store-backed transport values and report the named refusal-bypass mutant failing.
 - V3: Preserved workflows still pass: `src/server/__tests__/credentialStore*.test.ts`, the registry tests, the chat provider settings client tests (rewritten only where the retired GET is asserted), and the existing auth-gate and launch tests.
 - V4: The literal-citation preflight finds zero unresolved citations. `bun run check --full-properties` passes on the clean committed head using the Bun version declared by `.bun-version` at that commit. `bun scripts/verify-result.ts` exits 0.
 - V5: A disposable-copy rehearsal — a copied database with a seeded map, a disposable HOME, a spare port, never the live data directory — records the PW4 outcome; e2e, if any, runs only through the CI fixture path.
@@ -743,7 +746,7 @@ branch receives:
 | Claude, Default (no profile), no overrides | the filtered env: process env − withheld names, plus store launch-env entries as configured | none — host claude.ai login path (or an unregistered ambient `ANTHROPIC_AUTH_TOKEN`), unchanged | today's behavior: the resolve supplies an explicit env; routing or unrelated overrides an operator set ride the launch-env entries |
 | Claude, named non-wrapper profile | the filtered env + launch-env entries + the profile's catalog env overlaid; every controlled variable the profile does not set **deleted**; absent catalog keys blanked in the flag settings layer | none unless the profile is credentialed (row below) | unrelated variables (operator overrides, launch-env entries) are retained, per today's named-profile rule |
 | Claude, wrapper (`executable`) | the filtered env + launch-env entries + the wrapper's overlay env | none **composed** — a credential-bearing id can never take an executable (trusted invariant); an unregistered ambient token passes only by name, like Default | wrappers never gain tokens or headers through the catalog |
-| Claude, credentialed or headers-only | the named-profile branch **plus** transport pins (base URL + `TRANSPORT_PIN_ENV`) in env and flag settings | `ANTHROPIC_AUTH_TOKEN` (credentialed) and composed `ANTHROPIC_CUSTOM_HEADERS` (headers) in env only | the token reaches the CLI exactly as today; headers-only has no token |
+| Claude, credentialed or headers-only | the named-profile branch **plus** transport pins (base URL + `TRANSPORT_PIN_ENV`) in env and flag settings; a non-empty pin value the store supplies refuses the launch instead (C11) | `ANTHROPIC_AUTH_TOKEN` (credentialed) and composed `ANTHROPIC_CUSTOM_HEADERS` (headers) in env only | the token reaches the CLI exactly as today; headers-only has no token |
 | Codex | the filtered env; `codexHome`/`network` from trusted tiers per the runtime-origin rules | none via Claude composition — credentials via the Codex login in its home | one workspace-write sandbox as today |
 
 Direct legacy auth (an ambient `ANTHROPIC_AUTH_TOKEN` or the claude.ai

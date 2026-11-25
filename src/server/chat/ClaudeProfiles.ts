@@ -14,7 +14,7 @@ import {
   withoutCredentials,
   type ChatProviderEnv,
 } from './chatProviderEnv'
-import { catalogRegisteredNames, RegisteredNameRefusal, type RegistryContext } from './secretNameRegistry'
+import { catalogRegisteredNames, RegisteredNameRefusal, StoreTransportRefusal, type RegistryContext } from './secretNameRegistry'
 import { CODEX_PROVIDER_LABEL, resolveCodexHome, type CodexLaunchConfiguration } from './codexProfiles'
 import {
   PROFILE_CONTROLLED_ENV,
@@ -79,6 +79,9 @@ export function claudeProfileMetadata(
   return claudeProfileCatalog(ctx).profiles
 }
 
+/** No store-sourced names: a resolution without a credential snapshot. */
+const NO_NAMES: ReadonlySet<string> = new Set()
+
 /**
  * The registered secret names at `ctx`'s catalog (provider-relay-setup D2):
  * the set every launch withholds — parsed-layer catalog names in any entry
@@ -98,9 +101,10 @@ export function resolveClaudeProfile(
   globalEnv: ChatProviderEnv = {},
   ctx: ProfileCatalogContext = {},
   onCatalogErrors?: (errors: string[]) => void,
-  retainedNamesDb?: RegistryContext
+  retainedNamesDb?: RegistryContext,
+  storeSourced: ReadonlySet<string> = NO_NAMES
 ): ChatLaunchConfiguration {
-  return resolveClaudeProfileDetail(id, globalEnv, ctx, onCatalogErrors, retainedNamesDb).launch
+  return resolveClaudeProfileDetail(id, globalEnv, ctx, onCatalogErrors, retainedNamesDb, storeSourced).launch
 }
 
 /** One resolution with the facts a spawn composes over (mimo-million-token-context D3). */
@@ -122,7 +126,10 @@ export function resolveClaudeProfileDetail(
   globalEnv: ChatProviderEnv = {},
   ctx: ProfileCatalogContext = {},
   onCatalogErrors?: (errors: string[]) => void,
-  retainedNamesDb?: RegistryContext
+  retainedNamesDb?: RegistryContext,
+  /** The names whose override value the credential store supplies, from the
+   * same snapshot as globalEnv (provider-credential-store A1, r5). */
+  storeSourced: ReadonlySet<string> = NO_NAMES
 ): ResolvedClaudeProfile {
   const catalog = resolveProfileCatalog(ctx)
   // A failed file skips silently otherwise; report it (the rest resolves).
@@ -162,7 +169,7 @@ export function resolveClaudeProfileDetail(
   // credentials stay out of default and executable-backed launches too. The
   // filter runs before every branch's own operations (table W).
   const base = withoutCredentials(serverEnv, registered)
-  return { profile, registered, launch: buildClaudeLaunch(profile, base, serverEnv, registered) }
+  return { profile, registered, launch: buildClaudeLaunch(profile, base, serverEnv, registered, storeSourced) }
 }
 
 /**
@@ -195,7 +202,8 @@ export function buildClaudeLaunch(
   profile: CatalogProfile,
   base: Record<string, string | undefined>,
   serverEnv: Record<string, string | undefined>,
-  registered: ReadonlySet<string>
+  registered: ReadonlySet<string>,
+  storeSourced: ReadonlySet<string> = NO_NAMES
 ): ClaudeLaunchConfiguration {
   // The provider's own token, read before the names are withheld (D3/D4).
   const credential = profile.authTokenEnv !== undefined
@@ -241,6 +249,11 @@ export function buildClaudeLaunch(
     const blankCollisions = Object.keys(BLANK_OTHER_CREDENTIALS).filter(name => registered.has(name))
     const collisions = [...new Set([...controlledCollisions, ...pinnedCollisions, ...blankCollisions])].sort()
     if (collisions.length > 0) throw new RegisteredNameRefusal('credentialed', collisions)
+    // The transport pins below copy each key's effective value into the flag
+    // layer; a non-empty value from the credential store refuses instead
+    // (provider-credential-store A1, r5). A blank store entry still pins ''.
+    const storeTransport = TRANSPORT_PIN_ENV.filter(name => storeSourced.has(name) && (serverEnv[name] ?? '') !== '')
+    if (storeTransport.length > 0) throw new StoreTransportRefusal([...storeTransport].sort())
   } else if (controlledCollisions.length > 0) {
     throw new RegisteredNameRefusal('named-profile', controlledCollisions)
   }

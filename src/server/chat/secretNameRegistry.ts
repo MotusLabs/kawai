@@ -128,6 +128,27 @@ export class RegisteredNameRefusal extends Error {
 }
 
 /**
+ * The credentialed transport refusal (provider-credential-store A1, r5): a
+ * credential-bearing Claude launch pins every TRANSPORT_PIN_ENV key in both
+ * the child env and the flag settings layer, so a non-empty value the
+ * credential store supplies for one would be copied into the flag layer.
+ * The launch refuses before SDK availability or spawn instead. A subclass of
+ * RegisteredNameRefusal, so every site that settles a pre-spawn refusal
+ * settles this one the same way; the text is fixed and names keys only.
+ */
+export class StoreTransportRefusal extends RegisteredNameRefusal {
+  constructor(names: string[]) {
+    super('credentialed', names)
+    this.message =
+      `Credential store entr${names.length === 1 ? 'y' : 'ies'} ${names.join(', ')} cannot be used by a ` +
+      `credentialed launch: such a launch copies its transport settings into the Claude settings ` +
+      `layer, and a stored value never goes there. Clear the store entry, or store it blank to ` +
+      `launch without it.`
+    this.name = 'StoreTransportRefusal'
+  }
+}
+
+/**
  * The registry's collaborators at a launch site: the retained-names
  * persistence plus, in production, the credential store's secret-source keys
  * (provider-credential-store S3), read afresh at every observation so a key

@@ -16,7 +16,7 @@ import type {
   CredentialMigrationState,
   CredentialStoreState,
 } from '../../shared/credentials'
-import type { ChatProviderEnv } from './chatProviderEnv'
+import type { ChatProviderEnv, ProviderEnvSnapshot } from './chatProviderEnv'
 import os from 'node:os'
 import path from 'node:path'
 import { createCredentialStore, type CredentialStore } from './credentialStore'
@@ -64,14 +64,25 @@ export class CredentialComposition {
 
   /** The per-variable overrides above the process env: seed < store. */
   overrides(): ChatProviderEnv {
-    const merged: ChatProviderEnv = { ...this.options.seed }
+    return this.snapshot().env
+  }
+
+  /** One resolution snapshot (one store read): the overrides and the names
+   * whose effective value comes from the store — the store outranks the
+   * seed and the process env, so every store entry with a value wins. */
+  snapshot(): ProviderEnvSnapshot {
+    const env: ChatProviderEnv = { ...this.options.seed }
+    const storeSourced = new Set<string>()
     const { status, entries } = this.options.store.list()
-    if (!status.ok) return merged
-    for (const entry of entries) {
-      const value = this.options.store.resolve(entry.name)
-      if (value !== undefined) merged[entry.name] = value
+    if (status.ok) {
+      for (const entry of entries) {
+        const value = this.options.store.resolve(entry.name)
+        if (value === undefined) continue
+        env[entry.name] = value
+        storeSourced.add(entry.name)
+      }
     }
-    return merged
+    return { env, storeSourced }
   }
 
   /** The registry's store source: every secret-source key, names only. */
@@ -147,14 +158,17 @@ export function createServerCredentials(options: {
   return { store, composition }
 }
 
-/** The chat manager's two credential getters (S3): resolution's overrides
- * and the registry's store-key source, both read afresh per call. */
+/** The chat manager's credential getters (S3): resolution's overrides, the
+ * same overrides with their store origin (the credentialed transport
+ * refusal), and the registry's store-key source, each read afresh per call. */
 export function credentialManagerOptions(composition: CredentialComposition): {
   getProviderEnv: () => ChatProviderEnv
+  getProviderEnvSnapshot: () => ProviderEnvSnapshot
   getSecretSourceKeys: () => string[]
 } {
   return {
     getProviderEnv: () => composition.overrides(),
+    getProviderEnvSnapshot: () => composition.snapshot(),
     getSecretSourceKeys: () => composition.secretSourceKeys(),
   }
 }

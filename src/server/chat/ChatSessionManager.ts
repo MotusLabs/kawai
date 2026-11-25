@@ -65,7 +65,7 @@ import {
   ensureClaudeExecutable,
   type ClaudeExecutableCheck,
 } from './claudeExecutable'
-import { effectiveChatEnv, type ChatProviderEnv } from './chatProviderEnv'
+import { effectiveChatEnv, type ChatProviderEnv, type ProviderEnvSnapshot } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
 import type { ChatWorkerStore } from './chatWorkerStore'
 import type { ChatTaskStore } from './chatTaskStore'
@@ -175,6 +175,9 @@ import type { WorkspaceMessageContext, WorkspaceMessageEnvelope } from '../../sh
 export type { ChatQueryFactory }
 export { chatAuthErrorMessage, hasClaudeAuth }
 
+
+/** No store-sourced names (a manager built without a credential snapshot). */
+const NO_STORE_NAMES: ReadonlySet<string> = new Set()
 export interface ChatSessionManagerOptions {
   registry: SessionRegistry
   db: SessionDatabase
@@ -287,6 +290,13 @@ export interface ChatSessionManagerOptions {
    * getter, so a Settings change reaches the next spawn without a restart.
    */
   getProviderEnv?: () => ChatProviderEnv
+  /**
+   * The same overrides with the names the credential store supplies, read
+   * together (provider-credential-store A1, r5): each admission check and
+   * each spawn resolves from one snapshot, so the credentialed transport
+   * refusal sees origin and value from the same store read.
+   */
+  getProviderEnvSnapshot?: () => ProviderEnvSnapshot
   /**
    * The credential store's secret-source keys (provider-credential-store
    * S3), read at every registry observation so a stored key withholds at the
@@ -3021,6 +3031,7 @@ export class ChatSessionManager {
                 (this.options.getQuestionAutoAnswerMinutes?.() ?? 0) * 60_000,
               teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               getProviderEnv: () => this.providerEnv(),
+              getProviderEnvSnapshot: () => this.providerSnapshot(),
               // The role's window, read per spawn (mimo-million-token-context D3).
               getCompactWindow: () => this.teams.compactWindowFor(
                 record.sessionId,
@@ -3092,8 +3103,9 @@ export class ChatSessionManager {
    * handshake even when the provider configuration is unchanged.
    */
   private async probeAvailability(profileId: string = 'default', projectPath?: string): Promise<void> {
-    const providerEnv = this.providerEnv()
-    const launch = this.launchFor(profileId, projectPath)
+    const snapshot = this.providerSnapshot()
+    const providerEnv = snapshot.env
+    const launch = this.launchFor(profileId, projectPath, snapshot)
     // Only Claude chats probe the SDK handshake; a Codex chat returns from
     // createAvailableSession before this runs.
     if (launch.runtime !== 'claude') return
@@ -3132,7 +3144,13 @@ export class ChatSessionManager {
   }
 
   private providerEnv(): ChatProviderEnv {
-    return this.options.getProviderEnv?.() ?? {}
+    return this.providerSnapshot().env
+  }
+
+  /** One credential snapshot: the overrides and the names the store supplies. */
+  private providerSnapshot(): ProviderEnvSnapshot {
+    return this.options.getProviderEnvSnapshot?.()
+      ?? { env: this.options.getProviderEnv?.() ?? {}, storeSourced: NO_STORE_NAMES }
   }
 
   /** The registry's collaborators for one observation: the retained names
@@ -3190,13 +3208,13 @@ export class ChatSessionManager {
    * goes through here so catalog file failures are reported (never silently
    * skipped: an invalid file would otherwise launch with inherited settings).
    */
-  private launchFor(profileId: string | undefined, projectPath?: string): ChatLaunchConfiguration {
+  private launchFor(profileId: string | undefined, projectPath?: string, snapshot: ProviderEnvSnapshot = this.providerSnapshot()): ChatLaunchConfiguration {
     const report = this.options.catalogErrorLog
       ?? (errors => logger.warn('chat_profile_catalog_errors', { errors }))
     // The registry observes here too (provider-relay-setup D2): a name is
     // registered by the first catalog read that names it, launch or not —
     // an entry removed before any spawn stays withheld.
-    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report, this.registryContext())
+    return resolveClaudeProfile(profileId, snapshot.env, this.catalogCtx(projectPath), report, this.registryContext(), snapshot.storeSourced)
   }
 
   /**

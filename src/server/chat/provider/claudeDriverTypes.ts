@@ -11,7 +11,7 @@ import type { WorkspaceMessageContext } from '../../../shared/planWorkspace'
 import type { WorkspaceContextOutcome } from '../../plans/workspace/workspaceContext'
 import type { OutboundAuditSink } from '../../outbound/observer'
 import type { BackgroundTaskRecord } from '../chatBackgroundTasks'
-import type { ChatProviderEnv } from '../chatProviderEnv'
+import type { ChatProviderEnv, ProviderEnvSnapshot } from '../chatProviderEnv'
 import type { RetainedNamesDb } from '../secretNameRegistry'
 import type { ChatTimerScheduler } from '../timerScheduler'
 import type { ChatWireRecorder } from '../wireTap'
@@ -58,6 +58,9 @@ export interface ChatSessionDriverOptions extends ChatDriverCallbacks {
   resumeSessionId?: string
   /** Provider overrides, read at each spawn so Settings changes apply. */
   getProviderEnv?: () => ChatProviderEnv
+  /** The same overrides with their store origin, one snapshot per spawn
+   * (provider-credential-store A1, r5); preferred over getProviderEnv. */
+  getProviderEnvSnapshot?: () => ProviderEnvSnapshot
   /**
    * The secret-name registry's persistence seam (provider-relay-setup D2),
    * read at each spawn so a catalog edit re-registers at the next launch and

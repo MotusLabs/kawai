@@ -14,6 +14,8 @@
 //        does not reach the next creation without a restart;
 //   I3   a registered ANTHROPIC_AUTH_TOKEN is not refused on the credentialed
 //        branch, so the launch carries a registered name under its own name;
+//   r5   the credentialed transport refusal is bypassed, so a store pin key
+//        reaches the flag settings layer at creation or at a respawn;
 //   S6   the startup gate is not awaited, so restore or the first creation
 //        runs before the startup migration's store write settles.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -339,4 +341,57 @@ describe('I3/M7 — a registered output name refuses the credentialed launch', (
       expect(handles).toHaveLength(0)
     })
   }
+})
+
+describe('A1 (r5) — the credentialed transport refusal through the real manager', () => {
+  const settingsEnv = (handle: FakeHandle) => (handle.options.settings as { env?: Record<string, string> } | undefined)?.env
+
+  // @covers: provider-credentials › Credential resolution composes per variable › A stored transport value refuses a credentialed launch
+  test('a store-backed HTTPS_PROXY refuses the relay creation by name before SDK availability or any spawn', async () => {
+    const handles: FakeHandle[] = []
+    const { credentials, manager } = await claudeServer(handles)
+    await credentials.store.set('PCS_RELAY_TOKEN', 'zq-relay-token', 'secret-source')
+    await credentials.store.set('HTTPS_PROXY', 'http://zq-user:zq-pass@proxy.example.internal:3128', 'launch-env')
+    const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'relay-opus' })
+    expect(created.ok).toBe(false)
+    const error = created.ok ? '' : created.error
+    expect(error).toContain('Credential store entry HTTPS_PROXY cannot be used by a credentialed launch')
+    expect(error).not.toContain('zq-')
+    await flush()
+    expect(handles).toHaveLength(0)
+  })
+
+  // @covers: provider-credentials › Credential resolution composes per variable › A stored transport value refuses a credentialed launch
+  test('a store change before a respawn refuses that respawn by name; a blank entry then pins empty in the child env and the flag layer', async () => {
+    const handles: FakeHandle[] = []
+    const { credentials, manager } = await claudeServer(handles)
+    await credentials.store.set('PCS_RELAY_TOKEN', 'zq-relay-token', 'secret-source')
+    const created = await manager.createAvailableSession({ projectPath: project, claudeProfileId: 'relay-opus' })
+    if (!created.ok) throw new Error(created.error)
+    const sessionId = created.session.id
+    expect((await manager.send(sessionId, 'hello')).ok).toBe(true)
+    await spawned(handles, 0)
+    handles[0]!.push(initMessage('sdk-transport-1'))
+    await flush()
+    expect({ child: handles[0]!.options.env?.HTTPS_PROXY, flag: settingsEnv(handles[0]!)?.HTTPS_PROXY }).toEqual({ child: '', flag: '' })
+
+    // The agent exits; the operator stores a proxy; the next send respawns from a fresh composition.
+    await credentials.store.set('HTTPS_PROXY', 'http://zq-user:zq-pass@proxy.example.internal:3128', 'launch-env')
+    handles[0]!.query.close()
+    await flush()
+    const refused = await manager.send(sessionId, 'again')
+    expect(refused.ok).toBe(false)
+    const error = refused.ok ? '' : refused.error
+    expect(error).toContain('Credential store entry HTTPS_PROXY cannot be used by a credentialed launch')
+    expect(error).not.toContain('zq-')
+    await flush()
+    expect(handles).toHaveLength(1)
+
+    // Stored blank: the respawn goes ahead and pins the key empty in both layers.
+    await credentials.store.set('HTTPS_PROXY', '', 'launch-env')
+    expect((await manager.send(sessionId, 'once more')).ok).toBe(true)
+    await spawned(handles, 1)
+    expect(handles).toHaveLength(2)
+    expect({ child: handles[1]!.options.env?.HTTPS_PROXY, flag: settingsEnv(handles[1]!)?.HTTPS_PROXY }).toEqual({ child: '', flag: '' })
+  })
 })

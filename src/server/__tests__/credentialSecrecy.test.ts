@@ -8,7 +8,8 @@
 //   P1s  the same mutations plus refusals that carry sentinels in their
 //        input, then the real Claude launch composer and the real wire tap:
 //        no store value in any HTTP body, log call, SQLite row, the flag
-//        settings layer, or a wire-log frame. The designed channels stand:
+//        settings layer (store-backed transport pin keys included: a
+//        credentialed launch refuses them by name, r5), or a wire-log frame. The designed channels stand:
 //        the provider's token rides the launch env as ANTHROPIC_AUTH_TOKEN,
 //        and launch-env values ride the env as themselves.
 // Sentinel values use an alphabet no fixed text or name contains, so a
@@ -20,8 +21,8 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import type { CredentialKind, CredentialListing, CredentialListingRow } from '../../shared/credentials'
 import { createServerCredentials } from '../chat/credentialComposition'
-import { resolveClaudeProfileDetail } from '../chat/ClaudeProfiles'
-import { readRetainedNames, RETAINED_SECRET_NAMES_KEY, type RegistryContext } from '../chat/secretNameRegistry'
+import { resolveClaudeProfileDetail, TRANSPORT_PIN_ENV } from '../chat/ClaudeProfiles'
+import { readRetainedNames, RETAINED_SECRET_NAMES_KEY, StoreTransportRefusal, type RegistryContext } from '../chat/secretNameRegistry'
 import { createWireTappedSpawn } from '../chat/wireTap'
 import { freshTestDatabase } from './helpers/testDatabase'
 import { propertyCases } from './helpers/propertyCases'
@@ -284,6 +285,16 @@ describe('P1s — no store value escapes the designed channels', () => {
       const token = sentinel(next)
       values.add(token)
       await h.credentials.store.set('PCS_API_TOKEN', token, 'secret-source')
+      // A store-backed transport pin key (A1, r5): a non-empty value refuses
+      // the credentialed launch by name; a blank pins empty.
+      let storeTransport = false
+      if (next() < 0.5) {
+        const key = TRANSPORT_PIN_ENV[Math.floor(next() * TRANSPORT_PIN_ENV.length)]!
+        const value = next() < 0.3 ? '' : sentinel(next)
+        if (value) values.add(value)
+        storeTransport = value !== ''
+        await h.credentials.store.set(key, value, 'launch-env')
+      }
       bodies.push(await (await h.app.request('/api/settings/credentials')).text())
       const where = `case ${i}`
       for (const text of bodies) if (leaks(text, values).length > 0) failures.push(`${where}: HTTP body`)
@@ -298,9 +309,18 @@ describe('P1s — no store value escapes the designed channels', () => {
         setAppSetting: (key, value) => h.db.setAppSetting(key, value),
         secretSourceKeys: () => h.credentials.composition.secretSourceKeys(),
       }
-      const overrides = h.credentials.composition.overrides()
+      const snapshot = h.credentials.composition.snapshot()
       for (const profile of ['relay-opus', 'default']) {
-        const launch = resolveClaudeProfileDetail(profile, overrides, { homeDir: h.home }, undefined, registry).launch
+        let launch
+        try {
+          launch = resolveClaudeProfileDetail(profile, snapshot.env, { homeDir: h.home }, undefined, registry, snapshot.storeSourced).launch
+        } catch (error) {
+          if (!(error instanceof StoreTransportRefusal)) throw error
+          if (profile !== 'relay-opus' || !storeTransport) failures.push(`${where} ${profile}: unexpected transport refusal`)
+          if (leaks(error.message, values).length > 0) failures.push(`${where}: refusal text`)
+          continue
+        }
+        if (profile === 'relay-opus' && storeTransport) failures.push(`${where}: store transport value launched (refusal bypassed)`)
         if (launch.runtime !== 'claude') throw new Error('expected a Claude launch')
         if (leaks(JSON.stringify(launch.settings ?? {}), values).length > 0) failures.push(`${where} ${profile}: flag settings layer`)
         const frames = await wireFrames(launch.settings ?? {}, launch.env ?? {})

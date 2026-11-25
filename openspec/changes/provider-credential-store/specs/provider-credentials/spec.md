@@ -104,6 +104,10 @@ reaches a launch under its own name.
 - **WHEN** a provider's token variable resolves only through the store
 - **THEN** session creation passes the authentication check and the spawned agent receives that same value inside its composed token variable
 
+#### Scenario: A stored transport value refuses a credentialed launch
+- **WHEN** the store supplies a non-empty value for a transport pin variable and a credential-bearing profile starts or resumes
+- **THEN** the launch refuses before the availability check or spawn with fixed text naming only the variables, while a blank store entry pins the variable empty and the other branches still deliver the value
+
 ### Requirement: Legacy Settings credentials migrate to the store at upgrade
 At the first startup after adoption, the server SHALL move every Settings
 provider-env map entry once into the credential store and clear the map
