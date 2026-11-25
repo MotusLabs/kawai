@@ -88,10 +88,15 @@ interface WorkerEntry {
   disabled: boolean
 }
 
-/** The reason a request started under, widened when a session joins it. */
+/**
+ * The reason a request started under, widened when a session joins it. Its
+ * teams are captured under the request's key at start and at each join, so a
+ * team whose sessions reach the provider only after a credential change is
+ * never credited with the retired key's observation (B5).
+ */
 interface Started {
   reason: QuotaReason
-  teams: string[]
+  teams: Set<string>
   sessionJoined: boolean
 }
 
@@ -139,6 +144,20 @@ export class QuotaReaderService {
     return keys.length === 1 && keys[0] === key
   }
 
+  /**
+   * Whether the target's key is no longer one the provider holds: its live
+   * sessions resolve to another account, or — with none live — its workers
+   * hold only other keys. A session-origin settlement of a retired key (a
+   * request that outlived a credential change) is history only (B5).
+   */
+  isRetiredAccount(target: QuotaTarget): boolean {
+    const key = accountKeyOf(target)
+    const session = this.options.sessionTarget(target.providerId)
+    if (session !== undefined) return session === null || accountKeyOf(session) !== key
+    const keys = [...this.workers.values()].filter(entry => entry.target.providerId === target.providerId).map(entry => entry.key)
+    return keys.length > 0 && !keys.includes(key)
+  }
+
   /** Whether the worker entry for this target has a timer armed. */
   workerArmed(target: QuotaTarget): boolean {
     return this.workers.get(accountKeyOf(target))?.timer != null
@@ -155,14 +174,19 @@ export class QuotaReaderService {
     if (running) {
       // A session joining a worker's request (a spawn pull, a session tick)
       // shares its settlement: the session's teams get the observation too.
-      if (origin === 'session') running.started.sessionJoined = true
+      if (origin === 'session') {
+        running.started.sessionJoined = true
+        // A request is keyed by account, so the joining sessions are on its key now.
+        for (const team of this.options.sessionTeams(target)) running.started.teams.add(team)
+      }
       return running.promise
     }
     const token = ++this.sequence
     const startedAt = this.now()
     // The reason is the one the request started under (B3): a worker removed
     // while it runs still has its settlement recorded as a worker's.
-    const started: Started = { ...this.reasonOf(key, target, origin === 'session'), sessionJoined: false }
+    const initial = this.reasonOf(key, target, origin === 'session')
+    const started: Started = { reason: initial.reason, teams: new Set(initial.teams), sessionJoined: false }
     const read = this.options.read(target).catch(
       (): QuotaPull => ({ ok: false, outcome: 'unreachable', reason: 'quota read failed' })
     )
@@ -205,7 +229,9 @@ export class QuotaReaderService {
       else if (outcome === 'unsupported') worker.disabled = true
       else worker.failures = 0
     }
-    const now = this.reasonOf(key, target, started.sessionJoined)
+    // Later recipients only while they still hold this key: its current
+    // worker teams, and session teams when the session cadence resolves to it.
+    const now = this.reasonOf(key, target)
     const teams = new Set([...started.teams, ...now.teams])
     const reason: QuotaReason = started.sessionJoined && started.reason === 'worker' ? 'both' : started.reason
     this.options.onSettled({ target, reason, teams: [...teams], outcome, pull, startedAt, settledAt: this.now() })

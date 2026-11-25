@@ -13,7 +13,7 @@ import path from 'node:path'
 import { QUOTA_TIMEOUT_MS } from '../chat/quota/QuotaReaderService'
 import {
   BODY_MARKER, CADENCE_MS, HOST_ONLY, QUOTA_TOKEN, QUOTA_TOKEN_B, ROUTER, ZAI, ZAI_B,
-  flush, serviceHarness, step, storedRows, sub, type ServiceHarness,
+  flush, serviceHarness, step, liveTrace, storedRows, sub, type ServiceHarness,
 } from './helpers/quotaServiceHarness'
 
 const DESIGN = path.join(import.meta.dir, '../../../openspec/changes/process-quota-history-and-incident-advice/design.md')
@@ -26,6 +26,9 @@ afterEach(() => {
   // P4 over every row: nothing stored or logged carries the credential or the body.
   const haystack = [...storedRows(h), ...h.logs].join('\n')
   for (const secret of [QUOTA_TOKEN, QUOTA_TOKEN_B, BODY_MARKER]) expect(haystack).not.toContain(secret)
+  // The live trace keeps compatible wire labels but never a credential.
+  const liveText = liveTrace(h).join('\n')
+  for (const secret of [QUOTA_TOKEN, QUOTA_TOKEN_B]) expect(liveText).not.toContain(secret)
   h.close()
 })
 

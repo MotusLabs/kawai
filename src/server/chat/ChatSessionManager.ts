@@ -3319,7 +3319,9 @@ export class ChatSessionManager {
     }
     if (pull.ok) {
       this.providerUsageProfiles.add(providerId)
-      this.usageLimits.record(providerId, pull.report)
+      // A pull that outlived a credential change is the retired account's:
+      // history only, never the live report (B5).
+      if (!this.quota.service.isRetiredAccount({ providerId, ...target })) this.usageLimits.record(providerId, pull.report)
       this.quota.service.armSession(providerId)
       return false
     }
@@ -3604,6 +3606,8 @@ export class ChatSessionManager {
   /** Publish one session-cadence pull: a failed refresh keeps the held report (store semantics). */
   private publishSessionPull(providerId: string, target: QuotaTarget, pull: QuotaPull): void {
     if (this.isShutDown || !pull.ok) return
+    // A tick whose request outlived a credential change: history only (B5).
+    if (this.quota.service.isRetiredAccount(target)) return
     if ('remainingUsd' in pull) {
       this.recordOpenRouterPull(providerId, pull)
       this.noteOpenRouterCreditsRefused(providerId, pull, target.balanceKey)

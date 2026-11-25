@@ -13,7 +13,7 @@ import type { ChatUsageReport } from '../../shared/chat'
 import { HEADROOM_FRESH_MS, headroomEvidence, type HeadroomEvidence, type HeadroomLimit } from '../metrics/observations/headroom'
 import {
   BODY_MARKER, OTHER, QUOTA_TOKEN, QUOTA_TOKEN_B, ZAI, ZAI_B,
-  serviceHarness, step, storedRows, sub, type ServiceHarness,
+  serviceHarness, step, liveTrace, storedRows, sub, type ServiceHarness,
 } from './helpers/quotaServiceHarness'
 
 const DESIGN = path.join(import.meta.dir, '../../../openspec/changes/process-quota-history-and-incident-advice/design.md')
@@ -26,6 +26,9 @@ afterEach(() => {
   live = false
   const haystack = [...storedRows(h), ...h.logs].join('\n')
   for (const secret of [QUOTA_TOKEN, QUOTA_TOKEN_B, BODY_MARKER]) expect(haystack).not.toContain(secret)
+  // The live trace keeps compatible wire labels but never a credential.
+  const liveText = liveTrace(h).join('\n')
+  for (const secret of [QUOTA_TOKEN, QUOTA_TOKEN_B]) expect(liveText).not.toContain(secret)
   h.close()
 })
 

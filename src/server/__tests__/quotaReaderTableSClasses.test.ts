@@ -11,7 +11,7 @@ import { afterEach, expect, jest, test } from 'bun:test'
 import { QUOTA_TIMEOUT_MS, QuotaReaderService, type QuotaPull, type QuotaSettlement } from '../chat/quota/QuotaReaderService'
 import {
   BODY_MARKER, CADENCE_MS, HOST_ONLY, QUOTA_TOKEN, QUOTA_TOKEN_B, ZAI, ZAI_B,
-  serviceHarness, step, storedRows, sub, type ServiceHarness,
+  serviceHarness, step, liveTrace, storedRows, sub, type ServiceHarness,
 } from './helpers/quotaServiceHarness'
 
 const MIN = 60_000
@@ -21,6 +21,9 @@ afterEach(() => {
   if (!h) return
   const haystack = [...storedRows(h), ...h.logs].join('\n')
   for (const secret of [QUOTA_TOKEN, QUOTA_TOKEN_B, BODY_MARKER]) expect(haystack).not.toContain(secret)
+  // The live trace keeps compatible wire labels but never a credential.
+  const liveText = liveTrace(h).join('\n')
+  for (const secret of [QUOTA_TOKEN, QUOTA_TOKEN_B]) expect(liveText).not.toContain(secret)
   h.close()
   h = null
 })

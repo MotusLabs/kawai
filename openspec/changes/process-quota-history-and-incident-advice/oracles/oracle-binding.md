@@ -35,6 +35,12 @@ changing any output. These resolutions bind the executable tables.
   it is idle. A configuration trigger on a busy key starts nothing (S3). A
   settlement for the old key keeps the old key's identity and time. The
   persisted account alias is `provider@host` and carries no credential.
+  Writer resolution (Sol re-check note-d5b9f0e9): a request spans two
+  instants, so its recipients are captured under its key, at start and at
+  each joining session. A settlement adds later recipients only while they
+  still hold the key. No live path (worker settlement, spawn pull, session
+  tick) publishes a key the provider no longer holds. Every pull has the
+  target's own credentials redacted before any caller sees it.
 - **B6 (S8, S10).** The session reason keeps today's fixed per-provider
   cadence and spawn pull (A2: the session tests stay unchanged). A worker key
   whose provider's session cadence resolves to the same key is served by

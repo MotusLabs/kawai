@@ -34,6 +34,12 @@ async function start(sessionId: string): Promise<void> {
   await settle()
 }
 
+/** Settle until `ready` holds (a loaded shared process may need more turns); throws if it never does. */
+async function until(ready: () => boolean): Promise<void> {
+  for (let turn = 0; turn < 40 && !ready(); turn++) await settle()
+  if (!ready()) throw new Error('condition never held')
+}
+
 test('a retired key\'s late answer after a credential change goes to history under its own scope and never replaces the live report', async () => {
   const env: Record<string, string> = { ZQ_TOKEN: QUOTA_TOKEN }
   composition = await quotaComposition({ env })
@@ -72,6 +78,7 @@ test('after a rotation a session on the new key pulls its own account, not the r
   env.ZQ_TOKEN = QUOTA_TOKEN_B
   composition.answers.push(jsonResponse(quotaCapture(70)))
   await start(sessionC)
+  await until(() => composition!.calls.length === 2)
   expect(composition.calls.map(call => call.auth)).toEqual([QUOTA_TOKEN, QUOTA_TOKEN_B])
   expect(composition.manager.providerUsageOf('zai')?.windows[0]?.percentUsed).toBe(70)
   // The sweep moves the worker to K2: its poll is the live account's, for A and C.
@@ -121,4 +128,78 @@ test('a spawn pull and a worker subscription during held requests join them: one
   await settle()
   expect(composition.calls).toHaveLength(calls + 1)
   expect(historyRows(composition.db).filter(row => percentOf(row) === 22).map(row => String(row.team_id)).sort()).toEqual(teams)
+})
+
+// Sol re-check note-d5b9f0e9 item 2: a held request spans two instants, so a
+// joined session's recipients are captured under the request's key, and no
+// live path publishes a retired key's answer.
+test('a spawn joined to a held old-key poll before a rotation publishes nothing live, and a team that only used the new key gets none of the old key\'s history', async () => {
+  const env: Record<string, string> = { ZQ_TOKEN: QUOTA_TOKEN }
+  composition = await quotaComposition({ env, sdkPull: true })
+  composition.writeGroup('workers: [glm]')
+  const old = held()
+  composition.answers.push(old.answer, jsonResponse(quotaCapture(40)))
+  const anchorA = await sessionIn(composition)
+  const sessionB = await sessionIn(composition, extraProject(composition, 'project-b', 'workers: [hostonly]'), 'glm')
+  // B's spawn pull joins the held K1 worker poll.
+  await start(sessionB)
+  expect(composition.calls.map(call => call.auth)).toEqual([QUOTA_TOKEN])
+  // Rotate; C's team resolution moves the worker to K2, which answers 40%.
+  env.ZQ_TOKEN = QUOTA_TOKEN_B
+  const sessionC = await sessionIn(composition, extraProject(composition, 'project-c', 'workers: [hostonly]'), 'glm')
+  await start(sessionC)
+  await until(() => composition!.calls.length === 2)
+  expect(composition.calls.map(call => call.auth)).toEqual([QUOTA_TOKEN, QUOTA_TOKEN_B])
+  expect(composition.manager.providerUsageOf('zai')?.windows[0]?.percentUsed).toBe(40)
+  // K1 answers a second later, inside its bound.
+  await advance(1_000)
+  old.release(12)
+  await settle()
+  expect(composition.manager.providerUsageOf('zai')?.windows[0]?.percentUsed).toBe(40)
+  const k1 = historyRows(composition.db).filter(row => percentOf(row) === 12)
+  expect(k1.map(row => String(row.team_id)).sort()).toEqual([teamOf(anchorA), teamOf(sessionB)].sort())
+})
+
+// Sol re-check note-d5b9f0e9 item 1: the accepted capture echoes the
+// credential in an unknown window kind; the client-facing usage trace (the
+// manager's onUsage, published to chat connections) carries none of it.
+test('an accepted answer echoing the credential reaches the live usage trace redacted, through a worker poll and a spawn pull', async () => {
+  composition = await quotaComposition({ sdkPull: true })
+  composition.writeGroup('workers: [glm]')
+  await sessionIn(composition)
+  const session = await sessionIn(composition, extraProject(composition, 'project-c', 'workers: [hostonly]'), 'glm')
+  await start(session)
+  await advance(CADENCE_MS * 1.2)
+  expect(composition.calls.length).toBeGreaterThanOrEqual(2)
+  const trace = JSON.stringify([composition.usage, composition.manager.providerUsageOf('zai')])
+  expect(trace).not.toContain(QUOTA_TOKEN)
+  expect(trace).toContain('[redacted]')
+  expect(historyRows(composition.db).length).toBeGreaterThanOrEqual(2)
+  expect(JSON.stringify(historyRows(composition.db))).not.toContain(QUOTA_TOKEN)
+})
+
+test('a session cadence tick held across a rotation publishes nothing live when it answers after the new key\'s poll', async () => {
+  const env: Record<string, string> = { ZQ_TOKEN: QUOTA_TOKEN }
+  composition = await quotaComposition({ env, sdkPull: true })
+  composition.writeGroup('workers: [hostonly]')
+  const session = await sessionIn(composition, composition.project, 'glm')
+  await start(session)
+  await until(() => composition!.calls.length === 1)
+  // Hold the next cadence tick's K1 request.
+  const tick = held()
+  composition.answers.push(tick.answer, jsonResponse(quotaCapture(40)))
+  for (let at = 0; at < CADENCE_MS * 1.2 && composition.calls.length === 1; at += 1_000) await advance(1_000)
+  expect(composition.calls.map(call => call.auth)).toEqual([QUOTA_TOKEN, QUOTA_TOKEN])
+  // Rotate; a glm worker listed now polls K2, which answers 40%.
+  env.ZQ_TOKEN = QUOTA_TOKEN_B
+  composition.writeGroup('workers: [glm]')
+  await sessionIn(composition)
+  await until(() => composition!.calls.length === 3)
+  expect(composition.calls[2]!.auth).toBe(QUOTA_TOKEN_B)
+  expect(composition.manager.providerUsageOf('zai')?.windows[0]?.percentUsed).toBe(40)
+  await advance(1_000)
+  tick.release(12)
+  await settle()
+  expect(composition.manager.providerUsageOf('zai')?.windows[0]?.percentUsed).toBe(40)
+  expect(historyRows(composition.db).some(row => percentOf(row) === 12)).toBe(true)
 })

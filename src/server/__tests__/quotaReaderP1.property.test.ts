@@ -15,7 +15,7 @@ import { accountKeyOf, type QuotaTarget } from '../chat/quota/quotaTarget'
 import { propertyCases } from './helpers/propertyCases'
 import {
   BODY_MARKER, OTHER, QUOTA_TOKEN, QUOTA_TOKEN_B, ZAI, ZAI_B,
-  flush, serviceHarness, step, storedRows, sub, type ServiceHarness,
+  flush, serviceHarness, step, liveTrace, storedRows, sub, type ServiceHarness,
 } from './helpers/quotaServiceHarness'
 
 const SEED = 0x51A7
@@ -106,6 +106,8 @@ async function runCase(index: number): Promise<string[]> {
   }
   const haystack = [...storedRows(harness), ...harness.logs].join('\n')
   for (const secret of [QUOTA_TOKEN, QUOTA_TOKEN_B, BODY_MARKER]) if (haystack.includes(secret)) violations.push('secret persisted or logged')
+  const liveText = liveTrace(harness).join('\n')
+  for (const secret of [QUOTA_TOKEN, QUOTA_TOKEN_B]) if (liveText.includes(secret)) violations.push('credential in the live trace')
   harness.close()
   h = null
   return violations.map(violation => `case ${index}: ${violation}`)

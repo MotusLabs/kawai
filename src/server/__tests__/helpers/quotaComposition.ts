@@ -20,13 +20,13 @@ export const BODY_MARKER = 'body-marker-7f3e'
 
 export const CADENCE_MS = 600_000
 
-/** A Z.AI quota capture at `percentage`, carrying a body-only marker string. */
-export function quotaCapture(percentage: number, nextResetTime = 4_102_444_800_000): unknown {
+/** A Z.AI quota capture at `percentage`, carrying a body-only marker string and echoing `echo` (the request's credential). */
+export function quotaCapture(percentage: number, nextResetTime = 4_102_444_800_000, echo = QUOTA_TOKEN): unknown {
   return {
     code: 200, msg: `Operation successful ${BODY_MARKER}`, success: true,
     // An accepted answer whose unknown row kind echoes the credential and the
     // body marker (P4): the live parser keeps the raw type; history must not.
-    data: { limits: [{ type: 'TIME_LIMIT', percentage, nextResetTime }, { type: `${QUOTA_TOKEN}_${BODY_MARKER}`, percentage: 1 }], level: 'pro' },
+    data: { limits: [{ type: 'TIME_LIMIT', percentage, nextResetTime }, { type: `${echo}_${BODY_MARKER}`, percentage: 1 }], level: 'pro' },
   }
 }
 

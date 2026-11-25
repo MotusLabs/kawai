@@ -5,7 +5,8 @@
 // behavior is unchanged — and this class turns every settlement into history
 // rows for the teams it serves. A worker pull that returns data is also
 // published to the live usage store, the way a session pull is, when it is
-// the provider's current effective account (a retired key's is not). Worker
+// the provider's current effective account (a retired key's is not), with
+// echoed credentials redacted from every pull (redactSecrets.ts). Worker
 // subscriptions are recomputed from the teams' group files on every team
 // resolution and once a minute, so an edited group file or provider catalog
 // reaches the reader without a restart (S7, S14). History writes are
@@ -18,6 +19,7 @@ import { QuotaObservationStore, type QuotaAccountBasis } from '../../metrics/obs
 import {
   QuotaReaderService, type QuotaPull, type QuotaSettlement, type WorkerSubscription,
 } from './QuotaReaderService'
+import { redactPull } from './redactSecrets'
 import { accountAliasOf, accountScopeOf, type QuotaTarget } from './quotaTarget'
 
 export const WORKER_SWEEP_MS = 60_000
@@ -52,7 +54,8 @@ export class ManagerQuota {
   constructor(private readonly deps: ManagerQuotaDeps) {
     this.history = new QuotaObservationStore(deps.db, deps.now)
     this.service = new QuotaReaderService({
-      read: deps.read,
+      // Echoed credentials are redacted before any caller sees a pull (I2).
+      read: target => deps.read(target).then(pull => redactPull(pull, target)),
       cadenceMs: deps.cadenceMs,
       ...(deps.now ? { now: deps.now } : {}),
       ...(deps.random ? { random: deps.random } : {}),

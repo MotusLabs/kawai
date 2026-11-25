@@ -115,7 +115,7 @@ export function serviceHarness(shared?: SessionDatabase): ServiceHarness {
       ok(percent = 40, resetMs?: number) {
         if (request.ended) return
         request.ended = true
-        resolve(jsonResponse(quotaCapture(percent, resetMs)))
+        resolve(jsonResponse(quotaCapture(percent, resetMs, headers.Authorization)))
       },
       fail(status = 503) {
         if (request.ended) return
@@ -209,6 +209,18 @@ export function keyOfRequest(request: HeldRequest): string {
 }
 
 /** Every stored quota row, raw, for P4. */
+/**
+ * What leaves the reader for live use (I2/P4, Sol re-check note-d5b9f0e9
+ * item 1): each provider's published report, the session pulls and every
+ * settlement's pull, serialized.
+ */
+export function liveTrace(harness: ServiceHarness): string[] {
+  return [
+    ...['zai', 'other', 'hostonly', 'router'].map(provider => JSON.stringify(harness.usage.get(provider))),
+    JSON.stringify(harness.sessionPulls), JSON.stringify(harness.settlements.map(settlement => settlement.pull)),
+  ]
+}
+
 export function storedRows(harness: ServiceHarness): string[] {
   return (harness.db.db.prepare('SELECT * FROM process_quota_observations').all() as unknown[]).map(row => JSON.stringify(row))
 }
