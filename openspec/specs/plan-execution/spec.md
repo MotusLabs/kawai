@@ -76,15 +76,9 @@ Start SHALL be refused as `roles-routable`, naming the group or role, when a cha
 - **THEN** Start is refused as `roles-routable`, naming the role, the group, and the profiles each allows
 
 ### Requirement: An execution records what it started from
-An execution SHALL record its inputs at Start, and they SHALL never change afterwards:
-- the plan, the revision, and the content hash;
-- the validation report and input hash;
-- the base branch and its commit;
-- the floor checks with their CI mapping and the floor version;
-- the landing mode, the parallel limit, and the merge method;
-- who started it, and when.
+An execution SHALL record at Start, never to change: the plan, revision, and content hash; the validation report and input hash; the base branch and commit; the floor checks, CI mapping, and floor version; the landing mode, parallel limit, and merge method; who started it, and when.
 
-A later edit of the team's settings SHALL apply only to later executions.
+Start's revision, hash, report, and input hash SHALL stay the history's first entry; Apply SHALL only append entries and advance the current revision. Later settings edits SHALL apply only to later executions.
 
 #### Scenario: Settings edited during an execution
 - **WHEN** the operator changes the team's parallel limit while an execution runs
@@ -93,6 +87,10 @@ A later edit of the team's settings SHALL apply only to later executions.
 #### Scenario: The base branch moves on
 - **WHEN** the base branch advances after Start and a change is provisioned later
 - **THEN** the execution's recorded base commit is unchanged, and the change records the base branch's commit at its provisioning as its baseline
+
+#### Scenario: Start's record survives an Apply
+- **WHEN** the owner applies revision 4 to an execution started on revision 3, then resends the original Start
+- **THEN** the history's first entry still names revision 3 with its hash and report, the Start replays to the same execution, and its base, floor, landing, and limits are unchanged
 
 ### Requirement: Changes are scheduled once their dependencies have landed
 The execution SHALL schedule a change, in plan order, only once each of its dependencies has a landing fact for the plan. At most the parallel limit (default 3) of its changes SHALL be in progress: scheduled and not yet landed, stopped, or cancelled. A change landed by an earlier execution of the plan SHALL count as landed and SHALL NOT run again. A stopped dependency SHALL keep its dependents waiting while independent changes proceed.
@@ -382,15 +380,19 @@ When every change of the execution's revision has a landing fact, the execution 
 - **THEN** the execution is completed and the plan stays open
 
 ### Requirement: A running execution keeps its revision
-Approving another revision of the plan SHALL NOT change a running execution. It SHALL keep its revision, manifests, tasks, and instructions. A newer revision SHALL run only in a new execution, started after the running one finishes or is stopped, and that execution SHALL skip changes that have already landed.
+Approving another revision of the plan SHALL NOT change a running execution. It SHALL keep its revision, manifests, tasks, and instructions until the owner applies a newer approved revision to it through Apply. Apply SHALL be the only way a running execution's revision changes, and only forward; manifests SHALL keep the revision current at their dispatch. Without Apply, a newer revision SHALL run only in a new execution that skips changes already landed.
 
 #### Scenario: Approval during an execution
 - **WHEN** the owner approves revision 4 while an execution of revision 3 runs
 - **THEN** the execution continues on revision 3, and Start for revision 4 is refused as `one-execution` until it finishes or is stopped
 
 #### Scenario: Later instructions keep the revision
-- **WHEN** revision 4 is approved while a change of revision 3's execution awaits review, and the review fails
+- **WHEN** revision 4 is approved but not applied while a change of revision 3's execution awaits review, and the review fails
 - **THEN** the fix attempt's instruction and manifest still name revision 3
+
+#### Scenario: Apply moves the execution forward
+- **WHEN** the owner applies revision 4 to the running execution of revision 3
+- **THEN** the execution's current revision is 4, and its history lists revisions 3 and 4
 
 ### Requirement: Execution state survives restart
 Executions, change states, attempts, rounds, effects, and landing facts SHALL be durable. After a restart, Kawai SHALL resume each running execution from its stored state. Before repeating any effect whose outcome was not recorded, it SHALL inspect that effect. No attempt SHALL be dispatched twice.
