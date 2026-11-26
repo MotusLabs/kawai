@@ -24,6 +24,14 @@ import { retainSecretName, type RetainedNamesDb } from './secretNameRegistry'
 
 type Env = Record<string, string | undefined>
 
+/** Set `name` as an own entry of `env`. Plain assignment would hit the
+ * inherited `__proto__` setter and drop that valid name (design: names are
+ * "never case-converted, renamed, or dropped"); spread copies already keep
+ * own entries. */
+export function setEnvEntry<T>(env: Record<string, T>, name: string, value: T): void {
+  Object.defineProperty(env, name, { value, enumerable: true, writable: true, configurable: true })
+}
+
 /** Resolution: the overrides merged per variable over the process env. */
 export function resolutionEnv(overrides: ChatProviderEnv, processEnv: Env = process.env): Env {
   return { ...processEnv, ...overrides }
@@ -78,7 +86,7 @@ export class CredentialComposition {
       for (const entry of entries) {
         const value = this.options.store.resolve(entry.name)
         if (value === undefined) continue
-        env[entry.name] = value
+        setEnvEntry(env, entry.name, value)
         storeSourced.add(entry.name)
       }
     }
@@ -106,7 +114,7 @@ export class CredentialComposition {
         kind: entry.kind,
         state: entry.state,
         source: 'store',
-        overriding: processEnv[entry.name] !== undefined || Object.hasOwn(seed, entry.name),
+        overriding: (Object.hasOwn(processEnv, entry.name) && processEnv[entry.name] !== undefined) || Object.hasOwn(seed, entry.name),
         collision: entry.kind === 'launch-env' && registered.has(entry.name),
       })
     }

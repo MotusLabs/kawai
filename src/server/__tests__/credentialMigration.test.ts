@@ -152,6 +152,40 @@ describe('table M — the startup migration of the legacy Settings map', () => {
     expect(again.listing.migration).toEqual(complete())
   })
 
+  for (const name of ['__proto__', 'constructor', 'prototype']) {
+    test(`M4: a legacy ${name} entry moves as its own store entry beside its sibling, never dropped by the validator`, async () => {
+      // findings F1: plain assignment hit the inherited __proto__ setter, so the
+      // name vanished from the validated map and the commit deleted it unmoved.
+      db.setAppSetting(CHAT_PROVIDER_ENV_KEY, JSON.stringify(Object.fromEntries([[name, `zq-${name}-value`], ['VALID_SIBLING', 'zq-sibling']])))
+      const run = await start()
+      expect(storeEntries(run.store)).toEqual(Object.fromEntries([
+        [name, { kind: 'launch-env', value: `zq-${name}-value` }],
+        ['VALID_SIBLING', { kind: 'launch-env', value: 'zq-sibling' }],
+      ]))
+      expect(mapRow()).toBeNull()
+      expect(JSON.parse(stamp()!)).toEqual({ version: 1, skipped: [] })
+      expect(Object.hasOwn(run.delivery, name)).toBe(true)
+      expect(Object.getOwnPropertyDescriptor(run.delivery, name)?.value).toBe(`zq-${name}-value`)
+      expect(run.listing.rows.find(row => row.name === name)?.source).toBe('store')
+    })
+  }
+
+  test('I2: a durable import that left a validated name neither stored nor skipped keeps the map and no stamp', async () => {
+    seedMap({ KEPT_A: 'zq-kept-a', LOST_B: 'zq-lost-b' })
+    const real = newStore()
+    // A store whose import reports durable but drops one name — the class F1 hit.
+    const lossy: CredentialStore = Object.assign(Object.create(real) as CredentialStore, {
+      importLaunchEnv: (env: Record<string, string>) => real.importLaunchEnv({ KEPT_A: env.KEPT_A! }),
+    })
+    const state = await migrateLegacyProviderEnv({ db, store: lossy })
+    expect(state).toEqual(pendingState(MIGRATION_TEXT.writeFailed))
+    expect(mapRow()).toBe(JSON.stringify({ KEPT_A: 'zq-kept-a', LOST_B: 'zq-lost-b' }))
+    expect(stamp()).toBeNull()
+    // The next healthy start moves the rest and commits once.
+    expect((await start()).state).toEqual(complete())
+    expect(storeEntries(newStore())).toEqual({ KEPT_A: { kind: 'launch-env', value: 'zq-kept-a' }, LOST_B: { kind: 'launch-env', value: 'zq-lost-b' } })
+  })
+
   test('M5: an identical entry is absorbed keeping its existing kind, with no skip, and the commit still follows durability', async () => {
     // | M5 | absent | non-empty | ok | same value | durable | none | normal | Identical entry absorbed, including its existing kind, with durability confirmed | Delete map and set stamp atomically | Normal, complete, no skip for equality | Normal using existing entry |
     await seedStore({ SAME_TOKEN: { value: 'zq-same', kind: 'secret-source' } })
@@ -398,8 +432,9 @@ describe('table M — the startup migration of the legacy Settings map', () => {
 
   test('M16: the external store stays in place after the commit, and the pre-upgrade backup still holds the map for a rollback restore', async () => {
     // | M16 | present | absent | ok | — | — | none | downgrade to a pre-change binary | External store remains in place across binary downgrade | Map absent and stamp ignored on the post-upgrade database. Restoring the pre-upgrade backup supplies its old map | Legacy surface reports environment or none before restore, with legacy settings source when backup supplies the map | Legacy launch reads process and seed before restore and uses its configured legacy map after restore, with that binary's filters |
-    // The pre-change binary itself is not run here (limitation reported);
-    // this asserts what the current binary leaves for it.
+    // This asserts what the current binary leaves for the pre-change one; the
+    // pre-change binary itself runs on these copies in
+    // credentialBootstrap.integration.test.ts ("M16 — the pre-change binary …").
     db.close()
     const dbPath = path.join(root, 'upgrade.db')
     const backup = path.join(root, 'pre-upgrade.db')

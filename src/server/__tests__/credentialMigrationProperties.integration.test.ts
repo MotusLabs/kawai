@@ -91,12 +91,13 @@ async function generate(next: () => number, i: number): Promise<Case> {
   db.db.run('DELETE FROM app_settings WHERE key IN (?, ?, ?)', [CHAT_PROVIDER_ENV_KEY, MIGRATION_STAMP_KEY, RETAINED_SECRET_NAMES_KEY])
   const home = path.join(root, `case-${i}`)
   fs.mkdirSync(home, { recursive: true })
-  const map: Record<string, string> = {}
-  const prior: Case['prior'] = {}
+  // Null-prototype records: the generator itself must keep __proto__ (F1).
+  const map: Record<string, string> = Object.create(null)
+  const prior: Case['prior'] = Object.create(null)
   const values: string[] = []
   const count = 1 + Math.floor(next() * 5)
   for (let n = 0; n < count; n++) {
-    const name = pick(next, [`PM_UPPER_${n}`, `pm_lower_${n}`, `Pm_Mixed${n}`])
+    const name = pick(next, [`PM_UPPER_${n}`, `pm_lower_${n}`, `Pm_Mixed${n}`, '__proto__', 'constructor', 'prototype'])
     map[name] = next() < 0.1 ? '' : sentinel(next)
     if (map[name]) values.push(map[name])
     const relation = pick(next, ['absent', 'absent', 'same', 'different'] as const)

@@ -126,6 +126,16 @@ export async function migrateLegacyProviderEnv(options: MigrationOptions): Promi
     logger.warn('credential_migration_pending', { reason: 'not-durable', skipped: outcome.skipped })
     return pending(MIGRATION_TEXT.notDurable, outcome.skipped)
   }
+  // Every validated name must have a durable disposition before the map
+  // goes: stored by the core, or a names-only skip (I2, PM1). A name the
+  // import lost keeps the map for the next start instead of vanishing.
+  const resolved = store.list()
+  const stored = new Set(resolved.status.ok ? resolved.entries.map(entry => entry.name) : [])
+  const skipped = new Set(outcome.skipped)
+  if (Object.keys(map.env).some(name => !stored.has(name) && !skipped.has(name))) {
+    logger.warn('credential_migration_pending', { reason: 'name-not-stored', skipped: outcome.skipped })
+    return pending(MIGRATION_TEXT.writeFailed, outcome.skipped)
+  }
   const stamp: Stamp = { version: 1, skipped: outcome.skipped }
   try {
     db.db.transaction(() => {

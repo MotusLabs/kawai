@@ -14,6 +14,7 @@ import {
   withoutCredentials,
   type ChatProviderEnv,
 } from './chatProviderEnv'
+import { setEnvEntry } from './credentialComposition'
 import { catalogRegisteredNames, RegisteredNameRefusal, StoreTransportRefusal, type RegistryContext } from './secretNameRegistry'
 import { CODEX_PROVIDER_LABEL, resolveCodexHome, type CodexLaunchConfiguration } from './codexProfiles'
 import {
@@ -184,7 +185,7 @@ function withoutRegistered(env: Record<string, string>, registered: ReadonlySet<
   if (registered.size === 0) return env
   const filtered: Record<string, string> = {}
   for (const [name, value] of Object.entries(env)) {
-    if (!registered.has(name)) filtered[name] = value
+    if (!registered.has(name)) setEnvEntry(filtered, name, value)
   }
   return filtered
 }

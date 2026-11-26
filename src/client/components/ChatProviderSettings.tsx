@@ -5,7 +5,8 @@
 // always starts empty; Blank, Clear, and changing the kind are explicit acts.
 // Outcomes and refusals render the server's fixed text only, and an applied
 // but not durable save shows its warning (never a retry). The modal's Save
-// sends any value still typed into an input before it closes.
+// sends any value still typed into an input before it closes, and stays open
+// on that warning when a write was applied but not durable.
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent } from 'react'
 import type {
   CredentialKind,
@@ -98,7 +99,9 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
       }
     }, [])
 
-    /** Run one mutation; on success the typed input it consumed is cleared. */
+    /** Run one mutation; once applied, the typed input it consumed is cleared
+     * (never retried). True only for a durable write: an applied but not
+     * durable one keeps the modal open on its warning (U6). */
     const mutate = async (path: string, init: RequestInit, consumed?: () => void): Promise<boolean> => {
       setBusy(true)
       setError(null)
@@ -109,7 +112,7 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
         setListing(outcome.listing)
         setNotice({ text: outcome.message, warning: outcome.applied && !outcome.durable })
         consumed?.()
-        return true
+        return outcome.applied && outcome.durable
       } catch (err: unknown) {
         if (mountedRef.current) setError(err instanceof Error ? err.message : 'The credential request failed.')
         return false
@@ -210,7 +213,11 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
                   aria-label={`New value for ${row.name}`}
                   value={typed[row.name] ?? ''}
                   onChange={(e) => setTyped((current) => ({ ...current, [row.name]: e.target.value }))}
-                  onKeyDown={onEnter(() => void setValue(row.name, typed[row.name] ?? '', row.kind ?? 'launch-env'))}
+                  onKeyDown={onEnter(() => {
+                    // Enter shares Set's guard: an untouched or emptied input sends nothing (Blank is explicit).
+                    const value = typed[row.name] ?? ''
+                    if (value !== '') void setValue(row.name, value, row.kind ?? 'launch-env')
+                  })}
                   disabled={busy}
                 />
                 <button
@@ -245,10 +252,10 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input className="input min-w-0 flex-1 font-mono text-xs" placeholder="NAME" aria-label="New variable name"
-            value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={onEnter(() => void addNew())} disabled={busy} />
+            value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={onEnter(() => { if (newName.trim() !== '') void addNew() })} disabled={busy} />
           <input className="input min-w-0 flex-1 font-mono text-xs" type="password" autoComplete="off" placeholder="value"
             aria-label="New variable value" value={newValue} onChange={(e) => setNewValue(e.target.value)}
-            onKeyDown={onEnter(() => void addNew())} disabled={busy} />
+            onKeyDown={onEnter(() => { if (newName.trim() !== '') void addNew() })} disabled={busy} />
           <select className="input text-xs" aria-label="New variable kind" value={newKind}
             onChange={(e) => setNewKind(e.target.value as CredentialKind)} disabled={busy}>
             <option value="launch-env">{KIND_LABEL['launch-env']}</option>

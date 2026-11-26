@@ -14,7 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { CredentialComposition, credentialStorePath, deliveryEnv, resolutionEnv } from '../chat/credentialComposition'
 import { createCredentialStore } from '../chat/credentialStore'
-import { effectiveChatEnv, type ChatProviderEnv } from '../chat/chatProviderEnv'
+import { effectiveChatEnv, parseChatProviderEnv, validateChatProviderEnv, type ChatProviderEnv } from '../chat/chatProviderEnv'
 import { resolveClaudeProfileDetail, withheldCredentialNamesAt } from '../chat/ClaudeProfiles'
 import { codexSpawnEnv } from '../chat/codexProfiles'
 import { profileCatalogLevels } from '../chat/profileCatalog'
@@ -253,24 +253,67 @@ function rng(seed: number): () => number {
   }
 }
 
+describe('names keep their own entry', () => {
+  // findings F1 / decision-145e46be: plain assignment hit the inherited
+  // __proto__ setter, so that valid name vanished; each prototype-shaped name
+  // stays an own entry at every layer.
+  const PROTO_NAMES = ['__proto__', 'constructor', 'prototype'] as const
+  const own = (env: Record<string, unknown> | undefined, name: string) =>
+    env && Object.hasOwn(env, name) ? Object.getOwnPropertyDescriptor(env, name)?.value : 'missing'
+
+  for (const name of PROTO_NAMES) {
+    test(`${name}: store, snapshot, resolution, delivery projection, Claude launches, listing, seed parse, and the legacy validator keep it as an own entry`, () => {
+      const file = path.join(home, '.kawai', 'credentials.json')
+      writeStore(Object.fromEntries([[name, { kind: 'launch-env', value: `zq-${name}-store` }], [VAR, { kind: 'launch-env', value: 'zq-sibling' }]]))
+      const store = createCredentialStore(file)
+      expect(store.resolve(name)).toBe(`zq-${name}-store`)
+      const composition = new CredentialComposition({ store, seed: {} })
+      const snapshot = composition.snapshot()
+      expect([own(snapshot.env, name), snapshot.storeSourced.has(name), own(snapshot.env, VAR)]).toEqual([`zq-${name}-store`, true, 'zq-sibling'])
+      const resolution = effectiveChatEnv(snapshot.env)
+      expect(own(resolution, name)).toBe(`zq-${name}-store`)
+      expect(own(deliveryEnv(resolution, new Set()), name)).toBe(`zq-${name}-store`)
+      expect(own(deliveryEnv(resolution, new Set([name])), name)).toBe('missing')
+      const registry = memoryRegistry(composition)
+      for (const id of ['default', 'relay']) {
+        const launch = resolveClaudeProfileDetail(id, snapshot.env, { homeDir: home }, undefined, registry).launch
+        if (launch.runtime !== 'claude') throw new Error('expected a Claude launch')
+        expect({ id, value: own(launch.env, name), sibling: own(launch.env, VAR) }).toEqual({ id, value: `zq-${name}-store`, sibling: 'zq-sibling' })
+      }
+      const listed = composition.listing(new Set(), { state: 'none', text: null, skipped: [], ignored: [] }).rows.find(row => row.name === name)
+      expect(listed).toEqual({ name, kind: 'launch-env', state: 'set', source: 'store', overriding: false, collision: false })
+      const seed = parseChatProviderEnv(`${name}=zq-${name}-seed;${VAR}=seed-sibling`)
+      expect([own(seed, name), own(seed, VAR)]).toEqual([`zq-${name}-seed`, 'seed-sibling'])
+      const seeded = new CredentialComposition({ store: createCredentialStore(path.join(root, 'absent.json')), seed })
+      expect(own(seeded.overrides(), name)).toBe(`zq-${name}-seed`)
+      expect(seeded.listing(new Set(), { state: 'none', text: null, skipped: [], ignored: [] }).rows.find(row => row.name === name)?.source).toBe('seed')
+      const validated = validateChatProviderEnv(JSON.parse(JSON.stringify(Object.fromEntries([[name, `zq-${name}-map`]]))))
+      expect(validated.ok && own(validated.env, name)).toBe(`zq-${name}-map`)
+    })
+  }
+})
+
 describe('PC1 — composition equals the table', () => {
   const CASES = 200
   const SEED = 0x5c0c1
   test('PC1: seeded (process, seed, store, registry) tuples project exactly table C at the gate and every launch (200 cases)', () => {
     const next = rng(SEED)
     const pick = <T,>(items: readonly T[]): T => items[Math.floor(next() * items.length)]!
-    const names = ['PCS_P_A', 'PCS_P_B', 'PCS_P_C', 'pcs_p_mixed']
+    // Prototype-shaped names too (F1); process.env can never hold __proto__.
+    const names = ['PCS_P_A', 'PCS_P_B', 'PCS_P_C', 'pcs_p_mixed', '__proto__', 'constructor', 'prototype']
+    const own = (env: Record<string, string | undefined> | undefined, name: string) =>
+      env && Object.hasOwn(env, name) ? Object.getOwnPropertyDescriptor(env, name)?.value as string | undefined : undefined
     const failures: string[] = []
     for (let i = 0; i < propertyCases(CASES); i++) {
       const caseHome = path.join(root, `case-${i}`)
       fs.mkdirSync(path.join(caseHome, '.kawai'), { recursive: true, mode: 0o700 })
       const health = next() < 0.1 ? 'malformed' : 'ok'
-      const seed: ChatProviderEnv = {}
-      const entries: StoreSpec = {}
+      const seed: ChatProviderEnv = Object.create(null)
+      const entries: StoreSpec = Object.create(null)
       const retained: string[] = []
-      const processEnv: Record<string, string | undefined> = {}
+      const processEnv: Record<string, string | undefined> = Object.create(null)
       for (const name of names) {
-        const proc = pick([undefined, `p-${i}-${name}`])
+        const proc = name === '__proto__' ? undefined : pick([undefined, `p-${i}-${name}`])
         processEnv[name] = proc
         const seedValue = pick([undefined, `s-${i}-${name}`, ''])
         if (seedValue !== undefined) seed[name] = seedValue
@@ -302,10 +345,10 @@ describe('PC1 — composition equals the table', () => {
         const resolution = entry !== undefined ? entry.value : seed[name] !== undefined ? seed[name] : processEnv[name]
         const delivery = registered ? undefined : resolution
         const codexWant = registered ? undefined : processEnv[name]
-        const gate = effectiveChatEnv(overrides)[name]
+        const gate = own(effectiveChatEnv(overrides), name)
         if (gate !== resolution) failures.push(`case ${i} ${name} gate ${String(gate)} != ${String(resolution)}`)
-        if (claude.env?.[name] !== delivery) failures.push(`case ${i} ${name} claude ${String(claude.env?.[name])} != ${String(delivery)}`)
-        if (codex[name] !== codexWant) failures.push(`case ${i} ${name} codex ${String(codex[name])} != ${String(codexWant)}`)
+        if (own(claude.env, name) !== delivery) failures.push(`case ${i} ${name} claude ${String(own(claude.env, name))} != ${String(delivery)}`)
+        if (own(codex, name) !== codexWant) failures.push(`case ${i} ${name} codex ${String(own(codex, name))} != ${String(codexWant)}`)
       }
       if (failures.length > 0) break
     }

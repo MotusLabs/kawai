@@ -8,7 +8,7 @@
 // process.env happens in that one place. Registered credential names are
 // withheld from every launch. validateChatProviderEnv stays the legacy
 // Settings map's validator, which the upgrade migration reads.
-import { deliveryEnv, resolutionEnv } from './credentialComposition'
+import { deliveryEnv, resolutionEnv, setEnvEntry } from './credentialComposition'
 import { registeredSecretNames } from './secretNameRegistry'
 
 export type ChatProviderEnv = Record<string, string>
@@ -56,7 +56,7 @@ export function validateChatProviderEnv(
     if (raw.includes('\0')) {
       return { ok: false, error: `${name} contains a NUL character.` }
     }
-    env[name] = raw
+    setEnvEntry(env, name, raw)
   }
   return { ok: true, env }
 }
@@ -77,7 +77,7 @@ export function parseChatProviderEnv(raw: string | undefined): ChatProviderEnv {
       console.warn(`[agentboard] Ignoring malformed AGENTBOARD_CHAT_ENV entry: "${trimmed}"`)
       continue
     }
-    env[name] = trimmed.slice(eq + 1).trim()
+    setEnvEntry(env, name, trimmed.slice(eq + 1).trim())
   }
   return env
 }

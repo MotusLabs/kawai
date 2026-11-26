@@ -213,6 +213,26 @@ describe('ChatProviderSettings — the write-only credential section', () => {
     renderer.unmount()
   })
 
+  test('Enter on an untouched or emptied value input sends nothing and leaves the saved entry (F2)', async () => {
+    const renderer = await render()
+    const enter = async (label: string) => {
+      await act(async () => {
+        byLabel(renderer, label).props.onKeyDown({ key: 'Enter', preventDefault: () => {} })
+        await settle()
+      })
+    }
+    await enter('New value for ANTHROPIC_BASE_URL')
+    await type(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL'), 'https://typed.example')
+    await type(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL'), '')
+    await enter('New value for ANTHROPIC_BASE_URL')
+    // The new-variable inputs share Add's name guard.
+    await enter('New variable name')
+    await enter('New variable value')
+    expect(requests.filter((r) => r.method !== 'GET')).toEqual([])
+    expect(store.get('ANTHROPIC_BASE_URL')).toEqual({ kind: 'launch-env', value: 'https://gw.example' })
+    renderer.unmount()
+  })
+
   test('the listing shows a store failure, migration skips, and a collision by name only', async () => {
     const base = globalThis.fetch
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -282,4 +302,34 @@ describe('SettingsModal credential save', () => {
       await act(async () => { renderer.unmount() })
     })
   }
+
+  test('an applied but not durable modal Save keeps the modal open on the warning, consumes the input once, and the next Save closes (F3)', async () => {
+    let closed = 0
+    let renderer!: TestRenderer.ReactTestRenderer
+    await act(async () => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => { closed++ }} />)
+      await settle()
+    })
+    await act(async () => {
+      renderer.root.findAll((n) => n.type === 'button' && n.props.role === 'tab' && n.children.join('') === 'Chat')[0]?.props.onClick()
+      await settle()
+    })
+    durable = false
+    await type(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL'), 'https://unconfirmed.example')
+    const submit = async () => {
+      await act(async () => {
+        await renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })
+      })
+    }
+    await submit()
+    expect(closed).toBe(0)
+    expect(byTestId(renderer, 'credential-not-durable')[0]!.children.join('')).toContain('could not confirm')
+    expect(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL').props.value).toBe('')
+    await submit()
+    expect(closed).toBe(1)
+    expect(requests.filter((r) => r.method === 'PUT')).toEqual([
+      { method: 'PUT', path: '/ANTHROPIC_BASE_URL', body: { value: 'https://unconfirmed.example', kind: 'launch-env' } },
+    ])
+    await act(async () => { renderer.unmount() })
+  })
 })

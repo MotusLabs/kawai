@@ -22,6 +22,7 @@ import { TEAM_MCP_SERVER } from '../../team/teamPrompt'
 import { resolveClaudeProfileDetail } from '../ClaudeProfiles'
 import { composeCompaction, selectAutoCompactWindow } from '../claudeCompaction'
 import type { ChatProviderEnv, ProviderEnvSnapshot } from '../chatProviderEnv'
+import { setEnvEntry } from '../credentialComposition'
 import type { RetainedNamesDb } from '../secretNameRegistry'
 import type { ChatWireRecorder } from '../wireTap'
 import type { TeamToolSpec } from '../../team/mailboxTools'
@@ -116,7 +117,7 @@ export function claudeSpawnLaunch(input: ClaudeSpawnInput): ClaudeSpawnLaunch {
 
 function strings(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const [name, value] of Object.entries(env)) if (typeof value === 'string') out[name] = value
+  for (const [name, value] of Object.entries(env)) if (typeof value === 'string') setEnvEntry(out, name, value)
   return out
 }
 
