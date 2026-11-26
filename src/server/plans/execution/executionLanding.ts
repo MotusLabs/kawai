@@ -215,15 +215,16 @@ async function fetchHeads(adapters: Pick<LandingAdapters, 'fetch'>, cwd: string,
  */
 async function failedUpdate(deps: LandingDeps, row: ChangeRow, updateRound: RoundRow | null, update: { base: string; files: string[] }, effectId: string | null): Promise<void> {
   const store = deps.executions
-  // Under a hold (revision-control 3.2) `passedAt` is kept and no attempt
-  // dispatches — no owed marker for the update path: the release re-fires
-  // the landing stage, which re-runs the update and re-derives the attempt.
+  // Under a hold (revision-control 3.2) with no revision pending, `passedAt`
+  // is kept and no attempt dispatches — no owed marker for the update path:
+  // the release re-fires the landing stage, which re-derives the attempt.
   const held = deps.gate?.(row.change) === true
   const round = updateRound ?? store.rounds(row.executionId, row.change).at(-1) ?? null
-  // D9 first (review F9): the change stays `landing` until D9's mint, which
-  // exits landing and clears `passedAt` in its own transaction, so a crash
-  // before it leaves this follow-on eligible and the conflict is re-derived.
-  if (!held && round !== null && await deps.revisionAttempt(row, round, update, { generation: row.generation, effectId })) return
+  // D9 first, held or not (review F9): the change stays `landing` until D9's
+  // mint, which exits landing, clears `passedAt`, and records the conflict in
+  // one transaction, so a crash or refused mint leaves this follow-on
+  // eligible. Under a hold the minted fix stays owed, and the release sends it.
+  if (round !== null && await deps.revisionAttempt(row, round, update, { generation: row.generation, effectId })) return
   // The ordinary update path: the live guard re-read — a change D9's await
   // let move (a Stop, a racing write) is left to that write.
   const moved = store.transition(row.executionId, row.change, row, { state: 'gating', step: null, ...(held ? {} : { passedAt: null }) })

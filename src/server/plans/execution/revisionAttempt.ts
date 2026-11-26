@@ -38,6 +38,9 @@ function landingStands(store: RoundDeps['executions'], executionId: string, chan
   return effect !== null && effect.state === 'done' && effect.kind === 'update-branch' && effect.change === change.change
 }
 
+/** Thrown inside D9's transaction to roll back a refused mint's writes. */
+class MintRefused extends Error {}
+
 /** D9: the round's result is pinned to a task revision older than the task's current one. */
 export function revisionPending(deps: Pick<RoundDeps, 'tasks'>, taskId: string | null, round: RoundRow): boolean {
   const task = taskId === null ? null : deps.tasks.store.get(taskId)
@@ -64,7 +67,7 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
   const mintable = before.worktree !== null && before.baselineCommit !== null && before.taskId !== null
   const facts = mintable ? await gatherStartFacts(before.worktree!, before.baselineCommit!) : null
   const dispatch: DispatchDeps = { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results }
-  const minted = store.db.transaction(() => {
+  const mint = store.db.transaction(() => {
     // The guard: the round not superseded (open, passed, or the failed round
     // a diagnosis closes on) and still the newest, its revision still
     // pending, and no attempt minted since the reads — else the racing write
@@ -89,18 +92,25 @@ export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { exec
     // here, with the mint — never before it (review F9).
     store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null, ...(landing !== undefined ? { passedAt: null } : {}), ...close?.patch })
     close?.within()
-    if (facts === null) return null
+    // A refused mint (no facts, or the insert's own guards) rolls the
+    // supersession and the exit back (review F9): the round, the pass, the
+    // slot, and a landing follow-on stay as they were, and the stage re-fires.
+    if (facts === null) throw new MintRefused()
     const taskId = change.taskId!
     // The task revision is the one current at commit: an Adapt between the
     // reads and here is what the fix names, with the conflict kept.
     const taskRevision = deps.tasks.store.get(taskId)?.revision ?? 1
-    return commitAttemptInsert({ executions: store, plans: deps.plans, taskRevisionOf: id => deps.tasks.store.get(id)?.revision ?? null },
+    const inserted = commitAttemptInsert({ executions: store, plans: deps.plans, taskRevisionOf: id => deps.tasks.store.get(id)?.revision ?? null },
       { executionId: changeRow.executionId, change: changeRow.change, kind: 'fix' }, { newestId, roundId: round.id, taskRevision }, {
         taskId, baseline: change.baselineCommit!, startCommit: facts.startCommit, artifacts: facts.artifacts,
         answers: { resultId: round.resultId, roundId: round.id, failingChecks: [], findingsIds: [] },
         ...(update !== undefined ? { update } : {}),
       })
-  })()
+    if (inserted === null) throw new MintRefused()
+    return inserted
+  })
+  let minted: ReturnType<typeof mint> = null
+  try { minted = mint() } catch (error) { if (!(error instanceof MintRefused)) throw error }
   // The row is the owed dispatch's marker (revision-control 3.2): under a
   // hold the release sends it once through dispatchOwedAttempt.
   if (minted === null || deps.gate?.(changeRow.change) === true) return true
