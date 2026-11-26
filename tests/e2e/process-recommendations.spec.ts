@@ -70,10 +70,13 @@ function seedIncident(root: string): string {
       writer: { required: false, occupants: [] },
     };
     const store = new RecommendationStore(db);
-    const cutoff = new Date(now).toISOString();
+    // The incident follows the observation's write: the first assessment reads
+    // only rows recorded by its cutoff (Table E7), so the cutoff is taken after it.
+    const cutoffAt = Date.now();
+    const cutoff = new Date(cutoffAt).toISOString();
     const { recommendation } = store.create({ teamId, kind: 'quota', episodeKey: 'e2e:quota:zai', sessionId: null, taskId: null, groupId: 'devs',
       profileId: 'glm', providerId: 'zai', attentionId: null, cutoff, snapshot, snapshotBasis: 'incident' });
-    const evaluation = evaluateIncident({ kind: 'quota', snapshot, cutoff: now, observations: history.list(teamId, { until: cutoff }),
+    const evaluation = evaluateIncident({ kind: 'quota', snapshot, cutoff: cutoffAt, observations: history.list(teamId, { until: cutoff, availableBy: cutoff }),
       limits: [], open: true, comparisons: 0 });
     if (!store.append(recommendation.id, evaluation, cutoff, previous => assessmentState(previous, evaluation.advice))) throw new Error('no assessment');
     db.close();
