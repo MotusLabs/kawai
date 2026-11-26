@@ -95,12 +95,12 @@ Original note: implement after these have landed on master: `plan-execution`, `i
 
 ## 5. Apply (moved to `plan-revision-apply`, tasks 1.x–3.x there)
 
-- [ ] 5.1 **Moved to plan-revision-apply.** Implement `ApplyService.preview` and `apply` with `APPLY_PRECONDITIONS` (D11): reads first, then one transaction. Verify with tests:
+- [x] 5.1 **Moved to plan-revision-apply.** Implement `ApplyService.preview` and `apply` with `APPLY_PRECONDITIONS` (D11): reads first, then one transaction. Verify with tests:
   - each entry refuses by name and writes nothing, and every failing entry is listed;
   - two concurrent Applies on one base leave one revision row;
   - an agent caller is refused;
   - the preview lists the delta, the needed choices, and the generated Adapt texts.
-- [ ] 5.2 **Moved to plan-revision-apply.** Implement the per-change writes (D11). Verify with tests:
+- [x] 5.2 **Moved to plan-revision-apply.** Implement the per-change writes (D11). Verify with tests:
   - continue keeps the attempt, and later handoffs read the new revision;
   - adapt publishes one task revision with notify;
   - restart dispatches under the new revision;
@@ -108,12 +108,12 @@ Original note: implement after these have landed on master: `plan-execution`, `i
   - removed unlanded changes and their tasks are cancelled, with the slot given up;
   - the publication rows and `revision-applied` commit together;
   - completion reads the current revision (D12).
-- [ ] 5.3 **Moved to plan-revision-apply.** Write the R17 integration test: a crash before commit leaves nothing; a retry after commit replays, with one task revision and one notice per adapted change. Add the S4 forward-fix test: a change whose `fixes` names a fix task is applied to a running execution and lands, `fixStatus` reads running, and the fix task closes once no change of the current approved revision naming it is unlanded. Add the negative case (D11): a fix change removed before it lands is cancelled, and its fix task stays open. Add a `fixes`-only difference on a landed change, which applies as `metadata` with no choice. Add the AGENTS.md Apply bullet; that is the docs for group 5. Verify by the tests, and by reading the bullet against D10–D12.
+- [x] 5.3 **Moved to plan-revision-apply.** Write the R17 integration test: a crash before commit leaves nothing; a retry after commit replays, with one task revision and one notice per adapted change. Add the S4 forward-fix test: a change whose `fixes` names a fix task is applied to a running execution and lands, `fixStatus` reads running, and the fix task closes once no change of the current approved revision naming it is unlanded. Add the negative case (D11): a fix change removed before it lands is cancelled, and its fix task stays open. Add a `fixes`-only difference on a landed change, which applies as `metadata` with no choice. Add the AGENTS.md Apply bullet; that is the docs for group 5. Verify by the tests, and by reading the bullet against D10–D12.
 
 ## 6. Reading, supervision, and attention
 
-- [ ] 6.1 **Split: `holds` and `pauses` are 9.2 here; executions' `revisions` moved to plan-revision-apply.** Add `holds`, `pauses`, and executions' `revisions` to `team-plan-detail` and `plan_get` (D14, D15). Verify with connection and tool tests: another team's ids read as not found, and pushes follow every write and every Paused recording.
-- [ ] 6.2 **Carried out by 9.3.** Add the `paused`, `pausing`, and `hold` causes in their D13 position, and the three attention sources. Verify with tests:
+- [x] 6.1 **Split: `holds` and `pauses` are 9.2 here; executions' `revisions` moved to plan-revision-apply.** Add `holds`, `pauses`, and executions' `revisions` to `team-plan-detail` and `plan_get` (D14, D15). Verify with connection and tool tests: another team's ids read as not found, and pushes follow every write and every Paused recording.
+- [x] 6.2 **Carried out by 9.3.** Add the `paused`, `pausing`, and `hold` causes in their D13 position, and the three attention sources. Verify with tests:
   - each cause wins in its position (after `effect`, in the order `paused`, `pausing`, `hold`, before `uncertain-delivery`), and the others are listed as also applying;
   - none raises a `no-progress` stall, and `repeating-failure` keeps its S2 position ahead of them;
   - each item's id, owner, next action, and clearing rule, including after an extension;
@@ -124,8 +124,8 @@ Original note: implement after these have landed on master: `plan-execution`, `i
 
 ## 7. Human protocol and the view
 
-- [ ] 7.1 **Split: the hold and pause messages are 9.1 here; the two Apply messages moved to plan-revision-apply.** Add the D14 messages to `src/shared/planMessages.ts` and `CHAT_CONNECTION_TYPES`, and their handlers in `revisionControlConnections.ts`. Verify with router tests: every type is whitelisted, `unknown-team` is refused, and each result carries its record or error.
-- [ ] 7.2 **Split: the hold, pause, and checkpoint dialogs are 9.4 here; the Apply dialog moved to plan-revision-apply.** Add the `teamPlanStore` command slots and the components of D14. Verify with component tests:
+- [x] 7.1 **Split: the hold and pause messages are 9.1 here; the two Apply messages moved to plan-revision-apply.** Add the D14 messages to `src/shared/planMessages.ts` and `CHAT_CONNECTION_TYPES`, and their handlers in `revisionControlConnections.ts`. Verify with router tests: every type is whitelisted, `unknown-team` is refused, and each result carries its record or error.
+- [x] 7.2 **Split: the hold, pause, and checkpoint dialogs are 9.4 here; the Apply dialog moved to plan-revision-apply.** Add the `teamPlanStore` command slots and the components of D14. Verify with component tests:
   - each dialog arms one command id and reuses it while the payload is unchanged;
   - refusals render every failing check;
   - every control disables while disconnected;
@@ -133,20 +133,60 @@ Original note: implement after these have landed on master: `plan-execution`, `i
   - Apply asks a choice only for changed changes with tasks.
 
   Every store apply method has a dispatch caller.
-- [ ] 7.3 **Split, and obsolete in part (2026-11-18): CI no longer names spec files in `.github/workflows/ci.yml`; `scripts/e2e-fixture-specs.ts` lists every fixture-gated spec. The hold-to-Continue walkthrough is 9.5 here; the Apply step moved to plan-revision-apply.** Write one browser walkthrough with the fixture adapter, `tests/e2e/chat-plan-revision-control.spec.ts`, named in `.github/workflows/ci.yml`: hold a change, pause it, record a checkpoint, see Pausing turn into Paused, Continue, and Apply a revision with one adapted change. Run it alone on a spare `E2E_PORT` after `bun run build`. Needs no docs beyond the AGENTS.md bullets.
+- [x] 7.3 **Split, and obsolete in part (2026-11-18): CI no longer names spec files in `.github/workflows/ci.yml`; `scripts/e2e-fixture-specs.ts` lists every fixture-gated spec. The hold-to-Continue walkthrough is 9.5 here; the Apply step moved to plan-revision-apply.** Write one browser walkthrough with the fixture adapter, `tests/e2e/chat-plan-revision-control.spec.ts`, named in `.github/workflows/ci.yml`: hold a change, pause it, record a checkpoint, see Pausing turn into Paused, Continue, and Apply a revision with one adapted change. Run it alone on a spare `E2E_PORT` after `bun run build`. Needs no docs beyond the AGENTS.md bullets.
 
 ## 8. Checks
 
-- [ ] 8.1 **Carried out by 9.7 for this change; plan-revision-apply runs its own.** Run `bun run lint && bun run typecheck && bun run test` and `openspec validate revision-control --strict`. Verify that all pass, apart from the informational note for the unarchived `plan-execution` requirement.
+- [x] 8.1 **Carried out by 9.7 for this change; plan-revision-apply runs its own.** Run `bun run lint && bun run typecheck && bun run test` and `openspec validate revision-control --strict`. Verify that all pass, apart from the informational note for the unarchived `plan-execution` requirement.
 
 ## 9. Remainder: visibility, attention, human protocol, and view (proposed slice)
 
 Contract at the end of design.md; oracles in design "Remainder". Server first (9.1–9.3, one production-path checkpoint after 9.1, whose every prerequisite is in 9.1), then the client (9.4–9.5). plan-revision-apply's 2.2 and 3.1 start after 9.1–9.2 land (shared `planMessages.ts`, `chatConnectionTypes.ts`, and `planSupervisionDetail.ts`), and its 3.2–3.3 after 9.4–9.5 (shared `teamPlanStore.ts` and `PlanExecutionSection.tsx`). Every file stays under 500 lines.
 
-- [ ] 9.1 Add `team-plan-hold-place`, `team-plan-hold-release`, `team-plan-hold-extend`, `team-plan-pause`, and `team-plan-pause-resolve` to `src/shared/planMessages.ts` and `CHAT_CONNECTION_TYPES` (`src/server/chat/chatConnectionTypes.ts`), with handlers in a new `src/server/plans/revisionControl/revisionControlConnections.ts` composed in `planComposition.ts`, each answered by `team-plan-result`; and the minimal detail PT6 reads: `holds` (DV1's fields) in `team-plan-detail` (`src/server/plans/supervision/planSupervisionDetail.ts`), pushed after every hold place, release, and extend. Verify PT1–PT6 through the real connection router and `planComposition`; mutants: a type left out of the whitelist (PT1), the handler not composed (PT6), the push after a hold write removed (PT6). Checkpoint: the production path of PT6 (place over the socket, the push carries the hold) plus PT3's refusal, reviewed before 9.2.
-- [ ] 9.2 Add `pauses` (targets with state, causes, holder, checkpoints, and decisions) to `team-plan-detail`, and `holds` and `pauses` to `plan_get`, pushed after every pause and resolve write and every Paused recording (9.1 already pushes after hold writes). Verify DV1–DV4 with connection and tool tests; mutants: the push after a Paused recording removed (DV3), the team check removed (DV4).
-- [ ] 9.3 Add the `paused`, `pausing`, and `hold` causes after `effect` in the running-stage waits (`src/shared/planSupervision.ts`), and the three attention sources in `ATTENTION_SOURCES`. Verify CA1–CA6 and AT1–AT10 as table-driven tests, property AP-1, and one row each through the real `SupervisionMonitor` (no stall for a held change, CA3) and the real workspace read (AT1); mutants: `hold` placed after `uncertain-delivery` (CA4), the overdue key without the deadline (AT3), `plan-pause-overdue` raised beside `plan-checkpoint-decision` (AT7).
-- [ ] 9.4 Add the `teamPlanStore` command slots and `PlanHoldsSection.tsx`, `PlanHoldDialog.tsx`, `PlanPauseSection.tsx`, and `PlanCheckpointDecisionDialog.tsx`, opened from the plan detail and the execution section. Verify UI1–UI5 with component tests; every store apply method has a dispatch caller.
-- [ ] 9.5 Write `tests/e2e/chat-plan-revision-control.spec.ts`, skipped unless `AGENTBOARD_CHAT_FIXTURE=1` like the other plan specs, so `scripts/e2e-fixture-specs.ts` lists it for CI's fixture step: hold a change, pause it, record a checkpoint, see Pausing turn into Paused, Continue. Verify: `bun scripts/e2e-fixture-specs.ts` lists the file, and CI's fixture job passes it. Local runs only in a disposable checkout with its own build, database, and spare `E2E_PORT`; never `bun run test:e2e`.
-- [ ] 9.6 Map every plan-holds and plan-pause scenario to a literal test title (design "Scenario partition") and add `@covers: plan-holds › …` and `@covers: plan-pause › …` annotations above them. A landed scenario whose test cannot be found becomes a failing gap row, not a silent pass. Verify: the citation preflight reports zero unresolved, and `scripts/__tests__/specCoverageGuard.test.ts` passes.
-- [ ] 9.7 Run `openspec validate revision-control --strict`, the affected tests, and `bun run check --full-properties` on the clean committed head under the pinned Bun, then `scripts/verify-result.ts`. Verify: all pass; the result maps every oracle id of the remainder to a test title and a killed mutant.
+- [x] 9.1 Add `team-plan-hold-place`, `team-plan-hold-release`, `team-plan-hold-extend`, `team-plan-pause`, and `team-plan-pause-resolve` to `src/shared/planMessages.ts` and `CHAT_CONNECTION_TYPES` (`src/server/chat/chatConnectionTypes.ts`), with handlers in a new `src/server/plans/revisionControl/revisionControlConnections.ts` composed in `planComposition.ts`, each answered by `team-plan-result`; and the minimal detail PT6 reads: `holds` (DV1's fields) in `team-plan-detail` (`src/server/plans/supervision/planSupervisionDetail.ts`), pushed after every hold place, release, and extend. Verify PT1–PT6 through the real connection router and `planComposition`; mutants: a type left out of the whitelist (PT1), the handler not composed (PT6), the push after a hold write removed (PT6). Checkpoint: the production path of PT6 (place over the socket, the push carries the hold) plus PT3's refusal, reviewed before 9.2.
+- [x] 9.2 Add `pauses` (targets with state, causes, holder, checkpoints, and decisions) to `team-plan-detail`, and `holds` and `pauses` to `plan_get`, pushed after every pause and resolve write and every Paused recording (9.1 already pushes after hold writes). Verify DV1–DV4 with connection and tool tests; mutants: the push after a Paused recording removed (DV3), the team check removed (DV4).
+- [x] 9.3 Add the `paused`, `pausing`, and `hold` causes after `effect` in the running-stage waits (`src/shared/planSupervision.ts`), and the three attention sources in `ATTENTION_SOURCES`. Verify CA1–CA6 and AT1–AT10 as table-driven tests, property AP-1, and one row each through the real `SupervisionMonitor` (no stall for a held change, CA3) and the real workspace read (AT1); mutants: `hold` placed after `uncertain-delivery` (CA4), the overdue key without the deadline (AT3), `plan-pause-overdue` raised beside `plan-checkpoint-decision` (AT7).
+- [x] 9.4 Add the `teamPlanStore` command slots and `PlanHoldsSection.tsx`, `PlanHoldDialog.tsx`, `PlanPauseSection.tsx`, and `PlanCheckpointDecisionDialog.tsx`, opened from the plan detail and the execution section. Verify UI1–UI5 with component tests; every store apply method has a dispatch caller.
+- [x] 9.5 Write `tests/e2e/chat-plan-revision-control.spec.ts`, skipped unless `AGENTBOARD_CHAT_FIXTURE=1` like the other plan specs, so `scripts/e2e-fixture-specs.ts` lists it for CI's fixture step: hold a change, pause it, record a checkpoint, see Pausing turn into Paused, Continue. Verify: `bun scripts/e2e-fixture-specs.ts` lists the file, and CI's fixture job passes it. Local runs only in a disposable checkout with its own build, database, and spare `E2E_PORT`; never `bun run test:e2e`.
+- [x] 9.6 Map every plan-holds and plan-pause scenario to a literal test title (design "Scenario partition") and add `@covers: plan-holds › …` and `@covers: plan-pause › …` annotations above them. A landed scenario whose test cannot be found becomes a failing gap row, not a silent pass. Verify: the citation preflight reports zero unresolved, and `scripts/__tests__/specCoverageGuard.test.ts` passes.
+- [x] 9.7 Run `openspec validate revision-control --strict`, the affected tests, and `bun run check --full-properties` on the clean committed head under the pinned Bun, then `scripts/verify-result.ts`. Verify: all pass; the result maps every oracle id of the remainder to a test title and a killed mutant.
+
+## Landed evidence (archive reconciliation, 2026-11-27)
+
+Both changes landed: this one as PR #440 (`3279b2c793c3703c02f6189e6f68adb0eb95e967`), `plan-revision-apply` as PR #458 (`07d62161ecd6123ef68ec374777589923a14ac7a`). The boxes in groups 5–9 were ticked at the joint archive, each against the record named here. The split's notes above are unchanged; the moved rows stay listed for lineage, and `plan-revision-apply`'s tasks.md carries them.
+
+| Task | Carried out by | Record |
+| --- | --- | --- |
+| 5.1 | `plan-revision-apply` 2.1, 2.2 | `4baee945`, `f9f22e85`, `e1dc3388`; its accepted result-b8c96a1b-1fa3-40fa-9711-639200dda323 |
+| 5.2 | `plan-revision-apply` 2.2, 2.3 | `f9f22e85`, `e1dc3388`, `fceb0582`, `84db96b3`, `2cbe97ff`; the same result |
+| 5.3 | `plan-revision-apply` 2.4, 4.1 | `5932dedc` (CR1–CR4 in `applyCrash.test.ts`), `fa94e01d` (FX1–FX3 in `applyForwardFix.test.ts`), `f62bb7f5` (the recovery matrix's "R4 — Apply crash" row), `b5c92f48` (the AGENTS.md Apply bullet); the same result |
+| 6.1 | 9.2 here; `plan-revision-apply` 2.2, 3.1 | `113e68bd` (DV1–DV4); `e1dc3388`, `98fed6ce` |
+| 6.2 | 9.3 | `8ed661d1` |
+| 7.1 | 9.1 here; `plan-revision-apply` 2.2, 3.1 | `71e3c42c` (PT1–PT7); `e1dc3388`, `98fed6ce` |
+| 7.2 | 9.4 here; `plan-revision-apply` 3.2 | `1054860a` (UI1–UI5); `93283f0b`, `0b60050d` |
+| 7.3 | 9.5 here; `plan-revision-apply` 3.3 | `fe211ef2`, `b3f1fd59`; `8474299e`, `42959f9c` |
+| 8.1 | 9.7 here; `plan-revision-apply` 4.2 | result-4e1af778-c1a9-4ed3-bdea-bc4ea245ba63 and result-b8c96a1b-1fa3-40fa-9711-639200dda323, both accepted |
+
+Group 9 is task-e4772623-4768-44d7-8ccf-e9d8af37f57e. Its accepted result is result-4e1af778-c1a9-4ed3-bdea-bc4ea245ba63 on `00d3a8d1`, superseding result-33ec95fe on `692adac3` and result-016b35c3 on `b37a00a4`. The 9.1–9.6 code is the same in all three; the two later commits only rename the walkthrough's sessions and add the name guard.
+
+| Task | Commits | Tests and killed mutants |
+| --- | --- | --- |
+| 9.1 | `71e3c42c` | PT1–PT7 in `revisionControlConnections.test.ts`, through the real connection router and composition; `pt1-whitelist`, `pt6-compose`, `pt6-push`, `pt6-detail` |
+| 9.2 | `113e68bd` | DV1–DV4 in `revisionControlDetail.test.ts`; `dv3-paused-push`, `dv4-team-check` |
+| 9.3 | `8ed661d1` | CA1–CA6 in `revisionControlSupervision.test.ts`, AT1–AT11 in `revisionControlAttention.test.ts`, AP-1 (seed 0x4C0D, 300 cases), AT1 through the workspace read in `revisionControlAttentionWorkspace.test.ts`; `ca4-hold-after-uncertain`, `ca3-monitor-wiring`, `at3-key-without-deadline`, `at7-overdue-beside-decision`, `at1-source-unregistered` |
+| 9.4 | `1054860a` | UI1–UI5 in `planRevisionControlUi.test.tsx`; `ui1-remint-on-open`, `ui2-failures-hidden`, `ui3-confirm-connected`, `ui4-paused-without-paused-at`, `ui5-restart-only`, `a5-detail-holds` |
+| 9.5 | `fe211ef2`, `b3f1fd59` | `tests/e2e/chat-plan-revision-control.spec.ts`, six of six local runs; `scripts/e2e-fixture-specs.ts` lists it; CI's "Run chat fixture e2e tests" passed in 44413858476 |
+| 9.6 | `7a6fa42e`, `b37a00a4` | All 46 plan-holds and plan-pause scenarios annotated with literal titles; `scripts/__tests__/specCoverageGuard.test.ts` passes; `s37-holder-gone`, `s41-release-with-restart` |
+| 9.7 | — | `openspec validate revision-control --strict` valid; `bun run check --full-properties` under Bun 1.4.3, pass recorded as `513b53ff56eec2625aee6a29dd5914d2a07743ca81d4a19a4bb6433e6710b3fe`; the result's map holds 58 clauses and 126 citations |
+
+Review and CI: Codex Sol's findings-ab8fe769-aa8c-494d-920a-4c75d0f532e7 counted PASS on `00d3a8d1`. CI 44413858476 passed on `00d3a8d1`, 44416445952 on the integrated head `07bf9d63`, and on master 44418123667 (CI) and 44418147087 (Release). The fixture step had failed twice on the shared fixture server, both times on this walkthrough's session names: 44391706243, where `chat-task-revision.spec.ts` E09 picked the session named "Revision lead", fixed by `692adac3`; then 44403475936, where `plan-execution.spec.ts:109` got the wrong team because "Holdwalk implementer" contains "Walk implementer" and Playwright's `hasText` is a substring match, fixed by `00d3a8d1` with `revisionControlE2eSessionNames.test.ts` as the guard.
+
+Limits, as the accepted result records them:
+
+- The walkthrough stands in for the pause mail's late receipt with `MailboxStore.markDelivered`.
+- Scenario matches #23, #31, #33 and #46 are partial: no updating refusal, no "session untouched" assertion, no full server restart, and Stop through `finishExecution` rather than the Stop command.
+- The name guard covers this walkthrough's session names only; other specs already overlap each other.
+- The local fixture runs were not all green: `chat-codex-autocomplete.spec.ts` failed on this branch's old copy of that spec, and `plan-supervision.spec.ts` failed its "Narrow" card once.
+- `ChatSessionManager.ts` was out of scope, so the revision-control services hang off `PlanService` through a WeakMap side table.
+- `planComposition.ts` was already over 500 lines (561), and AT11 was added to design.md during 9.3.
+- No named advisor checked the design or the first production path before the formal review; the mutant incident of 9.3 is recorded in that task's journal.
