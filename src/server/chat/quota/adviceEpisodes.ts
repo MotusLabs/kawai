@@ -4,8 +4,10 @@
 // is the router's (providers-and-workers D8, `latestCoolingEnd`): its reset,
 // else one hour after it. Oldest first, an event joins the episode while the
 // episode's own end so far — the latest end of its members, never the
-// provider's current aggregate — is still ahead of the event; otherwise it
-// opens a new episode. An episode is in force at t while some member's own
+// provider's current aggregate — is still ahead of the event and the event
+// precedes the episode's recorded resolution (`closedAt`: once resolved, an
+// episode admits nothing, so each final limit belongs to one episode only);
+// otherwise it opens a new episode. An episode is in force at t while some member's own
 // end is ahead of t and that member's profile cooldown (the router's
 // aggregate, as of t) still runs (`episodeInForce`) — members can hold different
 // model-scoped windows, so neither the first nor the newest member decides.
@@ -29,25 +31,33 @@ export function eventEnd(event: EpisodeEvent): number {
   return Number.isFinite(reset) ? reset : Date.parse(event.at) + DEFAULT_COOLDOWN_MS
 }
 
+/** When the episode keyed by an event was recorded resolved (epoch ms), else null: the durable admission boundary. */
+export type ClosedAt = (eventId: string) => number | null
+
 /**
  * Chain final events into episodes, oldest first: sorted by `at`, events at
  * the same instant keep their given order (the store's commit order, so a
- * replay keys the episode by the event the live path saw first).
+ * replay keys the episode by the event the live path saw first). An event at
+ * or after the episode's recorded resolution opens a new one.
  */
-export function quotaEpisodes<E extends EpisodeEvent>(events: readonly E[]): QuotaEpisode<E>[] {
+export function quotaEpisodes<E extends EpisodeEvent>(events: readonly E[], closedAt: ClosedAt = () => null): QuotaEpisode<E>[] {
   const sorted = [...events].filter(event => Number.isFinite(Date.parse(event.at)))
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-  const episodes: QuotaEpisode<E>[] = []
+  const episodes: Array<QuotaEpisode<E> & { closed: number | null }> = []
   for (const event of sorted) {
     const last = episodes.at(-1)
-    if (last && Date.parse(event.at) < last.end) {
+    const at = Date.parse(event.at)
+    if (last && at < last.end && (last.closed === null || at < last.closed)) {
       last.events.push(event)
       last.end = Math.max(last.end, eventEnd(event))
+      // A tied leader can precede the episode's anchor: any member's recorded resolution closes it.
+      const closed = closedAt(event.id)
+      if (closed !== null) last.closed = last.closed === null ? closed : Math.min(last.closed, closed)
     } else {
-      episodes.push({ events: [event], end: eventEnd(event) })
+      episodes.push({ events: [event], end: eventEnd(event), closed: closedAt(event.id) })
     }
   }
-  return episodes
+  return episodes.map(({ events: members, end }) => ({ events: members, end }))
 }
 
 /**
@@ -55,12 +65,12 @@ export function quotaEpisodes<E extends EpisodeEvent>(events: readonly E[]): Quo
  * holds it, whichever event at its instant leads; null when that event is not
  * among them (pruned).
  */
-export function episodeFrom<E extends EpisodeEvent>(events: readonly E[], firstId: string): QuotaEpisode<E> | null {
+export function episodeFrom<E extends EpisodeEvent>(events: readonly E[], firstId: string, closedAt: ClosedAt = () => null): QuotaEpisode<E> | null {
   const first = events.find(event => event.id === firstId)
   if (!first) return null
   const from = Date.parse(first.at)
   const later = events.filter(event => event.id === firstId || Date.parse(event.at) >= from)
-  return quotaEpisodes(later).find(entry => entry.events.some(event => event.id === firstId)) ?? null
+  return quotaEpisodes(later, closedAt).find(entry => entry.events.some(event => event.id === firstId)) ?? null
 }
 
 /**

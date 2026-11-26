@@ -49,7 +49,7 @@ export interface AdviceHarness {
 }
 
 /** A harness over a fresh database, or `options.db` (a restart over the same data; left open on close). */
-export function adviceHarness(options: { db?: SessionDatabase; evaluate?: ManagerAdviceDeps['evaluate']; coolsAt?: ManagerAdviceDeps['coolsAt'] } = {}): AdviceHarness {
+export function adviceHarness(options: { db?: SessionDatabase; evaluate?: ManagerAdviceDeps['evaluate'] } = {}): AdviceHarness {
   const root = options.db ? null : fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-advice-')))
   const db = options.db ?? freshTestDatabase(path.join(root!, 'test.db'))
   const clock = { now: T0 }
@@ -90,7 +90,6 @@ export function adviceHarness(options: { db?: SessionDatabase; evaluate?: Manage
     writerSlot: () => ({ occupants: h.occupants, pending: h.pending }),
     onChange: teamId => { h.changes.push(teamId) },
     ...(options.evaluate ? { evaluate: options.evaluate } : {}),
-    ...(options.coolsAt ? { coolsAt: options.coolsAt } : {}),
   })
   h.limit = (options = {}) => {
     limits.record({

@@ -102,6 +102,19 @@ export class RecommendationStore {
     return row ? mapRecommendation(row) : null
   }
 
+  /**
+   * When the team's episode was first recorded resolved (epoch ms, the
+   * assessment's `created_at`), else null — the durable boundary after which
+   * the episode admits no member (D5, R5). Assessments only append, so it
+   * never moves once set.
+   */
+  resolvedAt(teamId: string, kind: RecommendationKind, episodeKey: string): number | null {
+    const row = this.db.prepare(`SELECT a.created_at FROM process_assessments a JOIN process_recommendations r ON r.id = a.recommendation_id
+      WHERE r.team_id = ? AND r.kind = ? AND r.episode_key = ? AND a.state = 'resolved' ORDER BY a.version LIMIT 1`)
+      .get(teamId, kind, episodeKey) as { created_at: string } | null
+    return row ? Date.parse(row.created_at) : null
+  }
+
   /** One recommendation by id, any team (the evaluator's own read). */
   byId(id: string): StoredRecommendation | null {
     const row = this.db.prepare('SELECT * FROM process_recommendations WHERE id = ?').get(id) as RecommendationRow | null

@@ -161,7 +161,10 @@ second alert. Advice is never
 Evaluator failures record a gap in `process_recommendation_gaps`. A limit
 event commits before its advice callback runs, so startup (and each session's
 team resolution) replays that session's final limit events still cooling and
-its context flag; an episode already recorded is not repeated. Startup then
+its context flag; an episode already recorded is not repeated, and a limit at
+or after an episode's recorded resolution opens a new one, so a replay never
+splits a resolved episode. Each assessment reads the router's cooldown as it
+stood at its own cutoff (`LimitEventStore.cooldownAt`). Startup then
 re-enqueues every unresolved or unassessed recommendation. The Metrics view
 lists the advice from the snapshot (no Prometheus); agents read it through
 `process_recommendations_list` and `process_recommendation_get`, and no tool

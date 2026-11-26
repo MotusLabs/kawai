@@ -86,14 +86,24 @@ At startup, episodes with no assessment for the current evaluator version are
 enqueued once (recovery-matrix row). A quota episode is a team's chain of final
 limits of one provider, oldest first: an event joins while the episode's own
 cooldown (the latest reset of its members, else one hour after the event) is
-still ahead of it, and otherwise opens a new episode; events at one instant
-keep their commit order. The episode is in force at a time while some member's
-own end is ahead of it and that member's profile cooldown, as the router saw it
-at that time, still runs (members can hold different model-scoped windows, so
-neither the first nor the newest member decides; a cooldown the router ended
-early counts as ended). The live join uses own ends; the episode's open state
-and startup reconstruction (only the episode in force, from its first event)
-use the in-force rule.
+still ahead of it and the event precedes the episode's recorded resolution
+(the `created_at` of its first `resolved` assessment, durable and append-only;
+an event at that instant counts as after it), and otherwise opens a new
+episode; events at one instant keep their commit order. So each final limit
+belongs to one episode only, and a resolved episode admits nothing: a restart
+never repartitions a consumed episode or promotes one of its members. The
+episode is in force at a time while some member's own end is ahead of it and
+that member's profile cooldown, as the router saw it at that time, still runs
+(members can hold different model-scoped windows, so neither the first nor the
+newest member decides); after its recorded resolution it is never in force.
+"As the router saw it" is `LimitEventStore.cooldownAt` (I5): read-only, the
+router's rule over the events recorded by that time, with a credit event
+ending early only on the readings taken by then and only when this process
+recorded it, so every assessment, first or later, reads the cooldown at its
+own cutoff. The live join, the episode's open state and startup
+reconstruction (only the episode in force) all use this partition.
+Recommendations recorded before this rule need nothing: their resolutions are
+already durable.
 
 ### D6 — Surfaces
 

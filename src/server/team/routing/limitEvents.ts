@@ -7,7 +7,8 @@
 // can read a 7-day window with its 7-day baseline; routing still reads only
 // the last 24 hours. Cooldown is computed from them on read and never
 // stored, so changing the policy needs no migration; `coolingTimeline`
-// reconstructs past cooling by the same rule. A `credit` event (a 402,
+// reconstructs past cooling by the same rule, and `cooldownAt` answers the
+// cooldown as of a past time from the evidence held then. A `credit` event (a 402,
 // openrouter-provider D8) can end early through an in-memory overlay fed by
 // provider usage pulls; tracking starts when this process records the event,
 // so an event loaded from the database after a restart ends only at the
@@ -206,6 +207,29 @@ export class LimitEventStore {
       providerId,
       ...(end?.credit ? { credit: true } : {}),
     }
+  }
+
+  /**
+   * The profile's cooldown end as the router saw it at `atMs` (process-quota-
+   * history-and-incident-advice I5), read-only: the same rule as `cooldownFor`
+   * over the events within the read window ending at `atMs`, with a credit
+   * event ending early only on readings taken at or before `atMs` and only
+   * when this process tracks it. Null when the profile was not cooling then.
+   */
+  cooldownAt(profileId: string, providerId: string | null, atMs: number): string | null {
+    if (!Number.isFinite(atMs)) return null
+    const from = new Date(atMs - LIMIT_EVENT_READ_WINDOW_MS).toISOString()
+    const until = new Date(atMs).toISOString()
+    const own = this.db.prepare('SELECT * FROM profile_limit_events WHERE profile_id = ? AND at >= ? AND at <= ? ORDER BY at, rowid')
+      .all(profileId, from, until) as Row[]
+    const provider = providerId === null ? [] : this.db.prepare(
+      'SELECT * FROM profile_limit_events WHERE provider_id = ? AND at >= ? AND at <= ? ORDER BY at, rowid').all(providerId, from, until) as Row[]
+    const returnedBy = (event: LimitEvent): number | null => {
+      if (!this.creditTracking.has(creditKey(event))) return null
+      const readings = (this.credit.get(event.providerId ?? event.profileId) ?? []).filter(reading => reading.at <= atMs)
+      return creditReturnedAt(readings, Date.parse(event.at))
+    }
+    return cooldownUntil(profileId, providerId, [...own, ...provider].map(fromRow), atMs, returnedBy)
   }
 
   /** The provider's own cooldown end (D8): its provider-scoped events alone. */
