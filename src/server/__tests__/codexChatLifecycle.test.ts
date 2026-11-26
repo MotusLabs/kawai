@@ -329,6 +329,7 @@ test('an unrelated failure records no limit event', async () => {
   expect(manager.limitEvents.forProvider(providerOf('codex', catalogCtx()))).toEqual([])
 })
 
+// @covers: profile-limit-handling › A payment-required failure is a final credit limit › A Codex session's 402 is not a credit limit here
 test("a Codex 402 records no credit limit event (openrouter-provider 3.1)", async () => {
   // The Claude paths force window 'credit' on a 402 (limitSignals.ts); a
   // Codex turn's 402-shaped failure records nothing through the manager.

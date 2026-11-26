@@ -13,7 +13,7 @@ const ZERO40 = '0'.repeat(40)
 const ZERO64 = '0'.repeat(64)
 
 function commit(overrides: Partial<Extract<RefFacts, { kind: 'commit' }>> = {}): RefFacts {
-  return { kind: 'commit', ref: 'refs/heads/main', commit: A, tree: T, recorded: false, head: A, dirtyPaths: [], ...overrides }
+  return { kind: 'commit', ref: 'refs/heads/main', commit: A, tree: T, bun: '1.4.5', pin: null, recordedBun: null, head: A, dirtyPaths: [], ...overrides }
 }
 
 describe('parsePushInput', () => {
@@ -54,7 +54,7 @@ describe('parsePushInput', () => {
 
 describe('decidePush', () => {
   test('a recorded ref passes without a check', () => {
-    expect(decidePush([commit({ recorded: true, head: B, dirtyPaths: ['x'] })], []).kind).toBe('pass')
+    expect(decidePush([commit({ recordedBun: '1.4.5', head: B, dirtyPaths: ['x'] })], []).kind).toBe('pass')
   })
 
   test('a deletion-only push passes without a check, even with hidden entries', () => {
@@ -100,7 +100,7 @@ describe('decidePush', () => {
   })
 
   test('hidden index entries refuse every non-deletion ref, recorded ones included (F1)', () => {
-    const verdict = decidePush([commit({ recorded: true }), commit({ ref: 'refs/tags/v1' })], [{ path: 'src/hidden.ts', skipWorktree: true, assumeUnchanged: false }])
+    const verdict = decidePush([commit({ recordedBun: '1.4.5' }), commit({ ref: 'refs/tags/v1' })], [{ path: 'src/hidden.ts', skipWorktree: true, assumeUnchanged: false }])
     expect(verdict.kind).toBe('refuse')
     expect(verdict.lines).toHaveLength(2)
     for (const line of verdict.lines) {

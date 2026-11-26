@@ -142,7 +142,10 @@ Duration bucket upper bounds are 1, 5, 15, 60, 300, 900, 3600, 14400, 86400,
 256000, 1000000 and +Inf. Every histogram exports cumulative buckets, count and
 sum with HELP/TYPE. Lifetime totals survive restart, missing scrapes and detail
 pruning. A later scrape recovers cumulative counts, not the exact timing of
-observations missed during a scraper outage. Do not average team percentiles or
+observations missed during a scraper outage. Estimating a percentile from
+histogram buckets in Prometheus is an approximation at bucket resolution and is
+not equal to the Metrics view's exact read-time percentiles, which are
+nearest-rank over the retained samples. Do not average team percentiles or
 compare token kinds as if cache-read tokens were output tokens.
 
 Team/group/provider/model/account/window values use persistent opaque aliases;

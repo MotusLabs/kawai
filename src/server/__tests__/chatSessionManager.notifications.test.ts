@@ -257,6 +257,7 @@ describe('ChatSessionManager notifications', () => {
     })
   })
 
+  // @covers: claude-session-profiles › A credentialed provider authenticates only with its own variable › No login-expiry notice
   test('a credentialed provider session shows no host-login expiry notice', async () => {
     writeCredentials(expiringCredentials(1.4))
     writeCredentialedProviderCatalog(tempDir)

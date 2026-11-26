@@ -5,11 +5,15 @@
 // scripts/check.ts runs the stub steps and writes the real records the hook
 // reads. Commits that only set up a state use --no-verify inside the
 // temporary repository, so the commit hook is not what a test measures.
+// The pinned-Bun tests (pre-push-bun-pin V3) commit a .bun-version that is
+// not the running Bun and seed records with checkRecords' own writer.
 // @reads: AGENTS.md
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
+import { writeRecord } from '../../src/server/checks/checkRecords'
 import { createHookRepo, type HookRepo } from './helpers/hookRepo'
+import { treeRecordKey } from '../lib/treeRecord'
 import { dirtyPaths } from '../pre-push'
 
 let fixture: HookRepo
@@ -23,6 +27,8 @@ afterEach(() => {
 })
 
 const FULL_CHECK_STEPS = ['step:lint', 'step:typecheck', 'step:test']
+// A pin guaranteed to differ from the running Bun.
+const PIN = Bun.version === '1.0.0' ? '1.0.1' : '1.0.0'
 
 /** Commit a change without the commit hook; returns the new HEAD. */
 function setUpCommit(relative: string, content: string, message = relative): string {
@@ -259,5 +265,104 @@ describe('the push hook in a temporary repository', () => {
     expect(result.code).not.toBe(0)
     expect(result.output).toContain('checked out but the working tree is dirty: src/shared/leaf.ts')
     expect(fixture.takeLog()).toEqual([])
+  })
+})
+
+describe('the push hook with a pinned Bun other than the running one', () => {
+  /** A full-pass record of HEAD's tree as a check under `bun` writes it. */
+  function seedPass(bun: string): void {
+    const treeId = fixture.git(['rev-parse', 'HEAD^{tree}']).trim()
+    writeRecord(path.join(fixture.repo, '.git', 'kawai-checks'), {
+      key: treeRecordKey(treeId, bun),
+      treeId,
+      bun,
+      platform: process.platform,
+      arch: process.arch,
+      at: new Date().toISOString(),
+      worktree: fixture.repo,
+      steps: [{ name: 'test', ms: 1 }],
+    })
+  }
+
+  // @covers: dev-checks › Pushes require a full check of the pushed tree › Recorded pass under the pinned Bun
+  test('V3a a pass recorded under the pin pushes without running a check', () => {
+    const head = setUpCommit('.bun-version', `${PIN}\n`)
+    seedPass(PIN)
+    const result = fixture.push(['origin', 'main'])
+    expect(result.code).toBe(0)
+    expect(fixture.takeLog()).toEqual([])
+    expect(result.output).toContain(`recorded full pass for tree`)
+    expect(result.output).toContain(`under Bun ${PIN}`)
+    expect(remoteRef('refs/heads/main')).toBe(head)
+  })
+
+  // @covers: dev-checks › Pushes require a full check of the pushed tree › Bun mismatch without a pass
+  test('V3b no pass on a clean HEAD is refused naming the pinned Bun, and no check step runs', () => {
+    const head = setUpCommit('.bun-version', `${PIN}\n`)
+    const result = fixture.push(['origin', 'main'])
+    expect(result.code).not.toBe(0)
+    expect(result.output).toContain(`refs/heads/main ${head}: no full-check pass`)
+    expect(result.output).toContain(`under Bun ${Bun.version} or the pinned Bun ${PIN}`)
+    expect(result.output).toContain(`run \`bun run check\` under Bun ${PIN} on a clean checkout of ${head}, then push`)
+    expect(fixture.takeLog()).toEqual([])
+    expect(fixture.records()).toEqual([])
+    expect(remoteRef('refs/heads/main')).toBeNull()
+  })
+
+  test('V3c the pin is read from the pushed commit, not from HEAD or the working tree', () => {
+    const pinned = setUpCommit('.bun-version', `${PIN}\n`)
+    fixture.git(['branch', 'pinned'])
+    fixture.git(['rm', '-q', '.bun-version'])
+    expect(fixture.commit(['--no-verify', '-m', 'unpin']).code).toBe(0)
+    fixture.takeLog()
+    const refused = fixture.push(['origin', 'pinned'])
+    expect(refused.code).not.toBe(0)
+    expect(refused.output).toContain(`refs/heads/pinned ${pinned}: no full-check pass`)
+    expect(refused.output).toContain(`run \`bun run check\` under Bun ${PIN} on the clean tree`)
+    expect(fixture.takeLog()).toEqual([])
+    // HEAD's own tree has no pin: the clean-HEAD fallback runs as before.
+    const pushed = fixture.push(['origin', 'main'])
+    expect(pushed.code).toBe(0)
+    expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
+  })
+
+  // @covers: dev-checks › Pushes require a full check of the pushed tree › Pin matching the current Bun
+  test('V3d a pin equal to the running Bun keeps the clean-HEAD fallback', () => {
+    const head = setUpCommit('.bun-version', `${Bun.version}\n`)
+    const result = fixture.push(['origin', 'main'])
+    expect(result.code).toBe(0)
+    expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
+    expect(remoteRef('refs/heads/main')).toBe(head)
+  })
+
+  // @covers: dev-checks › Pushes require a full check of the pushed tree › Recorded pass
+  test('V7 a pass recorded only under the running Bun pushes a pinned commit without a check (F3)', () => {
+    // M3 (gatherFacts consulting only the pinned key when the pin differs)
+    // must fail this: the hook would refuse a valid running-Bun record.
+    const head = setUpCommit('.bun-version', `${PIN}\n`)
+    seedPass(Bun.version)
+    const result = fixture.push(['origin', 'main'])
+    expect(result.code).toBe(0)
+    expect(fixture.takeLog()).toEqual([])
+    expect(result.output).toContain('recorded full pass for tree')
+    expect(result.output).toContain(`under Bun ${Bun.version}`)
+    expect(remoteRef('refs/heads/main')).toBe(head)
+  })
+
+  test.each([
+    ['two parts', '1.4'],
+    ['a word', 'latest'],
+  ])('V8 a malformed committed pin (%s) keeps the clean-HEAD fallback (F4)', (_name, content) => {
+    // M4 (the production call site treating any nonempty trimmed content as
+    // the pin, bypassing parseBunPin) must fail this: the hook would refuse
+    // this clean checkout instead of running the check.
+    const head = setUpCommit('.bun-version', `${content}\n`)
+    const result = fixture.push(['origin', 'main'])
+    expect(result.code).toBe(0)
+    expect(fixture.takeLog()).toEqual(FULL_CHECK_STEPS)
+    expect(result.output).not.toContain('pinned Bun')
+    expect(result.output).toContain('running `bun run check` on the clean tree')
+    expect(fixture.records()).toHaveLength(1)
+    expect(remoteRef('refs/heads/main')).toBe(head)
   })
 })

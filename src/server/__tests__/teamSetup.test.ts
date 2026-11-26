@@ -195,7 +195,7 @@ describe('Table O — when setup is offered', () => {
 describe('the preview and the templates', () => {
   // @covers: team-setup › The setup previews the starter team before writing › The preview lists the three groups
   test('the preview lists the three groups with workers, caps, and the cross-model flag', () => {
-    const preview = setupPreview(repo(), new Set(['opus', 'codex-sol']))
+    const preview = setupPreview(repo(), new Set(['opus', 'codex-sol']), home)
     expect(preview).toEqual({
       available: true, targetDir: groupsDir(), warnings: [],
       groups: [
@@ -208,7 +208,7 @@ describe('the preview and the templates', () => {
 
   // @covers: team-setup › The setup previews the starter team before writing › A missing worker profile is warned
   test('a starter worker the catalog lacks is warned once', () => {
-    expect(setupPreview(repo(), new Set(['opus'])).warnings).toEqual([
+    expect(setupPreview(repo(), new Set(['opus']), home).warnings).toEqual([
       "Profile codex-sol is not defined in this team's catalog; its slots will not staff until it is.",
     ])
   })

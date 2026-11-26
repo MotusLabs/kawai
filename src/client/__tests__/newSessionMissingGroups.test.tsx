@@ -4,6 +4,12 @@
 // changes, never shows for terminal sessions, never blocks creating the chat,
 // and its link closes the dialog and opens the team's Members tab — the team
 // key being the repository's main checkout when the path is a worktree.
+//
+// User-level groups count as groups (starter-setup-with-user-level-groups,
+// Table N): the notice follows the current setup answer and the same options
+// the group picker renders, so it shows only while the answer for the shown
+// path both offers setup and offers no group. The route sets the two
+// independently below, as it does for a user-level file.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import NewSessionModal from '../components/NewSessionModal'
@@ -37,17 +43,29 @@ const settle = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve()
 }
 
-/** Paths whose team has no project group file; every other path has groups. */
-async function dialog(withoutGroups: string[]) {
+/** One groups-route answer: whether setup is offered, and the groups offered to the picker. */
+interface Answer { setupAvailable: boolean; groups: string[] }
+const OFFERED_WITHOUT_GROUPS: Answer = { setupAvailable: true, groups: [] }
+
+/**
+ * The dialog over a groups route answered per project path, the offer and the
+ * offered groups set independently. A path in `held` stays pending until
+ * `answer(path, …)` releases its lookup; a path with neither an answer nor
+ * `other` fails.
+ */
+async function answered(answers: Record<string, Answer>, options: { held?: string[]; other?: Answer; path?: string } = {}) {
+  const body = ({ setupAvailable, groups }: Answer) => ({
+    groups: groups.map(id => ({ id, label: id === 'devs' ? 'Dev' : id, description: '' })),
+    errors: [], warnings: [], approvalDefault: null, setupAvailable,
+  })
+  const releases = new Map<string, (response: Response) => void>()
   globalThis.fetch = (async (url: string) => {
     const text = String(url)
     if (!text.startsWith('/api/chat/groups')) return Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })
     const projectPath = new URL(text, 'http://x').searchParams.get('projectPath') ?? ''
-    const setupAvailable = withoutGroups.includes(projectPath)
-    return Response.json({
-      groups: setupAvailable ? [] : [{ id: 'devs', label: 'Dev', description: '' }],
-      errors: [], warnings: [], approvalDefault: null, setupAvailable,
-    })
+    if (options.held?.includes(projectPath)) return new Promise<Response>(resolve => { releases.set(projectPath, resolve) })
+    const answer = answers[projectPath] ?? options.other
+    return answer ? Response.json(body(answer)) : new Response('', { status: 500 })
   }) as unknown as typeof fetch
   const created: string[] = []
   const closes: string[] = []
@@ -56,13 +74,16 @@ async function dialog(withoutGroups: string[]) {
     renderer = TestRenderer.create(<NewSessionModal
       isOpen onClose={() => closes.push('close')} onDismiss={done => closes.push(`dismiss:${done}`)}
       onCreate={path => { created.push(path) }}
-      defaultProjectDir="/repo" commandPresets={DEFAULT_PRESETS} defaultPresetId="claude"
+      defaultProjectDir={options.path ?? '/repo'} commandPresets={DEFAULT_PRESETS} defaultPresetId="claude"
     />)
     await settle()
   })
   return {
     renderer, created, closes,
     notice: () => renderer.root.findAllByProps({ 'data-testid': 'missing-groups-notice' }),
+    /** The group picker's own options by value; "" is "No group". */
+    options: () => renderer.root.findByProps({ 'aria-label': 'Group' }).findAllByType('option')
+      .map(option => (option.props as { value: string }).value),
     setPath: async (value: string) => act(async () => {
       renderer.root.findByProps({ 'aria-label': 'Project Path' }).props.onChange({ target: { value } })
       await settle()
@@ -71,8 +92,19 @@ async function dialog(withoutGroups: string[]) {
       renderer.root.findByProps({ 'aria-label': 'Session kind' }).props.onChange({ target: { value } })
     }),
     submit: () => act(() => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })),
+    /** Release a held lookup with its answer, as a late route reply. */
+    answer: (path: string, value: Answer) => act(async () => {
+      releases.get(path)!(Response.json(body(value)))
+      await settle()
+    }),
   }
 }
+
+/** Paths whose team has no project group file: setup is offered and no group; every other path has a group and no offer. */
+const dialog = (withoutGroups: string[]) => answered(
+  Object.fromEntries(withoutGroups.map(projectPath => [projectPath, OFFERED_WITHOUT_GROUPS])),
+  { other: { setupAvailable: false, groups: ['devs'] } },
+)
 
 // @covers: team-setup › The New Session dialog points a team without groups to setup › A project without groups shows the notice
 test('a chat for a project without groups shows the notice with a link to the Members tab', async () => {
@@ -123,6 +155,72 @@ test('the notice follows the path: it disappears for a project with groups and r
 // @covers: team-setup › The New Session dialog points a team without groups to setup › Terminal sessions show no notice
 test('terminal sessions show no notice', async () => {
   const shown = await dialog(['/repo'])
+  shown.setKind('terminal')
+  await act(settle)
+  expect(shown.notice()).toHaveLength(0)
+  shown.setKind('chat')
+  await act(settle)
+  expect(shown.notice()).toHaveLength(1)
+  act(() => shown.renderer.unmount())
+})
+
+// Table N (starter-setup-with-user-level-groups): the notice follows the
+// current setup answer and the same options the group picker renders; the
+// neutral "No group" option counts as none.
+// @covers: team-setup › The New Session dialog points a team without groups to setup › Unparsed user-level files do not hide the notice
+test('N1: a chat for an offered setup that offers no group shows the notice', async () => {
+  const shown = await answered({ '/repo': OFFERED_WITHOUT_GROUPS })
+  expect(shown.options()).toEqual([''])
+  expect(shown.notice()).toHaveLength(1)
+  act(() => shown.renderer.unmount())
+})
+
+// @covers: team-setup › The New Session dialog points a team without groups to setup › User-level groups hide the notice
+test('N2: a chat for an offered setup that offers a group hides the notice', async () => {
+  for (const groups of [['reviewers-sol'], ['lead', 'devs', 'reviewers']]) {
+    const shown = await answered({ '/repo': { setupAvailable: true, groups } })
+    expect(shown.options(), groups.join()).toEqual(['', ...groups])
+    expect(shown.notice(), groups.join()).toHaveLength(0)
+    act(() => shown.renderer.unmount())
+  }
+})
+
+test('N3: a chat for a team that is not offered setup shows no notice, with or without a group to choose', async () => {
+  for (const groups of [[], ['devs']]) {
+    const shown = await answered({ '/repo': { setupAvailable: false, groups } })
+    expect(shown.notice(), groups.join()).toHaveLength(0)
+    act(() => shown.renderer.unmount())
+  }
+})
+
+test('N4: a pending, failed, or other-path setup answer shows no notice', async () => {
+  const shown = await answered(
+    { '/repo': { setupAvailable: true, groups: ['devs'] }, '/bare': OFFERED_WITHOUT_GROUPS },
+    { held: ['/late', '/next'], path: '/late' })
+  // Pending at open.
+  expect(shown.notice()).toHaveLength(0)
+  await shown.setPath('/repo')
+  expect(shown.options()).toEqual(['', 'devs'])
+  // Another path: a late answer for the path just left changes nothing.
+  await shown.answer('/late', OFFERED_WITHOUT_GROUPS)
+  expect(shown.options()).toEqual(['', 'devs'])
+  expect(shown.notice()).toHaveLength(0)
+  await shown.setPath('/bare')
+  expect(shown.notice()).toHaveLength(1)
+  // Pending after a change: the notice is gone until the new path answers.
+  await shown.setPath('/next')
+  expect(shown.notice()).toHaveLength(0)
+  await shown.answer('/next', OFFERED_WITHOUT_GROUPS)
+  expect(shown.notice()).toHaveLength(1)
+  // Failed: the lookup for the shown path fails.
+  await shown.setPath('/down')
+  expect(shown.notice()).toHaveLength(0)
+  act(() => shown.renderer.unmount())
+})
+
+test('N5: a terminal session shows no notice, though setup is offered and no group is offered', async () => {
+  const shown = await answered({ '/repo': OFFERED_WITHOUT_GROUPS })
+  expect(shown.notice()).toHaveLength(1)
   shown.setKind('terminal')
   await act(settle)
   expect(shown.notice()).toHaveLength(0)

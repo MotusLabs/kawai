@@ -422,6 +422,7 @@ describe('credit cooldown (openrouter-provider D8)', () => {
     store = new LimitEventStore(schemaDb(':memory:'), () => now)
   })
 
+  // @covers: profile-limit-handling › A credit cooldown is bounded and ends early when credit returns › Owner tops up
   test('Owner tops up: the provider leaves cooldown at the pull that shows credit grew', () => {
     store.record(credit)
     expect(store.cooldownFor('openrouter-opus', 'openrouter')).toEqual({ until: iso(T0 + HOUR), provider: true, providerId: 'openrouter', credit: true })
@@ -437,6 +438,7 @@ describe('credit cooldown (openrouter-provider D8)', () => {
     expect(store.providerCooldownUntil('openrouter')).toBeNull()
   })
 
+  // @covers: profile-limit-handling › A credit cooldown is bounded and ends early when credit returns › The first pull only sets the baseline
   test('The first pull only sets the baseline: readings before the event are ignored', () => {
     // The failing input of the checkpoint review's finding: a pre-event low of
     // $0.01, then a first post-event pull of $10.01, still cools.
@@ -484,6 +486,7 @@ describe('credit cooldown (openrouter-provider D8)', () => {
     })
   })
 
+  // @covers: profile-limit-handling › A credit cooldown is bounded and ends early when credit returns › No balance source
   test('No balance source: the provider cools for one hour after the event', () => {
     store.record(credit)
     now = T0 + HOUR - 1
@@ -492,6 +495,7 @@ describe('credit cooldown (openrouter-provider D8)', () => {
     expect(store.cooldownFor('openrouter-opus', 'openrouter').until).toBeNull()
   })
 
+  // @covers: profile-limit-handling › A credit cooldown is bounded and ends early when credit returns › Restart during a credit cooldown
   test('Restart during a credit cooldown: a fresh store applies only the hour, whatever later pulls report', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-credit-'))
     try {

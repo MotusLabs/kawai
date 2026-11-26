@@ -179,17 +179,16 @@ export class ExecutionEffectStore {
     })()
   }
 
-  /**
-   * The done provision effects that created `branch` (D6): a name that
-   * exists is accepted only when one of these belongs to an execution of
-   * the same plan.
-   */
-  doneProvisions(branch: string): Array<{ executionId: string; command: Record<string, unknown> }> {
-    return (this.db.prepare(`SELECT * FROM plan_execution_effects WHERE kind = 'provision' AND state = 'done'`)
-      .all() as Array<Record<string, unknown>>)
-      .map(mapEffect)
-      .filter(effect => effect.command.branch === branch)
-      .map(effect => ({ executionId: effect.executionId, command: effect.command }))
+  /** Branch names this plan can reuse, as pinned in its completed provision commands (D6). */
+  provisionedBranches(planId: string): ReadonlySet<string> {
+    const rows = this.db.query<{ branch: string }, [string]>(`
+      SELECT DISTINCT json_extract(command_json, '$.branch') AS branch
+      FROM plan_execution_effects
+      WHERE kind = 'provision' AND state = 'done'
+        AND json_extract(command_json, '$.planId') = ?
+        AND json_type(command_json, '$.branch') = 'text'
+    `).all(planId)
+    return new Set(rows.map(row => row.branch))
   }
 
   /**

@@ -120,7 +120,7 @@ export interface MailboxServerServices {
   impact?: ImpactService
   releases?: MemberRelease
   management?: MailboxManagement
-  /** The read-only `team_metrics` tool (team-process-metrics D5). */
+  /** The read-only `team_metrics` and `team_metrics_drill` tools (team-process-metrics D5, bounded-metrics-reads D2). */
   metrics?: MetricsToolDeps
   /** Process report submit/list/get/link (team-process-metrics D6); never decide or unlink. */
   reports?: ReportToolDeps
@@ -169,8 +169,9 @@ export function teamToolTable(
     ...(validation ? validationHandlers(validation, sessionId) : {}),
     // Decisions: ask and record only — the owner answers and overrides (D16).
     ...(decisions ? decisionHandlers(decisions, sessionId) : {}),
-    // Metrics: read-only, bound to the caller's team (D5).
-    ...(metrics ? metricsHandlers(metrics, sessionId) : {}),
+    // Metrics: read-only, bound to the caller's team (D5); drills read the
+    // team's stored reports through the report service's store.
+    ...(metrics ? metricsHandlers(metrics, sessionId, reports ? { report: (teamId, id) => reports.service.store.report(teamId, id) } : undefined) : {}),
     // Reports: submit, read, and link only — no decide, apply, or unlink tool (D6).
     ...(reports ? reportHandlers(reports, sessionId) : {}),
     // Checkpoints: the Pausing holder records where work stands; Kawai pushes (revision-control D7).
@@ -210,10 +211,15 @@ export function teamToolTable(
   }))
 }
 
+/** True for a `z.strictObject` (catchall never), whose unknown keys must be refused. */
+const isStrict = (schema: z.ZodObject) => (schema._zod.def.catchall as { _zod?: { def: { type: string } } } | undefined)?._zod?.def.type === 'never'
+
 export async function createMailboxServer(mailbox: TeamMailbox, sessionId: string, services: MailboxServerServices = {}) {
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk')
   return createSdkMcpServer({ name: TEAM_MCP_SERVER, version: '1.0.0', tools: teamToolTable(mailbox, sessionId, services).map(({ name, description, schema, handler }) =>
-    tool(name, description, schema.shape, async (input) => {
+    // A strict schema is registered whole so the MCP validation refuses
+    // unknown keys; a shape would be rebuilt as a stripping object.
+    tool(name, description, (isStrict(schema) ? schema : schema.shape) as typeof schema.shape, async (input) => {
       try {
         const result = await handler(input)
         return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }

@@ -137,6 +137,7 @@ describe('every launch branch withholds the registered-name set (D5 composition 
     expect(launch.settings).toBeUndefined()
   })
 
+  // @covers: claude-session-profiles › Catalogs may cap the output reservation › Unset cap is neutralized
   test('the named-profile branch keeps its deletions and still filters registered names', () => {
     resolveClaudeLaunch('or2-sonnet', AMBIENT, ctx(), undefined, db)
     const launch = BRANCH_PROBES.namedProfile()
@@ -170,6 +171,7 @@ describe('every launch branch withholds the registered-name set (D5 composition 
     expect(launch.env?.HTTPS_PROXY).toBe('http://192.0.2.10:3128')
   })
 
+  // @covers: claude-session-profiles › Trusted providers may name their credential variables › User-level provider names its token variable
   test('the credentialed branch composes its token and filters every other registered name', () => {
     const launch = BRANCH_PROBES.credentialed()
     // The branch's own carve-outs (D5), named so the registered-absent claim
@@ -239,6 +241,7 @@ describe('registered secret names stay withheld (provider-credentials delta scen
   })
 
   // @covers: provider-credentials › Registered secret names stay withheld › A disabled entry's variables stay withheld
+  // @covers: provider-credentials › Registered secret names stay withheld › A dropped entry's variables stay withheld
   test('an entry outside the resolved catalog in any state keeps its names withheld', () => {
     // Pre-§3 form: the "dropped" provider parses (its names register) but the
     // trusted invariants drop it, so no launch may inherit DROP_KEY. The

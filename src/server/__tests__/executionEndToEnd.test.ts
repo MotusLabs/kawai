@@ -25,7 +25,9 @@ import { executionViewReads, executionViews } from '../plans/execution/execution
 import { flakyChecks } from '../../shared/planExecutionGates'
 import { executionOwnership } from '../plans/execution/executionOwnership'
 import { ExecutionExecutor } from '../plans/execution/executor'
+import { ExecutionService } from '../plans/execution/ExecutionService'
 import { provisionAdapter } from '../plans/execution/executionProvision'
+import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
 import { PlanService } from '../plans/PlanService'
 import { StrategyStore } from '../strategy/strategyStore'
 import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
@@ -50,7 +52,6 @@ let ghState: string
 let origin: string
 let baseSha: string
 
-/** The stub gh's scripted state. */
 /** The stub gh's scripted state: mergedHeads carries each branch's real merge commit. */
 let gh: {
   checks: string
@@ -127,11 +128,17 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(ghBin, 'gh'), [
     '#!/bin/sh',
     'if [ "$1 $2" = "pr view" ] && [ -f "$GH_STATE/pr-$3.json" ]; then cat "$GH_STATE/pr-$3.json"; exit 0; fi',
+    'case "$*" in',
+    '  *"auth status"*) exit 0 ;;',
+    '  *"git/trees/"*) cat "$GH_STATE/tree.json"; exit 0 ;;',
+    `  *"git/commits/"*) printf '%s' '{"tree":{"sha":"base-tree"}}'; exit 0 ;;`,
+    `  *"repos/acme/app"*) printf '%s' '{"default_branch":"master","permissions":{"push":true}}'; exit 0 ;;`,
+    'esac',
     'echo "unexpected gh $*" >&2; exit 1',
   ].join('\n') + '\n', { mode: 0o755 })
   git(['init', '-q', '--bare', '-b', 'master', origin], gitRoot)
   fs.writeFileSync(path.join(world.repo, 'seed.txt'), 'seed\n')
-  for (const change of ['dep-a', 'flaky-b']) {
+  for (const change of ['dep-a', 'flaky-b', 'restart-c']) {
     fs.mkdirSync(path.join(world.repo, 'openspec', 'changes', change), { recursive: true })
     fs.writeFileSync(path.join(world.repo, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
   }
@@ -143,6 +150,12 @@ beforeAll(async () => {
   git(['config', `url.${origin}.insteadOf`, 'https://github.com/acme/app.git'], world.repo)
   git(['push', '-q', 'origin', 'master'], world.repo)
   baseSha = git(['rev-parse', 'master'], origin).trim()
+  const tree = git(['ls-tree', '-r', baseSha], origin).trim().split('\n').map(line => {
+    const [meta, file] = line.split('\t')
+    const [, type, sha] = meta!.split(' ')
+    return { path: file, type, sha }
+  })
+  fs.writeFileSync(path.join(ghState, 'tree.json'), JSON.stringify({ tree }))
 })
 afterAll(() => {
   fs.rmSync(world.root, { recursive: true, force: true })
@@ -202,7 +215,11 @@ function makeExecutor(): ExecutionExecutor {
       checkRuns: async () => ({ ok: true as const, data: JSON.parse(gh.checks) }),
       statuses: async () => ({ ok: true as const, data: [] }),
       prList: async () => ({ ok: true as const, data: gh.pulls }),
-      prCreate: async () => ({ ok: true as const, data: { number: 7, url: 'https://example.internal/pr/7' } }),
+      prCreate: async (_repo, { head }) => {
+        const pull = { number: 7, url: 'https://example.internal/pr/7', state: 'OPEN', headRefOid: remoteHead(head)! }
+        gh.pulls.push(pull)
+        return { ok: true as const, data: pull }
+      },
       rerun: async () => ({ ok: true as const, data: null }),
     },
     landingAdapters: {
@@ -395,5 +412,86 @@ describe('the executed plan end to end (§17.1)', () => {
     // dep-a 1 round + flaky-b 2 rounds = 3 pushes, one per round.
     expect(pushes).toHaveLength(3)
     expect(executions.attempts(executionId, 'flaky-b')).toHaveLength(2)
+  }, 90000)
+
+  // @covers: plan-execution › Provisioning is an explicit execution step › A later execution reuses the worktree
+  test('a successor reuses an unlanded worktree, branches, and PR while foreign names block Preview and Start', async () => {
+    const change = 'restart-c'
+    const draft = (name: string) => ({
+      changes: [{ change: name, dependsOn: [], group: 'middle-devs', acceptance: [], extraChecks: [], guidance: '' }],
+      reviewGroup: 'reviewers',
+    })
+    const { planId, revision, hash } = await bench.draftInReview(draft(change))
+    expect(await bench.approve(planId, revision)).toMatchObject({ ok: true })
+    const service = new ExecutionService({
+      store: executions, plansStore: bench.plans, plans: plansService, tasks,
+      validation: {
+        prepareStanding: async () => ({}),
+        standing: () => ({ state: 'current', report: { id: 'r', inputHash: 'i', readiness: { carriedConditions: [] } } }),
+      },
+      impact: { gate: () => null },
+      settings: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 2, mergeMethod: 'merge' }) },
+      getSession: id => bench.records.get(id),
+      landingModes: () => new Set(['direct']),
+      promotions: { runningPromotion: () => null },
+      identityOf: () => world.team,
+      executionRevisions: new ExecutionRevisionStore(bench.db.db),
+      wake: teamId => executor.wake(teamId),
+      ghOptions: { env: { PATH: `${ghBin}:${process.env.PATH ?? ''}`, GH_STATE: ghState } },
+    })
+    const first = await service.start(bench.human, { planId, revision, contentHash: hash, commandId: 'start-first' })
+    if (!first.ok) throw new Error(first.message)
+    await executor.idle()
+    await implement(first.execution.id, change, 'export const c = 1\n')
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    const prior = executions.change(first.execution.id, change)!
+    expect(prior).toMatchObject({ state: 'gating', prNumber: 7, prOpenedByKawai: true })
+    const head = remoteHead(change)!
+    expect(gh.pulls).toMatchObject([{ number: 7, state: 'OPEN', headRefOid: head }])
+    expect(await service.stop(bench.human, { executionId: first.execution.id, reason: 'Revise the plan', commandId: 'stop-first' })).toMatchObject({ ok: true })
+    expect(executions.landings(planId)).toEqual([])
+
+    for (const name of [change, 'outside-kawai']) {
+      if (name !== change) git(['branch', name], world.repo)
+      const foreign = await bench.draftInReview(draft(name))
+      expect(await bench.approve(foreign.planId, foreign.revision)).toMatchObject({ ok: true })
+      const failures = [{ name: 'landing-ready', message: expect.stringContaining(name) }]
+      expect(await service.preview(bench.human, foreign)).toMatchObject({ ok: true, failures })
+      expect(await service.start(bench.human, { ...foreign, contentHash: foreign.hash, commandId: `start-${name}` }))
+        .toMatchObject({ ok: false, failures })
+    }
+
+    const previous = bench.plans.revision(planId, revision)!
+    const saved = await bench.service.saveDraft(bench.agent('lead'), {
+      plan_id: planId, expected_draft_hash: bench.plans.getDraft(planId, 'lead')!.contentHash,
+      content: { ...previous.content, goal: 'Ship the revised plan' },
+    })
+    expect(saved).toMatchObject({ ok: true })
+    const submitted = await bench.service.submit(bench.agent('lead'), { plan_id: planId })
+    if (!submitted.ok) throw new Error(submitted.message)
+    const successor = submitted.revision
+    expect(await bench.approve(planId, successor.revision)).toMatchObject({ ok: true })
+    expect(await service.preview(bench.human, { planId, revision: successor.revision })).toMatchObject({ ok: true, failures: [] })
+    const next = await service.start(bench.human, { planId, revision: successor.revision, contentHash: successor.contentHash, commandId: 'start-successor' })
+    if (!next.ok) throw new Error(next.message)
+    await executor.idle()
+    const reused = executions.change(next.execution.id, change)!
+    expect(reused).toMatchObject({ state: 'implementing', branch: change, worktree: prior.worktree, prNumber: null })
+    expect(reused.taskId).not.toBe(prior.taskId)
+    expect(executions.attempts(next.execution.id, change)[0]?.manifest.startCommit).toBe(head)
+    expect(git(['rev-parse', 'HEAD'], reused.worktree!).trim()).toBe(head)
+    expect(remoteHead(change)).toBe(head)
+    await results.submit(bench.agent('dev'), reused.taskId!, { summary: 'Verify the work under the revised plan', commit: head })
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(executions.change(next.execution.id, change)).toMatchObject({ state: 'gating', prNumber: 7, prOpenedByKawai: false })
+    expect(gh.pulls).toHaveLength(1)
+
+    gh.checks = JSON.stringify(['ci', 'e2e'].map(name => ({ name, source: 'status', conclusion: 'success', link: null })))
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(executions.rounds(next.execution.id, change).at(-1)?.reviewAssignmentId).toBeTruthy()
+    expect(executions.landings(planId)).toEqual([])
   }, 90000)
 })
