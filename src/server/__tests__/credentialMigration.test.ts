@@ -152,8 +152,11 @@ describe('table M — the startup migration of the legacy Settings map', () => {
     expect(again.listing.migration).toEqual(complete())
   })
 
-  for (const name of ['__proto__', 'constructor', 'prototype']) {
-    test(`M4: a legacy ${name} entry moves as its own store entry beside its sibling, never dropped by the validator`, async () => {
+  test('M4: legacy __proto__, constructor, and prototype entries move as their own store entries beside a sibling, never dropped by the validator', async () => {
+    for (const name of ['__proto__', 'constructor', 'prototype']) {
+      // Each name starts from an unmigrated database and no store file.
+      db.deleteAppSetting(MIGRATION_STAMP_KEY)
+      fs.rmSync(storeFile(), { force: true })
       // findings F1: plain assignment hit the inherited __proto__ setter, so the
       // name vanished from the validated map and the commit deleted it unmoved.
       db.setAppSetting(CHAT_PROVIDER_ENV_KEY, JSON.stringify(Object.fromEntries([[name, `zq-${name}-value`], ['VALID_SIBLING', 'zq-sibling']])))
@@ -167,8 +170,8 @@ describe('table M — the startup migration of the legacy Settings map', () => {
       expect(Object.hasOwn(run.delivery, name)).toBe(true)
       expect(Object.getOwnPropertyDescriptor(run.delivery, name)?.value).toBe(`zq-${name}-value`)
       expect(run.listing.rows.find(row => row.name === name)?.source).toBe('store')
-    })
-  }
+    }
+  })
 
   test('I2: a durable import that left a validated name neither stored nor skipped keeps the map and no stamp', async () => {
     seedMap({ KEPT_A: 'zq-kept-a', LOST_B: 'zq-lost-b' })

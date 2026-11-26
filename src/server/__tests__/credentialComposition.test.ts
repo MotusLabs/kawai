@@ -261,8 +261,8 @@ describe('names keep their own entry', () => {
   const own = (env: Record<string, unknown> | undefined, name: string) =>
     env && Object.hasOwn(env, name) ? Object.getOwnPropertyDescriptor(env, name)?.value : 'missing'
 
-  for (const name of PROTO_NAMES) {
-    test(`${name}: store, snapshot, resolution, delivery projection, Claude launches, listing, seed parse, and the legacy validator keep it as an own entry`, () => {
+  test('prototype-shaped names (__proto__, constructor, prototype) stay own entries at the store, snapshot, resolution, delivery projection, Claude launches, listing, seed parse, and the legacy validator', () => {
+    for (const name of PROTO_NAMES) {
       const file = path.join(home, '.kawai', 'credentials.json')
       writeStore(Object.fromEntries([[name, { kind: 'launch-env', value: `zq-${name}-store` }], [VAR, { kind: 'launch-env', value: 'zq-sibling' }]]))
       const store = createCredentialStore(file)
@@ -289,8 +289,8 @@ describe('names keep their own entry', () => {
       expect(seeded.listing(new Set(), { state: 'none', text: null, skipped: [], ignored: [] }).rows.find(row => row.name === name)?.source).toBe('seed')
       const validated = validateChatProviderEnv(JSON.parse(JSON.stringify(Object.fromEntries([[name, `zq-${name}-map`]]))))
       expect(validated.ok && own(validated.env, name)).toBe(`zq-${name}-map`)
-    })
-  }
+    }
+  })
 })
 
 describe('PC1 — composition equals the table', () => {

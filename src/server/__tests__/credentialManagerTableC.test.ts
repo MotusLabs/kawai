@@ -214,10 +214,13 @@ const ROWS: Row[] = [
 ]
 
 describe('table C through the real ChatSessionManager', () => {
-  for (const row of ROWS) {
-    const label = `process ${row.process ?? 'absent'}, seed ${row.seed ?? 'absent'}, store ${row.store ? `${row.store.kind} "${row.store.value}"` : 'absent'}${row.bound ? ', bound' : ''}`
-    test(`${row.id} (${label}): the Claude launch, the gate, and the Codex launch observe the row's value`, async () => {
-      if (row.process !== null) process.env[VAR] = row.process
+  test('table C rows C1-C8 hold through the real ChatSessionManager at the Claude launch, the bound gate, and the Codex launch', async () => {
+    const mismatches: string[] = []
+    for (const row of ROWS) {
+      fs.rmSync(path.join(home, '.kawai', 'credentials.json'), { force: true })
+      fs.rmSync(path.join(home, '.kawai', 'providers.json'), { force: true })
+      if (row.process === null) delete process.env[VAR]
+      else process.env[VAR] = row.process
       if (row.store) writeStore({ [VAR]: row.store })
       const seed: Record<string, string> = row.seed === null ? {} : { [VAR]: row.seed }
       // C5 is registered by its store kind alone: observe its launches before any binding.
@@ -232,9 +235,12 @@ describe('table C through the real ChatSessionManager', () => {
       seen.codex = (await codexLaunch(seed)).VAR
       const want: Record<string, Seen | 'refused'> = { claude: row.claude, codex: row.codex }
       if (row.gate !== undefined) Object.assign(want, { gate: row.gate, boundOwn: row.gate === 'refused' ? 'refused' : undefined })
-      expect({ row: row.row, ...seen }).toEqual({ row: row.row, ...want })
-    }, 30_000)
-  }
+      for (const key of new Set([...Object.keys(want), ...Object.keys(seen)])) {
+        if (seen[key] !== want[key]) mismatches.push(`${row.row} ${key}: got ${String(seen[key])}, want ${String(want[key])}`)
+      }
+    }
+    expect(mismatches).toEqual([])
+  }, 180_000)
 
   // @covers: provider-credentials › Credential resolution composes per variable › A seed-only sibling key survives
   test('C9: the seed holds two variables, the store one — Claude composes per variable; Codex takes neither', async () => {
