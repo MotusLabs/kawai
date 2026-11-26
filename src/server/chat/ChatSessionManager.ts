@@ -3485,7 +3485,8 @@ export class ChatSessionManager {
         const record = this.records.get(id)
         const teamId = this.teams.teamOf(id)?.teamId
         if (!record?.groupId || !teamId) return { occupants: [], pending: 0 }
-        const facts = this.teamMail.staffing.capacity(teamId, record.groupId, record.projectPath)
+        // Staffing keys writers and reservations by worktree root (roster D4), not the session's cwd.
+        const facts = this.teamMail.staffing.capacity(teamId, record.groupId, worktreeRootOf(record.projectPath))
         return { occupants: facts.worktreeOccupants, pending: facts.worktreePending }
       },
       onChange: teamId => this.options.onProcessReportChange?.(teamId),
