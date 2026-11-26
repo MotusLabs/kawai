@@ -157,7 +157,9 @@ export class WorkspaceConnections {
 
   /**
    * Set up team's preview (starter-team-setup D3): the starter groups, the
-   * target directory, and the workers this team's catalog lacks. Read-only.
+   * target directory, the workers this team's catalog lacks, and the
+   * user-level group files the write would replace, read under the same home
+   * as the catalog. Read-only.
    */
   private async setupPreview(connection: ChatConnection, teamPath: string) {
     const team = await this.manager.teamScopes.resolve(teamPath)
@@ -165,7 +167,7 @@ export class WorkspaceConnections {
       connection.send({ type: 'team-workspace-setup-preview-result', teamPath, ok: false, error: unknownTeamError(teamPath) })
       return
     }
-    const preview = setupPreview(team.groupsRoot, this.manager.catalogProfileIds(team.groupsRoot))
+    const preview = setupPreview(team.groupsRoot, this.manager.catalogProfileIds(team.groupsRoot), this.manager.groupCatalogHome())
     connection.send({ type: 'team-workspace-setup-preview-result', teamPath, ok: true, preview })
   }
 

@@ -164,7 +164,7 @@ Every refusal uses the tool-error envelope of the unknown-window refusal
 |----|------|----------|
 | T1 | `team_metrics {window:'7d'}` | serialized < 32,000 bytes; every value, `n`, baseline, flag equals a `full` read in the same cache period; `mail_share.drill.messages` ≤ 50 with `messagesTotal` 2,595; `projectionTruncated` true |
 | T1a | same with `detail:'full'` | deep-equal to the tab's read of the same key (drill, breakdown, slices) |
-| T1b | compact and full while export is budget-unavailable | both carry `toolMeasurement.export.state` `budget-unavailable` |
+| T1b | compact and full while export is budget-unavailable | both carry `toolMeasurement.export.state` `budget-unavailable`; full keeps every drill entry; the P4 witness holds after each call |
 | T2 | drill `{window:'7d', end: T1.periodEnd, metric:'mail_share', list:'messages', limit:200}` walked to a null cursor | 13 pages; concatenation = sorted 2,595 ids once; every page total 2,595 |
 | T3 | drill `metric:'velocity'`; `list:'toolStreaks'` on `mail_share`; `list:'breakdown'` | refused naming `METRIC_IDS`; refused naming the metrics with tool streaks; refused naming the three lists |
 | T4 | drill with `slice:{kind:'group'}` | page entries equal the sliced read's list; refusal for `slice.kind:'x'` names the kinds |
@@ -174,14 +174,14 @@ Every refusal uses the tool-error envelope of the unknown-window refusal
 | T8 | `process_report_submit` (7d) | returned snapshot compact; stored row whole with 6,998 message refs |
 | T9a | two `team_metrics` reads 1 s apart, then a `fresh` report submission (fake clock) | both reads share one `periodEnd`; the submission reads at now, bypassing both caches |
 | T9 | two drills whose `end` differ by 31 s (fake clock) | each page equals `readAt` at its own end |
-| T10 | page 2 read 1 h after page 1 (fake clock, records unchanged) | page equals the read at the cursor's `end`, not at now |
+| T10 | page 2 read 1 h after page 1 (fake clock, records unchanged) | page equals the read at the cursor's `end`, not at now; one fixture per runtime, so page 2 recomputes through the expired cache, and page 1's retained read and the recomputed entry both equal the read at `end` (P4 witness on each page) |
 | T11 | `limit` 0, 201, 1.5 on `messages`; 51 on `toolStreaks` | refused naming 1–200; refused naming 1–50 |
-| T12 | cursor not base64url; `v:2`; an unknown field; missing `after`; cursor plus `metric` | refused as invalid cursor or "a cursor carries its request" (one row each) |
+| T12 | cursor not base64url; `v:2`; an unknown field; missing `after`; cursor plus any first-page argument; an unknown tool argument; a live tool-streak cursor whose end differs from its inner cursor's | refused as invalid cursor, "a cursor carries its request", or an unrecognized key (one row each) |
 | T13 | `report_id` of another team, or unknown | refused `Unknown report: <id>` |
 | T14 | a live cursor used from a session of another team | refused as a team mismatch; no entries |
 | T15 | live `toolStreaks` walk while three later streaks commit | pages and total equal the first page's high-water mark; entries equal the human pager's for the same end and page size |
 | T16 | report `toolStreaks` on a snapshot with total 120, 50 stored | entries are the 50 stored, `total` 120, `reachable` 50, then `next` null |
-| T17 | `end` later than now, or not ISO | refused naming `end` |
+| T17 | `end` later than now, or not an ISO instant (out-of-range fields included) | refused naming `end`; an ISO instant with `Z` or an offset, with or without a fraction, reads at that instant, years 0000–0099 and year 0's leap day included, through a continuation that keeps the normalized `end` |
 | T18 | the human's `process-tool-drill-page` and report connection after agent walks | unchanged responses (connection tests stay green) |
 
 Unreachable: a report cursor with a `slice` (the cursor schema has no slice
@@ -203,8 +203,17 @@ for reports, so decoding refuses it as an unknown field — T12).
   equals the full list sorted by id. Seed `0xC0DE`, 300 cases.
 - **P4, stored records are unchanged by reads.** For every read-only row of
   Table T, a hash of the stored report rows and observation rows before and
-  after the call is equal; for T8, the new report holds the whole snapshot
-  and existing rows are unchanged.
+  after the call is equal, and each cached read the call may touch deep-equals
+  its earlier clone; for T8, the new report holds the whole snapshot and
+  existing rows are unchanged. The witness lives in the shared call path
+  of `metricsDrillHarness.ts`: every read-tool call (`team_metrics`,
+  `team_metrics_drill`, `process_reports_list`, `process_report_get`) under
+  either runtime, each walk page included, checks the stored rows, every
+  metrics object either `MetricsReader` cache has held (through the
+  read-only `cachedEntries`, never `read`/`readAt`), and each entry the call
+  computes against an independent `readMetrics` at its key's end, so T1b,
+  T10, T12, T17, and every other row run inside it. P4 seeds T17's ancient
+  windows and walks every T17 end with T17's page size.
 
 **Mutants each row must kill** (listed in tasks.md): a cache key without
 `end` (T9, T10); the cursor's team trusted (T14); `after` compared with `>=`
@@ -219,8 +228,9 @@ The first checkpoint is one real path: `team_metrics_drill` registered in
 `teamToolTable`, called through the Claude and Codex registrations against a
 manager-built `MetricsReader`, returning page 1 and page 2 of `mail_share`
 messages at a fixed end, plus the T14 refusal. A mutant that leaves the
-handler unregistered must fail it. Report and tool-streak sources expand
-after that checkpoint.
+handler unregistered, or drops the metrics services from the manager's
+composition, must fail it (`metricsDrillManager.integration.test.ts`).
+Report and tool-streak sources expand after that checkpoint.
 
 ## Affected existing workflows
 
@@ -284,7 +294,7 @@ lineage (`8011e25e`, `result-d18090f6`, tasks `931742d5`, `49405e3d`,
 ### Verification
 - V1: Table T rows are committed as literal table-driven tests next to the code, at least one per guarded seam through `teamToolTable`, each with the named mutant shown failing.
 - V2: Properties P1 and P2 run through `propertyCases` with seeds `0xD811` and `0xC0DE` at 300 declared cases.
-- V3: A citation preflight resolves every cited literal test title, then `bun run check --full-properties` passes on the clean committed head under pinned Bun 1.4.3, and `scripts/verify-result.ts` reports its exit code.
+- V3: A citation preflight resolves every cited literal test title, then `bun run check --full-properties` passes on the clean committed head using the Bun version declared by `.bun-version` at that commit, and `scripts/verify-result.ts` reports its exit code.
 - V4: `openspec validate bounded-metrics-reads --strict` passes.
 ### Excluded
 - X1: No `task_get` change; it is delivered by PR #396 and `bounded-task-reads`.

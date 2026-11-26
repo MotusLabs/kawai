@@ -1546,6 +1546,18 @@ export class ChatSessionManager {
     return new Set(resolvedCatalog(ctx).catalog.profiles.keys())
   }
 
+  /**
+   * The home the user-level `.kawai` catalogs are read from — the injected
+   * one, else undefined for the ambient home (the Set up team preview names
+   * the user-level group files it would replace, and must look where the
+   * group catalog reads).
+   */
+  groupCatalogHome(): string | undefined {
+    // An empty override is none, as everywhere else the option is read: the
+    // ambient home, never a directory resolved against the working directory.
+    return this.options.profileCatalogHome || undefined
+  }
+
   groupProfileCounts(teamId: string, groupId: string): Record<string, number> {
     const counts: Record<string, number> = {}
     for (const record of this.records.values()) {

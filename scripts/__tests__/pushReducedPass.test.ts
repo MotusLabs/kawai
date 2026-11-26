@@ -39,10 +39,10 @@ function recordPass(caseProfile: CaseProfile | undefined, retried: boolean): voi
 }
 
 function pushVerdict() {
-  const recorded = readTreeRecord(dir, TREE) !== null
+  const recordedBun = readTreeRecord(dir, TREE) !== null ? Bun.version : null
   // HEAD elsewhere and a dirty tree: only the recorded pass can let it through.
   return decidePush(
-    [{ kind: 'commit', ref: 'refs/heads/feature', commit: COMMIT, tree: TREE, recorded, head: null, dirtyPaths: ['x'] }],
+    [{ kind: 'commit', ref: 'refs/heads/feature', commit: COMMIT, tree: TREE, bun: Bun.version, pin: null, recordedBun, head: null, dirtyPaths: ['x'] }],
     []
   ).kind
 }

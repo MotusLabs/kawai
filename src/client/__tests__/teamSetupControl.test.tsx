@@ -4,7 +4,9 @@
 // nothing until Confirm; Cancel sends nothing; the run's answer — success,
 // skip, or refusal — shows inline, routed by the protocol handler; every
 // control is disabled while disconnected, and a dropped connection releases
-// the wait.
+// the wait. A preview's warning that a starter group replaces a user-level
+// group file is shown like any other and leaves Confirm usable
+// (starter-setup-with-user-level-groups).
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
@@ -33,6 +35,8 @@ const PREVIEW: TeamSetupPreview = {
   warnings: ['Profile codex-sol is not defined in this team\'s catalog; its slots will not staff until it is.'],
 }
 
+/** Every renderer the running test mounted; afterEach unmounts them, inside act. */
+const mounted: TestRenderer.ReactTestRenderer[] = []
 let sent: ClientMessage[]
 beforeEach(() => {
   sent = []
@@ -40,6 +44,8 @@ beforeEach(() => {
   useTeamSetupStore.setState({ setups: {} })
 })
 afterEach(() => {
+  // A renderer left mounted re-renders at every later reset of the stores, outside act.
+  act(() => { for (const renderer of mounted.splice(0)) renderer.unmount() })
   useTeamWorkspaceDataStore.setState({ views: {}, approvalSaves: {} })
   useTeamSetupStore.setState({ setups: {} })
 })
@@ -49,6 +55,7 @@ const control = (available: boolean, connected = true) =>
 const mount = (available: boolean, connected = true) => {
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => { renderer = TestRenderer.create(control(available, connected)) })
+  mounted.push(renderer)
   return renderer
 }
 const row = (id: string): TeamMemberRow => ({
@@ -61,6 +68,7 @@ const panel = (members: TeamMemberRow[], available: boolean) => {
   act(() => {
     renderer = TestRenderer.create(<TeamMembersPanel loaded members={members} onOpenSession={() => {}} setupControl={control(available)} />)
   })
+  mounted.push(renderer)
   return renderer
 }
 const openPreview = (renderer: TestRenderer.ReactTestRenderer) => {
@@ -111,6 +119,26 @@ test('choosing Set up team asks for the preview; it shows groups, workers, the f
   expect(textOf(one(renderer, 'team-setup-warnings'))).toContain('codex-sol is not defined')
   expect(one(renderer, 'team-setup-confirm').props.disabled).toBe(false)
   expect(sent).toHaveLength(1)
+})
+
+// starter-setup-with-user-level-groups (Table W1 at the control): the
+// preview's warning that a starter group replaces a user-level group file is
+// listed with the missing-worker warning, once per file, and it informs only
+// — Confirm stays usable, since the write alone checks its target.
+// @covers: team-setup › The setup preview names the user-level groups it would replace › A starter group that replaces a user-level group is warned
+test('the preview warns which starter groups replace user-level group files, and Confirm stays enabled', () => {
+  const renderer = mount(true)
+  act(() => one(renderer, 'team-setup-open').props.onClick())
+  const replacements = ['lead.md replaces /home/u/.kawai/groups/lead.md for this project.', 'reviewers.md replaces /home/u/.kawai/groups/reviewers.md for this project.']
+  act(() => handleTeamSetupMessage({
+    type: 'team-workspace-setup-preview-result', teamPath: '/repo', ok: true,
+    preview: { ...PREVIEW, warnings: [...PREVIEW.warnings, ...replacements] },
+  }))
+  expect(one(renderer, 'team-setup-warnings').findAll(node => node.type === 'li').map(textOf)).toEqual(
+    [...PREVIEW.warnings, ...replacements].map(warning => `Warning: ${warning}`))
+  expect(one(renderer, 'team-setup-confirm').props.disabled).toBe(false)
+  act(() => one(renderer, 'team-setup-confirm').props.onClick())
+  expect(sent.at(-1)).toEqual({ type: 'team-workspace-setup-run', teamPath: '/repo' })
 })
 
 // @covers: team-setup › The setup previews the starter team before writing › Cancelling writes nothing
@@ -172,6 +200,7 @@ test('with no project group files, Set up team is the tab’s only group-file wr
     renderer = TestRenderer.create(<TeamMembersPanel loaded members={[row('reviewers-sol')]} onOpenSession={() => {}}
       setupControl={control(true)} />)
   })
+  mounted.push(renderer)
   const buttons = renderer.root.findAll(node => node.type === 'button').map(node => node.props['data-testid'] ?? textOf(node))
   expect(buttons).toEqual(['team-setup-open'])
 })

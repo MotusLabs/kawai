@@ -74,12 +74,8 @@ export function provisionAdapter(store: ExecutionStore, git: ProvisionGit = { fe
         const remote = await git.lsRemoteHead(repo, `refs/heads/${branch}`)
         if (!remote.ok) return { ok: false, error: remote.error }
         const taken = worktreeTaken || local.ok || remote.sha !== null
-        if (taken) {
-          // Accepted only when a done provision of this plan created the name.
-          const ours = store.doneProvisions(branch).some(provision => provision.command.planId === planId)
-          if (!ours) {
-            return { ok: false, error: failure(['provision', 'name-check'], `The name "${branch}" is already taken by work not of this plan; the change stops as name-taken.`) }
-          }
+        if (taken && !store.provisionedBranches(planId).has(branch)) {
+          return { ok: false, error: failure(['provision', 'name-check'], `The name "${branch}" is already taken by work not of this plan; the change stops as name-taken.`) }
         }
 
         // 3-4. Add or reuse, never forced.
