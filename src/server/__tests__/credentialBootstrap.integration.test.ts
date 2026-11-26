@@ -1,4 +1,5 @@
 // @exercises: src/server/routes/credentials.ts, src/server/chat/credential*.ts, src/server/chat/secretNameRegistry.ts, src/shared/credentials.ts
+// @reads: packages/agent-runtime/node_modules
 // The credential surface through the REAL bootstrap (provider-credential-store
 // PW1, U7, PW4): `bun src/server/index.ts` starts on a spare port with a
 // disposable HOME, database, log file, and private tmux server — never the
