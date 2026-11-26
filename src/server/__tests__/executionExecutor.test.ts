@@ -203,7 +203,8 @@ describe('provisioning (§11.3)', () => {
     const startBase = git(['rev-parse', 'master'], origin).trim()
     const executionId = startExecution(plan, ['base-dep', 'base-late'], startBase)
     // The base branch advances after Start: base-dep lands, its merge commit joining origin's master.
-    const landedContent = 'openspec/changes/base-dep/design.md'
+    // The landed content is any file of the change's; a plain one at the fixture root.
+    const landedContent = 'landed-base-dep.txt'
     fs.writeFileSync(path.join(world.repo, landedContent), '# base-dep\n')
     landOnBase(landedContent, 'base-dep lands')
     const landed = git(['rev-parse', 'master'], origin).trim()
