@@ -113,6 +113,15 @@ describe('ChatProviderSettings — the write-only credential section', () => {
     renderer.unmount()
   })
 
+  // Preserved: the Settings Chat tab names this section by its label
+  // (tests/e2e/settings-tabs.spec.ts), so the credential editor keeps it.
+  test('the section keeps its Claude Chat Provider label', async () => {
+    const renderer = await render()
+    const labels = renderer.root.findAllByType('label').map(node => node.children.join(''))
+    expect(labels).toContain('Claude Chat Provider')
+    renderer.unmount()
+  })
+
   // @covers: provider-credentials › The credential UI is write-only › Replace requires retyping
   test('replace requires retyping: every value input starts empty and is empty again after a save', async () => {
     const renderer = await render()

@@ -158,7 +158,7 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
     const migration = listing?.migration
     return (
       <div className="border-t border-border pt-4" data-testid="chat-provider-settings">
-        <label className="mb-1 block text-xs text-secondary">Chat Credentials</label>
+        <label className="mb-1 block text-xs text-secondary">Claude Chat Provider</label>
         <p className="mb-2 text-[10px] text-muted">
           Variables for chat sessions, stored in ~/.kawai/credentials.json (owner-only). Values are
           never shown again: type a value to set or replace it. Launch variables reach Claude
