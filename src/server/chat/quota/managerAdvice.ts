@@ -17,8 +17,9 @@
 // commits (`snapshot_basis` `incident`). The limit event commits before its
 // subscriber runs, so a crash in between leaves a durable final event with no
 // recommendation: at startup, and again once each session's team resolves,
-// every final event still in force and every flagged context is replayed
-// through the same path (`reconstructed`, idempotent per episode, R5). Quota
+// the team's quota episode still cooling (`adviceEpisodes.ts`, the rule the
+// live join uses too) and every flagged context are replayed through the
+// same path (`reconstructed`, idempotent per episode, R5). Quota
 // history writes and limit updates re-evaluate the team's open episodes. Nothing here sends mail,
 // routes, or changes a login (X3, I1).
 import type { Database } from 'bun:sqlite'
@@ -32,6 +33,7 @@ import { incidentSnapshot } from '../../metrics/recommendations/snapshot'
 import { RecommendationStore, type StoredRecommendation } from '../../metrics/recommendations/store'
 import type { QuotaObservationStore } from '../../metrics/observations/quotaObservations'
 import { LIMIT_EVENT_READ_WINDOW_MS } from '../../team/routing/limitEvents'
+import { episodeEndFrom, quotaEpisodes, type EpisodeEvent } from './adviceEpisodes'
 
 /** A durable `profile_limit_events` row (the limit store's own table). */
 interface LimitEventRow {
@@ -151,26 +153,77 @@ export class ManagerAdvice {
   }
 
   /**
-   * Replay the session's incidents still in force: its context flag, and its
-   * final limit events whose cooldown still runs, oldest first, so they
-   * coalesce exactly as they did live. An episode that already has a
-   * recommendation is left alone.
+   * Replay the session's incidents still in force: its context flag, and for
+   * each provider it hit a final limit on, the team's episode of that
+   * provider still cooling now — only that one, its members oldest first, so
+   * they coalesce exactly as they did live (an earlier, ended episode is
+   * never revived). An episode that already has a recommendation is left
+   * alone.
    */
   private reconstruct(sessionId: string): void {
     const teamId = this.deps.teamOf(sessionId)
     if (!teamId) return
     const record = this.deps.record(sessionId)
     if (record?.contextExhausted && !record.archivedAt) this.contextIncident(sessionId, 'reconstructed')
-    const since = new Date(this.now() - LIMIT_EVENT_READ_WINDOW_MS).toISOString()
-    const rows = this.deps.db.prepare(`SELECT * FROM profile_limit_events
-      WHERE session_id = ? AND final = 1 AND at >= ? ORDER BY at, id`).all(sessionId, since) as LimitEventRow[]
-    for (const row of rows) {
-      const event = limitEventOf(row)
-      const until = this.deps.limits.cooldownFor(event.profileId, event.providerId).until
-      if (until === null || Date.parse(until) <= this.now()) continue
-      this.quotaIncident(teamId, event, 'reconstructed')
+    const now = this.now()
+    const since = new Date(now - LIMIT_EVENT_READ_WINDOW_MS).toISOString()
+    const own = this.finalRows(since).filter(row => row.session_id === sessionId)
+    for (const providerId of new Set(own.map(row => this.rowProvider(row)))) {
+      const active = quotaEpisodes(this.teamEpisodeEvents(teamId, providerId, since, now)).at(-1)
+      if (!active || active.end <= now) continue
+      const last = active.events.at(-1)!.row
+      // The router's aggregate still cools (a credit limit can end early).
+      const until = this.deps.limits.cooldownFor(last.profile_id, last.provider_id).until
+      if (until === null || Date.parse(until) <= now) continue
+      for (const entry of active.events) this.quotaIncident(teamId, limitEventOf(entry.row), 'reconstructed')
     }
     this.attachStalls(teamId)
+  }
+
+  private finalRows(sinceIso: string): LimitEventRow[] {
+    return this.deps.db.prepare(`SELECT * FROM profile_limit_events
+      WHERE final = 1 AND at >= ? ORDER BY at, id`).all(sinceIso) as LimitEventRow[]
+  }
+
+  /** The provider a limit event counts against (as `quotaIncident` derives it). */
+  private rowProvider(row: LimitEventRow): string {
+    return row.provider_id ?? this.deps.providerOf(row.profile_id, this.deps.record(row.session_id)?.projectPath ?? '')
+  }
+
+  /** The team's final limits of the provider at or after `sinceIso` and at or before `untilMs`, as episode events. */
+  private teamEpisodeEvents(teamId: string, providerId: string, sinceIso: string, untilMs: number): Array<EpisodeEvent & { row: LimitEventRow }> {
+    return this.finalRows(sinceIso)
+      .filter(row => Date.parse(row.at) <= untilMs && this.deps.teamOf(row.session_id) === teamId && this.rowProvider(row) === providerId)
+      .map(row => ({ id: row.id, at: row.at, resetsAt: row.resets_at, row }))
+  }
+
+  /**
+   * When the quota episode `rec` opened ends by its own cooldown, over the
+   * team's events up to `untilMs` other than `exceptId`; null when its first
+   * event is gone (pruned).
+   */
+  private episodeEnd(rec: StoredRecommendation, untilMs: number, exceptId?: string): number | null {
+    if (rec.providerId === null) return null
+    const firstId = rec.episodeKey.slice(`quota:${rec.providerId}:`.length)
+    const events = this.teamEpisodeEvents(rec.teamId, rec.providerId, rec.cutoff, untilMs).filter(event => event.id !== exceptId)
+    return episodeEndFrom(events, firstId)
+  }
+
+  /**
+   * The team's unresolved quota episode of the provider that `event` joins:
+   * one whose own cooldown still runs at the event's time. Episodes that ended
+   * before it are re-evaluated (they resolve) and never absorb it.
+   */
+  private joinable(teamId: string, providerId: string, event: LimitEvent): StoredRecommendation | null {
+    const at = Date.parse(event.at)
+    let joined: StoredRecommendation | null = null
+    for (const rec of this.store.unresolved()) {
+      if (rec.teamId !== teamId || rec.kind !== 'quota' || rec.providerId !== providerId) continue
+      const end = this.episodeEnd(rec, at, event.id)
+      if (joined === null && (end === null || end > at)) joined = rec
+      else if (end !== null && end <= at) this.service.enqueue(rec.id)
+    }
+    return joined
   }
 
   /** Attach the team's unresolved quota advice to its task's current plan stall (R6), whichever came first. */
@@ -193,9 +246,9 @@ export class ManagerAdvice {
     const projectPath = record?.projectPath ?? ''
     const providerId = event.providerId ?? this.deps.providerOf(event.profileId, projectPath)
     const episodeKey = `quota:${providerId}:${event.id}`
-    const open = this.store.openFor(teamId, 'quota', providerId)
+    const open = this.joinable(teamId, providerId, event)
     if (open) {
-      // A later final limit joins the open episode; a stall raised since it opened attaches now (R6).
+      // A final limit within the open episode's own cooldown joins it; a stall raised since it opened attaches now (R6).
       const attention = this.planStallAttention(open.taskId)
       if (attention && this.store.attach(open.id, attention)) this.deps.onChange?.(teamId)
       this.service.enqueue(open.id)
@@ -252,7 +305,11 @@ export class ManagerAdvice {
     }
     const { profileId, providerId } = rec.snapshot.limited
     const until = this.deps.limits.cooldownFor(profileId, providerId).until
-    return until !== null && Date.parse(until) > cutoff
+    if (until === null || Date.parse(until) <= cutoff) return false
+    // The episode's own cooldown (R5): a later, separate episode keeps the
+    // aggregate cooling but never this one.
+    const own = this.episodeEnd(rec, cutoff)
+    return own === null || own > cutoff
   }
 
   /** The newest stall alert of the plan change that owns the task (R6), as its attention id. */

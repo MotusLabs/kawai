@@ -246,6 +246,77 @@ describe('Table R through the advice service', () => {
     })
   })
 
+  // Reconstruction forms the episodes the live path forms (adviceEpisodes.ts):
+  // only the episode still cooling by its own cooldown is replayed, from its
+  // first event; an earlier episode that ended is never revived.
+  describe('R5 episodes by their own cooldown', () => {
+    /** Final limits (offset from T0 in minutes, reset offset) recorded with no subscriber, then two restarts at `restartAt`. */
+    const replay = (limits: Array<[number, number]>, restartAt: number) => {
+      h = adviceHarness()
+      team()
+      h.observe('kimi', 'moon', T0 - MIN)
+      h.advice.shutdown()
+      for (const [at, reset] of limits) {
+        h.clock.now = T0 + at * MIN
+        h.limit({ resetsAt: new Date(T0 + reset * MIN).toISOString() })
+      }
+      const ids = (h.db.db.prepare('SELECT id FROM profile_limit_events ORDER BY at, id').all() as Array<{ id: string }>).map(row => row.id)
+      h.clock.now = T0 + restartAt * MIN
+      for (let boot = 0; boot < 2; boot++) {
+        restart()
+        h.advice.start()
+        h.drain()
+      }
+      return { recs: recommendations(h), ids }
+    }
+
+    test('R5: two disjoint cooldowns reconstruct only the active episode, from its own event and cutoff', () => {
+      // The reviewer's probe: 12:00 (reset 12:01) then 12:02 (reset 13:00), restart at 12:03.
+      const { recs, ids } = replay([[0, 1], [2, 60]], 3)
+      expect(recs).toHaveLength(1)
+      expect(recs[0]).toMatchObject({ episodeKey: `quota:zai:${ids[1]}`, cutoff: '2026-06-01T12:02:00.000Z', snapshotBasis: 'reconstructed' })
+      expect(recs[0]!.assessments[0]!.cutoff).toBe('2026-06-01T12:02:00.000Z')
+    })
+
+    test('R5: overlapping cooldowns reconstruct one episode from the first event, coalesced', () => {
+      const { recs, ids } = replay([[0, 60], [30, 90]], 45)
+      expect(recs).toHaveLength(1)
+      expect(recs[0]).toMatchObject({ episodeKey: `quota:zai:${ids[0]}`, cutoff: new Date(T0).toISOString() })
+    })
+
+    test('R5: a three-event chain of overlapping cooldowns reconstructs one episode from its first event', () => {
+      const { recs, ids } = replay([[0, 20], [10, 40], [30, 70]], 50)
+      expect(recs).toHaveLength(1)
+      expect(recs[0]).toMatchObject({ episodeKey: `quota:zai:${ids[0]}`, cutoff: new Date(T0).toISOString() })
+    })
+
+    test('R5: episodes whose own cooldowns all ended reconstruct nothing', () => {
+      expect(replay([[0, 1], [2, 5]], 10).recs).toEqual([])
+    })
+
+    test('R5: live, a final limit after the open episode\'s own cooldown ended opens a new episode, and restart adds none', () => {
+      h = adviceHarness()
+      team()
+      h.observe('kimi', 'moon', T0 - MIN)
+      h.limit({ resetsAt: new Date(T0 + MIN).toISOString() })
+      h.drain()
+      h.clock.now = T0 + 2 * MIN
+      h.limit({ resetsAt: new Date(T0 + 60 * MIN).toISOString() })
+      h.drain()
+      const ids = (h.db.db.prepare('SELECT id FROM profile_limit_events ORDER BY at, id').all() as Array<{ id: string }>).map(row => row.id)
+      const live = recommendations(h)
+      expect(live.map(rec => rec.episodeKey)).toEqual([`quota:zai:${ids[0]}`, `quota:zai:${ids[1]}`])
+      // The ended episode resolved; the new one is open.
+      expect(live[0]!.assessments.at(-1)!.state).toBe('resolved')
+      expect(live[1]!.assessments.at(-1)!.state).not.toBe('resolved')
+      h.clock.now = T0 + 3 * MIN
+      restart()
+      h.advice.start()
+      h.drain()
+      expect(recommendations(h).map(rec => rec.episodeKey)).toEqual(live.map(rec => rec.episodeKey))
+    })
+  })
+
   // An open quota episode that predates its stall attaches to it whichever event comes next (R6).
   describe('R6 when the stall is raised after the quota episode opened', () => {
     const attentionId = 'plan-stall:exec-1:chg:ep-3'

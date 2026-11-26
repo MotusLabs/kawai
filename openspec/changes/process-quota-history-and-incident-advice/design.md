@@ -83,7 +83,12 @@ evidence hash) suppresses duplicates. Evaluation runs off a coalescing queue
 after incident commits and quota/reset updates, targeting publication within
 five seconds; evaluator failure records a health gap and leaves work running.
 At startup, episodes with no assessment for the current evaluator version are
-enqueued once (recovery-matrix row).
+enqueued once (recovery-matrix row). A quota episode is a team's chain of final
+limits of one provider, oldest first: an event joins while the episode's own
+cooldown (the latest reset of its members, else one hour after the event) is
+still ahead of it, and otherwise opens a new episode; the live join, the
+episode's open state, and startup reconstruction (only the episode still
+cooling, from its first event) all use that rule.
 
 ### D6 — Surfaces
 
