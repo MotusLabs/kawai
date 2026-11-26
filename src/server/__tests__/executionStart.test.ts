@@ -2,7 +2,8 @@
 // `origin` behind a github-shaped remote URL (url.insteadOf), a stub gh, and
 // a store-level plan bench: agent refusal, the lost-result replay, a payload
 // mismatch named per field, racing Starts leaving one execution, a cross-plan
-// owned change, landed changes starting landed, and Start writing no task
+// owned change, landed changes starting landed, the parallel limit edited
+// during an execution reaching only the next one, and Start writing no task
 // and no mail.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
@@ -21,6 +22,8 @@ import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisi
 import { schemaDb } from './schemaDb'
 import { ExecutionService } from '../plans/execution/ExecutionService'
 import { advanceExecutionRevision } from '../plans/execution/executionApplyStore'
+import { executionSnapshot } from '../plans/execution/executionSnapshot'
+import { planSteps } from '../plans/execution/executionPlanner'
 
 const GITHUB_URL = 'https://github.com/acme/app.git'
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
@@ -38,6 +41,8 @@ const commitAll = (cwd: string, message: string) => {
 let root: string
 /** The team's backstop setting for the next Start; undefined leaves it out (hand-built settings read the default). */
 let backstop: number | undefined
+/** The team's parallel limit, as the settings would read when the next Start runs. */
+let parallelLimit = 3
 let main: string
 let db: Database
 let plansStore: PlanStore
@@ -126,7 +131,7 @@ esac
       standing: () => ({ state: 'current', report: { id: 'rep-1', inputHash: 'ih-1', readiness: { carriedConditions: [] } } }) as never,
     },
     impact: { gate: () => null },
-    settings: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: 3, mergeMethod: 'merge', ...(backstop !== undefined ? { maxFailedFixRounds: backstop } : {}) }) },
+    settings: { planExecution: async () => ({ floorChecks: FLOOR, maxParallelChanges: parallelLimit, mergeMethod: 'merge', ...(backstop !== undefined ? { maxFailedFixRounds: backstop } : {}) }) },
     getSession: () => null,
     landingModes: () => new Set(['direct']),
     promotions: { runningPromotion: () => null },
@@ -268,6 +273,30 @@ describe('ExecutionService.start', () => {
       backstop = 3
       expect(executions.execution(started.execution.id)!.maxFailedFixRounds).toBe(7)
     } finally { backstop = undefined }
+  })
+
+  // @covers: plan-execution › An execution records what it started from › Settings edited during an execution
+  test('the parallel limit edited while an execution runs reaches only the next execution; the running one keeps scheduling under the limit it recorded', async () => {
+    // What one executor tick would schedule for an execution: the changes leaving `waiting`.
+    const scheduled = (executionId: string) => planSteps(executionSnapshot(team.teamId, main, executions, plansStore), new Date().toISOString())
+      .transitions.filter(step => step.executionId === executionId).map(step => step.change)
+    parallelLimit = 2
+    try {
+      const running = approvedPlan(['lim1', 'lim2', 'lim3'])
+      const first = await start(running.planId, running.hash, 'cmd-limit-first')
+      if (!first.ok) throw new Error(first.message)
+      // The operator lowers the team's parallel limit while the execution runs.
+      parallelLimit = 1
+      // The running execution keeps the limit it recorded: two of its three changes are scheduled and the third waits for a free slot.
+      expect(executions.execution(first.execution.id)!.maxParallel).toBe(2)
+      expect(scheduled(first.execution.id)).toEqual(['lim1', 'lim2'])
+      // The next execution uses the new one: one of its two changes is scheduled.
+      const next = approvedPlan(['lim4', 'lim5'])
+      const second = await start(next.planId, next.hash, 'cmd-limit-next')
+      if (!second.ok) throw new Error(second.message)
+      expect(second.execution.maxParallel).toBe(1)
+      expect(scheduled(second.execution.id)).toEqual(['lim4'])
+    } finally { parallelLimit = 3 }
   })
 
   test('hand-built settings without the backstop record the default of 5', async () => {
