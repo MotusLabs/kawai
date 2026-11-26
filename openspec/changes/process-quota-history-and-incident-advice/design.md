@@ -86,9 +86,14 @@ At startup, episodes with no assessment for the current evaluator version are
 enqueued once (recovery-matrix row). A quota episode is a team's chain of final
 limits of one provider, oldest first: an event joins while the episode's own
 cooldown (the latest reset of its members, else one hour after the event) is
-still ahead of it, and otherwise opens a new episode; the live join, the
-episode's open state, and startup reconstruction (only the episode still
-cooling, from its first event) all use that rule.
+still ahead of it, and otherwise opens a new episode; events at one instant
+keep their commit order. The episode is in force at a time while some member's
+own end is ahead of it and that member's profile cooldown, as the router saw it
+at that time, still runs (members can hold different model-scoped windows, so
+neither the first nor the newest member decides; a cooldown the router ended
+early counts as ended). The live join uses own ends; the episode's open state
+and startup reconstruction (only the episode in force, from its first event)
+use the in-force rule.
 
 ### D6 — Surfaces
 

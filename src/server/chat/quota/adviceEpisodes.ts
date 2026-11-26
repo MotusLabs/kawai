@@ -5,7 +5,10 @@
 // else one hour after it. Oldest first, an event joins the episode while the
 // episode's own end so far — the latest end of its members, never the
 // provider's current aggregate — is still ahead of the event; otherwise it
-// opens a new episode.
+// opens a new episode. An episode is in force at t while some member's own
+// end is ahead of t and that member's profile cooldown (the router's
+// aggregate, as of t) still runs (`episodeInForce`) — members can hold different
+// model-scoped windows, so neither the first nor the newest member decides.
 import { DEFAULT_COOLDOWN_MS } from '../../team/routing/limitEvents'
 
 export interface EpisodeEvent {
@@ -26,10 +29,14 @@ export function eventEnd(event: EpisodeEvent): number {
   return Number.isFinite(reset) ? reset : Date.parse(event.at) + DEFAULT_COOLDOWN_MS
 }
 
-/** Chain final events (any order; sorted by `at`, then id) into episodes, oldest first. */
+/**
+ * Chain final events into episodes, oldest first: sorted by `at`, events at
+ * the same instant keep their given order (the store's commit order, so a
+ * replay keys the episode by the event the live path saw first).
+ */
 export function quotaEpisodes<E extends EpisodeEvent>(events: readonly E[]): QuotaEpisode<E>[] {
   const sorted = [...events].filter(event => Number.isFinite(Date.parse(event.at)))
-    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
   const episodes: QuotaEpisode<E>[] = []
   for (const event of sorted) {
     const last = episodes.at(-1)
@@ -44,14 +51,23 @@ export function quotaEpisodes<E extends EpisodeEvent>(events: readonly E[]): Quo
 }
 
 /**
- * The end of the episode `firstId` opened, over `events` (the episode's
- * candidates); null when that event is not among them (pruned).
+ * The episode `firstId` opened, over `events` (none before it): the one that
+ * holds it, whichever event at its instant leads; null when that event is not
+ * among them (pruned).
  */
-export function episodeEndFrom(events: readonly EpisodeEvent[], firstId: string): number | null {
+export function episodeFrom<E extends EpisodeEvent>(events: readonly E[], firstId: string): QuotaEpisode<E> | null {
   const first = events.find(event => event.id === firstId)
   if (!first) return null
   const from = Date.parse(first.at)
   const later = events.filter(event => event.id === firstId || Date.parse(event.at) >= from)
-  const episode = quotaEpisodes(later).find(entry => entry.events[0]?.id === firstId)
-  return episode?.end ?? null
+  return quotaEpisodes(later).find(entry => entry.events.some(event => event.id === firstId)) ?? null
+}
+
+/**
+ * Whether the episode is in force at `atMs` (R5, the one predicate the live
+ * `isOpen` and startup reconstruction share): some member's own end is ahead
+ * and its own profile's router cooldown (`coolsAt`) still runs at `atMs`.
+ */
+export function episodeInForce<E extends EpisodeEvent>(members: readonly E[], atMs: number, coolsAt: (member: E, atMs: number) => boolean): boolean {
+  return members.some(member => eventEnd(member) > atMs && coolsAt(member, atMs))
 }

@@ -32,8 +32,8 @@ import { ProcessAdviceService, type AdviceServiceDeps } from '../../metrics/reco
 import { incidentSnapshot } from '../../metrics/recommendations/snapshot'
 import { RecommendationStore, type StoredRecommendation } from '../../metrics/recommendations/store'
 import type { QuotaObservationStore } from '../../metrics/observations/quotaObservations'
-import { LIMIT_EVENT_READ_WINDOW_MS } from '../../team/routing/limitEvents'
-import { episodeEndFrom, quotaEpisodes, type EpisodeEvent } from './adviceEpisodes'
+import { cooldownUntil, LIMIT_EVENT_READ_WINDOW_MS } from '../../team/routing/limitEvents'
+import { episodeFrom, episodeInForce, quotaEpisodes, type EpisodeEvent, type QuotaEpisode } from './adviceEpisodes'
 
 /** A durable `profile_limit_events` row (the limit store's own table). */
 interface LimitEventRow {
@@ -54,7 +54,10 @@ export interface ManagerAdviceDeps {
     subscribe: (listener: (event: LimitEvent) => void) => () => void
     forProvider: (providerId: string) => LimitEvent[]
     cooldownFor: (profileId: string, providerId: string | null) => { until: string | null }
+    forProfile: (profileId: string) => LimitEvent[]
   }
+  /** Test seam: whether a profile's router cooldown runs at a time (production: `routerCoolsAt`). */
+  coolsAt?: (profileId: string, providerId: string | null, atMs: number) => boolean
   record: (sessionId: string) => ChatSessionRecord | undefined
   /** Every tracked record (startup reconstruction of flagged sessions). */
   records: () => Iterable<ChatSessionRecord>
@@ -170,11 +173,7 @@ export class ManagerAdvice {
     const own = this.finalRows(since).filter(row => row.session_id === sessionId)
     for (const providerId of new Set(own.map(row => this.rowProvider(row)))) {
       const active = quotaEpisodes(this.teamEpisodeEvents(teamId, providerId, since, now)).at(-1)
-      if (!active || active.end <= now) continue
-      const last = active.events.at(-1)!.row
-      // The router's aggregate still cools (a credit limit can end early).
-      const until = this.deps.limits.cooldownFor(last.profile_id, last.provider_id).until
-      if (until === null || Date.parse(until) <= now) continue
+      if (!active || !this.inForce(active.events, now)) continue
       for (const entry of active.events) this.quotaIncident(teamId, limitEventOf(entry.row), 'reconstructed')
     }
     this.attachStalls(teamId)
@@ -182,7 +181,7 @@ export class ManagerAdvice {
 
   private finalRows(sinceIso: string): LimitEventRow[] {
     return this.deps.db.prepare(`SELECT * FROM profile_limit_events
-      WHERE final = 1 AND at >= ? ORDER BY at, id`).all(sinceIso) as LimitEventRow[]
+      WHERE final = 1 AND at >= ? ORDER BY at, rowid`).all(sinceIso) as LimitEventRow[]
   }
 
   /** The provider a limit event counts against (as `quotaIncident` derives it). */
@@ -198,15 +197,19 @@ export class ManagerAdvice {
   }
 
   /**
-   * When the quota episode `rec` opened ends by its own cooldown, over the
-   * team's events up to `untilMs` other than `exceptId`; null when its first
-   * event is gone (pruned).
+   * The quota episode `rec` opened, by its own cooldown, over the team's
+   * events up to `untilMs` other than `exceptId`; null when its first event
+   * is gone (pruned).
    */
-  private episodeEnd(rec: StoredRecommendation, untilMs: number, exceptId?: string): number | null {
+  private episodeOf(rec: StoredRecommendation, untilMs: number, exceptId?: string): QuotaEpisode<EpisodeEvent & { row: LimitEventRow }> | null {
     if (rec.providerId === null) return null
     const firstId = rec.episodeKey.slice(`quota:${rec.providerId}:`.length)
     const events = this.teamEpisodeEvents(rec.teamId, rec.providerId, rec.cutoff, untilMs).filter(event => event.id !== exceptId)
-    return episodeEndFrom(events, firstId)
+    return episodeFrom(events, firstId)
+  }
+
+  private episodeEnd(rec: StoredRecommendation, untilMs: number, exceptId?: string): number | null {
+    return this.episodeOf(rec, untilMs, exceptId)?.end ?? null
   }
 
   /**
@@ -303,13 +306,21 @@ export class ManagerAdvice {
       const flag = rec.sessionId ? this.deps.record(rec.sessionId)?.contextExhausted : null
       return flag ? `context-exhausted:${rec.sessionId}:${flag.at}` === rec.episodeKey : false
     }
-    const { profileId, providerId } = rec.snapshot.limited
-    const until = this.deps.limits.cooldownFor(profileId, providerId).until
-    if (until === null || Date.parse(until) <= cutoff) return false
-    // The episode's own cooldown (R5): a later, separate episode keeps the
-    // aggregate cooling but never this one.
-    const own = this.episodeEnd(rec, cutoff)
-    return own === null || own > cutoff
+    // The episode's own members decide (R5): a later, separate episode keeps
+    // the aggregate cooling but never this one; reconstruction applies the same rule.
+    const episode = this.episodeOf(rec, cutoff)
+    if (episode === null) {
+      const { profileId, providerId } = rec.snapshot.limited
+      const until = this.deps.limits.cooldownFor(profileId, providerId).until
+      return until !== null && Date.parse(until) > cutoff
+    }
+    return this.inForce(episode.events, cutoff)
+  }
+
+  /** The shared in-force rule (`episodeInForce`) over the router's per-member cooldowns. */
+  private inForce(members: ReadonlyArray<EpisodeEvent & { row: LimitEventRow }>, atMs: number): boolean {
+    const coolsAt = this.deps.coolsAt ?? ((profileId: string, providerId: string | null, at: number) => routerCoolsAt(this.deps.limits, profileId, providerId, at, this.now()))
+    return episodeInForce(members, atMs, (member, at) => coolsAt(member.row.profile_id, member.row.provider_id, at))
   }
 
   /** The newest stall alert of the plan change that owns the task (R6), as its attention id. */
@@ -324,4 +335,18 @@ export class ManagerAdvice {
       return null
     }
   }
+}
+
+/**
+ * Whether the profile's router cooldown runs at `atMs` (≤ now): its durable
+ * cooldown as of `atMs` (the events recorded by then, providers-and-workers
+ * D8), unless the router already ended it early (a credit return this process
+ * saw, at an unrecorded time) — then it counts as ended at every time.
+ */
+export function routerCoolsAt(limits: ManagerAdviceDeps['limits'], profileId: string, providerId: string | null, atMs: number, nowMs: number): boolean {
+  const events = [...limits.forProfile(profileId), ...(providerId === null ? [] : limits.forProvider(providerId))]
+  const durableNow = cooldownUntil(profileId, providerId, events, nowMs)
+  if (durableNow !== null && limits.cooldownFor(profileId, providerId).until === null) return false
+  const until = cooldownUntil(profileId, providerId, events.filter(event => Date.parse(event.at) <= atMs), atMs)
+  return until !== null && Date.parse(until) > atMs
 }
