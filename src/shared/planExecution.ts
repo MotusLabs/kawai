@@ -7,6 +7,7 @@
 // `manifestHashInput`.
 import { canonicalJson } from './productStrategy'
 import { PLAN_CHECK_FLOOR } from './plans'
+import type { ExecutionRevisionView } from './planRevisionControl'
 
 /** The floor-map version an execution records with its snapshot (D16). */
 export const FLOOR_VERSION = 1
@@ -141,7 +142,7 @@ export interface AttemptManifest {
   artifacts: Record<string, string>
   roleProfiles: string[]
   answers?: { resultId: string; roundId: string; failingChecks: CiCheck[]; findingsIds: string[] }
-  /** An update attempt's failed branch update (revision-control PR E, A1): the base head and the conflicting files; a failed check carries both empty. */
+  /** An update attempt's failed branch update (revision-control PR E, A1), or the one a D9 revision fix answers too (plan-revision-apply AL3): the base head and the conflicting files; a failed check carries both empty. */
   update?: { base: string; files: string[] }
   /** A restart's start point (rev4 §4, D5): THIS pause target's own newest checkpoint on origin — id and commit. Omitted when none reached origin (the restart then starts from origin's branch head with the may-predates note); never null. */
   checkpoint?: { id: string; commit: string }
@@ -315,4 +316,10 @@ export interface PlanExecutionView {
   startedAt: string
   finishedAt: string | null
   changes: ExecutionChangeView[]
+  /**
+   * Every revision the execution held, seq 1 (Start's record) first, each with
+   * its publication rows (plan-revision-apply D4, D6); absent from a server
+   * that predates Apply.
+   */
+  revisions?: ExecutionRevisionView[]
 }

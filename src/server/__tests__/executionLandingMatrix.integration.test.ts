@@ -109,8 +109,12 @@ describe('bringing the branch up to date (14.2)', () => {
     await passedChange(h, executionId, 'up-g')
     pushCommit(matrix, 'master', 'other-g.txt', 'g\n')
     h.gh.update = branch => { mergeBaseInto(branch, clone => fs.writeFileSync(path.join(clone, 'extra.txt'), 'edited in the merge\n')) }
-    const real = h.results.handoff.bind(h.results)
-    h.results.handoff = (async () => { throw new Error('the send was refused') }) as typeof h.results.handoff
+    // The update handoff commits through the synchronous group dispatch (attemptSend.ts); refuse it there.
+    const real = h.assignments.dispatchWithin.bind(h.assignments)
+    h.assignments.dispatchWithin = ((caller, input) => {
+      if (input.handoff?.kind === 'fix') throw new Error('the send was refused')
+      return real(caller, input)
+    }) as typeof h.assignments.dispatchWithin
     await h.tick()
     await h.tick()
     expect(row(executionId, 'up-g').stopDetail).toMatchObject({ stage: 'update' })
@@ -123,7 +127,7 @@ describe('bringing the branch up to date (14.2)', () => {
     expect(updateRow.manifest.answers?.roundId).toBe(h.executions.rounds(executionId, 'up-g').at(-1)!.id)
     // Retry resumes the change; the owed step dispatches the row under its
     // uniform key, and the stamp lands.
-    h.results.handoff = real
+    h.assignments.dispatchWithin = real
     h.executions.transition(executionId, 'up-g', row(executionId, 'up-g'), { state: 'gating', step: null, stopReason: null, stopDetail: null, fixRounds: 0 })
     await h.tick()
     const sent = handoffs(executionId, 'up-g', 'fix')

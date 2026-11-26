@@ -93,10 +93,15 @@ export function fixInstruction(input: FixInstructionInput): string {
   ].filter(line => line !== null).join('\n')
 }
 
-/** The update attempt's instruction (D13): what failed and how to continue. The dispatch and the owed re-send build it from the manifest's `update` fact. */
-export function updateInstruction(update: { base: string; files: string[] }): string {
+/**
+ * The update attempt's instruction (D13): what failed and how to continue,
+ * and the plan revision and attempt manifest the update answers (AL2). The
+ * dispatch and the owed re-send build it from the manifest's `update` fact.
+ */
+export function updateInstruction(update: { base: string; files: string[] }, pin: { revision: number; manifestHash: string }): string {
   return [
     'Bring the branch up to date with the base branch.',
+    `This update runs under plan revision ${pin.revision} (attempt manifest ${pin.manifestHash}).`,
     update.files.length > 0
       ? `The merge conflicts with the base${update.base ? ` (base head ${update.base})` : ''} in: ${update.files.join(', ')}. Resolve the conflicts and commit the merge.`
       : `GitHub's branch update did not produce a clean merge. Merge the base branch yourself and push.`,

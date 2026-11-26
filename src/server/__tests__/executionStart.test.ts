@@ -20,6 +20,7 @@ import { ExecutionStore } from '../plans/execution/executionStore'
 import { ExecutionRevisionStore } from '../plans/revisionControl/executionRevisionStore'
 import { schemaDb } from './schemaDb'
 import { ExecutionService } from '../plans/execution/ExecutionService'
+import { advanceExecutionRevision } from '../plans/execution/executionApplyStore'
 
 const GITHUB_URL = 'https://github.com/acme/app.git'
 const FLOOR = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
@@ -178,6 +179,44 @@ describe('ExecutionService.start', () => {
     expect(executions.executionsOf(target.planId)).toHaveLength(1)
     expect(plansStore.events(target.planId).filter(event => event.kind === 'execution-started')).toHaveLength(1)
     expect(wakes).toEqual([team.teamId])
+  })
+
+  // plan-revision-apply D4: the started-from record is the seq-1 row; an Apply moves only the current columns.
+  // @covers: plan-execution › An execution records what it started from › Start's record survives an Apply
+  test('a replayed Start after an Apply returns its execution, found through the seq-1 row', async () => {
+    const target = approvedPlan(['moved1', 'moved2'])
+    const first = await start(target.planId, target.hash, 'cmd-moved')
+    if (!first.ok) throw new Error(first.message)
+    // The writes Apply's transaction makes: the history row at seq 2 and the advanced columns.
+    const revisions = new ExecutionRevisionStore(db)
+    revisions.recordAt(2, { executionId: first.execution.id, revision: 2, contentHash: 'h-applied', reportId: 'rep-2', inputHash: 'ih-2', appliedAt: first.execution.startedAt, rationale: 'apply', commandId: 'apply-moved', payload: null }, [])
+    expect(advanceExecutionRevision(db, first.execution.id, 1, { revision: 2, contentHash: 'h-applied', reportId: 'rep-2', inputHash: 'ih-2' })).toBe(true)
+    const again = await start(target.planId, target.hash, 'cmd-moved')
+    expect(again).toMatchObject({ ok: true, replayed: true })
+    if (again.ok) expect(again.execution).toMatchObject({ id: first.execution.id, revision: 2, contentHash: 'h-applied' })
+    expect(revisions.history(first.execution.id)).toHaveLength(2)
+    // The history's first entry still names what Start recorded, and no other Start input moved.
+    expect(revisions.history(first.execution.id)[0]).toMatchObject({ seq: 1, revision: 1, contentHash: target.hash, reportId: first.execution.reportId, inputHash: first.execution.inputHash })
+    const pinned = (row: typeof first.execution) => [row.baseBranch, row.baseCommit, row.floor, row.landingMode, row.maxParallel, row.mergeMethod, row.startedAt]
+    expect(pinned(executions.execution(first.execution.id)!)).toEqual(pinned(first.execution))
+  })
+
+  // @covers: plan-execution › A running execution keeps its revision › Approval during an execution
+  test('approving revision 2 while an execution of revision 1 runs changes nothing: it keeps revision 1, and Start for revision 2 is refused as one-execution', async () => {
+    const target = approvedPlan(['appr1', 'appr2'])
+    const first = await start(target.planId, target.hash, 'cmd-appr')
+    if (!first.ok) throw new Error(first.message)
+    const revision = plansStore.atomically(() => plansStore.insertRevision(target.planId, { content: contentOf(['appr1', 'appr2', 'appr3']), contentHash: 'h-appr-2', pin: null, author: { kind: 'human', sessionId: null } }))
+    plansStore.setRevisionStatus(target.planId, 1, 'superseded')
+    plansStore.setRevisionStatus(target.planId, revision, 'approved')
+    plansStore.setCurrentApproved(target.planId, revision)
+    expect(executions.execution(first.execution.id)).toMatchObject({ state: 'running', revision: 1, contentHash: target.hash })
+    expect(executions.changes(first.execution.id).map(row => row.change)).toEqual(['appr1', 'appr2'])
+    const second = await start(target.planId, 'h-appr-2', 'cmd-appr-2', revision)
+    expect(second).toMatchObject({ ok: false, reason: 'precondition' })
+    // changes-unclaimed joins it: the running execution still owns these changes.
+    if (!second.ok) expect(second.failures!.map(failure => failure.name)).toEqual(['one-execution', 'changes-unclaimed'])
+    expect(executions.executionsOf(target.planId).map(row => row.id)).toEqual([first.execution.id])
   })
 
   test('a different payload under the same command id is refused naming the field', async () => {

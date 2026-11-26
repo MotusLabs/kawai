@@ -1,12 +1,12 @@
-// Deferred fix handoffs: rebuild the failed round's findings and the applied
-// diagnosis decision from stored rows after a hold or restart.
+// Deferred fix and update handoffs: rebuild the failed round's findings and
+// the applied diagnosis decision, or the failed update, from stored rows
+// after a hold or restart.
 import { DecisionStore } from '../decisions/decisionStore'
 import { diagnosisRationale } from '../decisions/diagnosisCards'
 import { DiagnosisStore } from './diagnosisStore'
-import { dispatchFix, type DispatchDeps, type FixAttemptInput } from './executionDispatch'
+import { dispatchFix, dispatchUpdateAttempt, type DispatchDeps, type FixAttemptInput } from './executionDispatch'
 import type { AttemptRow } from './executionRows'
-import { fixFindings } from './fixFindings'
-
+import { fixFindings, revisionFixNotes } from './fixFindings'
 /** The fix attempt's re-send, texts rebuilt at send time from the round the attempt answers — the manifest keeps only ids. */
 export async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: string; change: string; group: string }, newest: AttemptRow): Promise<void> {
   const changeRow = deps.executions.change(input.executionId, input.change)
@@ -23,10 +23,14 @@ export async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: 
   // second republish after the attempt was minted is still the round's
   // answer), a failed round its failing checks and the verdict's findings.
   if (round?.outcome === 'superseded') {
+    notes = revisionFixNotes(deps.tasks.store, changeRow.taskId, newest.manifest.update)
+  } else if (round === null) {
+    // A fix row that answers no round is an adaptation's (plan-pause Adapt,
+    // plan-revision-apply's Apply): it names the revisions its manifest pins.
     const task = changeRow.taskId === null ? null : deps.tasks.store.get(changeRow.taskId)
     const rationale = task === null || task === undefined ? null : deps.tasks.store.revisions(task.id).at(-1)?.rationale ?? null
-    notes = [`The task's direction was republished as revision ${task?.revision ?? 1}${rationale ? ` (${rationale})` : ''}. Re-apply your work on top of the new direction.`]
-  } else if (round !== null && round.outcome === 'fail') {
+    notes = [`The work was re-issued under plan revision ${newest.manifest.plan.revision} and task revision ${newest.manifest.task.revision}${rationale ? ` (${rationale})` : ''}. Continue from your branch's head on top of the current direction.`]
+  } else if (round.outcome === 'fail') {
     failingChecks = (round.ci ?? []).filter(check => check.conclusion.toLowerCase() === 'failure')
       .map(check => ({ name: check.name, conclusion: check.conclusion, link: check.link }))
     const all = changeRow.taskId === null ? [] : deps.tasks.store.results.findingsFor(round.resultId)
@@ -44,8 +48,18 @@ export async function dispatchOwedFix(deps: DispatchDeps, input: { executionId: 
     executionId: input.executionId, change: input.change, group: input.group,
     failingChecks, findingsIds, findings,
     diagnosis: decision === null ? null : diagnosisRationale(decision),
-    continueFrom: round?.commitSha ?? changeRow.baselineCommit ?? '',
+    continueFrom: round?.commitSha ?? newest.manifest.startCommit ?? changeRow.baselineCommit ?? '',
     fixRounds: changeRow.fixRounds,
   }, { id: newest.id, number: newest.number, manifestHash: newest.manifestHash })
 }
 
+/** The update attempt's re-send (A1): the failed update's facts live in the manifest. */
+export async function dispatchOwedUpdate(deps: DispatchDeps, input: { executionId: string; change: string; group: string }, newest: AttemptRow): Promise<void> {
+  const roundId = newest.manifest.answers?.roundId ?? null
+  const round = roundId === null ? null : deps.executions.round(roundId) ?? null
+  if (round === null) return
+  await dispatchUpdateAttempt(deps, {
+    executionId: input.executionId, change: input.change, round,
+    update: newest.manifest.update ?? { base: '', files: [] },
+  })
+}

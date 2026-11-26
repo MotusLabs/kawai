@@ -16,3 +16,20 @@ Approving another revision of the plan SHALL NOT change a running execution. It 
 #### Scenario: Apply moves the execution forward
 - **WHEN** the owner applies revision 4 to the running execution of revision 3
 - **THEN** the execution's current revision is 4, and its history lists revisions 3 and 4
+
+### Requirement: An execution records what it started from
+An execution SHALL record at Start, never to change: the plan, revision, and content hash; the validation report and input hash; the base branch and commit; the floor checks, CI mapping, and floor version; the landing mode, parallel limit, and merge method; who started it, and when.
+
+Start's revision, hash, report, and input hash SHALL stay the history's first entry; Apply SHALL only append entries and advance the current revision. Later settings edits SHALL apply only to later executions.
+
+#### Scenario: Settings edited during an execution
+- **WHEN** the operator changes the team's parallel limit while an execution runs
+- **THEN** the running execution keeps the limit it recorded and the next execution uses the new one
+
+#### Scenario: The base branch moves on
+- **WHEN** the base branch advances after Start and a change is provisioned later
+- **THEN** the execution's recorded base commit is unchanged, and the change records the base branch's commit at its provisioning as its baseline
+
+#### Scenario: Start's record survives an Apply
+- **WHEN** the owner applies revision 4 to an execution started on revision 3, then resends the original Start
+- **THEN** the history's first entry still names revision 3 with its hash and report, the Start replays to the same execution, and its base, floor, landing, and limits are unchanged

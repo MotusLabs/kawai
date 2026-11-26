@@ -44,7 +44,7 @@ export function landingDeps(deps: ExecutorDeps, team: TeamIdentity, repo: string
     results: deps.results, plansService: deps.plansService, conditionsOf: deps.conditionsOf, records: deps.records,
     ...(deps.ghOptions ? { ghOptions: deps.ghOptions } : {}),
     now: () => (deps.now?.() ?? new Date()).toISOString(),
-    revisionAttempt: (changeRow, round, update) => dispatchRevisionAttempt(rounds(), changeRow, round, update),
+    revisionAttempt: (changeRow, round, update, landing) => dispatchRevisionAttempt(rounds(), changeRow, round, update, undefined, landing),
     updateAttempt: (changeRow, round, update) => dispatchUpdateAttempt(dispatchDeps(deps, team), {
       executionId: changeRow.executionId, change: changeRow.change, round, update,
     }),

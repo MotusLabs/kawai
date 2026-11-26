@@ -15,18 +15,19 @@ import { effectiveExtraChecks, evaluateCi, reviewVerdict, splitExtraChecks } fro
 import type { CiCheck, StopDetail, StopReason } from '../../../shared/planExecution'
 import type { PlanCheck } from '../../../shared/plans'
 import type { RoundRow } from './executionRows'
-import type { ChangePatch } from './executionPatch'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
 import { lsRemoteHead, pushToRemote } from '../landing/gitRemote'
 import { ghCheckRuns, ghPrCreate, ghPrList, ghRerunFailed, ghStatuses } from '../landing/github'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import type { AssignmentService } from '../../team/AssignmentService'
-import { dispatchFix, ensureFixAttempt } from './executionDispatch'
+import { dispatchRevisionAttempt } from './revisionAttempt'
+// D9 lives in revisionAttempt.ts; re-exported for its callers.
+export { dispatchRevisionAttempt, revisionPending } from './revisionAttempt'
 import { refusable } from './stepRefusal'
 import type { EffectAdapter } from './effects'
 import { blocking, foldLedger, roundReview } from '../../../shared/findingsLedger'
-import { fixFindings, reviewAsk } from './fixFindings'
+import { reviewAsk } from './fixFindings'
 import { raiseReviewP0Alerts } from '../supervision/reviewAlerts'
 import type { MailboxStore } from '../../team/mailboxStore'
 import type { Database } from 'bun:sqlite'
@@ -161,69 +162,6 @@ export async function applyRoundStage(deps: RoundDeps, changeRow: { executionId:
     await dispatchRevisionAttempt(deps, changeRow, round)
     return
   }
-}
-
-/** D9: the round's result is pinned to a task revision older than the task's current one. */
-export function revisionPending(deps: Pick<RoundDeps, 'tasks'>, taskId: string | null, round: RoundRow): boolean {
-  const task = taskId === null ? null : deps.tasks.store.get(taskId)
-  if (task === null || task === undefined) return false
-  const result = deps.tasks.store.results.get(round.resultId)
-  return result !== null && result !== undefined && result.taskRevision < task.revision
-}
-
-/**
- * D9's fix attempt naming a newer task revision: supersede the pinned round
- * and return the change to implementing — leaving `landing` releases the
- * slot. A revision applied once a failed branch update settled (D9, D13)
- * names the base head and the conflicting files too, so one attempt answers
- * both and no update attempt follows. False when no revision is pending.
- */
-export async function dispatchRevisionAttempt(deps: RoundDeps, changeRow: { executionId: string; change: string; taskId: string | null }, round: RoundRow, update?: { base: string; files: string[] }, close?: { patch: ChangePatch; within: () => void }): Promise<boolean> {
-  const store = deps.executions
-  if (!revisionPending(deps, changeRow.taskId, round)) return false
-  const task = deps.tasks.store.get(changeRow.taskId!)!
-  const change = store.change(changeRow.executionId, changeRow.change)
-  const execution = store.execution(changeRow.executionId)
-  if (change === null || execution === null) return false
-  // A diagnosis closed by the revision (review-convergence DX1) closes in
-  // the same transaction, with its patch (the count back at 0).
-  store.db.transaction(() => {
-    store.supersedeRound(round.id)
-    // A7: the superseded round's live round-effect rows never run after it.
-    store.cancelLiveRoundEffects(changeRow.executionId, round.id)
-    store.transition(changeRow.executionId, changeRow.change, change, { state: 'implementing', step: null, ...close?.patch })
-    close?.within()
-  })()
-  const fixRounds = close?.patch.fixRounds ?? change.fixRounds
-  const group = change.groupOverride ?? deps.plans.revision(execution.planId, execution.revision)?.content.changes.find(entry => entry.change === changeRow.change)?.group
-  if (group === null || group === undefined) return true
-  const revisionRow = deps.tasks.store.revisions(task.id).at(-1)
-  const texts = [`The task's direction was republished as revision ${task.revision}${revisionRow?.rationale ? ` (${revisionRow.rationale})` : ''}. Re-apply your work on top of the new direction.`]
-  if (update !== undefined) {
-    texts.push(`GitHub's update of the branch with the base did not merge cleanly (base head ${update.base}${update.files.length > 0 ? `; conflicting files: ${update.files.join(', ')}` : ''}). Merge the base branch as part of this attempt.`)
-  }
-  // The attempt row — the owed dispatch's marker (revision-control 3.2) —
-  // is created however the gate reads; the handoff only when unheld, and
-  // the release dispatches it once through dispatchOwedAttempt.
-  const attempt = await ensureFixAttempt(
-    { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
-    {
-      executionId: changeRow.executionId, change: changeRow.change, group,
-      failingChecks: [], findingsIds: [], findings: fixFindings(deps.tasks.store, task.id, null, texts),
-      continueFrom: round.commitSha, fixRounds,
-    },
-  )
-  if (attempt === null || deps.gate?.(changeRow.change) === true) return true
-  await dispatchFix(
-    { team: deps.team, executions: store, plans: deps.plans, tasks: deps.tasks, assignments: deps.assignments, results: deps.results },
-    {
-      executionId: changeRow.executionId, change: changeRow.change, group,
-      failingChecks: [], findingsIds: [], findings: fixFindings(deps.tasks.store, task.id, null, texts),
-      continueFrom: round.commitSha, fixRounds,
-    },
-    attempt,
-  )
-  return true
 }
 
 async function pollCi(deps: RoundDeps, changeRow: { executionId: string; change: string; branch: string | null; worktree: string | null }, round: RoundRow, extra: PlanCheck[]): Promise<void> {

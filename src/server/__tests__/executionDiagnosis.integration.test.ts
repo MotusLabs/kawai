@@ -445,23 +445,38 @@ describe('crashes and restarts (tasks 4.2, 5.2)', () => {
     ['DX5', 'Reject F1, F2', ['first problem', 'second problem']],
     ['DX9', 'Reassign to senior-devs', ['one thing is wrong']],
   ] as const
-  test.each(crashRows)('%s: a crash after the fix dispatch and before the close replays the same key and writes nothing twice', async (id, choice, raise) => {
+  // The fix send commits with the close and the transition (plan-revision-apply AL3, the F8 challenge).
+  test.each(crashRows)('%s: a crash at the close rolls the fix dispatch back with it; the recovery sends one fix and writes nothing twice', async (id, choice, raise) => {
     const change = `cr-${id.toLowerCase()}`
     const executionId = await stagnating(change, [...raise], id === 'DX9' ? [{ change: `${change}-other`, group: 'senior-devs' }] : [])
     if (id === 'DX5') await h.results.disputeFindings(h.bench.agent('dev'), row(executionId, change).taskId!, [{ id: 'F2', counterEvidence: 'src/x.ts:1 handles it' }])
     decideDiagnosis(h.bench.db.db, teamId(), executionId, change, choice)
+    const fixesBefore = fixHandoffs(executionId, change).length
     const crashing = h.makeExecutor({ diagnosisBeforeClose: () => { throw new Error('crash before the close') } })
     try { await h.tick(crashing) } catch { /* the wake loop logs it */ } finally { crashing.close() }
-    // The dispatch stands; the close and the transition rolled back.
     expect(openDiagnosis(h.bench.db.db, executionId, change)).not.toBeNull()
     expect(row(executionId, change).step).toBe('diagnosing')
-    const crashed = snapshot(executionId, change)
+    expect(fixHandoffs(executionId, change)).toHaveLength(fixesBefore)
     await h.tick()
+    const recovered = snapshot(executionId, change)
     await h.tick()
-    const replayed = snapshot(executionId, change)
-    expect(replayed).toEqual(crashed)
+    expect({ fixes: recovered.fixes.length, again: snapshot(executionId, change) }).toEqual({ fixes: fixesBefore + 1, again: recovered })
     expect(openDiagnosis(h.bench.db.db, executionId, change)).toBeNull()
     expect(row(executionId, change)).toMatchObject({ state: 'implementing', fixRounds: 0, groupOverride: id === 'DX9' ? 'senior-devs' : null })
+  })
+
+  test('an owner override between a failed close and the recovery: the one fix sent names the override, and the close records it', async () => {
+    const executionId = await stagnating('cr-override')
+    decideDiagnosis(h.bench.db.db, teamId(), executionId, 'cr-override', 'Fix round', { rationale: 'the first rationale' })
+    const fixesBefore = fixHandoffs(executionId, 'cr-override').length
+    const crashing = h.makeExecutor({ diagnosisBeforeClose: () => { throw new Error('crash before the close') } })
+    try { await h.tick(crashing) } catch { /* the wake loop logs it */ } finally { crashing.close() }
+    const override = decideDiagnosis(h.bench.db.db, teamId(), executionId, 'cr-override', 'Fix round', { kind: 'override', rationale: 'the override in the gap' })
+    await h.tick(); await h.tick()
+    const sent = fixHandoffs(executionId, 'cr-override').slice(fixesBefore)
+    expect(sent).toHaveLength(1)
+    expect({ override: bodyOf(sent[0]!).includes('the override in the gap'), first: bodyOf(sent[0]!).includes('the first rationale') }).toEqual({ override: true, first: false })
+    expect([diagnoses(executionId, 'cr-override').at(-1), row(executionId, 'cr-override')]).toMatchObject([{ decisionId: override.id, outcome: 'fix' }, { state: 'implementing', fixRounds: 0 }])
   })
 
   test('an amend wait across a restart: the restarted executor journals nothing, and the revision still closes it', async () => {

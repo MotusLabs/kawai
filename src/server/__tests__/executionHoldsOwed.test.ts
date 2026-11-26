@@ -423,16 +423,16 @@ describe('redispatch order and the refused fix (revision-control PR E, A3, H″ 
     const taskId = first.taskId!
     // The fix handoff is refused: applyFix mints the row, the send throws,
     // and the change stops instruction-failed with the fix stage named.
-    const original = results.handoff
-    results.handoff = (async () => {
-      throw new Error('the fix handoff is refused by the test')
-    }) as typeof results.handoff
+    const original = assignments.dispatchWithin.bind(assignments) // the fix handoff's synchronous send (attemptSend.ts)
+    assignments.dispatchWithin = ((caller, input) => {
+      if (input.handoff?.kind === 'fix') throw new Error('the fix handoff is refused by the test'); return original(caller, input)
+    }) as typeof assignments.dispatchWithin
     try {
       failCi()
       executor.wake(world.team.teamId)
       await executor.idle()
     } finally {
-      results.handoff = original
+      assignments.dispatchWithin = original
     }
     expect(executions.change(executionId, name)).toMatchObject({ state: 'stopped', stopReason: 'instruction-failed' })
     const fixRow = executions.attempts(executionId, name).at(-1)!

@@ -21,7 +21,6 @@ import type { TaskResultService } from '../../team/TaskResultService'
 import type { AssignmentService } from '../../team/AssignmentService'
 import { runGit } from '../../git/gitCommand'
 import { logger } from '../../logger'
-import { assignmentState } from '../../team/assignmentStore'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
 import { inspectDueUnknownEffects, recoverUnknownEffects } from './executorStartup'
@@ -36,7 +35,8 @@ import { ciClass } from '../../../shared/planExecutionGates'
 import type { ActiveHold } from '../../../shared/planRevisionControl'
 import type { OpenPauseTarget } from '../revisionControl/holdGate'
 import type { GhCommandOptions } from '../landing/ghCommand'
-import { executionSnapshot } from './executionSnapshot'
+import { teamSnapshot } from './teamSnapshot'
+import { completeIfLanded } from './executionCompletion'
 import { planSteps } from './executionPlanner'
 import { holdGate } from '../revisionControl/holdGate'
 import { EffectPinConflict } from './executionEffectStore'
@@ -199,24 +199,10 @@ export class ExecutionExecutor {
     // nothing, bounded so a pathological loop cannot spin forever.
     for (let pass = 0; pass < 10; pass++) {
       if (this.closed) return
-      const snapshot = executionSnapshot(teamId, team.groupsRoot, this.deps.store, this.deps.plans,
-        taskId => this.deps.tasks.store.results.listByTask(taskId)
-          .map(result => ({ id: result.id, commit: result.commit, taskRevision: result.taskRevision, submittedBySession: result.submittedBy.kind === 'agent' ? result.submittedBy.sessionId : null }))
-          .reverse(),
-        taskId => this.deps.tasks.store.get(taskId)?.revision ?? 1,
-        taskId => this.deps.tasks.store.get(taskId)?.status ?? 'active',
-        taskId => {
-          // The newest standing assignment is the stage's (a retried stage's
-          // failed predecessor stays unsuperseded, older).
-          const outstanding = this.deps.tasks.store.assignmentsOf(taskId).filter(row => row.supersededBy === null).at(-1)
-          if (outstanding === undefined) return null
-          const state = assignmentState(outstanding, outstanding.messageId !== null ? this.deps.mailbox.get(outstanding.messageId) : null)
-          return { id: outstanding.id, state: state.state, reason: state.reason, requestKey: outstanding.requestKey ?? null }
-        },
-        taskId => this.deps.tasks.store.assignmentsOf(taskId).map(row => ({ requestKey: row.requestKey })),
-        planId => this.deps.holds?.active(teamId, planId) ?? [],
-        planId => this.deps.holds?.openTargets(teamId, planId) ?? [])
+      const snapshot = teamSnapshot(this.deps, teamId, team.groupsRoot)
       if (snapshot.executions.length === 0) return
+      // plan-revision-apply D4: an execution whose current revision fully landed (an Apply removed its last unlanded change) completes.
+      if (snapshot.executions.some(entry => completeIfLanded({ executions: this.deps.store, plans: this.deps.plans, plansService: this.deps.plansService }, entry.row.id))) continue
       // review-findings-ledger D8: a refuted review re-gates before anything plans; the change moved, so plan again.
       if (regateOwned({ team, executions: this.deps.store, tasks: this.deps.tasks.store, mail: this.deps.mailbox, now: () => this.deps.now?.() ?? new Date(), afterInsert: this.deps.regateAfterInsert },
         this.deps.store.ownedChanges(teamId), change => this.gateOf(snapshot, change.executionId)(change.change))) continue

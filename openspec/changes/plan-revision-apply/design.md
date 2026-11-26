@@ -103,22 +103,28 @@ A change of plan-wide rules with nothing landed, or of roles at any time, marks 
 - **unchanged:** a publication row only;
 - **metadata:** the row, with the landed change's `dependsOn` and `fixes` read from the new revision;
 - **changed, `continue`:** the row; the running attempt keeps its manifest, and later attempts and handoffs read the execution's new revision;
-- **changed, `adapt`:** the human publishes the task's next revision with notify through the `within` publication (request key `apply:<commandId>:<change>`), recording the task revision. The shipped notice goes to the outstanding claimant, and plan-execution D9 follows after commit;
-- **changed, `restart`:** the row. The executor supersedes the assignment and dispatches a new attempt of the stage's kind under the new revision, as in D9 here;
-- **added:** a change row in `waiting` at its content position (or `landed` with `owns = 0` when a landing fact exists), scheduled by the executor;
-- **removed, unlanded:** state `cancelled`, `owns = 0`. Pending effects are cancelled, the slot is given up, and Kawai cancels its task with the `PreparedTaskStatus` the prepare phase made, calling its synchronous `commit` here, exactly as Stop does (`ExecutionService.ts:419-445`). The old text named `TaskService.setStatus(system, …, 'cancelled')` with `alsoWithin`; that is async and cannot run inside a synchronous SQLite transaction, so it is obsolete: an async call started inside a synchronous `db.transaction` finishes after the transaction commits, outside it.
+- **changed, `adapt`:** the human publishes the task's next revision with notify through the `within` publication (request key `apply:<commandId>:<change>`), recording the task revision. The shipped notice goes to the outstanding claimant. A fix attempt naming that revision always follows, as plan-pause's Adapt does: with a round gating or landing, plan-execution D9 supersedes it and dispatches the fix after commit; while implementing with no round and a newest attempt, dispatched or still owed, the transaction then supersedes the held assignment through the stop branch (after the notice, so the holder still gets it) and mints one owed `fix` row naming the new revisions, dispatched by the owed step; over an owed fix row it keeps that row's answers (review F3). Main plan-execution's "Direction changed while implementing" (no attempt) keeps governing a task revision published outside Adapt, as plan-pause also distinguishes;
+- **changed, `restart`:** the row, no task revision. The standing assignment is superseded, an open or passed round is superseded, the change returns to `implementing`, and one owed attempt row of the newest attempt's kind (an update restarts as `fix`) is minted with a manifest naming the new revision; the executor's owed step dispatches it after commit (resolved in the blind reading, CH5);
+- **added:** a change row in `waiting` at its content position (or `landed` with `owns = 0` when a landing fact exists), scheduled by the executor. A name an earlier Apply of the run removed restores its cancelled row the same way, as fresh work with no task, PR, or stop, owned again under the owner index (review F2); its attempts and rounds stay as history of the retired task;
+- **removed, unlanded:** state `cancelled`, `owns = 0`; the publication row records the task the row carried, which is retired: once a re-add restores the row without it, that task's attempts and rounds are no longer the change's current ones. Pending effects are cancelled, the slot is given up, and Kawai cancels its task with the `PreparedTaskStatus` the prepare phase made, calling its synchronous `commit` here, exactly as Stop does (`ExecutionService.ts:419-445`). The old text named `TaskService.setStatus(system, …, 'cancelled')` with `alsoWithin`; that is async and cannot run inside a synchronous SQLite transaction, so it is obsolete: an async call started inside a synchronous `db.transaction` finishes after the transaction commits, outside it.
 
 Positions follow the target's content order. The `revision-applied` event closes the transaction.
 
 **Atomicity and crashes (R17).** The revision row, the publication rows, the task revisions with their notices, the cancellations, and the event commit together. The command id replays the whole command, and each task publication's request key replays inside it, so a retry after a crash publishes nothing twice. The notices are mailbox rows, under shipped delivery and receipt recovery.
 
-**Forward fixes (S4, plan-supervision at 645d02d).** `PlanChange.fixes` names the fix or correction task (`task-<uuid>`, a `plan_fix_tasks` row). A revision that adds changes naming such a task joins the running execution through Apply, and `fixStatus` then reads running for that execution. S4 closes a fix task once a change naming it has landed and no change in the current approved revision naming it is unlanded. Each landing is judged by the revision it landed under (`plan_change_landings.execution_id`). Apply never removes a landed change (`landed-unchanged`), so it never strands a fix. A removed, unlanded fix change is cancelled like any other, and the fix task stays open until a change naming it lands.
+**Forward fixes (S4, plan-supervision at 645d02d).** `PlanChange.fixes` names the fix or correction task (`task-<uuid>`, a `plan_fix_tasks` row). A revision that adds changes naming such a task joins the running execution through Apply, and `fixStatus` then reads running for that execution. S4 closes a fix task once a change naming it has landed and no change in the current approved revision naming it is unlanded. A landing's receipt is immutable evidence: its `plan_change_landings` row (execution, mechanism, head, base, and merge commits) never changes, and Apply never redefines the landed change's definition (`landed-unchanged`). Its `dependsOn` and `fixes` associations are the explicitly mutable part: a metadata change (DL6, CH2, FX3) updates them, and the fix reader attributes a landing through the execution's current revision, so a forward fix may name already-landed work and a revision moving a `fixes` pointer moves the attribution from the old task to the new one. Apply never removes a landed change (`landed-unchanged`), so it never strands a fix. A removed, unlanded fix change is cancelled like any other, and the fix task stays open until a change naming it lands.
 
 **Stale preparation.** A prepared cancel whose task status moved since the prepare phase throws `StaleTaskStatus` inside the transaction, which rolls back everything. Apply then prepares again, at most 3 times as Stop does (`STOP_ATTEMPTS`, `ExecutionService.ts:475`), and otherwise refuses `state` naming the task, with nothing written.
+
+**Replay before preparation (design challenge DC3).** After the caller check, Apply looks up the plan event recorded under the command id before any read of the prepare phase: a different compared payload is refused naming the first differing field (AK3); the same payload returns the prior result, reconstructed from the `plan_execution_revisions` row whose `command_id` is this command, with its publication rows. So a resend of Apply A after a later Apply B moved the execution on still returns A's revision, and no prepare-phase failure can refuse a replay. The in-transaction replay of `recordRevisionControlEvent` (an AK5 race) resolves to the same reconstruction.
+
+**Stale owed attempts (design challenge DC1).** An attempt row minted but never dispatched (owed) before an Apply names the old revision in its immutable manifest. When the executor's owed step finds the newest owed row's manifest naming a revision other than the execution's current one, it mints one successor row of the same kind, copying its answers and update facts, with a manifest naming the current revision, and dispatches that; the stale row stays as it was, never dispatched (I5, P4). The regression sequences: a hold, CH5's owed row at revision 4, an Apply 4 → 5 choosing continue, then the release, dispatch a manifest naming 5; and Apply A → 4, Apply B → 5, resend A returns 4.
 
 **After commit:** wake the executor and push `team-plan-detail`. Dispatches (restart's new attempt, adapt's fix attempt per plan-execution D9, added changes' provisioning) follow from stored state on the executor's next tick, so they are never part of the transaction and are idempotent across a crash.
 
 ### D4. What a running execution's revision now means (revision-control D12, unchanged)
+
+- **Started-from record (Lead own-call, 2026-11-18).** Start's revision, content hash, report, and input hash stay immutable as history row seq 1; every other Start input (base, floor, landing, limits, merge method, starter) stays pinned. Apply appends history rows and advances only the execution's current-revision columns. A replayed Start after an Apply still returns its execution, found through its seq-1 row rather than the current columns. The plan-execution delta clarifies "An execution records what it started from" accordingly; no Start precondition or migration changes.
 
 - **Approval still changes nothing.** Only Apply moves an execution to a newer revision, and only forward.
 - **Manifests are immutable.** An attempt's manifest names the revision current at its dispatch. Attempts dispatched after an Apply name the new one.
@@ -164,12 +170,12 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | AP6 | `validation-current` | the target's report is out of date (V5's message) |
 | AP7 | `start-conditions-resolved` | the target report carries an unresolved `start` condition |
 | AP8 | `strategy-impact` | the impact gate refuses the target |
-| AP9 | `landing-unchanged` | the landing mode or integration branch differs |
+| AP9 | `landing-unchanged` | the landing mode or integration branch differs (names the old and new landing, points to a forward fix change) |
 | AP10 | `landed-unchanged` | a landed change's acceptance differs (names it, suggests a forward fix) |
 | AP11 | `merge-quiet` | a changed or removed change has a merge or fast-forward running |
-| AP12 | `choices-complete` | a changed change with a task has no choice, or an Adapt text is empty |
+| AP12 | `choices-complete` | a changed change with a task has no choice, or an Adapt text is empty (an omitted text takes the generated one, D5; an explicitly empty one fails), names the change |
 | AP13 | `changes-unclaimed` | an added change's task id is claimed elsewhere |
-| AP14 | `changes-on-base` | an added or adapted change's artifacts are not on the base |
+| AP14 | `changes-on-base` | an added, adapted, or restarted change's artifacts are not on the base |
 | AP15 | `roles-routable` | an unlanded change's group under the target's roles has no routable worker |
 | AP16 | several entries | refused naming every failing entry in list order |
 | AP17 | none | accepted |
@@ -179,11 +185,11 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | id | Input | Result |
 | --- | --- | --- |
 | AK1 | an agent caller, or a direct service call with an agent caller | refused `forbidden` before any read; nothing written |
-| AK2 | the same command id and payload after a success | the prior result; no second row, task revision, or notice |
+| AK2 | the same command id and payload after a success, even after a later Apply moved the execution on | the prior result, reconstructed from the history row recorded under this command id before any preparation (DC3); no second row, task revision, or notice |
 | AK3 | the same command id, a different payload | refused naming the first differing field |
 | AK4 | two different command ids on the same execution revision, concurrently | one commits; the other is refused `execution-revision-unchanged` naming the new revision |
-| AK5 | the same command id sent twice concurrently | one commits; the other resolves as its replay |
-| AK6 | a prepared cancel goes stale three times | refused `state` naming the task; nothing written |
+| AK5 | the same command id and the same payload sent twice concurrently (a different payload is AK3) | one commits; the other resolves as its replay |
+| AK6 | a prepared cancel goes stale three times (D3 "Stale preparation": at most 3 prepares, as Stop) | refused `state` naming the task; nothing written |
 
 ### Classification (DL), through `revisionDelta`
 
@@ -191,15 +197,15 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | --- | --- | --- |
 | DL1 | only in the target | added |
 | DL2 | only in the running revision, unlanded | removed |
-| DL3 | only in the running revision, landed | finding `landed-changed` (refusal) |
+| DL3 | only in the running revision, landed | removed, with finding `landed-changed` naming it (refusal) |
 | DL4 | in both, unlanded, a compared field differs, has a task | changed, needs a choice |
 | DL5 | as DL4 but still waiting with no task | changed, choice `none` |
 | DL6 | landed, differs only in `dependsOn` or `fixes` | metadata, no choice |
-| DL7 | landed, differs in any other compared field | finding `landed-changed` |
+| DL7 | landed, differs in any other compared field | changed, with finding `landed-changed` naming it (refusal) |
 | DL8 | landing mode or integration branch differs | finding `landing-changed` |
 | DL9 | plan-wide rules or extra checks differ, something landed | finding `plan-rules-changed` |
-| DL10 | plan-wide rules differ, nothing landed | every unlanded change changed |
-| DL11 | a role's profiles differ | unlanded changes of that group changed; never `landed-changed` |
+| DL10 | plan-wide rules differ, nothing landed | every unlanded change changed, fields `planAcceptanceRules` / `planExtraChecks` (D2's effective fields) |
+| DL11 | a role's profiles differ | unlanded changes whose implementing or effective review group is that role's changed, field `roles` (D2); never `landed-changed` |
 | DL12 | only `leadGroup` differs | every change unchanged; informational `lead-changed` |
 | DL13 | identical | unchanged |
 
@@ -210,13 +216,13 @@ Each row makes exactly one entry fail on an otherwise valid Apply. Result: refus
 | CH1 | unchanged | publication row | nothing |
 | CH2 | metadata | publication row; the change reads the target's `dependsOn` and `fixes` | nothing |
 | CH3 | changed, continue | publication row; the running attempt's manifest unchanged | later attempts and handoffs read the new revision |
-| CH4 | changed, adapt | publication row with the task revision; one task revision with notify under `apply:<commandId>:<change>`; its notice to the outstanding claimant | plan-execution D9's fix attempt names that revision (waits under a hold or an undecided pause, D8) |
-| CH5 | changed, restart | publication row | the executor supersedes the assignment and dispatches a new attempt under the new revision |
+| CH4 | changed, adapt | publication row with the task revision; one task revision with notify under `apply:<commandId>:<change>`; its notice to the outstanding claimant | a fix attempt naming that revision follows in every state (the plan-pause "Adapt" precedent): with a round gating or landing, plan-execution D9 supersedes the round and dispatches it; while implementing with no round, the transaction (after the notice) supersedes the held assignment through the stop branch and mints one owed `fix` row, which the owed step dispatches, also over an owed newest row (an owed fix keeps its answers) and with no attempt yet (an in-flight first implement dispatch then yields); waits under a hold or an undecided pause, D8 |
+| CH5 | changed, restart | publication row; no task revision; the standing assignment superseded, an open or passed round superseded, the change back to `implementing`, and one owed attempt row of the newest attempt's kind (an update restarts as `fix`) whose manifest names the new revision | the executor's owed step dispatches that attempt once; if a later Apply moved the execution on before dispatch (e.g. under a hold), the owed step mints one successor row at the current revision and dispatches it instead, the stale row unchanged and never sent (DC1) |
 | CH6 | changed, choice `none` (no task) | publication row | the new definition applies at provisioning |
 | CH7 | added, no landing fact | change row `waiting` at its content position | scheduled by its dependencies |
 | CH8 | added, landing fact exists | change row `landed`, `owns = 0` | nothing |
 | CH9 | removed, unlanded, task open | state `cancelled`, `owns = 0`; effects cancelled; slot given up; the prepared cancel committed | nothing |
-| CH10 | removed, unlanded, task already closed | as CH9 without a task write | nothing |
+| CH10 | removed, unlanded, task already closed or no task | as CH9 without a task write (a closed task keeps its status) | nothing |
 
 Every success also writes the next `plan_execution_revisions` row, updates the execution's revision columns to equal it, and writes the `revision-applied` event, all in the same transaction.
 
@@ -226,19 +232,19 @@ Boundaries: B0 before the prepare phase; B1 after it, before the transaction; B2
 
 | id | Crash at | State after restart | Retry |
 | --- | --- | --- | --- |
-| CR1 | B0 or B1 | no revision row, publication row, task revision, notice, cancellation, or event from this Apply | runs as a first Apply |
-| CR2 | B2 | as CR1 (the transaction rolled back) | runs as a first Apply |
-| CR3 | B3 | the whole Apply committed; nothing dispatched yet | replays; the executor's startup tick dispatches from stored state once |
+| CR1 | B0 or B1 | no revision row, publication row, task revision, notice, cancellation, or event from this Apply | runs as a first Apply against the current state (refused if a precondition now fails) |
+| CR2 | B2 | as CR1 (the transaction rolled back) | as CR1 |
+| CR3 | B3 | the whole Apply committed; nothing dispatched yet; notices delivered under shipped receipt recovery | replays with the original outcome (DC3), even after a later Apply; the executor's startup tick dispatches from stored state once |
 | CR4 | B4 | committed and dispatched | replays; nothing new |
 
-Completeness: the boundaries B0–B4 cover every point of the command's path, and each maps to one row. Unreachable: a partial transaction (SQLite atomicity); a notice without its task revision (both in one `TaskStore.publish` inside the transaction).
+Completeness: the boundaries B0–B4 cover every point of the command's path, and each maps to one row. Across the other tables, AP1–AP15 are single-failure rows and AP16 their combination; DL1–DL7 and DL13 classify each change name (presence × landed × differing fields × task), while DL8–DL12 are execution-wide findings layered over them, so the completeness test expands the per-change axes and the execution-wide axes separately; CH1–CH10 partition the per-change classes and choices of an accepted Apply. Unreachable: a partial transaction (SQLite atomicity); a notice without its task revision (both in one `TaskStore.publish` inside the transaction).
 
 ### Properties
 
 - **P1, one history.** For every execution, revision rows are contiguous from seq 1, at most one per seq, and the execution's revision columns equal the newest row. Generator: seeded sequences over one plan of approvals, Applies with fresh or replayed command ids, concurrent pairs on one base, Stops, and a crash at each of B0–B4 with restart. Seams: the real `ApplyService`, `PlanService`, stores, and `TaskStore` on a fresh test database; git reads through a stub that checks its arguments. Seed `0x4A99`, 200 cases through `propertyCases`.
 - **P2, publish once.** Across the same sequences, each adapted change has exactly one task revision and one notice per Apply command id, whatever retries and crashes occur.
 - **P3, landed work stays.** No accepted Apply changes a landed change other than its `dependsOn` and `fixes`, removes it, or changes plan-wide rules after a landing. Generator: random content edits over plans with random landed sets; seam: `revisionDelta` plus the real precondition list; seed `0x4A9A`, 500 cases through `propertyCases`.
-- **P4, manifests keep their revision.** Every attempt manifest names the revision current at its dispatch; an Apply never rewrites one. Same generator and seams as P1, with the real executor ticking between commands; seed `0x4A9B`, 200 cases through `propertyCases`.
+- **P4, manifests keep their revision.** Every dispatched attempt's manifest names the revision current at its dispatch; an Apply never rewrites one, and an owed row left across an Apply is superseded by a successor at dispatch, never sent (DC1). Every attempt send (implement, owed, fix, update) checks the execution's revision and content hash against the manifest, the row still the change's newest, in the one transaction that dispatches and stamps it; no await separates the check from the commit. A fix or update row minted across git reads is inserted only while the newest attempt, newest round, and task revision read before them are unchanged, its manifest pinned to the revision current at commit; otherwise it yields to the row or direction the Apply wrote (review F6). Every field an insert or send writes — the manifest's pins and role profiles, the assignment's group and allowedProfiles, the instruction (which names the revision, the update's included), and the request key — is computed inside the committing transaction from the rows it re-reads (the execution, its revision, the change's override and generation, the task, the newest round and attempt); only git facts cross an await, and a send whose manifest profiles are not what the revision assigns the change's route yields to the owed step's successor (invariant AL2, review F7). A fact no row re-derives is recorded on the attempt row at mint, and every send renders the row (invariant AL3, review F8): D9's revision fix is minted in the transaction that supersedes its round, its manifest recording a settled update conflict's base head and conflicting files, and a settled update's landing follow-on hands D9 that conflict while the change is still `landing` — D9's transaction is the one that exits landing and clears the pass marker, guarded by the change's generation, the done effect, and the running execution — so a crash before the mint leaves the follow-on eligible and its recovery mints the one fix with the conflict (review F9); a hold governs only the send — a held follow-on with a revision pending mints the same conflict-bearing fix in that transaction, which stays owed and mail-free until the release sends it — and a refused mint (no start facts, or the insert's guards) rolls back the supersession and the exit, so the follow-on and its round stay eligible; the immediate send, a hold release, a successor (DC1 Continue), and a second Adapt's replacement (CH4 carries the owed row's answers and conflict) name them alike; a Restart (CH5) starts fresh and leaves them in its predecessor's history; update attempts render their row's conflict; and a fix step's send commits with its transition and diagnosis close, so the decision and count it names are the ones the close records. The generator includes holds placed and released between Applies. Same generator and seams as P1, with the real executor ticking between commands; seed `0x4A9B`, 200 cases through `propertyCases`.
 
 Model-based test: the CR table and the CH table run as the reference model over P1's sequences, comparing stored rows after every step.
 

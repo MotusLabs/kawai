@@ -14,7 +14,7 @@ import type { PlanDetail, PlanEvent, PlanSummary } from './plans'
 import type { PromotionPreview } from './planIntegration'
 import type { ImpactGate, PlanImpact } from './strategyImpact'
 import type { DecisionCard, DecisionPublicationReceipt, PlanDecision, PublicationReview } from './planDecisions'
-import type { HoldCites, HoldScope, HoldView, PauseView } from './planRevisionControl'
+import type { ApplyPreview, ExecutionRevisionView, HoldCites, HoldScope, HoldView, PauseView } from './planRevisionControl'
 import type { AlignmentAssessment, AssessmentFinding, PlanRevisionValidation, PlanValidationReport, Question } from './planValidation'
 
 export type PlanServerMessage =
@@ -64,6 +64,10 @@ export type PlanServerMessage =
       pause?: PauseView
       /** revision-control D9: the decided target of `team-plan-pause-resolve`, and the hold its releaseHold freed. */
       resolution?: { change: string; decision: string; releaseHold?: { holdId: string; stillCovering: string[] } }
+      /** plan-revision-apply D3: the history row an Apply recorded (on a replay, the row its first command recorded). */
+      applied?: ExecutionRevisionView
+      /** plan-revision-apply D5: the Apply dialog's preview — the delta, needed choices, generated Adapt texts, and standing. */
+      applyPreview?: ApplyPreview
     }
 
 /** The report a `team-plan-result` carries (plan-validation D11): the stored row, or a dry run with a null id. */
@@ -121,6 +125,16 @@ export type PlanClientMessage =
   | { type: 'team-plan-hold-extend'; teamPath: string; requestId: string; planId: string; holdId: string; deadline: string; reason?: string; commandId: string }
   | { type: 'team-plan-pause'; teamPath: string; requestId: string; planId: string; holdId: string; deadline: string; note?: string; commandId: string }
   | { type: 'team-plan-pause-resolve'; teamPath: string; requestId: string; planId: string; pauseId: string; change: string; choice: 'continue' | 'adapt' | 'restart'; adapt?: string; rationale?: string; releaseHold?: boolean; commandId: string }
+  // plan-revision-apply D3, D5: the owner applies the plan's newer approved
+  // revision to a running execution. The preview reads only and takes no
+  // command id; Apply replays by its command id, and `team-plan-result`
+  // answers with `applyPreview` or `applied`, or `error` with every failing check.
+  | { type: 'team-plan-execution-apply-preview'; teamPath: string; requestId: string; executionId: string; revision: number; choices?: Record<string, string> }
+  | {
+      type: 'team-plan-execution-apply'; teamPath: string; requestId: string; executionId: string
+      expectedRevision: number; revision: number; contentHash: string
+      choices: Record<string, string>; adaptations?: Record<string, string>; rationale: string; commandId: string
+    }
 
 /** plan-validation D11: the shape `team-plan-assess` alignment takes (questions and findings are the agents' tools'). */
 export type PlanAssessAlignment = AlignmentAssessment

@@ -100,10 +100,13 @@ async function runAuthority(from: number, to: number) {
   } finally { await runtime.teardown() }
 }
 
-// Each half of the full-properties profile takes about 24 s on the shared
-// workspace, past the runner's 20 s default; the bound is per test, not per case.
-const HALF_TIMEOUT_MS = 60_000
+// The full-properties profile runs in four 40-case ranges; each is bounded
+// at 60 s on the shared workspace, past the runner's 20 s default. The bound
+// is per test, not per case.
+const RANGE_TIMEOUT_MS = 60_000
 
 // @covers: plan-decisions › Fresh approval publishes only the reviewed handoff › An unauthorized or malformed approval writes nothing
-test('I1 seed 0xDEC10001 — cases 1–80 require an exact eligible human approval', () => runAuthority(0, 80), HALF_TIMEOUT_MS)
-test('I1 seed 0xDEC10001 — cases 81–160 require an exact eligible human approval', () => runAuthority(80, 160), HALF_TIMEOUT_MS)
+test('I1 seed 0xDEC10001 — cases 1–40 require an exact eligible human approval', () => runAuthority(0, 40), RANGE_TIMEOUT_MS)
+test('I1 seed 0xDEC10001 — cases 41–80 require an exact eligible human approval', () => runAuthority(40, 80), RANGE_TIMEOUT_MS)
+test('I1 seed 0xDEC10001 — cases 81–120 require an exact eligible human approval', () => runAuthority(80, 120), RANGE_TIMEOUT_MS)
+test('I1 seed 0xDEC10001 — cases 121–160 require an exact eligible human approval', () => runAuthority(120, 160), RANGE_TIMEOUT_MS)

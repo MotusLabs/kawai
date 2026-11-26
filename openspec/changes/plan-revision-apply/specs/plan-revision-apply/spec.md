@@ -59,7 +59,7 @@ Apply SHALL refuse as `landed-unchanged` a revision that removes a landed change
 - **THEN** Apply succeeds and `api-fix` is scheduled in the running execution
 
 ### Requirement: Each choice publishes or dispatches as recorded
-On Apply, a changed change chosen continue SHALL keep its running attempt; adapt SHALL publish the task's next revision with notify through task revision publication, returning the change for re-evaluation; restart SHALL supersede its assignment and dispatch a new attempt under the new revision. Added changes SHALL be scheduled by their dependencies. Removed unlanded changes SHALL be cancelled with their tasks.
+On Apply, a changed change chosen continue SHALL keep its running attempt; adapt SHALL publish the task's next revision with notify and dispatch a fix attempt naming it, even while the developer still implements, unlike a revision published outside Apply; restart SHALL supersede its assignment and dispatch a new attempt under the new revision. Added changes SHALL be scheduled by their dependencies. Removed unlanded changes SHALL be cancelled with their tasks.
 
 #### Scenario: Adapt notifies the developer
 - **WHEN** the owner applies revision 4 choosing adapt for change `ui`, whose developer holds its attempt

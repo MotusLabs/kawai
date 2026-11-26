@@ -8,6 +8,8 @@
 // pure gates live server-side: `holdGate` (D5), `pauseTargetState` (D8),
 // `revisionDelta` (D10); their input and result types are here.
 
+import type { PlanExecutionView } from './planExecution'
+
 // --- Holds (D2, D4) ---
 
 export type HoldScope = 'plan' | 'changes'
@@ -289,3 +291,36 @@ export interface ExecutionRevisionView {
   appliedAt: string
   changes: PublicationChange[]
 }
+
+// --- Apply (plan-revision-apply D3, D5) ---
+
+/** One Apply precondition's standing: null when it holds, else what to do. */
+export interface ApplyStandingEntry {
+  name: string
+  message: string | null
+}
+
+/** What `team-plan-execution-apply-preview` returns (D5): reads only, no command id. */
+export interface ApplyPreview {
+  executionId: string
+  /** The execution's current revision — the Apply's `expectedRevision`. */
+  fromRevision: number
+  revision: number
+  /** The target revision's content hash; null when the revision does not exist. */
+  contentHash: string | null
+  /** The delta; null when either revision is missing. */
+  delta: RevisionDelta | null
+  /** The changed changes with a task: each needs continue, adapt, or restart. */
+  needed: string[]
+  /** The generated Adapt text per needed change (D5): the task text under the target revision. */
+  adaptations: Record<string, string>
+  /** Every precondition's standing, in list order, for the choices the preview was asked about. */
+  standing: ApplyStandingEntry[]
+}
+
+/**
+ * An execution's view with its revision history (plan-revision-apply D4,
+ * D6): `team-plan-detail` and `plan_get` carry every revision the execution
+ * held, seq 1 first, each with its publication rows.
+ */
+export type PlanExecutionWithRevisions = PlanExecutionView & { revisions: ExecutionRevisionView[] }

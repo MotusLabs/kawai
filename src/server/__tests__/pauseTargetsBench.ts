@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import type { ChatHandoffPackage, TeamMessage } from '../../shared/team'
 import type { AttemptManifest, FloorMap } from '../../shared/planExecution'
 import type { PlanHold } from '../../shared/planRevisionControl'
-import { sessionRow, createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
+import { sessionRow, createPlanBench, createPlanWorld, type PlanBench, type PlanBenchFixture, type PlanWorld } from './planHarness'
 import { ExecutionStore } from '../plans/execution/executionStore'
 import { PauseService, PLAN_PAUSE_TAG, type PauseInput, type PauseOutcome, type PauseServiceDeps } from '../plans/revisionControl/pauseService'
 import { PauseStore } from '../plans/revisionControl/pauseStore'
@@ -65,9 +65,9 @@ export interface PauseTargetsBench {
   close: () => void
 }
 
-export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBench> {
+export async function pauseTargetsBench(prefix: string, fixture: PlanBenchFixture = {}): Promise<PauseTargetsBench> {
   const world = await createPlanWorld(prefix)
-  const bench = createPlanBench(world)
+  const bench = createPlanBench(world, {}, fixture)
   const teamId = world.team.teamId
   const now = (): Date => new Date(NOW)
   const inDays = (days: number): string => new Date(NOW + days * 24 * 60 * 60 * 1000).toISOString()
@@ -152,8 +152,9 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
     return { planId: draft.planId, executionId: execution.id }
   }
 
-  const manifest = (): AttemptManifest => ({
-    version: 1, plan: { id: 'p', revision: 1, contentHash: 'h' }, execution: 'e', task: { id: 't', revision: 1 },
+  // inFlight's attempt names its task, as every minted manifest does (changeIncarnation.ts reads it).
+  const manifest = (taskId = 't'): AttemptManifest => ({
+    version: 1, plan: { id: 'p', revision: 1, contentHash: 'h' }, execution: 'e', task: { id: taskId, revision: 1 },
     validation: { reportId: 'r', inputHash: 'i' }, baseline: 'b', startCommit: 's', artifacts: {}, roleProfiles: [],
   })
 
@@ -171,7 +172,7 @@ export async function pauseTargetsBench(prefix: string): Promise<PauseTargetsBen
     })
     if (claim === 'claim') bench.mail.claim(message.id, holder)
     else if (claim === 'spawning') bench.mail.reserveForSpawn(message.id)
-    if (mintAttempt) executions.insertAttempt({ executionId, change, kind: 'implement', assignmentId: inserted.assignment.id, manifest: manifest(), manifestHash: 'mh' })
+    if (mintAttempt) executions.insertAttempt({ executionId, change, kind: 'implement', assignmentId: inserted.assignment.id, manifest: manifest(task.id), manifestHash: 'mh' })
     const row = executions.change(executionId, change)!
     const updated = executions.transition(executionId, change, row, { state: 'implementing', worktree: world.repo, branch: `${change}-branch`, taskId: task.id })
     if (!updated) throw new Error('the transition to implementing failed')

@@ -63,6 +63,8 @@ import type { PauseTickDeps } from './revisionControl/pauseTick'
 import { CheckpointTool } from './revisionControl/checkpointTool'
 import { readRevisionControl } from './revisionControl/revisionControlRead'
 import { attachRevisionControl } from './revisionControl/revisionControlServices'
+import { attachApply } from './revisionControl/applyConnections'
+import { composeApply, originBranchHead } from './revisionControl/applyComposition'
 import type { ActiveHold } from '../../shared/planRevisionControl'
 import { readPlanSupervisionDetail, type SupervisionDetailReads } from './supervision/planSupervisionDetail'
 import type { SupervisionRuntime } from './supervision/supervisionRead'
@@ -308,16 +310,18 @@ export function composePlanServices(options: PlanServicesOptions): {
     [directMechanism.mode, directMechanism],
     ['integration-branch', integrationMechanism(integrationStore)],
   ])
+  // Start's and Apply's validation standing reads (plan-execution D4, plan-revision-apply D3).
+  const startValidation = options.executionValidation ?? {
+    prepareStanding: (planId: string, revision: number) => validation.prepareStanding(planId, revision),
+    standing: (prepared: unknown) => validation.standing(prepared as Parameters<ValidationService['standing']>[0]),
+  }
   executions = new ExecutionService({
     store: executionStore,
     plansStore: options.plans,
     plans,
     // revision-control D2: Start records the execution's seq-1 revision.
     executionRevisions: new ExecutionRevisionStore(options.db),
-    validation: options.executionValidation ?? {
-      prepareStanding: (planId: string, revision: number) => validation.prepareStanding(planId, revision),
-      standing: (prepared: unknown) => validation.standing(prepared as Parameters<ValidationService['standing']>[0]),
-    },
+    validation: startValidation,
     impact: { gate: (planId, revision) => options.impact.gate(planId, revision) },
     settings: executionSettings(options.caps),
     getSession: options.getSession,
@@ -389,15 +393,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       // the same adapter the executor's landing reads; a failed read is
       // refused `head-unreadable` inside the resolve (K7).
       tasks: team.tasks, checkpoints: checkpointStore, assignmentService: team.assignments,
-      adaptHead: async (executionId, change) => {
-        const row = executionStore.change(executionId, change)
-        const teamId = executionStore.execution(executionId)?.teamId
-        const identity = teamId !== undefined ? team.identityOf(teamId) : undefined
-        if (row === null || row.branch === null || identity === undefined) return null
-        const head = await import('./landing/gitRemote').then(module => module.lsRemoteHead(row.worktree ?? identity.groupsRoot, `refs/heads/${row.branch}`))
-        if (!head.ok || head.sha === null) return { ok: false }
-        return { ok: true, startCommit: head.sha, artifacts: {} }
-      },
+      adaptHead: originBranchHead(executionStore, team.identityOf),
       wake: teamId => runtime?.command(teamId),
       // R2's release bookkeeping (rev4 §4): the team's MemberRelease behind
       // the resolve's structural seams — a ready spawned holder is released
@@ -499,6 +495,16 @@ export function composePlanServices(options: PlanServicesOptions): {
     holds: holdStore, pauses: pauseStore, checkpoints: checkpointStore, executions: executionStore, ...(pauseTick ? { tick: pauseTick } : {}),
   }, teamId, planId, now)
   attachRevisionControl(plans, { holds, pauses: composedPauses, read: readControl })
+  // plan-revision-apply D1: Apply rides the PlanService beside them, woken through the same runtime.
+  attachApply(plans, composeApply({
+    db: options.db, store: executionStore, plansStore: options.plans, plans, validation: startValidation,
+    impact: { gate: (planId, revision) => options.impact.gate(planId, revision) }, settings: executionSettings(options.caps), mechanisms,
+    ...(team !== undefined ? { team: { tasks: team.tasks, mailbox: team.mailbox, identityOf: team.identityOf } } : {}),
+    sessionExists: id => options.getSession(id) !== undefined, wake: teamId => runtime?.command(teamId),
+    ...(options.executionGhOptions ? { ghOptions: options.executionGhOptions } : {}),
+    ...(options.executionProbe ? { probe: options.executionProbe } : {}),
+    ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+  }))
   let monitor: SupervisionMonitor | null = null
   if (team?.supervision) {
     // The detail and the monitor's sweeps read one loader with the monitor's own `waitEndedAt` (D11).
