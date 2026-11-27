@@ -20,8 +20,8 @@ On attach, the system SHALL deliver only the turns that started within the 24 ho
 - **THEN** the whole conversation is shown and no control to load earlier messages is offered
 
 #### Scenario: A short day over the event cap is still budgeted
-- **WHEN** a client attaches to a chat whose whole conversation lies within 24 hours, in two units holding 501 events together
-- **THEN** only the newest whole unit that fits the budget is shown, and the control to load earlier messages is offered
+- **WHEN** a client attaches to a chat whose whole conversation lies within 24 hours, in two units holding 501 events together, and the newest unit alone fits both the 500-event and the 512 KiB limits
+- **THEN** only that newest whole unit is shown, the older unit stays in older history, and the control to load earlier messages is offered
 
 #### Scenario: Old pending request is still shown
 - **WHEN** an approval requested 30 hours ago is still pending at attach
@@ -48,7 +48,7 @@ While older history exists, the top of the transcript SHALL offer a control to l
 
 #### Scenario: Gap in activity
 - **WHEN** the 24 hours before the oldest loaded turn contain no turns but older turns exist
-- **THEN** one use of the control still loads at least the next older turn
+- **THEN** one use of the control still loads from the nearest older turn, within the size budget: the whole turn when it fits both limits, otherwise its newest parts that fit, or its single oversized newest part alone, and the control stays offered while older events remain
 
 #### Scenario: Disconnected
 - **WHEN** the connection to the server is lost

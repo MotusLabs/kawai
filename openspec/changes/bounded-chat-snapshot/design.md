@@ -80,10 +80,15 @@ bytes.
    no eligible candidate the window is empty (`events: []`, `startId: null`,
    `hasOlder` false); otherwise at least one part is delivered.
 3. **Options.** `fromId` and `throughId` still widen to the *part* holding
-   the id and ignore the budget (a reconnect must keep what was shown). A
-   page (`beforeId`) applies the same rule walking back from the part before
-   the one holding `beforeId`; the boundary turn's remaining portion is the
-   newest candidate unit.
+   the id and ignore the budget (a reconnect must keep what was shown); a
+   reveal never widens to the containing turn, only to the part holding the
+   resolved event. A page (`beforeId`) applies the same rule walking back
+   from the part before the one holding `beforeId`; the boundary turn's
+   remaining portion is the newest candidate unit. When the 24 hours before
+   `beforeId` hold no unit, the nearest older unit is the candidate and item 2
+   applies to it as to any newest candidate: the whole unit when it fits both
+   limits, otherwise its newest quiet-part suffix that fits both limits, or
+   its single oversized newest part alone.
 4. **Results.** `hasOlder` and `startId` keep their meaning, so the
    load-earlier control and the paging protocol are unchanged.
 5. **Cross-turn results (legacy replay).** The replay can emit a tool call
@@ -287,7 +292,7 @@ cover. `*` means don't-care. Ids match `fast-chat-switching`'s tables.
 | W10 | `fromId` names an event 1,200 events back | widened to the part holding it; budget ignored |
 | W11 | `throughId` older than the budgeted start | widened to the part holding it |
 | W12 | `beforeId`, the 24 h before it hold 1,500 events, bounded candidates as D1 | the same precedence as D1 — whole units, or the oversized newest candidate's part-suffix, or its single atomic part alone; caps hold except that one part; ends before `beforeId`'s part; `hasOlder` reflects the actual remaining older events |
-| W13 | `beforeId`, empty 24 h before it, older turns exist | at least the next older unit |
+| W13 | `beforeId`, empty 24 h before it, older turns exist; two fixtures for the nearest older candidate: (a) a 120-event turn within both limits; (b) a 600-event turn in 60 quiet parts of 10 events each, small enough in bytes that the event limit binds | (a) the whole turn: `startId` is the turn's first event; `hasOlder` true only when events older than that turn remain. (b) the newest 50 parts (500 events, the limit inclusive, within 512 KiB), never the whole turn: `startId` is the first event of the 11th part counted from the oldest (event offset 100 in the turn); `hasOlder` true (its 10 older parts remain); and, were one newest part alone over a limit, that part alone (the single-part exception). Kills "gap page loads the whole oversized turn" and "a fitting turn is split" |
 | W14 | turn with no quiet point, 900 events | that turn whole (single part) |
 | W15 | many small CJK text events in independent quiet parts, each part within the byte budget, whose combined UTF-8 crosses 512 KiB while the count stays below 500 (individually small raw events alone do not establish this — part size decides) | the walk stops at the same precedence points on the byte measure — a unit stop once units are selected, else the part boundary before the byte limit; no single-part exception |
 | W16 | units already selected; the next older unit holds 600 events with quiet 10-event parts, over the remaining budget | the walk stops; that unit is left whole; its parts never fill the leftover space |
@@ -296,7 +301,8 @@ cover. `*` means don't-care. Ids match `fast-chat-switching`'s tables.
 | W19 | attach: a call and its result both older than the window, newest turn unrelated | both left in older history; none delivered; `hasOlder` true |
 | W20 | attach: newest unit 200 KiB selected; a 100 KiB unit holding a late result selected; an older 300 KiB unit holding its call, each measured as delivered | the first two fit and are delivered; the older unit stays whole in older history (it would overflow the remainder); `hasOlder` true; the result shows with the marker |
 | W21 | `beforeId` page: the late result lies in the page, its call in a still older unit | the page delivers the result's unit by the ordinary rule, with no special age exception and no duplicate across pages; the call arrives on a later page |
-| W22 | reveal: `throughId` names the late result's event id, and separately a `tool:<callId>` anchor | each keeps its existing widened-anchor semantics: the window widens to the unit holding the resolved event (the anchor's first match); nothing else changes |
+| W22 | reveal of a named result: one turn of three quiet parts, A (a 30-event prefix with no tool event), B (a closed call and result pair) and C (opens with an assistant message that does not continue B's and holds `r2`, the late result of an earlier turn's call); `throughId` = the id of `r2`, with the recent window start newer than the turn | exact event id first (existing resolution); the window widens to the quiet *part* holding `r2`, never to the turn start: it starts at C's first event, parts A and B stay in older history, and the window end is unchanged. Kills "reveal widens to the containing turn" and "widens only to the previous part" |
+| W22b | reveal by tool anchor: an older turn T1 of two quiet parts, A (a 30-event prefix with no tool event) and B (opens with the call `c1`, whose result is not in T1, so B runs to the end of T1), and a later turn T2 that holds the matching result of `c1` in a later part than its first; both turns older than the ordinary window start and before its end; `throughId` = `tool:c1` | no event has that exact id, so the existing resolution applies: the first event carrying `c1`, the call in B; the window widens to the quiet part holding it and starts at B's first event, part A stays in older history, the matching result in T2 does not choose the start, and the window end is unchanged. Kills "reveal widens to the containing turn" (start at A), "anchor resolves to the last match" (start in T2) and a moved window end |
 | W23 | a legacy pair whose call-to-result span holds more than 2,700 events in turns that each fit the budget on their own | the ordinary count and byte limits apply and no atomic allowance is used (every turn fits): at most 500 events and 512 KiB are delivered; the window never expands to the whole span (the existing single-part exception, one oversized newest part alone, is not involved) |
 | W24 | a call that is genuinely unfinished or cancelled, with no result, across turns | kept as recorded, never fabricated a result; no marker, no link |
 | W25 | a page: the 24 h before the oldest entry hold one 501-event part, otherwise within bytes | that part delivered whole (single-part exception); `hasOlder` is true only when older events actually remain after it |
@@ -474,7 +480,7 @@ canonical UTF-8 length of the whole original output.
 
 ### Verification
 
-- V1: Tables W (W1–W25), E (E1–E20, including E16a and E16b), B (B1–B6) and H (H1–H10) are committed verbatim as table-driven tests, with properties P1 and P3 (seed `0x5eed`, 500 and 300 cases), and pass under `bun run test`.
+- V1: Tables W (W1–W25, with W22b), E (E1–E20, including E16a and E16b), B (B1–B6) and H (H1–H10) are committed verbatim as table-driven tests, with properties P1 and P3 (seed `0x5eed`, 500 and 300 cases), and pass under `bun run test`.
 - V2: Production wiring tests OW4 and OW5 pass over the real app and a real Bun server.
 - V3: `bun run check` passes on the clean committed tree.
 - V4: On the affected lead chats (identities held in owner-controlled records), the attach snapshot is at most about 600 KiB and the chat loads on the owner's phone link (task 6.2).
