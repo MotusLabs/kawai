@@ -4,7 +4,9 @@
 // real worktree from origin's base, never touching a foreign branch) into
 // implementing with Kawai's task, attempt manifest, and keyed dispatch —
 // once, replays included — and a fresh executor over the same rows resumes
-// without duplicating anything.
+// without duplicating anything. A change provisioned after its dependency
+// landed starts from that landing while the execution's recorded base commit
+// stands.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -51,8 +53,8 @@ const commitAll = (cwd: string, message: string) => {
   git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', message], cwd)
 }
 
-/** An approved plan whose revision lists exactly these independent changes. */
-async function approvedPlan(changes: string[]): Promise<{ planId: string; revision: number; hash: string }> {
+/** An approved plan whose revision lists exactly these changes; `dependsOn` gives the few that depend on another. */
+async function approvedPlan(changes: string[], dependsOn: Record<string, string[]> = {}): Promise<{ planId: string; revision: number; hash: string }> {
   for (const change of changes) {
     // Task creation validates the OpenSpec change exists in the main checkout.
     fs.mkdirSync(path.join(world.repo, 'openspec', 'changes', change), { recursive: true })
@@ -61,17 +63,24 @@ async function approvedPlan(changes: string[]): Promise<{ planId: string; revisi
   commitAll(world.repo, 'changes')
   git(['push', '-q', 'origin', 'master'], world.repo)
   const { planId, revision, hash } = await bench.draftInReview({
-    changes: changes.map(change => ({ change, dependsOn: [], group: 'middle-devs', acceptance: [], extraChecks: [], guidance: '' })),
+    changes: changes.map(change => ({ change, dependsOn: dependsOn[change] ?? [], group: 'middle-devs', acceptance: [], extraChecks: [], guidance: '' })),
   })
   await bench.approve(planId, revision)
   return { planId, revision, hash }
 }
 
-/** One running execution of an approved plan over these changes. */
-function startExecution(plan: { planId: string; revision: number; hash: string }, changes: string[]): string {
+/** One commit of exactly one path on the main checkout's master, published: the base branch advancing by a landing. */
+const landOnBase = (file: string, message: string) => {
+  git(['add', '--', file], main())
+  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', message, '--', file], main())
+  git(['push', '-q', 'origin', 'master'], main())
+}
+
+/** One running execution of an approved plan over these changes, started from `baseCommit` (the base branch's commit at Start). */
+function startExecution(plan: { planId: string; revision: number; hash: string }, changes: string[], baseCommit = baseSha): string {
   return executions.insertExecution({
     teamId: world.team.teamId, planId: plan.planId, revision: plan.revision, contentHash: plan.hash, reportId: 'r', inputHash: 'i',
-    landingMode: 'direct', baseBranch: 'master', baseCommit: baseSha, floor: { version: 1, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } },
+    landingMode: 'direct', baseBranch: 'master', baseCommit, floor: { version: 1, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } },
     maxParallel: 2, mergeMethod: 'merge', changes: changes.map(change => ({ change, landed: false })),
   }).id
 }
@@ -181,6 +190,44 @@ describe('provisioning (§11.3)', () => {
     expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], row.worktree!).trim()).toBe('probe-a')
     expect(git(['rev-parse', 'HEAD'], row.worktree!).trim()).toBe(baseSha)
     expect(git(['rev-parse', 'refs/heads/foreign'], origin).trim()).toBe(foreignHead)
+  })
+
+  // The base branch's advance is the change's own dependency landing: a direct
+  // change starts from its dependencies' newest landing in its execution, else
+  // from the Start-time commit, so an advance that lands none of them leaves
+  // the baseline on the Start-time commit (the test above).
+  // @covers: plan-execution › An execution records what it started from › The base branch moves on
+  test('the base branch moves on after Start: a change provisioned once its dependency landed starts from the branch\'s new commit, and the execution\'s recorded base commit stands', async () => {
+    const plan = await approvedPlan(['base-dep', 'base-late'], { 'base-late': ['base-dep'] })
+    // Start records the base branch's commit as it stands then.
+    const startBase = git(['rev-parse', 'master'], origin).trim()
+    const executionId = startExecution(plan, ['base-dep', 'base-late'], startBase)
+    // The base branch advances after Start: base-dep lands, its merge commit joining origin's master.
+    // The landed content is any file of the change's; a plain one at the fixture root.
+    const landedContent = 'landed-base-dep.txt'
+    fs.writeFileSync(path.join(world.repo, landedContent), '# base-dep\n')
+    landOnBase(landedContent, 'base-dep lands')
+    const landed = git(['rev-parse', 'master'], origin).trim()
+    expect(landed).not.toBe(startBase)
+    // The landing outcome's two writes: the landing fact (its base-branch CI settled), then the change's landed state.
+    executions.insertLanding({
+      planId: plan.planId, change: 'base-dep', executionId, teamId: world.team.teamId, mechanism: 'direct',
+      prNumber: 7, prUrl: 'u', headSha: landed, baseSha: startBase, mergeSha: landed, treeVerified: true,
+      postCi: [{ name: 'ci', source: 'actions', conclusion: 'success', link: null, startedAt: null, completedAt: null }],
+    })
+    const dependency = executions.change(executionId, 'base-dep')!
+    expect(executions.transition(executionId, 'base-dep', dependency, { state: 'landed', step: null })).not.toBeNull()
+
+    // base-late is provisioned later; the base branch's commit at its provisioning is that landing.
+    executor.wake(world.team.teamId)
+    await executor.idle()
+    expect(git(['rev-parse', 'master'], origin).trim()).toBe(landed)
+    // Both bases: the execution's recorded base commit is unchanged …
+    expect(executions.execution(executionId)!.baseCommit).toBe(startBase)
+    // … and the change records the base branch's commit at its provisioning as its baseline.
+    const row = executions.change(executionId, 'base-late')!
+    expect(row.baselineCommit).toBe(landed)
+    expect(git(['rev-parse', 'HEAD'], row.worktree!).trim()).toBe(landed)
   })
 
   test('a name taken by work not of this plan stops as name-taken', async () => {

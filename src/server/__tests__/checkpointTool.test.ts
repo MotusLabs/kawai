@@ -117,6 +117,8 @@ const caller = { kind: 'agent' as const, sessionId: 'dev' }
 const baseInput = { task_id: 'task-x', summary: 'where work stands', next_steps: 'finish the parser' }
 const checkpointCount = (bench: Bench) => bench.db.db.prepare('SELECT COUNT(*) AS n FROM plan_checkpoints').get() as { n: number }
 const effectCount = (bench: Bench) => (bench.executions.effectsOf(bench.executionId)).length
+/** Rows this connection has inserted, updated, or deleted since it opened: a call that refuses writes none. */
+const totalWrites = (bench: Bench) => (bench.db.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n
 const freshRow = (bench: Bench) => bench.executions.change(bench.executionId, 'api')!
 
 /** Run one effect through the round pipeline's own push adapter, as the executor's chain resolves it. */
@@ -278,6 +280,24 @@ describe('task_checkpoint refusals (D7)', () => {
       expect(checkpointCount(b).n).toBe(0)
       expect(effectCount(b)).toBe(0)
     }
+  })
+
+  // @covers: plan-pause › Holders record checkpoints through task_checkpoint › Kawai is writing the branch
+  test('task_checkpoint while Kawai is updating the branch is refused naming updating, and records no checkpoint or effect', async () => {
+    const updating = bench()
+    updating.executions.transition(updating.executionId, 'api', freshRow(updating), { state: 'landing', step: 'updating' })
+    const row = freshRow(updating)
+    expect(row).toMatchObject({ state: 'landing', step: 'updating' })
+    const writes = totalWrites(updating)
+    const busy = refusalOf(await updating.tool.record(caller, { ...baseInput, commit: updating.work.commit }), 'landing update')
+    expect(busy.reason).toBe('kawai-writing')
+    expect(busy.message).toContain('Kawai is writing the branch (landing updating)')
+    // Refused before any write: no checkpoint, no effect, no row anywhere, and the target still points at none.
+    expect(checkpointCount(updating).n).toBe(0)
+    expect(effectCount(updating)).toBe(0)
+    expect(totalWrites(updating)).toBe(writes)
+    expect(updating.pauses.target(updating.pauseId, 'api')!.checkpointId).toBeNull()
+    expect(freshRow(updating)).toEqual(row)
   })
 })
 

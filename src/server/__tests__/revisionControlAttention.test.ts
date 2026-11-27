@@ -4,14 +4,38 @@
 // fresh test database, read it through the one revision-control reader, and
 // project it through the real `ATTENTION_SOURCES`; AP-1 runs seeded command
 // sequences over the same seam: one target never raises two items, and items
-// exist only for open plans.
-import { describe, expect, test } from 'bun:test'
+// exist only for open plans. AT5 once more whole (plan-pause's deadline
+// scenario): the composed plan services, a holder whose session is a
+// persisted row the pause target links to, the deadline passing on the real
+// clock, and `WorkspaceRead.snapshot` — the overdue item rises, and the
+// holder's session, row and record alike, is as it was.
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
 import type { Database } from 'bun:sqlite'
-import type { AttentionItem } from '../../shared/teamWorkspace'
+import type { AttentionItem, TeamWorkspaceSnapshot } from '../../shared/teamWorkspace'
 import type { FloorMap } from '../../shared/planExecution'
-import { attentionItems, type AttentionInput } from '../team/workspaceRead'
+import type { ChatSessionRecord, SessionDatabase } from '../db'
+import type { PlanPauseTarget } from '../../shared/planRevisionControl'
+import { attentionItems, WorkspaceRead, type AttentionInput } from '../team/workspaceRead'
+import { loadGroupCatalog } from '../team/groupCatalog'
 import { PlanStore } from '../plans/planStore'
 import { ExecutionStore } from '../plans/execution/executionStore'
+import { AssignmentService } from '../team/AssignmentService'
+import { AssignmentStore } from '../team/assignmentStore'
+import { MemberRelease } from '../team/memberRelease'
+import { TeamMailbox } from '../team/TeamMailbox'
+import { TaskService } from '../team/TaskService'
+import { TaskResultService } from '../team/TaskResultService'
+import { TeamWorktrees } from '../team/worktreeRoots'
+import { WorktreeStaffing } from '../team/staffing'
+import { TeamCaps } from '../team/teamCaps'
+import { ImpactService } from '../strategy/ImpactService'
+import { ImpactStore } from '../strategy/impactStore'
+import { composeExecutionCore, composePlanServices } from '../plans/planComposition'
+import { pauseHolderFacts } from '../plans/revisionControl/pauseTick'
+import { revisionControlOf } from '../plans/revisionControl/revisionControlServices'
+import { inDays, inFlightTarget, settleReceipt, type ComposedStack } from './revisionControlStack'
+import { createPlanBench, createPlanWorld, sessionRow, type PlanBench, type PlanWorld } from './planHarness'
 import { HoldStore } from '../plans/revisionControl/holdStore'
 import { PauseStore } from '../plans/revisionControl/pauseStore'
 import { CheckpointStore } from '../plans/revisionControl/checkpointStore'
@@ -313,5 +337,151 @@ describe('property AP-1', () => {
         expect(new Set(items.map(item => item.id)).size, context).toBe(items.length)
       }
     }
+  })
+})
+
+// --- AT5 whole (plan-pause's deadline scenario): the real workspace read over the composed plan services ---
+
+let live: PlanWorld
+let bench: PlanBench
+let composed: ReturnType<typeof composePlanServices>
+let releases: MemberRelease
+/** The `chat_sessions` persistence, as the manager writes a session record through it. */
+let sessions: SessionDatabase
+/** Every archive the composition's release path asked the manager for. */
+const archived: string[] = []
+/** The Team page's workspace read over the composed services, for a team whose records are the one given. */
+let read: (record: ChatSessionRecord) => TeamWorkspaceSnapshot
+
+/**
+ * The construction the server runs — `composePlanServices` over the team services, as
+ * revisionControlStack's `composeStack` builds it — with the one difference this file needs:
+ * a release archives for real, through the session persistence and the record above it, and
+ * says so in `archived`. A double that only refuses would hide a release Kawai should never ask for.
+ */
+beforeAll(async () => {
+  live = await createPlanWorld('kawai-rc-at5-')
+  bench = createPlanBench(live)
+  sessions = bench.db as SessionDatabase
+  const core = composeExecutionCore(bench.db.db), mail = bench.mail
+  const teamOf = () => live.team, records = () => bench.records.values(), getSession = (id: string) => bench.records.get(id)
+  const tasks = new TaskService(bench.tasks, { getSession, homeDir: live.home, restoreSession: () => undefined, plans: bench.plans, ownership: core.ownership })
+  releases = new MemberRelease(bench.db.db, {
+    store: mail, tasks: bench.tasks, records, getRecord: getSession, teamOf,
+    definition: async () => undefined, cachedDefinition: () => undefined,
+    recipient: () => undefined, hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false,
+    archive: sessionId => {
+      archived.push(sessionId)
+      const at = new Date().toISOString()
+      sessions.updateChatSession(sessionId, { archivedAt: at })
+      const record = bench.records.get(sessionId)
+      if (record) bench.records.set(sessionId, { ...record, archivedAt: at })
+      return { ok: true }
+    },
+    notify: () => undefined,
+  })
+  const caps = new TeamCaps({ homeDir: live.home }), worktrees = new TeamWorktrees()
+  const staffing = new WorktreeStaffing(bench.db.db, mail, { records, teamOf, caps, worktrees, spawn: () => Promise.resolve({ ok: false, error: 'no spawn in tests' }) })
+  const assignments = new AssignmentService(bench.db.db, new AssignmentStore(bench.db.db, mail), bench.tasks, mail, {
+    getSession, records, teamOf, staffing, caps, worktrees, homeDir: live.home, plans: bench.plans, ownership: core.ownership,
+  })
+  const results = new TaskResultService(tasks, { getSession, assignments, releases, records, homeDir: live.home, ownership: core.ownership, onWrite: id => core.wakes.resultWrite(id) })
+  const impact = new ImpactService(new ImpactStore(bench.db.db), { strategies: bench.strategies, plans: bench.plans, mail, getSession })
+  composed = composePlanServices({
+    db: bench.db.db, plans: bench.plans, strategies: bench.strategies, impact, getSession, homeDir: live.home,
+    caps: { planExecution: async () => ({ floorChecks: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }, maxParallelChanges: 2, mergeMethod: 'merge' }) },
+    executionCore: core,
+    executionTeam: {
+      tasks, assignments, results, taskStore: bench.tasks, mailbox: mail, releases,
+      teamMailbox: new TeamMailbox(mail, { getSession, homeDir: live.home, tasks: bench.tasks }),
+      pendingSpawns: () => [], records,
+      identityOf: id => (id === live.team.teamId ? live.team : undefined), teamOfSession: teamOf,
+      supervision: { holder: () => null, blocker: () => null, live: () => false },
+      // The pause tick's holder facts (revision-control D8) as the manager wires them.
+      pauseFacts: pauseHolderFacts({
+        getRecord: getSession,
+        pendingRequest: () => false, hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false,
+        parkedResumes: id => mail.parkedBy(id).map(row => row.parkedUntil), cooldownUntil: () => null,
+      }),
+    },
+    executionValidation: { prepareStanding: async () => ({}), standing: () => ({ state: 'current', report: { id: 'rep-1', inputHash: 'ih-1', readiness: { carriedConditions: [] } } }) as never },
+  })
+  bench.service = composed.plans
+  await composed.runtime!.start()
+  // The Team page's read: the composed PlanService, the real task and mailbox stores, the team's catalog and
+  // its records; the manager's other sources (directory, waiting reasons, requests, turn ends, the audit) are empty.
+  read = record => new WorkspaceRead({
+    plans: composed.plans, tasks, mailbox: { store: mail }, teamRecords: () => [record],
+    teams: { catalogForTeam: () => loadGroupCatalog({ groupsRoot: live.team.groupsRoot, homeDir: live.home }) },
+    waitingFor: () => ({}), directory: { list: () => [] }, getPendingRequests: () => [],
+    groupProfileCounts: () => ({}), teamApprovalDefault: () => null,
+    turnEnds: { finishedForTeam: () => [] }, exhaustionEpisodes: () => [],
+    outboundAudit: { violationGroups: () => [], windowCounts: () => ({ allowed: 0, unknown: 0, violations: 0 }) },
+  } as never).snapshot(live.team)
+})
+
+afterAll(() => {
+  composed.runtime?.stop()
+  bench.db.close()
+  fs.rmSync(live.root, { recursive: true, force: true })
+})
+
+describe('AT5 through the real workspace read', () => {
+  // @covers: plan-pause › Pausing never resolves a pending request › The pause deadline passes
+  test('the overdue item asks the owner to unblock the holder, and the linked holder\'s persisted session is untouched', async () => {
+    const holder = 'api-dev', teamId = live.team.teamId
+    // `inFlightTarget` reads only its stack's execution store; this file's composition stands in for the rest.
+    const { planId, executionId, taskId } = await inFlightTarget(live, bench, { executionStore: composed.executionStore } as unknown as ComposedStack, holder, 'attempt')
+    // The holder's session as the manager keeps a spawned member: one persisted row, and the record over it.
+    const at = new Date().toISOString()
+    const record = sessions.insertChatSession({ ...sessionRow(holder, 'leads', live.feature), name: 'Api dev', createdAt: at, lastActivityAt: at, spawned: true, taskId })
+    bench.records.set(holder, record)
+    const row = (): unknown => sessions.db.prepare('SELECT * FROM chat_sessions WHERE session_id = ?').get(holder)
+    const before = { row: row(), record: structuredClone(record) }
+    expect(before.row).toMatchObject({ session_id: holder, archived_at: null, status: 'waiting', task_id: taskId, spawned: 1 })
+    // Untouched, the row and the record alike: no archive asked of the manager, and no release left pending.
+    const untouched = (): void => {
+      expect(row()).toEqual(before.row)
+      expect(bench.records.get(holder)).toEqual(before.record)
+      expect(archived).toEqual([])
+      expect(releases.pendingFor(holder)).toBe(false)
+    }
+    const runtime = composed.runtime!
+    const tick = async (): Promise<void> => { runtime.command(teamId); await runtime.idle() }
+    const placed = composed.holds.place(bench.human, {
+      planId, scope: 'changes', rationale: 'rethink the direction', deadline: inDays(2), cites: null, commandId: 'at5-hold', changes: ['api'],
+    })
+    if (!placed.ok || !placed.result) throw new Error(placed.ok ? 'the hold wrote nothing' : placed.message)
+    // The service refuses a deadline that is not in the future: the clock itself has to pass this one.
+    const deadline = Date.now() + 3000
+    const paused = await composed.pauses!.pause(bench.human, { planId, holdId: placed.result.hold.id, deadline: new Date(deadline).toISOString(), commandId: 'at5-pause' })
+    if (!paused.ok || !paused.result) throw new Error(paused.ok ? 'the pause wrote nothing' : paused.message)
+    const { pause } = paused.result
+    const target = (): PlanPauseTarget | null => composed.pauses!.deps.pauses.target(pause.id, 'api')
+    // Linked: the instruction's claimant is the target's holder, and the pause mail reached them.
+    expect(target()).toMatchObject({ stage: 'attempt', holderSession: holder, pausedAt: null, decision: null })
+    settleReceipt(bench, target()!.messageId!, holder)
+    await tick()
+    // Before the deadline: still Pausing with no checkpoint to finish with, no item, and the holder as they were.
+    expect(Date.now()).toBeLessThan(deadline)
+    expect(revisionControlOf(composed.plans)!.read(teamId, planId).pauses[0]!.targets[0]).toMatchObject({ holderSession: holder, state: { state: 'pausing', causes: [{ kind: 'no-checkpoint' }] } })
+    expect(read(record).attention).toEqual([])
+    untouched()
+    const held = { target: target(), members: read(record).members, journal: bench.tasks.journal(taskId) }
+    expect(held.members.flatMap(group => group.members).map(member => member.sessionId)).toContain(holder)
+    await Bun.sleep(Math.max(0, deadline - Date.now()) + 50)
+    // Past the deadline the executor's own pause pass runs first, then the Team page's read.
+    await tick()
+    untouched()
+    expect(read(record).attention).toEqual([{
+      id: `plan-pause-overdue:${pause.id}:api`, kind: 'plan-pause-overdue',
+      cause: expect.stringContaining(`is still Pausing after the pause deadline ${pause.deadline}`) as never,
+      owner: { kind: 'human', id: null, label: 'Human' }, impact: {},
+      nextAction: 'Unblock the holder, or restart or stop', link: { kind: 'plan', id: planId, planId, change: 'api' }, requiresHuman: true,
+    }])
+    untouched()
+    // Nothing else moved either: the target, the holder's seat among the team's members, the task's journal, the change still in flight.
+    expect({ target: target(), members: read(record).members, journal: bench.tasks.journal(taskId) }).toEqual(held)
+    expect(composed.executionStore.execution(executionId)!.state).toBe('running')
   })
 })
