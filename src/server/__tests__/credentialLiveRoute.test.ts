@@ -62,6 +62,7 @@ function costedResult(): SDKMessage {
 }
 
 describe('F7 — a live session keeps its admitted route', () => {
+  // @covers: provider-credentials › Store changes apply at the next launch › Running session keeps its environment
   test('a store pin change while a routed chat is live must not throw in its usage refresh timer', async () => {
     const credentials = createServerCredentials({ db, seed: {}, homeDir: tempDir })
     await credentials.store.set('PCS_LR_TOKEN', 'zq-admitted-token', 'secret-source')
