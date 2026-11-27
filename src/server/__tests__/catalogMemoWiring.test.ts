@@ -148,7 +148,7 @@ describe('Table W — production wiring', () => {
     ))
   })
 
-  test('W4: the usage cadence reads the balance key through the shared memo; only the direct launch resolution reads per tick', async () => {
+  test('W4: the usage cadence reads the balance key through the shared memo and never re-resolves the admitted launch per tick', async () => {
     // The package adapter loads the SDK lazily at its first spawn (task 6.1);
     // a cold load is real module I/O that fake-timer microtask drains never cover.
     await import('@anthropic-ai/claude-agent-sdk')
@@ -164,10 +164,11 @@ describe('Table W — production wiring', () => {
         reads.push(markerReads(() => jest.advanceTimersByTime(REFRESH_MS)))
         await drainNow()
       }
-      // Each tick resolves the unchanged launch catalog directly (one read);
-      // the first tick's provider lookup also warms the shared memo, which
-      // the balance-key read then hits. A balance-key bypass reads [3, 2, 2, 2].
-      expect(reads).toEqual([2, 1, 1, 1])
+      // A live session pulls with the launch env admitted at its spawn
+      // (provider-credential-store F7), so no tick resolves the launch
+      // catalog; the first tick's balance-key lookup warms the shared memo,
+      // which later ticks hit. A balance-key bypass reads [2, 1, 1, 1].
+      expect(reads).toEqual([1, 0, 0, 0])
       // Parity: every credits pull, the start's and each tick's, carries the
       // value under the balance key name an independent fresh resolution names.
       const keyEnv = resolveProfileCatalog(catalogCtx(home, project)).profiles.get('or-m')!.balanceKeyEnv

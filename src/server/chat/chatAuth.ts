@@ -31,7 +31,16 @@ export function claudeConfigDir(
  * never disagree. Credentials never leave the server.
  */
 export function hasClaudeAuth(providerEnv: ChatProviderEnv = {}): boolean {
-  const env = effectiveChatEnv(providerEnv)
+  return hasClaudeAuthIn(effectiveChatEnv(providerEnv))
+}
+
+/**
+ * The same gate over an explicit, already-composed launch environment, with
+ * no process.env merge: the manager's gate passes the environment the spawn
+ * really receives, so a key the launch withholds (a registered name, a blank
+ * store entry) never authenticates it (provider-credential-store F8).
+ */
+export function hasClaudeAuthIn(env: Record<string, string | undefined>): boolean {
   if (env.ANTHROPIC_API_KEY?.trim()) return true
   if (env.ANTHROPIC_AUTH_TOKEN?.trim()) return true
   if (env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return true

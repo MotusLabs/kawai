@@ -100,8 +100,13 @@ absent passes through) and *delivery* = resolution minus registered names,
 with launch-env store entries delivered unchanged. It replaces
 `routes/chatProviderEnv.ts`'s `current()`, which bootstrap stops passing.
 Every consumer above takes one of the two projections, never the raw map:
-the gate, injection, availability probe and usage pulls read resolution;
-Claude and Codex launches read delivery. The registry's `secretSourceKeys`
+the credentialed gate, injection, availability probe and usage pulls read
+resolution; Claude and Codex launches read delivery. The Default
+(non-credentialed) gate reads only the explicit launch environment the
+spawn receives — delivery, with no process-env merge — so a withheld or
+blanked key never admits a chat (F8). A live session's usage pulls, usage
+reports and post-turn scheduling read the launch environment admitted at
+its spawn; only admission and spawn or resume resolve afresh or refuse (F7). The registry's `secretSourceKeys`
 source is fed from the store listing at every observation.
 
 **S4 — "The listing" is the credential listing.** The store requirement's
