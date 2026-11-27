@@ -108,9 +108,22 @@ async function gate(row: GateRow): Promise<{ admitted: false } | { admitted: tru
 }
 
 describe('F8 — the Default gate reads only the explicit launch env', () => {
-  test.each(ROWS.map(row => [row.name, row] as const))('Default gate row %s', async (_name, row) => {
-    expect(await gate(row)).toEqual(row.want)
-  }, 30_000)
+  // Literal titles, one per row, so each row is citable at the commit.
+  const row = (name: string) => async () => {
+    const found = ROWS.find(candidate => candidate.name === name)
+    if (!found) throw new Error(`no gate row ${name}`)
+    expect(await gate(found)).toEqual(found.want)
+  }
+  test('Default gate row C5: a secret-source store entry withholds the process value', row('C5: a secret-source store entry withholds the process value'), 30_000)
+  test('Default gate row C7: a provider-registered process value is withheld', row('C7: a provider-registered process value is withheld'), 30_000)
+  test('Default gate row C4: a blank launch-env store entry pins empty over the process value', row('C4: a blank launch-env store entry pins empty over the process value'), 30_000)
+  test('Default gate row C1: an unregistered process value admits', row('C1: an unregistered process value admits'), 30_000)
+  test('Default gate row C2: a seed value admits', row('C2: a seed value admits'), 30_000)
+  test('Default gate row C3: a launch-env store value admits', row('C3: a launch-env store value admits'), 30_000)
+  test('Default gate row C8: no source refuses', row('C8: no source refuses'), 30_000)
+  test('every gate row has its literal test', () => {
+    expect(ROWS.map(candidate => candidate.name)).toEqual(['C5: a secret-source store entry withholds the process value', 'C7: a provider-registered process value is withheld', 'C4: a blank launch-env store entry pins empty over the process value', 'C1: an unregistered process value admits', 'C2: a seed value admits', 'C3: a launch-env store value admits', 'C8: no source refuses'])
+  })
 
   test('hasClaudeAuth keeps merging the process environment for direct callers; hasClaudeAuthIn reads only its argument', () => {
     process.env[KEY] = 'zq-proc'

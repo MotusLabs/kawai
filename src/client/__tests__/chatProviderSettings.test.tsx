@@ -239,7 +239,7 @@ describe('ChatProviderSettings — the write-only credential section', () => {
   // (constructor, __proto__, toString, …): an untouched row reads no
   // inherited value through the one typed-value accessor (F2).
   const PROTOTYPE_NAMES = Object.getOwnPropertyNames(Object.prototype).filter(name => STORE_NAME.test(name)).sort()
-  test.each(PROTOTYPE_NAMES)('an untouched %s row starts empty with Set disabled, and Enter and Save write nothing (F2)', async (name) => {
+  const untouchedRow = (name: string) => async () => {
     store.set(name, { kind: 'launch-env', value: 'zq-stored' })
     const handle = createRef<ChatProviderSettingsHandle>()
     let renderer!: TestRenderer.ReactTestRenderer
@@ -264,10 +264,24 @@ describe('ChatProviderSettings — the write-only credential section', () => {
     expect(store.get(name)).toEqual({ kind: 'launch-env', value: 'zq-stored' })
     expect(byTestId(renderer, 'chat-provider-error')).toHaveLength(0)
     renderer.unmount()
-  })
+  }
+  // Literal titles, one per name, so each row is citable at the commit.
+  test('an untouched __defineGetter__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__defineGetter__'))
+  test('an untouched __defineSetter__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__defineSetter__'))
+  test('an untouched __lookupGetter__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__lookupGetter__'))
+  test('an untouched __lookupSetter__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__lookupSetter__'))
+  test('an untouched __proto__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__proto__'))
+  test('an untouched constructor row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('constructor'))
+  test('an untouched hasOwnProperty row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('hasOwnProperty'))
+  test('an untouched isPrototypeOf row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('isPrototypeOf'))
+  test('an untouched propertyIsEnumerable row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('propertyIsEnumerable'))
+  test('an untouched toLocaleString row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('toLocaleString'))
+  test('an untouched toString row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('toString'))
+  test('an untouched valueOf row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('valueOf'))
 
   test('the prototype-name table covers constructor and __proto__', () => {
-    expect(PROTOTYPE_NAMES).toEqual(expect.arrayContaining(['__proto__', 'constructor', 'hasOwnProperty', 'toString', 'valueOf']))
+    // Exactly the names with a literal test above: a runtime adding one fails here.
+    expect(PROTOTYPE_NAMES).toEqual(['__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__', '__proto__', 'constructor', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString', 'toString', 'valueOf'])
   })
 
   test('the listing shows a store failure, migration skips, and a collision by name only', async () => {
