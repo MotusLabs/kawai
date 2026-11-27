@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { CredentialListing, CredentialListingRow } from '@shared/credentials'
 import SettingsModal from '../components/SettingsModal'
-import ChatProviderSettings from '../components/ChatProviderSettings'
+import ChatProviderSettings, { type ChatProviderSettingsHandle } from '../components/ChatProviderSettings'
+import { STORE_NAME } from '../../server/chat/credentialStoreDocument'
+import { createRef } from 'react'
 
 interface Recorded {
   method: string
@@ -231,6 +233,41 @@ describe('ChatProviderSettings — the write-only credential section', () => {
     expect(requests.filter((r) => r.method !== 'GET')).toEqual([])
     expect(store.get('ANTHROPIC_BASE_URL')).toEqual({ kind: 'launch-env', value: 'https://gw.example' })
     renderer.unmount()
+  })
+
+  // Every Object.prototype name the store's launch-env name grammar accepts
+  // (constructor, __proto__, toString, …): an untouched row reads no
+  // inherited value through the one typed-value accessor (F2).
+  const PROTOTYPE_NAMES = Object.getOwnPropertyNames(Object.prototype).filter(name => STORE_NAME.test(name)).sort()
+  test.each(PROTOTYPE_NAMES)('an untouched %s row starts empty with Set disabled, and Enter and Save write nothing (F2)', async (name) => {
+    store.set(name, { kind: 'launch-env', value: 'zq-stored' })
+    const handle = createRef<ChatProviderSettingsHandle>()
+    let renderer!: TestRenderer.ReactTestRenderer
+    await act(async () => {
+      renderer = TestRenderer.create(<ChatProviderSettings ref={handle} />)
+      await settle()
+    })
+    const input = byLabel(renderer, `New value for ${name}`)
+    const set = button(renderer, 'Set', byTestId(renderer, `credential-row-${name}`)[0]!)
+    expect({ value: input.props.value, setDisabled: set.props.disabled }).toEqual({ value: '', setDisabled: true })
+    await act(async () => {
+      input.props.onKeyDown({ key: 'Enter', preventDefault: () => {} })
+      await settle()
+    })
+    let saved: boolean | undefined
+    await act(async () => {
+      saved = await handle.current!.save()
+      await settle()
+    })
+    expect(saved).toBe(true)
+    expect(requests.filter((r) => r.method !== 'GET')).toEqual([])
+    expect(store.get(name)).toEqual({ kind: 'launch-env', value: 'zq-stored' })
+    expect(byTestId(renderer, 'chat-provider-error')).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('the prototype-name table covers constructor and __proto__', () => {
+    expect(PROTOTYPE_NAMES).toEqual(expect.arrayContaining(['__proto__', 'constructor', 'hasOwnProperty', 'toString', 'valueOf']))
   })
 
   test('the listing shows a store failure, migration skips, and a collision by name only', async () => {

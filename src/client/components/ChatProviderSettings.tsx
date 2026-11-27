@@ -71,7 +71,11 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
   function ChatProviderSettings({ onBusyChange }, ref) {
     const [listing, setListing] = useState<CredentialListing | null>(null)
     // Typed replacement values per variable; always start empty (write-only).
-    const [typed, setTyped] = useState<Record<string, string>>({})
+    // A Map, never a plain object: a variable named `constructor` or
+    // `__proto__` must not read an inherited value (F2).
+    const [typed, setTyped] = useState<ReadonlyMap<string, string>>(() => new Map())
+    /** The one accessor for a row's typed value: input, Set, Enter, and Save. */
+    const typedOf = (name: string): string => typed.get(name) ?? ''
     const [newName, setNewName] = useState('')
     const [newValue, setNewValue] = useState('')
     const [newKind, setNewKind] = useState<CredentialKind>('launch-env')
@@ -124,8 +128,8 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
     const setValue = (name: string, value: string, kind: CredentialKind) =>
       mutate(nameUrl(name), json('PUT', { value, kind }), () =>
         setTyped((current) => {
-          const next = { ...current }
-          delete next[name]
+          const next = new Map(current)
+          next.delete(name)
           return next
         })
       )
@@ -138,7 +142,7 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
 
     /** The modal's Save: every value still typed, then the new variable. */
     const savePending = async (): Promise<boolean> => {
-      for (const [name, value] of Object.entries(typed)) {
+      for (const [name, value] of typed) {
         if (value === '') continue
         const kind = listing?.rows.find((row) => row.name === name)?.kind ?? 'launch-env'
         if (!(await setValue(name, value, kind))) return false
@@ -211,11 +215,14 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
                   autoComplete="off"
                   placeholder={row.source === 'store' ? 'Type a new value to replace' : 'Type a value to save here'}
                   aria-label={`New value for ${row.name}`}
-                  value={typed[row.name] ?? ''}
-                  onChange={(e) => setTyped((current) => ({ ...current, [row.name]: e.target.value }))}
+                  value={typedOf(row.name)}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setTyped((current) => new Map(current).set(row.name, value))
+                  }}
                   onKeyDown={onEnter(() => {
                     // Enter shares Set's guard: an untouched or emptied input sends nothing (Blank is explicit).
-                    const value = typed[row.name] ?? ''
+                    const value = typedOf(row.name)
                     if (value !== '') void setValue(row.name, value, row.kind ?? 'launch-env')
                   })}
                   disabled={busy}
@@ -223,8 +230,8 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
                 <button
                   type="button"
                   className="btn text-xs"
-                  disabled={busy || !(typed[row.name] ?? '')}
-                  onClick={() => void setValue(row.name, typed[row.name] ?? '', row.kind ?? 'launch-env')}
+                  disabled={busy || typedOf(row.name) === ''}
+                  onClick={() => void setValue(row.name, typedOf(row.name), row.kind ?? 'launch-env')}
                 >
                   Set
                 </button>
