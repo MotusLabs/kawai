@@ -21,7 +21,8 @@ import { outboundAuditHooks } from '../../outbound/auditHooks'
 import { TEAM_MCP_SERVER } from '../../team/teamPrompt'
 import { resolveClaudeProfileDetail } from '../ClaudeProfiles'
 import { composeCompaction, selectAutoCompactWindow } from '../claudeCompaction'
-import type { ChatProviderEnv } from '../chatProviderEnv'
+import type { ChatProviderEnv, ProviderEnvSnapshot } from '../chatProviderEnv'
+import { setEnvEntry } from '../credentialComposition'
 import type { RetainedNamesDb } from '../secretNameRegistry'
 import type { ChatWireRecorder } from '../wireTap'
 import type { TeamToolSpec } from '../../team/mailboxTools'
@@ -51,6 +52,8 @@ function compatibleQuery(query: Query): Query {
 export interface ClaudeSpawnInput {
   claudeProfileId?: string
   getProviderEnv?: () => ChatProviderEnv
+  /** One credential snapshot per spawn: the overrides and their store origin. */
+  getProviderEnvSnapshot?: () => ProviderEnvSnapshot
   profileCatalogHome?: string
   retainedNamesDb?: RetainedNamesDb
   projectPath: string
@@ -74,12 +77,16 @@ export interface ClaudeSpawnLaunch {
  * registered name, so the caller's start or send refuses before anything runs.
  */
 export function claudeSpawnLaunch(input: ClaudeSpawnInput): ClaudeSpawnLaunch {
+  // One snapshot per spawn (resume included): the credentialed transport
+  // refusal reads origin and value from the same store read.
+  const snapshot = input.getProviderEnvSnapshot?.() ?? { env: input.getProviderEnv?.() ?? {}, storeSourced: new Set<string>() }
   const { launch: resolved, profile, registered } = resolveClaudeProfileDetail(
     input.claudeProfileId,
-    input.getProviderEnv?.() ?? {},
+    snapshot.env,
     { projectPath: input.projectPath, ...(input.profileCatalogHome ? { homeDir: input.profileCatalogHome } : {}) },
     undefined,
     input.retainedNamesDb,
+    snapshot.storeSourced,
   )
   if (resolved.runtime !== 'claude') throw new Error('Codex chats start through the Codex driver, not the Claude Agent SDK.')
   const flagEnv = (resolved.settings as { env?: Record<string, string | undefined> } | undefined)?.env
@@ -110,7 +117,7 @@ export function claudeSpawnLaunch(input: ClaudeSpawnInput): ClaudeSpawnLaunch {
 
 function strings(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const [name, value] of Object.entries(env)) if (typeof value === 'string') out[name] = value
+  for (const [name, value] of Object.entries(env)) if (typeof value === 'string') setEnvEntry(out, name, value)
   return out
 }
 

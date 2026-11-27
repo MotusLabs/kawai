@@ -1,66 +1,65 @@
-// Settings section for the chat provider environment: KEY=VALUE overrides
-// (base URL, model names, gateway token) applied to Claude Chat sessions only.
-// Server-backed: Apply saves this section; the modal also awaits save() before
-// closing on Save. Credential values come back redacted; leaving one blank
-// keeps the stored value.
+// Settings credential section (provider-credential-store S5): the write-only
+// editor over /api/settings/credentials. The listing shows each variable's
+// name, kind, set/blank state, source, and override/collision marks — never a
+// value. Setting or replacing a value means typing it anew into an input that
+// always starts empty; Blank, Clear, and changing the kind are explicit acts.
+// Outcomes and refusals render the server's fixed text only, and an applied
+// but not durable save shows its warning (never a retry). The modal's Save
+// sends any value still typed into an input before it closes, and stays open
+// on that warning when a write was applied but not durable.
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent } from 'react'
 import type {
-  ChatProviderEnvResponse,
-  ChatProviderEnvSource,
-  ChatProviderEnvUpdate,
-} from '@shared/chatProviderSettings'
+  CredentialKind,
+  CredentialListing,
+  CredentialListingRow,
+  CredentialMutationOutcome,
+  CredentialRefusal,
+} from '@shared/credentials'
 
-const ENDPOINT = '/api/settings/chat-provider-env'
+const ENDPOINT = '/api/settings/credentials'
 
-interface Row {
-  id: number
-  name: string
-  value: string
-  /** The server holds a value this browser was never sent. */
-  redacted: boolean
+const SOURCE_LABEL: Record<CredentialListingRow['source'], string> = {
+  store: 'Saved here',
+  seed: 'AGENTBOARD_CHAT_ENV',
 }
 
-const SOURCE_LABEL: Record<ChatProviderEnvSource, string> = {
-  settings: 'Using the overrides saved here.',
-  environment: 'Using AGENTBOARD_CHAT_ENV from the server environment.',
-  none: 'No overrides: chat sessions use the server environment.',
+const KIND_LABEL: Record<CredentialKind, string> = {
+  'launch-env': 'Launch variable',
+  'secret-source': 'Secret source',
 }
 
-let nextRowId = 0
-const toRows = (data: ChatProviderEnvResponse): Row[] =>
-  Object.entries(data.env).map(([name, value]) => ({
-    id: nextRowId++,
-    name,
-    value,
-    redacted: data.redacted.includes(name),
-  }))
-
-/** Build the PUT body; returns an error message instead when rows are invalid. */
-export function rowsToUpdate(rows: Row[]): ChatProviderEnvUpdate | string {
-  const env: Record<string, string> = {}
-  const keep: string[] = []
-  for (const row of rows) {
-    const name = row.name.trim()
-    if (!name && !row.value) continue // untouched blank row
-    if (!name) return 'Every value needs a variable name.'
-    if (name in env) return `${name} appears more than once.`
-    env[name] = row.value
-    if (row.redacted && row.value === '') keep.push(name)
-  }
-  return keep.length > 0 ? { env, keep } : { env }
+const OTHER_KIND: Record<CredentialKind, CredentialKind> = {
+  'launch-env': 'secret-source',
+  'secret-source': 'launch-env',
 }
 
-async function request(init?: RequestInit): Promise<ChatProviderEnvResponse> {
-  const res = await fetch(ENDPOINT, init)
-  const data = (await res.json().catch(() => ({}))) as Partial<ChatProviderEnvResponse> & {
-    error?: string
-  }
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
-  return data as ChatProviderEnvResponse
+/** One request; a refusal throws its fixed text, never a raw response. */
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, init)
+  const data = (await res.json().catch(() => null)) as (T & Partial<CredentialRefusal>) | null
+  if (!res.ok || data === null) throw new Error(data?.error || 'The credential request failed.')
+  return data
 }
+
+/** A listing of the expected shape; anything else is a failed request, never a crash. */
+function isListing(value: unknown): value is CredentialListing {
+  const listing = value as Partial<CredentialListing> | null
+  return typeof listing === 'object' && listing !== null && Array.isArray(listing.rows)
+    && typeof listing.store === 'object' && listing.store !== null
+    && typeof listing.migration === 'object' && listing.migration !== null
+    && Array.isArray(listing.migration.skipped) && Array.isArray(listing.migration.ignored)
+}
+
+const json = (method: string, body: unknown): RequestInit => ({
+  method,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+})
+
+const nameUrl = (name: string) => `${ENDPOINT}/${encodeURIComponent(name)}`
 
 export interface ChatProviderSettingsHandle {
-  /** Save pending edits, returning false when the modal must stay open. */
+  /** Send pending typed values, returning false when the modal must stay open. */
   save: () => Promise<boolean>
 }
 
@@ -70,36 +69,20 @@ interface ChatProviderSettingsProps {
 
 const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProviderSettingsProps>(
   function ChatProviderSettings({ onBusyChange }, ref) {
-    const [rows, setRows] = useState<Row[]>([])
-    const [source, setSource] = useState<ChatProviderEnvSource | null>(null)
+    const [listing, setListing] = useState<CredentialListing | null>(null)
+    // Typed replacement values per variable; always start empty (write-only).
+    // A Map, never a plain object: a variable named `constructor` or
+    // `__proto__` must not read an inherited value (F2).
+    const [typed, setTyped] = useState<ReadonlyMap<string, string>>(() => new Map())
+    /** The one accessor for a row's typed value: input, Set, Enter, and Save. */
+    const typedOf = (name: string): string => typed.get(name) ?? ''
+    const [newName, setNewName] = useState('')
+    const [newValue, setNewValue] = useState('')
+    const [newKind, setNewKind] = useState<CredentialKind>('launch-env')
     const [busy, setBusy] = useState(true)
-    const [dirty, setDirty] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [notice, setNotice] = useState<{ text: string; warning: boolean } | null>(null)
     const mountedRef = useRef(true)
-
-    // A completed request replaces every row and clears `dirty`, so editing is
-    // locked while one is in flight (`busy`); otherwise edits made after Apply
-    // would be silently overwritten by its response.
-    const apply = (data: ChatProviderEnvResponse) => {
-      if (!mountedRef.current) return
-      setRows(toRows(data))
-      setSource(data.source)
-      setDirty(false)
-      setError(null)
-    }
-
-    const run = async (promise: Promise<ChatProviderEnvResponse>): Promise<boolean> => {
-      setBusy(true)
-      try {
-        apply(await promise)
-        return mountedRef.current
-      } catch (err: unknown) {
-        if (mountedRef.current) setError(err instanceof Error ? err.message : String(err))
-        return false
-      } finally {
-        if (mountedRef.current) setBusy(false)
-      }
-    }
 
     useEffect(() => {
       onBusyChange?.(busy)
@@ -107,144 +90,198 @@ const ChatProviderSettings = forwardRef<ChatProviderSettingsHandle, ChatProvider
 
     useEffect(() => {
       mountedRef.current = true
-      void run(request())
+      setBusy(true)
+      request<CredentialListing>(ENDPOINT)
+        .then((data) => {
+          if (!isListing(data)) throw new Error('The credential request failed.')
+          if (mountedRef.current) setListing(data)
+        })
+        .catch((err: unknown) => { if (mountedRef.current) setError(err instanceof Error ? err.message : 'The credential request failed.') })
+        .finally(() => { if (mountedRef.current) setBusy(false) })
       return () => {
         mountedRef.current = false
       }
     }, [])
 
-    const edit = (id: number, patch: Partial<Row>) => {
-      setRows((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
-      setDirty(true)
-    }
-
-    // The section sits inside the modal's <form>: Enter must apply this section,
-    // not submit and close the whole modal.
-    const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-      if (e.key !== 'Enter') return
-      e.preventDefault()
-      if (!busy && dirty) handleApply()
-    }
-
-    const handleApply = async (): Promise<boolean> => {
-      if (busy) return false
-      const update = rowsToUpdate(rows)
-      if (typeof update === 'string') {
-        setError(update)
+    /** Run one mutation; once applied, the typed input it consumed is cleared
+     * (never retried). True only for a durable write: an applied but not
+     * durable one keeps the modal open on its warning (U6). */
+    const mutate = async (path: string, init: RequestInit, consumed?: () => void): Promise<boolean> => {
+      setBusy(true)
+      setError(null)
+      try {
+        const outcome = await request<CredentialMutationOutcome>(path, init)
+        if (!isListing(outcome.listing)) throw new Error('The credential request failed.')
+        if (!mountedRef.current) return false
+        setListing(outcome.listing)
+        setNotice({ text: outcome.message, warning: outcome.applied && !outcome.durable })
+        consumed?.()
+        return outcome.applied && outcome.durable
+      } catch (err: unknown) {
+        if (mountedRef.current) setError(err instanceof Error ? err.message : 'The credential request failed.')
         return false
+      } finally {
+        if (mountedRef.current) setBusy(false)
       }
-      return run(
-        request({
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(update),
+    }
+
+    const setValue = (name: string, value: string, kind: CredentialKind) =>
+      mutate(nameUrl(name), json('PUT', { value, kind }), () =>
+        setTyped((current) => {
+          const next = new Map(current)
+          next.delete(name)
+          return next
         })
       )
+
+    const addNew = () =>
+      mutate(nameUrl(newName.trim()), json('PUT', { value: newValue, kind: newKind }), () => {
+        setNewName('')
+        setNewValue('')
+      })
+
+    /** The modal's Save: every value still typed, then the new variable. */
+    const savePending = async (): Promise<boolean> => {
+      for (const [name, value] of typed) {
+        if (value === '') continue
+        const kind = listing?.rows.find((row) => row.name === name)?.kind ?? 'launch-env'
+        if (!(await setValue(name, value, kind))) return false
+      }
+      if (newName.trim() !== '' && !(await addNew())) return false
+      return true
     }
 
     useImperativeHandle(ref, () => ({
-      save: async () => {
-        if (busy) return false
-        return dirty ? handleApply() : true
-      },
+      save: async () => (busy ? false : savePending()),
     }))
 
+    // Inside the modal's <form>: Enter applies this input, never closes the modal.
+    const onEnter = (action: () => void) => (e: KeyboardEvent<HTMLInputElement>) => {
+      if (e.key !== 'Enter') return
+      e.preventDefault()
+      if (!busy) action()
+    }
+
+    const migration = listing?.migration
     return (
       <div className="border-t border-border pt-4" data-testid="chat-provider-settings">
         <label className="mb-1 block text-xs text-secondary">Claude Chat Provider</label>
         <p className="mb-2 text-[10px] text-muted">
-          Environment overrides for Claude Chat sessions only (e.g. ANTHROPIC_BASE_URL,
-          ANTHROPIC_MODEL). Terminal sessions are unaffected. Applies to chat turns started after
-          saving. Credential values are never shown; leave one blank to keep it.
+          Variables for chat sessions, stored in ~/.kawai/credentials.json (owner-only). Values are
+          never shown again: type a value to set or replace it. Launch variables reach Claude
+          launches as themselves; secret sources reach an agent only through a provider binding.
+          Changes apply at the next agent launch.
         </p>
 
+        {listing && !listing.store.ok && (
+          <p role="alert" className="mb-2 text-xs text-red-500" data-testid="credential-store-state">
+            {listing.store.text}
+          </p>
+        )}
+        {migration && migration.state === 'pending' && migration.text && (
+          <p className="mb-2 text-xs text-yellow-500" data-testid="credential-migration">{migration.text}</p>
+        )}
+        {migration && migration.skipped.length > 0 && (
+          <p className="mb-2 text-[10px] text-muted" data-testid="credential-migration-skipped">
+            {migration.skipped.map((name) => `Legacy Settings ${name} not migrated: the store already holds ${name}.`).join(' ')}
+          </p>
+        )}
+        {migration && migration.ignored.length > 0 && (
+          <p className="mb-2 text-[10px] text-muted" data-testid="credential-migration-ignored">
+            Legacy Settings values found after the migration are not used: {migration.ignored.join(', ')}.
+          </p>
+        )}
+
         <div className="space-y-2">
-          {rows.map((row) => (
-            // Stacked name over value: provider variable names run to 30+
-            // characters and would be clipped beside the value at modal width.
-            <div key={row.id} className="space-y-1 rounded border border-border p-2">
-              <div className="flex items-center gap-2">
+          {(listing?.rows ?? []).map((row) => (
+            <div key={row.name} className="space-y-1 rounded border border-border p-2" data-testid={`credential-row-${row.name}`}>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-mono">{row.name}</span>
+                <span className="text-muted">
+                  {row.kind ? KIND_LABEL[row.kind] : 'Inherited'} · {row.state === 'blank' ? 'blank' : 'set'} · {SOURCE_LABEL[row.source]}
+                  {row.overriding ? ' · overrides the environment' : ''}
+                </span>
+              </div>
+              {row.collision && (
+                <p className="text-[10px] text-yellow-500" data-testid={`credential-collision-${row.name}`}>
+                  {row.name} is a registered credential name, so it is not delivered under its own name. Bind it in a
+                  provider catalog entry, or use a different variable name.
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
                 <input
                   className="input min-w-0 flex-1 font-mono text-xs"
-                  placeholder="NAME"
-                  aria-label="Variable name"
-                  value={row.name}
-                  onChange={(e) => edit(row.id, { name: e.target.value })}
-                  onKeyDown={onKeyDown}
+                  type="password"
+                  autoComplete="off"
+                  placeholder={row.source === 'store' ? 'Type a new value to replace' : 'Type a value to save here'}
+                  aria-label={`New value for ${row.name}`}
+                  value={typedOf(row.name)}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setTyped((current) => new Map(current).set(row.name, value))
+                  }}
+                  onKeyDown={onEnter(() => {
+                    // Enter shares Set's guard: an untouched or emptied input sends nothing (Blank is explicit).
+                    const value = typedOf(row.name)
+                    if (value !== '') void setValue(row.name, value, row.kind ?? 'launch-env')
+                  })}
                   disabled={busy}
                 />
                 <button
                   type="button"
                   className="btn text-xs"
-                  aria-label={`Remove ${row.name || 'variable'}`}
-                  disabled={busy}
-                  onClick={() => {
-                    setRows((current) => current.filter((r) => r.id !== row.id))
-                    setDirty(true)
-                  }}
+                  disabled={busy || typedOf(row.name) === ''}
+                  onClick={() => void setValue(row.name, typedOf(row.name), row.kind ?? 'launch-env')}
                 >
-                  ×
+                  Set
                 </button>
+                <button type="button" className="btn text-xs" disabled={busy}
+                  onClick={() => void setValue(row.name, '', row.kind ?? 'launch-env')}>
+                  Blank
+                </button>
+                {row.source === 'store' && row.kind && (
+                  <>
+                    <button type="button" className="btn text-xs" disabled={busy}
+                      aria-label={`Make ${row.name} a ${KIND_LABEL[OTHER_KIND[row.kind]].toLowerCase()}`}
+                      onClick={() => void mutate(`${nameUrl(row.name)}/reclassify`, json('POST', { kind: OTHER_KIND[row.kind!] }))}>
+                      Make {KIND_LABEL[OTHER_KIND[row.kind]].toLowerCase()}
+                    </button>
+                    <button type="button" className="btn text-xs" disabled={busy} aria-label={`Clear ${row.name}`}
+                      onClick={() => void mutate(nameUrl(row.name), { method: 'DELETE' })}>
+                      Clear
+                    </button>
+                  </>
+                )}
               </div>
-              <input
-                className="input w-full font-mono text-xs"
-                placeholder={row.redacted ? 'Stored — leave blank to keep' : 'value'}
-                aria-label={`Value for ${row.name || 'new variable'}`}
-                type={row.redacted ? 'password' : 'text'}
-                value={row.value}
-                onChange={(e) => edit(row.id, { value: e.target.value })}
-                onKeyDown={onKeyDown}
-                disabled={busy}
-              />
             </div>
           ))}
         </div>
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className="btn text-xs"
-            disabled={busy}
-            onClick={() => {
-              setRows((current) => [...current, { id: nextRowId++, name: '', value: '', redacted: false }])
-              setDirty(true)
-            }}
-          >
-            + Add Variable
+          <input className="input min-w-0 flex-1 font-mono text-xs" placeholder="NAME" aria-label="New variable name"
+            value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={onEnter(() => { if (newName.trim() !== '') void addNew() })} disabled={busy} />
+          <input className="input min-w-0 flex-1 font-mono text-xs" type="password" autoComplete="off" placeholder="value"
+            aria-label="New variable value" value={newValue} onChange={(e) => setNewValue(e.target.value)}
+            onKeyDown={onEnter(() => { if (newName.trim() !== '') void addNew() })} disabled={busy} />
+          <select className="input text-xs" aria-label="New variable kind" value={newKind}
+            onChange={(e) => setNewKind(e.target.value as CredentialKind)} disabled={busy}>
+            <option value="launch-env">{KIND_LABEL['launch-env']}</option>
+            <option value="secret-source">{KIND_LABEL['secret-source']}</option>
+          </select>
+          <button type="button" className="btn btn-primary text-xs" disabled={busy || newName.trim() === ''}
+            onClick={() => void addNew()} data-testid="credential-add">
+            Add
           </button>
-          <button
-            type="button"
-            className="btn btn-primary text-xs"
-            disabled={busy || !dirty}
-            onClick={handleApply}
-            data-testid="chat-provider-apply"
-          >
-            Apply
-          </button>
-          {source === 'settings' && (
-            <button
-              type="button"
-              className="btn text-xs"
-              disabled={busy}
-              onClick={() => run(request({ method: 'DELETE' }))}
-              data-testid="chat-provider-reset"
-            >
-              Reset to Default
-            </button>
-          )}
         </div>
 
         {error ? (
-          <p role="alert" className="mt-2 text-xs text-red-500" data-testid="chat-provider-error">
-            {error}
+          <p role="alert" className="mt-2 text-xs text-red-500" data-testid="chat-provider-error">{error}</p>
+        ) : notice ? (
+          <p className={`mt-2 text-[10px] ${notice.warning ? 'text-yellow-500' : 'text-muted'}`}
+            data-testid={notice.warning ? 'credential-not-durable' : 'credential-outcome'}>
+            {notice.text}
           </p>
-        ) : (
-          source && (
-            <p className="mt-2 text-[10px] text-muted" data-testid="chat-provider-source">
-              {dirty ? 'Unsaved changes. Click Apply or Save to persist them.' : SOURCE_LABEL[source]}
-            </p>
-          )
-        )}
+        ) : null}
       </div>
     )
   }

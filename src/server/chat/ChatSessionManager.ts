@@ -58,14 +58,14 @@ import type { SessionRegistry } from '../SessionRegistry'
 import type { ChatQueryFactory } from './provider/claudeDriverTypes'
 import { createChatDriver, type ChatDriverSharedOptions } from './provider/createChatDriver'
 import type { ChatAgentDriver, ChatRuntime, ChatSendOutcome } from './provider/driver'
-import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
+import { chatAuthErrorMessage, hasClaudeAuth, hasClaudeAuthIn } from './chatAuth'
 import { historyWindow } from './historyWindow'
 import {
   ClaudeExecutableError,
   ensureClaudeExecutable,
   type ClaudeExecutableCheck,
 } from './claudeExecutable'
-import { effectiveChatEnv, type ChatProviderEnv } from './chatProviderEnv'
+import { effectiveChatEnv, type ChatProviderEnv, type ProviderEnvSnapshot } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
 import type { ChatWorkerStore } from './chatWorkerStore'
 import type { ChatTaskStore } from './chatTaskStore'
@@ -80,7 +80,7 @@ import {
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
 } from './ClaudeProfiles'
-import { RegisteredNameRefusal } from './secretNameRegistry'
+import { RegisteredNameRefusal, type RegistryContext } from './secretNameRegistry'
 import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
@@ -175,6 +175,9 @@ import type { WorkspaceMessageContext, WorkspaceMessageEnvelope } from '../../sh
 export type { ChatQueryFactory }
 export { chatAuthErrorMessage, hasClaudeAuth }
 
+
+/** No store-sourced names (a manager built without a credential snapshot). */
+const NO_STORE_NAMES: ReadonlySet<string> = new Set()
 export interface ChatSessionManagerOptions {
   registry: SessionRegistry
   db: SessionDatabase
@@ -287,6 +290,26 @@ export interface ChatSessionManagerOptions {
    * getter, so a Settings change reaches the next spawn without a restart.
    */
   getProviderEnv?: () => ChatProviderEnv
+  /**
+   * The same overrides with the names the credential store supplies, read
+   * together (provider-credential-store A1, r5): each admission check and
+   * each spawn resolves from one snapshot, so the credentialed transport
+   * refusal sees origin and value from the same store read.
+   */
+  getProviderEnvSnapshot?: () => ProviderEnvSnapshot
+  /**
+   * The credential store's secret-source keys (provider-credential-store
+   * S3), read at every registry observation so a stored key withholds at the
+   * next launch. Production passes the composition's; tests may omit it.
+   */
+  getSecretSourceKeys?: () => Iterable<string>
+  /**
+   * Settles when the startup credential migration finished, either way
+   * (provider-credential-store S6): restore — and so mail dispatch — and new
+   * sessions' gate and availability probe wait for it, so no launch composes
+   * before the migration's one write. Tests may omit it.
+   */
+  startupGate?: Promise<unknown>
   /** Per-session protocol capture for the chat debug view (always on). */
   wireLogs?: ChatWireLogs
   /** Project-directory check; injected in tests that use fictitious paths. */
@@ -384,6 +407,21 @@ function compareNotices(a: ChatNotification, b: ChatNotification): number {
   return Date.parse(b.receivedAt) - Date.parse(a.receivedAt)
 }
 
+/**
+ * The effective environment one resolved launch gives its spawn, inheritance
+ * expanded: a set SDK `env` replaces the child's environment whole
+ * (credentials withheld); only an unset one inherits process.env. Codex homes
+ * hold the credentials, never ANTHROPIC_* environment, so a Codex launch is
+ * empty for the Claude credential consumers. Undefined values are dropped.
+ */
+function envOfLaunch(launch: ChatLaunchConfiguration): Record<string, string> {
+  if (launch.runtime === 'codex') return {}
+  const merged = launch.env ?? effectiveChatEnv({})
+  return Object.fromEntries(
+    Object.entries(merged).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  )
+}
+
 /** The chat-task-output reply payload (background tasks D3). */
 export type ChatTaskOutputResult =
   | { state: 'ok'; output: string; totalBytes: number; truncated: boolean }
@@ -457,6 +495,14 @@ export class ChatSessionManager {
   private readonly providerUsageProfiles = new Set<string>()
   /** Refresh timer per routed profile (provider usage pull design D5). */
   private readonly providerUsageTimers = new Map<string, ReturnType<typeof setInterval>>()
+  /**
+   * The launch environment each session's agent was admitted with
+   * (provider-credential-store F7): live paths — usage pulls, usage reports,
+   * post-turn scheduling, account notices — read it and never re-resolve the
+   * launch, so a later store edit (a transport pin, say) refuses only the
+   * next admission or spawn, never a running chat's timers.
+   */
+  private readonly admittedLaunchEnv = new Map<string, Record<string, string>>()
   /** Provider usage refresh cadence (provider usage pull design D5). */
   private readonly providerUsageRefreshMs: number
   /**
@@ -516,6 +562,8 @@ export class ChatSessionManager {
   >()
 
   async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string; cloneFromSessionId?: string; taskId?: string; spawned?: boolean }): Promise<ChatCreateResult> {
+    // No creation gate or probe composes before the startup migration settled.
+    if (this.options.startupGate) await this.options.startupGate.catch(() => undefined)
     // Refuse a bad path before the probe spends an SDK spawn on it.
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -556,7 +604,7 @@ export class ChatSessionManager {
       }
       return this.createSession(input)
     }
-    const projectAuthRefusal = this.authRefusal(input.claudeProfileId, project.path)
+    const projectAuthRefusal = this.authRefusal(input.claudeProfileId, project.path, launch)
     if (projectAuthRefusal) return { ok: false, error: projectAuthRefusal }
     try {
       await this.probeAvailability(input.claudeProfileId, project.path)
@@ -861,7 +909,9 @@ export class ChatSessionManager {
       // its expiry is not this session's notice (openrouter-provider D4).
       credentialsPath = profileCredential(record.claudeProfileId, this.catalogCtx(record.projectPath))
         ? null
-        : credentialsPathFor(this.launchEnvOf(record.claudeProfileId, record.projectPath))
+        : credentialsPathFor(
+            this.admittedLaunchEnv.get(sessionId) ?? this.launchEnvOf(record.claudeProfileId, record.projectPath)
+          )
     } catch {
       credentialsPath = null
     }
@@ -1434,7 +1484,8 @@ export class ChatSessionManager {
     // chat-attach awaits them via whenRestored(). The mailbox and wire-log
     // orphan pruning start only after the rows exist — pruning before the
     // restore would see an empty registry and delete every chat's wire log.
-    this.restorePromise = this.restorePersisted()
+    const gate = this.options.startupGate
+    this.restorePromise = (gate ? gate.catch(() => undefined).then(() => this.restorePersisted()) : this.restorePersisted())
       .then(async () => {
         if (this.isShutDown) return
         this.teamMail.start()
@@ -1814,7 +1865,7 @@ export class ChatSessionManager {
         return { ok: false, error: this.codexLoginRefusal(launch.codexHome, input.claudeProfileId ?? null) }
       }
     } else {
-      const authRefusal = this.authRefusal(input.claudeProfileId, projectPath)
+      const authRefusal = this.authRefusal(input.claudeProfileId, projectPath, launch)
       if (authRefusal) return { ok: false, error: authRefusal }
     }
     // The runtime facts are fixed at creation (codex-chat-sessions 3.3,
@@ -2156,6 +2207,7 @@ export class ChatSessionManager {
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
+    this.admittedLaunchEnv.delete(sessionId)
     this.outboundObservers.delete(sessionId)
     // The transcript is final once the agent is stopped: release the title
     // tail with it (design D4 risk note).
@@ -2333,6 +2385,7 @@ export class ChatSessionManager {
     this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
+    this.admittedLaunchEnv.delete(sessionId)
     this.outboundObservers.delete(sessionId)
     this.releaseTitleWatch(sessionId)
     this.cancelCwdRefresh(sessionId)
@@ -2832,7 +2885,7 @@ export class ChatSessionManager {
             const executable = await this.checkExecutable()
             existing.setClaudeExecutablePath?.(executable?.path)
           }
-          const authRefusal = this.authRefusal(record?.claudeProfileId, record?.projectPath)
+          const authRefusal = this.authRefusal(record?.claudeProfileId, record?.projectPath, launch)
           if (authRefusal) throw new Error(authRefusal)
         }
       }
@@ -2855,9 +2908,12 @@ export class ChatSessionManager {
       if (launch.runtime === 'claude' && launch.executable) {
         verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
       }
-      const authRefusal = this.authRefusal(record.claudeProfileId, record.projectPath)
+      const authRefusal = this.authRefusal(record.claudeProfileId, record.projectPath, launch)
       if (authRefusal) throw new Error(authRefusal)
     }
+    // The gates passed on this launch: its environment is the session's
+    // admitted route until the next spawn (F7).
+    this.admittedLaunchEnv.set(record.sessionId, envOfLaunch(launch))
     // Agent start is one of the account-notice check points (notification
     // strip design D3).
     this.refreshAccountNotice(record.sessionId)
@@ -2997,7 +3053,7 @@ export class ChatSessionManager {
               // per-spawn provider, so a respawn re-derives the catalog's
               // names plus the retained ones (correction A) — a name
               // registered after this driver's creation still withholds.
-              withheldCredentials: () => withheldCredentialNamesAt(this.catalogCtx(record.projectPath), this.options.db),
+              withheldCredentials: () => withheldCredentialNamesAt(this.catalogCtx(record.projectPath), this.registryContext()),
               teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               // Codex fills a home holding no report with one read (PR E
               // 7.1); the store claims it once per home.
@@ -3017,6 +3073,7 @@ export class ChatSessionManager {
                 (this.options.getQuestionAutoAnswerMinutes?.() ?? 0) * 60_000,
               teamTools: teamToolTable(this.mailbox, record.sessionId, teamServices),
               getProviderEnv: () => this.providerEnv(),
+              getProviderEnvSnapshot: () => this.providerSnapshot(),
               // The role's window, read per spawn (mimo-million-token-context D3).
               getCompactWindow: () => this.teams.compactWindowFor(
                 record.sessionId,
@@ -3026,7 +3083,7 @@ export class ChatSessionManager {
               // The secret-name registry observes and persists at every
               // Claude spawn (provider-relay-setup D2), so a name once seen
               // survives its catalog entry's removal.
-              retainedNamesDb: this.options.db,
+              retainedNamesDb: this.registryContext(),
               claudeProfileId: record.claudeProfileId,
               ...(this.options.profileCatalogHome
                 ? { profileCatalogHome: this.options.profileCatalogHome }
@@ -3088,8 +3145,9 @@ export class ChatSessionManager {
    * handshake even when the provider configuration is unchanged.
    */
   private async probeAvailability(profileId: string = 'default', projectPath?: string): Promise<void> {
-    const providerEnv = this.providerEnv()
-    const launch = this.launchFor(profileId, projectPath)
+    const snapshot = this.providerSnapshot()
+    const providerEnv = snapshot.env
+    const launch = this.launchFor(profileId, projectPath, snapshot)
     // Only Claude chats probe the SDK handshake; a Codex chat returns from
     // createAvailableSession before this runs.
     if (launch.runtime !== 'claude') return
@@ -3128,7 +3186,28 @@ export class ChatSessionManager {
   }
 
   private providerEnv(): ChatProviderEnv {
-    return this.options.getProviderEnv?.() ?? {}
+    return this.providerSnapshot().env
+  }
+
+  /** One credential snapshot: the overrides and the names the store supplies. */
+  private providerSnapshot(): ProviderEnvSnapshot {
+    return this.options.getProviderEnvSnapshot?.()
+      ?? { env: this.options.getProviderEnv?.() ?? {}, storeSourced: NO_STORE_NAMES }
+  }
+
+  /** The registry's collaborators for one observation: the retained names
+   * in the db plus the store's secret-source keys (provider-credential-store S3). */
+  private registryContext(): RegistryContext | undefined {
+    // Some harnesses construct the manager without a db: no persistence then,
+    // but the store's keys still withhold.
+    const db = this.options.db as SessionDatabase | undefined
+    const keys = this.options.getSecretSourceKeys
+    if (!db) return keys ? { getAppSetting: () => null, setAppSetting: () => {}, secretSourceKeys: keys } : undefined
+    return {
+      getAppSetting: key => db.getAppSetting(key),
+      setAppSetting: (key, value) => db.setAppSetting(key, value),
+      ...(keys ? { secretSourceKeys: keys } : {}),
+    }
   }
 
   /** Catalog lookup context for a session's project path. */
@@ -3171,13 +3250,13 @@ export class ChatSessionManager {
    * goes through here so catalog file failures are reported (never silently
    * skipped: an invalid file would otherwise launch with inherited settings).
    */
-  private launchFor(profileId: string | undefined, projectPath?: string): ChatLaunchConfiguration {
+  private launchFor(profileId: string | undefined, projectPath?: string, snapshot: ProviderEnvSnapshot = this.providerSnapshot()): ChatLaunchConfiguration {
     const report = this.options.catalogErrorLog
       ?? (errors => logger.warn('chat_profile_catalog_errors', { errors }))
     // The registry observes here too (provider-relay-setup D2): a name is
     // registered by the first catalog read that names it, launch or not —
     // an entry removed before any spawn stays withheld.
-    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report, this.options.db)
+    return resolveClaudeProfile(profileId, snapshot.env, this.catalogCtx(projectPath), report, this.registryContext(), snapshot.storeSourced)
   }
 
   /**
@@ -3185,7 +3264,11 @@ export class ChatSessionManager {
    * naming `authTokenEnv` authenticates only with that variable — never the
    * host login or another credential (openrouter-provider D4).
    */
-  private authRefusal(profileId: string = 'default', projectPath?: string): string | undefined {
+  private authRefusal(
+    profileId: string = 'default',
+    projectPath?: string,
+    launch?: ChatLaunchConfiguration
+  ): string | undefined {
     if (this.options.authCheck) return this.options.authCheck() ? undefined : chatAuthErrorMessage()
     const credential = profileCredential(profileId, this.catalogCtx(projectPath))
     if (credential) {
@@ -3194,7 +3277,9 @@ export class ChatSessionManager {
         ? undefined
         : `Provider ${credential.providerLabel} needs ${credential.authTokenEnv} in the server environment.`
     }
-    return hasClaudeAuth(this.launchEnvOf(profileId, projectPath)) ? undefined : chatAuthErrorMessage()
+    // The explicit launch environment alone (F8): a key the launch withholds
+    // (registered, or blanked by the store) never authenticates the gate.
+    return hasClaudeAuthIn(envOfLaunch(launch ?? this.launchFor(profileId, projectPath))) ? undefined : chatAuthErrorMessage()
   }
 
   /**
@@ -3235,19 +3320,7 @@ export class ChatSessionManager {
     profileId: string | undefined,
     projectPath?: string
   ): Record<string, string> {
-    const launch = this.launchFor(profileId, projectPath)
-    // Codex homes hold the credentials, never ANTHROPIC_* environment: the
-    // Claude credential consumers (account notices, provider usage) see an
-    // empty environment for a Codex profile.
-    if (launch.runtime === 'codex') return {}
-    // A set SDK `env` replaces the child's environment whole (credentials
-    // withheld); only an unset one inherits process.env.
-    const merged = launch.env ?? effectiveChatEnv({})
-    return Object.fromEntries(
-      Object.entries(merged).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined
-      )
-    )
+    return envOfLaunch(this.launchFor(profileId, projectPath))
   }
 
   // ----------------------------------------------------------- provider usage pull
@@ -3361,7 +3434,7 @@ export class ChatSessionManager {
    * login) are never kept for it — only its own pulls (openrouter D6).
    */
   private keepsOwnEndpointPullsOnly(record: ChatSessionRecord): boolean {
-    const baseUrl = this.launchEnvOf(record.claudeProfileId, record.projectPath).ANTHROPIC_BASE_URL?.trim()
+    const baseUrl = this.admittedLaunchEnv.get(record.sessionId)?.ANTHROPIC_BASE_URL?.trim()
     return baseUrl !== undefined && isOpenRouterBaseUrl(baseUrl)
   }
 
@@ -3372,18 +3445,18 @@ export class ChatSessionManager {
 
   /**
    * The quota pull target for a session's profile — the effective base URL
-   * and credentials its SDK spawns receive (the same resolution the auth
-   * gate and account notices read), or null when the profile has no
-   * provider base URL.
+   * and credentials its agent was admitted with (F7: the spawn's route, never
+   * a re-resolution), or null when the profile has no provider base URL or
+   * the session has no admitted agent.
    */
   private providerUsageTarget(
     record: ChatSessionRecord
   ): { baseUrl: string; token?: string; balanceKey?: string } | null {
-    const env = this.launchEnvOf(record.claudeProfileId, record.projectPath)
-    const baseUrl = env.ANTHROPIC_BASE_URL?.trim()
+    const env = this.admittedLaunchEnv.get(record.sessionId)
+    const baseUrl = env?.ANTHROPIC_BASE_URL?.trim()
     if (!baseUrl) return null
     const token =
-      env.ANTHROPIC_AUTH_TOKEN?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined
+      env?.ANTHROPIC_AUTH_TOKEN?.trim() || env?.ANTHROPIC_API_KEY?.trim() || undefined
     // The credits pull's value comes from the server environment under the
     // provider's `balanceKeyEnv` name (openrouter-provider D6) — the same
     // resolution the auth gate reads. Launch environments withhold

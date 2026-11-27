@@ -10,7 +10,7 @@ The shipped default catalog, grouped by provider:
 
 | ID | Label | Provider | Routing and models |
 | --- | --- | --- | --- |
-| default | Default | Claude | Existing server environment and global provider Settings |
+| default | Default | Claude | Existing server environment and the [credential store](#credential-store) |
 | opus | Claude Opus | Claude | prescribed model `claude-opus-5-5` |
 | sonnet | Claude Sonnet | Claude | prescribed model `claude-sonnet-5-5` |
 | haiku | Claude Haiku | Claude | prescribed model `claude-haiku-5-5` |
@@ -137,7 +137,7 @@ home before discovery, so the picker and creation read the same files.
 Catalog `env` keys are restricted to the profile-controlled variables
 (PROFILE_CONTROLLED_ENV): routing, models, attribution, compaction.
 Credential values are never allowed in catalog files; they enter sessions
-only through the server environment or global provider Settings, so catalog
+only through the server environment or the [credential store](#credential-store), so catalog
 files stay safe to commit and mount. `CLAUDE_CODE_MAX_OUTPUT_TOKENS` is
 profile-controlled too: a provider may cap the output reservation Claude Code
 asks for (pay-per-token gateways such as OpenRouter refuse a request whose
@@ -177,7 +177,7 @@ Trust and withholding:
   included — so no agent can read another provider's key, or the balance key
   at all, from its environment.
 - Creating a session on a credentialed provider needs its `authTokenEnv`
-  variable in the server environment (or global provider Settings), whatever
+  variable in the server environment (or as a credential in Settings), whatever
   host login exists: otherwise creation is refused with "Provider OpenRouter
   needs OPENROUTER_API_KEY in the server environment." Such sessions show no
   claude.ai login-expiry notice.
@@ -233,6 +233,101 @@ that has one, copy the entry there to offer OpenRouter:
   }
 }
 ```
+
+## Credential store
+
+Chat credentials you enter in **Settings → Chat** live in one server-owned
+file, `~/.kawai/credentials.json`, under the same HOME as the catalog
+directory. The file and its directory are owner-only (`0600`/`0700`); a
+file that grants group or other access, is a symbolic link, is not a
+regular file, belongs to another user, or does not parse is refused whole —
+nothing is chmodded, salvaged, or rewritten, and repair is manual. Values
+never enter SQLite, logs, the wire log, the catalog files, or any client
+payload. `DatabaseBackups` never copies the store file, so back it up
+yourself if you need to.
+
+Each entry has a kind:
+
+- **Launch variable** (`launch-env`) — reaches Claude launches under its own
+  name, like a server environment variable. Names follow the environment
+  rule (`[A-Za-z_][A-Za-z0-9_]*`, mixed case allowed).
+- **Secret source** (`secret-source`) — a key a provider binding reads
+  (`authTokenEnv`, `balanceKeyEnv`); it never reaches any launch under its
+  own name. Names follow the catalog rule `^[A-Z_][A-Z0-9_]*$`. Saving one
+  registers the name first (names only, in SQLite), so it stays withheld
+  even after you reclassify it as a launch variable or clear it.
+
+A blank value is a stored state for both kinds: it composes as the empty
+string.
+
+**Composition, per variable.** The gate and every launch resolve each
+variable from, lowest first: the server process environment,
+`AGENTBOARD_CHAT_ENV`, then the store. A higher source replaces one variable, never the
+whole set, so a seed-only key survives a store entry for another name.
+Claude launches then remove every registered name (catalog bindings, secret
+sources, and retained names) before applying the profile. Codex launches
+keep their filtered process environment: store and `AGENTBOARD_CHAT_ENV`
+entries never reach a Codex launch, and registered names are withheld from
+it too. A store that cannot be read composes as absent — the lower sources
+apply — and Settings shows why.
+
+**Transport variables on credentialed launches.** A profile whose provider
+names `authTokenEnv` pins its route: `ANTHROPIC_BASE_URL` and the transport
+variables `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`,
+`NODE_TLS_REJECT_UNAUTHORIZED`, and `NODE_EXTRA_CA_CERTS` are written into
+both the launch environment and the settings layer Kawai passes to Claude
+Code on its command line, so no user or project settings file can redirect
+the key. A store value never goes into that layer, so when the store holds
+a non-empty value for any transport variable, starting or resuming a
+credentialed chat refuses before anything runs, with an error naming the
+variables (never their values). To launch, clear the store entry, or store
+it blank to launch with that variable empty. Default, named
+non-credentialed, and wrapper launches are unaffected: they receive the
+store value in their environment only. A transport value from the server
+environment or `AGENTBOARD_CHAT_ENV` is still pinned on credentialed
+launches as before, which copies it onto the command line too — keep
+passwords out of transport variables used by credentialed profiles.
+
+**Write-only Settings.** `GET /api/settings/credentials` lists each
+variable's name, kind, state (set or blank), source, and marks (it overrides
+a lower source; it collides with a registered name and so is not
+delivered) — never a value, a prefix, or a length. `PUT
+/api/settings/credentials/<NAME>` with `{ "value", "kind" }` sets or
+replaces one variable, `DELETE` clears it, and `POST …/<NAME>/reclassify`
+with `{ "kind" }` changes its kind. Replacing a value means typing it again.
+Every change reports whether it applied and whether the write reached the
+disk; a save that applied but could not be confirmed says so and is not
+retried. Changes apply at the next launch; running sessions keep their
+environment. The retired `/api/settings/chat-provider-env` answers 404.
+
+**Migration from the Settings map.** Earlier builds kept Settings overrides
+in the database (`app_settings.chat_provider_env`). The first start of this
+build moves that map into the store as launch variables: the store write
+comes first and must reach the disk, then one database transaction deletes
+the map and records a names-only stamp. Entries the store already holds with
+the same value are absorbed; a different store value wins, and Settings lists
+the skip by name. The map itself is never a source: until the migration
+commits, a value that exists only in the map does not reach any session, and
+Settings shows the migration as pending with its reason (the write was not
+confirmed on disk, failed, or the store cannot be read). A pending or
+interrupted migration keeps the map and retries at the next start; once the
+stamp exists it never runs again, and a map found beside the stamp is
+ignored and listed by name. A retry imports the map again, so a variable you
+cleared while the migration was pending comes back from the map: clear it
+again once the migration completes. Restoring a database backup taken before
+the upgrade brings the map back and re-runs the migration the same way,
+keeping the store's later values. To roll back to an older build, restore
+that pre-upgrade backup: older builds ignore the store.
+
+**Backups taken before the migration may hold the old values.** Every
+backup taken before the migration's database commit can contain the map —
+including the upgrade's own startup snapshot and every `pre-migration-<n>`
+backup. Nothing scrubs them. If the presence of those values in old backups
+matters, rotate the credentials. Rotation ages them out as new backups
+replace old ones: 24 hourly `interval` snapshots (about a day), 7 `startup`
+snapshots (seven restarts), and the `pre-migration-<n>` backups of the
+newest three migrations. No backup taken after the commit holds the map
+values.
 
 ## Auto-compaction window
 
@@ -372,8 +467,8 @@ Claude settings files cannot redirect it.
 Terminal commands are unaffected: kawai writes no executables, and existing
 `claude-*` wrapper scripts remain yours to maintain or delete.
 
-Resolution starts with the server environment, applies global provider
-Settings (or AGENTBOARD_CHAT_ENV when no Settings override exists), then
+Resolution starts with the server environment, applies AGENTBOARD_CHAT_ENV
+and then the credential store per variable (see [Credential store](#credential-store)), then
 cleans and applies named-profile controlled variables. Controlled variables
 are routing, model and model aliases, attribution, and auto-compaction fields
 listed in PROFILE_CONTROLLED_ENV. Named profiles neutralize conflicting
@@ -398,7 +493,7 @@ mapping.
 Default retains global provider configuration unchanged. Named profiles retain
 credentials and unrelated runtime variables from it. Provide suitable API keys,
 auth tokens, OAuth tokens, or an authenticated CLI configuration on the server
-or through global provider Settings; credentials are not stored in the catalog
+or through the credential store; credentials are not stored in the catalog
 or included in metadata. Credential presence does not prove gateway acceptance.
 A provider that names its own key variable (see [Provider credentials](#provider-credentials))
 uses that key instead of the shared credentials.
@@ -423,7 +518,7 @@ agent respawn resolve the stored profile against the current filesystem and
 resume the same SDK conversation. Unknown stored profiles remain visible and
 block sending until their catalog entry is restored (a renamed or deleted
 `.kawai` file hits the same path). Catalog files are read per request and at
-each spawn; global Settings changes apply at the next spawn; active processes
+each spawn; credential store changes apply at the next spawn; active processes
 keep their launch settings.
 
 Availability probes check the SDK control handshake under the resolved

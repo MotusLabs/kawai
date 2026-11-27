@@ -46,7 +46,10 @@ import { createArchivedChatRoutes } from './routes/archivedChats'
 import { createChatSearchRoutes } from './routes/chatSearch'
 import { createPlanWorkspaceAssetRoutes } from './routes/planWorkspaceAsset'
 import { createPasteFileRoutes } from './routes/pasteFile'
-import { createChatProviderEnvStore } from './routes/chatProviderEnv'
+import { migrateLegacyProviderEnv, migrationStatus } from './chat/credentialMigration'
+import { mountCredentialRoutes } from './routes/credentials'
+import { withheldCredentialNamesAt } from './chat/ClaudeProfiles'
+import { createServerCredentials, credentialManagerOptions } from './chat/credentialComposition'
 import { createSettingsRoutes, loadStoredSettings } from './routes/settings'
 import { createSessionPreviewRoutes } from './routes/sessionPreview'
 import { createDirectoryRoutes } from './routes/directories'
@@ -86,9 +89,21 @@ export function startServer(): void {
   // The chat manager reads this live at each question (question-auto-answer D5).
   let runtimeQuestionAutoAnswerMinutes = storedSettings.questionAutoAnswerMinutes
 
-  // Chat provider environment: the Settings override wins over
-  // AGENTBOARD_CHAT_ENV; read live by the chat manager at each SDK spawn.
-  const chatProviderEnv = createChatProviderEnvStore(db, config.chatProviderEnv)
+  // Credentials (provider-credential-store S1-S3): the one store at
+  // <HOME>/.kawai/credentials.json with the SQLite retain collaborator, and
+  // the composition every chat consumer reads — per variable, process env <
+  // seed < store.
+  const credentials = createServerCredentials({ db, seed: config.chatProviderEnv })
+  // The legacy Settings map's one migration (S6, bound table M): after the
+  // startup backup and SQL migrations, file first, then one SQLite commit.
+  // While one is pending, chat restore, new-session probes, and credential
+  // mutations wait for it, so no launch composes and no operator write races
+  // it. With nothing to migrate (no map, or a stamp) there is no gate: the
+  // run would write nothing, and startup keeps its ungated order.
+  let credentialMigration = migrationStatus(db)
+  const credentialsReady = credentialMigration.state === 'pending'
+    ? migrateLegacyProviderEnv({ db, store: credentials.store }).then(state => { credentialMigration = state })
+    : undefined
 
   const sessionManager = new SessionManager(undefined, {
     displayNameExists: (name, excludeSessionId) => db.displayNameExists(name, excludeSessionId),
@@ -184,7 +199,8 @@ export function startServer(): void {
     onBackgroundTasks: (sessionId, tasks) => chatConnections.publishBackgroundTasks(sessionId, tasks),
     onNotifications: (sessionId, notifications) =>
       chatConnections.publishNotifications(sessionId, notifications),
-    getProviderEnv: chatProviderEnv.current,
+    ...credentialManagerOptions(credentials.composition),
+    ...(credentialsReady ? { startupGate: credentialsReady } : {}),
     wireLogs: chatWireLogs,
     workerStore: chatWorkerStore,
     imageStore: chatImageStore,
@@ -423,7 +439,19 @@ export function startServer(): void {
     },
   }))
 
-  app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
+  // The write-only credential routes (provider-credential-store S5); the
+  // retired /api/settings/chat-provider-env is no longer mounted.
+  mountCredentialRoutes(app, {
+    store: credentials.store,
+    composition: credentials.composition,
+    registered: () => withheldCredentialNamesAt({}, {
+      getAppSetting: key => db.getAppSetting(key),
+      setAppSetting: (key, value) => db.setAppSetting(key, value),
+      secretSourceKeys: () => credentials.composition.secretSourceKeys(),
+    }),
+    migration: () => credentialMigration,
+    ...(credentialsReady ? { ready: credentialsReady } : {}),
+  })
   app.route('/api/chat/profiles', createClaudeProfileRoutes())
   app.route('/api/chat/groups', createTeamGroupRoutes({
     groupProfileCounts: (teamId, groupId) => chatSessionManager.groupProfileCounts(teamId, groupId),

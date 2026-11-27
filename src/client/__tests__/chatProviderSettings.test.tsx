@@ -1,48 +1,67 @@
+// The Settings credential section (provider-credential-store S5, U table at
+// the client): a write-only editor over /api/settings/credentials. A fake
+// server keeps the store's VALUES server-side only and answers with
+// value-free listings, so every assertion that no value renders back is
+// against a server that really holds one.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
-import type { ChatProviderEnvResponse } from '@shared/chatProviderSettings'
+import type { CredentialListing, CredentialListingRow } from '@shared/credentials'
 import SettingsModal from '../components/SettingsModal'
-import ChatProviderSettings, { rowsToUpdate } from '../components/ChatProviderSettings'
+import ChatProviderSettings, { type ChatProviderSettingsHandle } from '../components/ChatProviderSettings'
+import { STORE_NAME } from '../../server/chat/credentialStoreDocument'
+import { createRef } from 'react'
 
 interface Recorded {
   method: string
+  path: string
   body: unknown
 }
 
+const SECRET = 'zq7-unshaped-sentinel'
 const originalFetch = globalThis.fetch
 let requests: Recorded[]
-/** Per-method responder; defaults echo a server holding `serverState`. */
-let serverState: ChatProviderEnvResponse
-let failNext: { status: number; error: string } | null
+/** The fake server's store: name → {kind, value} (values never leave it). */
+let store: Map<string, { kind: 'launch-env' | 'secret-source'; value: string }>
+let failNext: { status: number; code: string; error: string } | null
+let durable: boolean
+
+function listing(): CredentialListing {
+  const rows: CredentialListingRow[] = [...store.entries()].map(([name, entry]) => ({
+    name, kind: entry.kind, state: entry.value === '' ? 'blank' : 'set', source: 'store', overriding: false, collision: false,
+  }))
+  return { store: { ok: true }, rows, migration: { state: 'none', text: null, skipped: [], ignored: [] } }
+}
 
 beforeEach(() => {
   requests = []
   failNext = null
-  serverState = {
-    env: { ANTHROPIC_BASE_URL: 'https://gw.example', ANTHROPIC_AUTH_TOKEN: '' },
-    redacted: ['ANTHROPIC_AUTH_TOKEN'],
-    source: 'settings',
-  }
+  durable = true
+  store = new Map([['ANTHROPIC_AUTH_TOKEN', { kind: 'secret-source', value: SECRET }], ['ANTHROPIC_BASE_URL', { kind: 'launch-env', value: 'https://gw.example' }]])
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (!String(input).includes("chat-provider-env")) {
-      return Response.json(String(input).includes("history-max-age-hours") ? { hours: 24 } : { enabled: true })
+    const url = String(input)
+    if (!url.includes('/api/settings/credentials')) {
+      return Response.json(url.includes('history-max-age-hours') ? { hours: 24 } : { enabled: true })
     }
     const method = init?.method ?? 'GET'
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null
-    requests.push({ method, body })
+    const path = url.replace('/api/settings/credentials', '')
+    requests.push({ method, path, body })
     if (failNext) {
-      const { status, error } = failNext
+      const { status, code, error } = failNext
       failNext = null
-      return new Response(JSON.stringify({ error }), { status })
+      return Response.json({ code, error }, { status })
     }
-    if (method === 'PUT') {
-      const env = (body as { env: Record<string, string> }).env
-      serverState = { env, redacted: [], source: 'settings' }
-    }
-    if (method === 'DELETE') {
-      serverState = { env: { ANTHROPIC_BASE_URL: 'https://default' }, redacted: [], source: 'environment' }
-    }
-    return new Response(JSON.stringify(serverState), { status: 200 })
+    const name = decodeURIComponent(path.split('/')[1] ?? '')
+    let applied = true
+    if (method === 'PUT') store.set(name, { kind: body.kind ?? 'launch-env', value: body.value })
+    else if (method === 'DELETE') applied = store.delete(name)
+    else if (method === 'POST') store.set(name, { kind: body.kind, value: store.get(name)!.value })
+    else return Response.json(listing())
+    return Response.json({
+      applied, durable: applied && durable,
+      message: !applied ? 'Nothing changed.' : durable ? 'Saved. It applies at the next agent launch.' : 'Saved, but the store could not confirm the write reached the disk.',
+      listing: listing(),
+    })
   }) as typeof fetch
 })
 
@@ -51,7 +70,7 @@ afterEach(() => {
 })
 
 async function settle(): Promise<void> {
-  for (let i = 0; i < 4; i++) await Promise.resolve()
+  for (let i = 0; i < 6; i++) await Promise.resolve()
 }
 
 async function render(): Promise<TestRenderer.ReactTestRenderer> {
@@ -65,8 +84,11 @@ async function render(): Promise<TestRenderer.ReactTestRenderer> {
 
 const byTestId = (renderer: TestRenderer.ReactTestRenderer, id: string) =>
   renderer.root.findAllByProps({ 'data-testid': id }).filter((n) => typeof n.type === 'string')
-
-const inputs = (renderer: TestRenderer.ReactTestRenderer) => renderer.root.findAllByType('input')
+const byLabel = (renderer: TestRenderer.ReactTestRenderer, label: string) =>
+  renderer.root.findAll((n) => typeof n.type === 'string' && n.props['aria-label'] === label)[0]!
+const button = (renderer: TestRenderer.ReactTestRenderer, text: string, within?: TestRenderer.ReactTestInstance) =>
+  (within ?? renderer.root).findAll((n) => n.type === 'button' && n.children.join('') === text)[0]!
+const rendered = (renderer: TestRenderer.ReactTestRenderer) => JSON.stringify(renderer.toJSON())
 
 async function click(node: TestRenderer.ReactTestInstance): Promise<void> {
   await act(async () => {
@@ -81,81 +103,111 @@ async function type(node: TestRenderer.ReactTestInstance, value: string): Promis
   })
 }
 
-describe('ChatProviderSettings', () => {
-  test('loads the stored overrides and shows where they came from', async () => {
+describe('ChatProviderSettings — the write-only credential section', () => {
+  test('lists every variable with kind, state, and source, and renders no stored value', async () => {
     const renderer = await render()
-    const fields = inputs(renderer)
-    expect(fields.map((f) => f.props.value)).toEqual([
-      'ANTHROPIC_BASE_URL', 'https://gw.example', 'ANTHROPIC_AUTH_TOKEN', '',
-    ])
-    // The redacted credential is a password field with a keep hint.
-    expect(fields[3]!.props.type).toBe('password')
-    expect(fields[3]!.props.placeholder).toContain('leave blank to keep')
-    expect(byTestId(renderer, 'chat-provider-source')[0]!.children.join('')).toContain('saved here')
-    expect(byTestId(renderer, 'chat-provider-apply')[0]!.props.disabled).toBe(true)
+    const row = byTestId(renderer, 'credential-row-ANTHROPIC_AUTH_TOKEN')[0]!
+    expect(JSON.stringify(row.children.map(String))).toBeDefined()
+    expect(rendered(renderer)).toContain('Secret source')
+    expect(rendered(renderer)).toContain('Saved here')
+    expect(rendered(renderer)).not.toContain(SECRET)
+    expect(rendered(renderer)).not.toContain('https://gw.example')
     renderer.unmount()
   })
 
-  test('apply PUTs the edited map and keeps an untouched credential', async () => {
+  // Preserved: the Settings Chat tab names this section by its label
+  // (tests/e2e/settings-tabs.spec.ts), so the credential editor keeps it.
+  test('the section keeps its Claude Chat Provider label', async () => {
     const renderer = await render()
-    await type(inputs(renderer)[1]!, 'https://other.example')
-    const apply = byTestId(renderer, 'chat-provider-apply')[0]!
-    expect(apply.props.disabled).toBe(false)
-    await click(apply)
-    expect(requests.at(-1)).toEqual({
-      method: 'PUT',
-      body: {
-        env: { ANTHROPIC_BASE_URL: 'https://other.example', ANTHROPIC_AUTH_TOKEN: '' },
-        keep: ['ANTHROPIC_AUTH_TOKEN'],
-      },
-    })
-    expect(byTestId(renderer, 'chat-provider-error')).toHaveLength(0)
+    const labels = renderer.root.findAllByType('label').map(node => node.children.join(''))
+    expect(labels).toContain('Claude Chat Provider')
     renderer.unmount()
   })
 
-  test('adding and removing rows changes what is saved', async () => {
+  // @covers: provider-credentials › The credential UI is write-only › Replace requires retyping
+  test('replace requires retyping: every value input starts empty and is empty again after a save', async () => {
     const renderer = await render()
-    await click(renderer.root.findAll((n) => n.type === 'button' && n.children.includes('+ Add Variable'))[0]!)
-    const fields = inputs(renderer)
-    await type(fields[4]!, 'ANTHROPIC_MODEL')
-    await type(inputs(renderer)[5]!, 'gw-pro')
-    await click(renderer.root.findAll((n) => n.type === 'button' && n.props['aria-label'] === 'Remove ANTHROPIC_AUTH_TOKEN')[0]!)
-    await click(byTestId(renderer, 'chat-provider-apply')[0]!)
-    expect(requests.at(-1)!.body).toEqual({
-      env: { ANTHROPIC_BASE_URL: 'https://gw.example', ANTHROPIC_MODEL: 'gw-pro' },
-    })
+    const input = () => byLabel(renderer, 'New value for ANTHROPIC_AUTH_TOKEN')
+    expect(input().props.value).toBe('')
+    expect(input().props.type).toBe('password')
+    expect(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL').props.value).toBe('')
+    await type(input(), 'replacement')
+    await click(button(renderer, 'Set', byTestId(renderer, 'credential-row-ANTHROPIC_AUTH_TOKEN')[0]!))
+    expect(requests.at(-1)).toEqual({ method: 'PUT', path: '/ANTHROPIC_AUTH_TOKEN', body: { value: 'replacement', kind: 'secret-source' } })
+    expect(input().props.value).toBe('')
+    expect(rendered(renderer)).not.toContain('replacement')
+    // A remount (reopening Settings) starts empty too.
     renderer.unmount()
+    const again = await render()
+    expect(byLabel(again, 'New value for ANTHROPIC_AUTH_TOKEN').props.value).toBe('')
+    again.unmount()
   })
 
-  test('a server refusal is shown and the edits are kept', async () => {
+  // @covers: provider-credentials › The credential UI is write-only › Errors carry fixed safe text only
+  test('a refusal shows the server\'s fixed text only and keeps what was typed', async () => {
     const renderer = await render()
-    await type(inputs(renderer)[0]!, 'BAD NAME')
-    failNext = { status: 400, error: '"BAD NAME" is not a valid environment variable name.' }
-    await click(byTestId(renderer, 'chat-provider-apply')[0]!)
+    await type(byLabel(renderer, 'New variable name'), 'lower_secret')
+    await type(byLabel(renderer, 'New variable value'), SECRET)
+    failNext = { status: 400, code: 'name-not-catalog', error: 'A secret source needs an upper-case name (A-Z, 0-9, _), like a catalog binding.' }
+    await click(byTestId(renderer, 'credential-add')[0]!)
     const error = byTestId(renderer, 'chat-provider-error')[0]!
     expect(error.props.role).toBe('alert')
-    expect(error.children.join('')).toContain('not a valid environment variable name')
-    expect(inputs(renderer)[0]!.props.value).toBe('BAD NAME')
+    expect(error.children.join('')).toBe('A secret source needs an upper-case name (A-Z, 0-9, _), like a catalog binding.')
+    expect(byLabel(renderer, 'New variable name').props.value).toBe('lower_secret')
     renderer.unmount()
   })
 
-  test('reset DELETEs the override and shows the environment default', async () => {
+  test('a non-JSON failure renders a fixed sentence, never the response text', async () => {
     const renderer = await render()
-    await click(byTestId(renderer, 'chat-provider-reset')[0]!)
-    expect(requests.at(-1)!.method).toBe('DELETE')
-    expect(inputs(renderer).map((f) => f.props.value)).toEqual(['ANTHROPIC_BASE_URL', 'https://default'])
-    expect(byTestId(renderer, 'chat-provider-source')[0]!.children.join('')).toContain('AGENTBOARD_CHAT_ENV')
-    // Nothing to reset once the default is in effect.
-    expect(byTestId(renderer, 'chat-provider-reset')).toHaveLength(0)
+    globalThis.fetch = (async () => new Response(`<html>${SECRET}</html>`, { status: 502 })) as unknown as typeof fetch
+    await click(button(renderer, 'Blank', byTestId(renderer, 'credential-row-ANTHROPIC_BASE_URL')[0]!))
+    expect(byTestId(renderer, 'chat-provider-error')[0]!.children.join('')).toBe('The credential request failed.')
+    expect(rendered(renderer)).not.toContain(SECRET)
     renderer.unmount()
   })
 
-  test('Enter applies the section instead of submitting the modal form', async () => {
+  test('a successful response that is not a listing renders the fixed failure, never a crash', async () => {
+    // A server (or a stub) answering another shape: the section stays mounted.
+    globalThis.fetch = (async () => Response.json({ profiles: [], errors: [], enabled: true })) as unknown as typeof fetch
     const renderer = await render()
-    await type(inputs(renderer)[1]!, 'https://enter.example')
+    expect(byTestId(renderer, 'chat-provider-error')[0]!.children.join('')).toBe('The credential request failed.')
+    await type(byLabel(renderer, 'New variable name'), 'PCS_SHAPE')
+    await click(byTestId(renderer, 'credential-add')[0]!)
+    expect(byTestId(renderer, 'chat-provider-error')[0]!.children.join('')).toBe('The credential request failed.')
+    expect(byLabel(renderer, 'New variable name').props.value).toBe('PCS_SHAPE')
+    renderer.unmount()
+  })
+
+  test('an applied but not durable save shows its warning and sends nothing more', async () => {
+    const renderer = await render()
+    durable = false
+    await type(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL'), 'https://new.example')
+    await click(button(renderer, 'Set', byTestId(renderer, 'credential-row-ANTHROPIC_BASE_URL')[0]!))
+    expect(byTestId(renderer, 'credential-not-durable')[0]!.children.join('')).toContain('could not confirm')
+    expect(requests.filter((r) => r.method === 'PUT')).toHaveLength(1)
+    renderer.unmount()
+  })
+
+  test('blank, clear, and reclassify are explicit acts with their own requests', async () => {
+    const renderer = await render()
+    const row = () => byTestId(renderer, 'credential-row-ANTHROPIC_BASE_URL')[0]!
+    await click(button(renderer, 'Blank', row()))
+    expect(requests.at(-1)).toEqual({ method: 'PUT', path: '/ANTHROPIC_BASE_URL', body: { value: '', kind: 'launch-env' } })
+    expect(rendered(renderer)).toContain('blank')
+    await click(byLabel(renderer, 'Make ANTHROPIC_BASE_URL a secret source'))
+    expect(requests.at(-1)).toEqual({ method: 'POST', path: '/ANTHROPIC_BASE_URL/reclassify', body: { kind: 'secret-source' } })
+    await click(byLabel(renderer, 'Clear ANTHROPIC_BASE_URL'))
+    expect(requests.at(-1)).toEqual({ method: 'DELETE', path: '/ANTHROPIC_BASE_URL', body: null })
+    expect(byTestId(renderer, 'credential-row-ANTHROPIC_BASE_URL')).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('Enter sets the typed value instead of submitting the modal form', async () => {
+    const renderer = await render()
+    await type(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL'), 'https://enter.example')
     let prevented = false
     await act(async () => {
-      inputs(renderer)[1]!.props.onKeyDown({ key: 'Enter', preventDefault: () => { prevented = true } })
+      byLabel(renderer, 'New value for ANTHROPIC_BASE_URL').props.onKeyDown({ key: 'Enter', preventDefault: () => { prevented = true } })
       await settle()
     })
     expect(prevented).toBe(true)
@@ -163,47 +215,114 @@ describe('ChatProviderSettings', () => {
     renderer.unmount()
   })
 
-  test('editing is locked while a save is in flight, so no edit is lost to its response', async () => {
+  test('Enter on an untouched or emptied value input sends nothing and leaves the saved entry (F2)', async () => {
     const renderer = await render()
-    await type(inputs(renderer)[1]!, 'https://pending.example')
-    let release!: (response: Response) => void
-    const pending = new Promise<Response>((resolve) => { release = resolve })
-    const realFetch = globalThis.fetch
-    globalThis.fetch = (async () => pending) as unknown as typeof fetch
-    await click(byTestId(renderer, 'chat-provider-apply')[0]!)
-
-    for (const field of inputs(renderer)) expect(field.props.disabled).toBe(true)
-    const buttons = renderer.root.findAllByType('button')
-    for (const label of ['+ Add Variable']) {
-      expect(buttons.find((b) => b.children.includes(label))!.props.disabled).toBe(true)
+    const enter = async (label: string) => {
+      await act(async () => {
+        byLabel(renderer, label).props.onKeyDown({ key: 'Enter', preventDefault: () => {} })
+        await settle()
+      })
     }
-    for (const remove of buttons.filter((b) => String(b.props['aria-label']).startsWith('Remove'))) {
-      expect(remove.props.disabled).toBe(true)
-    }
-
-    await act(async () => {
-      release(new Response(JSON.stringify({
-        env: { ANTHROPIC_BASE_URL: 'https://pending.example' }, redacted: [], source: 'settings',
-      }), { status: 200 }))
-      await settle()
-    })
-    globalThis.fetch = realFetch
-    for (const field of inputs(renderer)) expect(field.props.disabled).toBe(false)
-    expect(inputs(renderer)[1]!.props.value).toBe('https://pending.example')
+    await enter('New value for ANTHROPIC_BASE_URL')
+    await type(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL'), 'https://typed.example')
+    await type(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL'), '')
+    await enter('New value for ANTHROPIC_BASE_URL')
+    // The new-variable inputs share Add's name guard.
+    await enter('New variable name')
+    await enter('New variable value')
+    expect(requests.filter((r) => r.method !== 'GET')).toEqual([])
+    expect(store.get('ANTHROPIC_BASE_URL')).toEqual({ kind: 'launch-env', value: 'https://gw.example' })
     renderer.unmount()
   })
 
-  test('a failed load is reported', async () => {
-    failNext = { status: 500, error: 'boom' }
+  // Every Object.prototype name the store's launch-env name grammar accepts
+  // (constructor, __proto__, toString, …): an untouched row reads no
+  // inherited value through the one typed-value accessor (F2).
+  const PROTOTYPE_NAMES = Object.getOwnPropertyNames(Object.prototype).filter(name => STORE_NAME.test(name)).sort()
+  const untouchedRow = (name: string) => async () => {
+    store.set(name, { kind: 'launch-env', value: 'zq-stored' })
+    const handle = createRef<ChatProviderSettingsHandle>()
+    let renderer!: TestRenderer.ReactTestRenderer
+    await act(async () => {
+      renderer = TestRenderer.create(<ChatProviderSettings ref={handle} />)
+      await settle()
+    })
+    const input = byLabel(renderer, `New value for ${name}`)
+    const set = button(renderer, 'Set', byTestId(renderer, `credential-row-${name}`)[0]!)
+    expect({ value: input.props.value, setDisabled: set.props.disabled }).toEqual({ value: '', setDisabled: true })
+    await act(async () => {
+      input.props.onKeyDown({ key: 'Enter', preventDefault: () => {} })
+      await settle()
+    })
+    let saved: boolean | undefined
+    await act(async () => {
+      saved = await handle.current!.save()
+      await settle()
+    })
+    expect(saved).toBe(true)
+    expect(requests.filter((r) => r.method !== 'GET')).toEqual([])
+    expect(store.get(name)).toEqual({ kind: 'launch-env', value: 'zq-stored' })
+    expect(byTestId(renderer, 'chat-provider-error')).toHaveLength(0)
+    renderer.unmount()
+  }
+  // Literal titles, one per name, so each row is citable at the commit.
+  test('an untouched __defineGetter__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__defineGetter__'))
+  test('an untouched __defineSetter__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__defineSetter__'))
+  test('an untouched __lookupGetter__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__lookupGetter__'))
+  test('an untouched __lookupSetter__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__lookupSetter__'))
+  test('an untouched __proto__ row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('__proto__'))
+  test('an untouched constructor row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('constructor'))
+  test('an untouched hasOwnProperty row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('hasOwnProperty'))
+  test('an untouched isPrototypeOf row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('isPrototypeOf'))
+  test('an untouched propertyIsEnumerable row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('propertyIsEnumerable'))
+  test('an untouched toLocaleString row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('toLocaleString'))
+  test('an untouched toString row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('toString'))
+  test('an untouched valueOf row starts empty with Set disabled, and Enter and Save write nothing (F2)', untouchedRow('valueOf'))
+
+  test('the prototype-name table covers constructor and __proto__', () => {
+    // Exactly the names with a literal test above: a runtime adding one fails here.
+    expect(PROTOTYPE_NAMES).toEqual(['__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__', '__proto__', 'constructor', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString', 'toString', 'valueOf'])
+  })
+
+  test('the listing shows a store failure, migration skips, and a collision by name only', async () => {
+    const base = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith('/api/settings/credentials')) return base(input, init)
+      return Response.json({
+        store: { ok: false, reason: 'malformed', text: 'The user credential store is malformed; repair or remove it by hand. Lower sources apply meanwhile.' },
+        rows: [{ name: 'RELAY_KEY', kind: 'launch-env', state: 'set', source: 'store', overriding: false, collision: true }],
+        migration: { state: 'pending', text: 'Migration pending.', skipped: ['OLD_NAME'], ignored: [] },
+      } satisfies CredentialListing)
+    }) as typeof fetch
     const renderer = await render()
-    expect(byTestId(renderer, 'chat-provider-error')[0]!.children.join('')).toContain('boom')
+    expect(byTestId(renderer, 'credential-store-state')[0]!.children.join('')).toContain('malformed')
+    expect(byTestId(renderer, 'credential-migration-skipped')[0]!.children.join('')).toBe('Legacy Settings OLD_NAME not migrated: the store already holds OLD_NAME.')
+    expect(byTestId(renderer, 'credential-collision-RELAY_KEY')[0]!.children.join('')).toContain('registered credential name')
+    expect(byTestId(renderer, 'credential-migration')[0]!.children.join('')).toBe('Migration pending.')
+    expect(byTestId(renderer, 'credential-migration-ignored')).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('a complete migration lists residual ignored names and no pending text (table M, M2)', async () => {
+    const base = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith('/api/settings/credentials')) return base(input, init)
+      return Response.json({
+        store: { ok: true },
+        rows: [],
+        migration: { state: 'complete', text: 'Legacy Settings values found after the migration are not used.', skipped: [], ignored: ['RESIDUAL_A', 'RESIDUAL_B'] },
+      } satisfies CredentialListing)
+    }) as typeof fetch
+    const renderer = await render()
+    expect(byTestId(renderer, 'credential-migration')).toHaveLength(0)
+    expect(byTestId(renderer, 'credential-migration-ignored')[0]!.children.join('')).toBe('Legacy Settings values found after the migration are not used: RESIDUAL_A, RESIDUAL_B.')
     renderer.unmount()
   })
 })
 
-describe('SettingsModal provider save', () => {
-  for (const failure of [null, { status: 500, error: 'Unable to persist' }]) {
-    test(failure ? 'keeps the modal and edits on a save failure' : 'Save persists edits before closing and restores them on reopen', async () => {
+describe('SettingsModal credential save', () => {
+  for (const failure of [null, { status: 500, code: 'write-failed', error: 'The user credential store could not be written; the previous contents stand.' }]) {
+    test(failure ? 'keeps the modal and the typed value on a save failure' : 'Save sends the typed value before closing; reopening starts empty', async () => {
       let closed = 0
       let renderer!: TestRenderer.ReactTestRenderer
       const onClose = () => { closed++ }
@@ -211,83 +330,57 @@ describe('SettingsModal provider save', () => {
         renderer = TestRenderer.create(<SettingsModal isOpen onClose={onClose} />)
         await settle()
       })
-      const value = () => renderer.root.findByProps({ 'aria-label': 'Value for ANTHROPIC_BASE_URL' })
+      await act(async () => {
+        renderer.root.findAll((n) => n.type === 'button' && n.props.role === 'tab' && n.children.join('') === 'Chat')[0]?.props.onClick()
+        await settle()
+      })
+      const value = () => byLabel(renderer, 'New value for ANTHROPIC_BASE_URL')
       await type(value(), 'https://saved.example')
       failNext = failure
       await act(async () => {
         await renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })
       })
-      expect(requests.filter(r => r.method === 'PUT')).toEqual([{
-        method: 'PUT',
-        body: {
-          env: { ANTHROPIC_BASE_URL: 'https://saved.example', ANTHROPIC_AUTH_TOKEN: '' },
-          keep: ['ANTHROPIC_AUTH_TOKEN'],
-        },
-      }])
+      expect(requests.filter((r) => r.method === 'PUT')).toEqual([
+        { method: 'PUT', path: '/ANTHROPIC_BASE_URL', body: { value: 'https://saved.example', kind: 'launch-env' } },
+      ])
       expect(closed).toBe(failure ? 0 : 1)
       if (failure) {
         expect(value().props.value).toBe('https://saved.example')
-        expect(byTestId(renderer, 'chat-provider-error')[0]!.children.join('')).toContain(failure.error)
+        expect(byTestId(renderer, 'chat-provider-error')[0]!.children.join('')).toBe(failure.error)
       } else {
-        await act(async () => { renderer.update(<SettingsModal isOpen={false} onClose={onClose} />) })
-        await act(async () => {
-          renderer.update(<SettingsModal isOpen onClose={onClose} />)
-          await settle()
-        })
-        expect(value().props.value).toBe('https://saved.example')
+        expect(store.get('ANTHROPIC_BASE_URL')!.value).toBe('https://saved.example')
       }
       await act(async () => { renderer.unmount() })
     })
   }
 
-  test('Save waits for persistence and prevents duplicate submission', async () => {
+  test('an applied but not durable modal Save keeps the modal open on the warning, consumes the input once, and the next Save closes (F3)', async () => {
     let closed = 0
     let renderer!: TestRenderer.ReactTestRenderer
     await act(async () => {
       renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => { closed++ }} />)
       await settle()
     })
-    await type(renderer.root.findByProps({ 'aria-label': 'Value for ANTHROPIC_BASE_URL' }), 'https://pending.example')
-    let release!: (response: Response) => void
-    let puts = 0
-    globalThis.fetch = (() => {
-      puts++
-      return new Promise<Response>(resolve => { release = resolve })
-    }) as unknown as typeof fetch
-    let save!: Promise<void>
     await act(async () => {
-      save = renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })
+      renderer.root.findAll((n) => n.type === 'button' && n.props.role === 'tab' && n.children.join('') === 'Chat')[0]?.props.onClick()
       await settle()
     })
+    durable = false
+    await type(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL'), 'https://unconfirmed.example')
+    const submit = async () => {
+      await act(async () => {
+        await renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })
+      })
+    }
+    await submit()
     expect(closed).toBe(0)
-    expect(renderer.root.findAllByType('button').find(b => b.props.type === 'submit')!.props.disabled).toBe(true)
-    await act(async () => {
-      await renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })
-      release(Response.json(serverState))
-      await save
-    })
-    expect(puts).toBe(1)
+    expect(byTestId(renderer, 'credential-not-durable')[0]!.children.join('')).toContain('could not confirm')
+    expect(byLabel(renderer, 'New value for ANTHROPIC_BASE_URL').props.value).toBe('')
+    await submit()
     expect(closed).toBe(1)
+    expect(requests.filter((r) => r.method === 'PUT')).toEqual([
+      { method: 'PUT', path: '/ANTHROPIC_BASE_URL', body: { value: 'https://unconfirmed.example', kind: 'launch-env' } },
+    ])
     await act(async () => { renderer.unmount() })
-  })
-})
-
-describe('rowsToUpdate', () => {
-  const row = (name: string, value: string, redacted = false) => ({ id: 0, name, value, redacted })
-
-  test('skips blank rows and trims names', () => {
-    expect(rowsToUpdate([row('  A ', '1'), row('', '')])).toEqual({ env: { A: '1' } })
-  })
-
-  test('refuses a value without a name and duplicate names', () => {
-    expect(rowsToUpdate([row('', 'x')])).toBe('Every value needs a variable name.')
-    expect(rowsToUpdate([row('A', '1'), row('A', '2')])).toBe('A appears more than once.')
-  })
-
-  test('a redacted row left blank is kept; one with a new value is replaced', () => {
-    expect(rowsToUpdate([row('T_TOKEN', '', true), row('U_TOKEN', 'new', true)])).toEqual({
-      env: { T_TOKEN: '', U_TOKEN: 'new' },
-      keep: ['T_TOKEN'],
-    })
   })
 })

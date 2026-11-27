@@ -1,15 +1,27 @@
 // Provider environment for chat sessions: KEY=VALUE overrides (base URL,
 // model names, gateway token) applied only to the Claude Agent SDK processes
 // spawned for chat — never to tmux terminal sessions. Seeded from
-// AGENTBOARD_CHAT_ENV, overridable from Settings. The SDK's `env` option
-// REPLACES the subprocess environment rather than merging it, so the merge
-// with process.env happens here, in one place. Credential variables a
-// trusted catalog names are withheld from every launch here too.
+// AGENTBOARD_CHAT_ENV; the credential store's entries compose over the seed
+// per variable (credentialComposition.ts owns resolution and delivery; the
+// helpers here delegate to it). The SDK's `env` option REPLACES the
+// subprocess environment rather than merging it, so the merge with
+// process.env happens in that one place. Registered credential names are
+// withheld from every launch. validateChatProviderEnv stays the legacy
+// Settings map's validator, which the upgrade migration reads.
+import { deliveryEnv, resolutionEnv, setEnvEntry } from './credentialComposition'
 import { registeredSecretNames } from './secretNameRegistry'
 
 export type ChatProviderEnv = Record<string, string>
 
-/** Upper bounds so a Settings PUT cannot store an unbounded blob. */
+/** One credential resolution snapshot (provider-credential-store A1, r5):
+ * the overrides above the process env and the names whose value the
+ * credential store supplies, read together. */
+export interface ProviderEnvSnapshot {
+  env: ChatProviderEnv
+  storeSourced: ReadonlySet<string>
+}
+
+/** The legacy Settings validator's bounds, unchanged at that input boundary. */
 export const CHAT_PROVIDER_ENV_MAX_ENTRIES = 32
 export const CHAT_PROVIDER_ENV_MAX_VALUE_LENGTH = 4096
 
@@ -44,7 +56,7 @@ export function validateChatProviderEnv(
     if (raw.includes('\0')) {
       return { ok: false, error: `${name} contains a NUL character.` }
     }
-    env[name] = raw
+    setEnvEntry(env, name, raw)
   }
   return { ok: true, env }
 }
@@ -65,16 +77,16 @@ export function parseChatProviderEnv(raw: string | undefined): ChatProviderEnv {
       console.warn(`[agentboard] Ignoring malformed AGENTBOARD_CHAT_ENV entry: "${trimmed}"`)
       continue
     }
-    env[name] = trimmed.slice(eq + 1).trim()
+    setEnvEntry(env, name, trimmed.slice(eq + 1).trim())
   }
   return env
 }
 
-/** Server env plus overrides — what the spawned SDK process will see. */
+/** Server env plus overrides — the resolution composition (S3). */
 export function effectiveChatEnv(
   providerEnv: ChatProviderEnv
 ): Record<string, string | undefined> {
-  return { ...process.env, ...providerEnv }
+  return resolutionEnv(providerEnv)
 }
 
 /**
@@ -101,12 +113,10 @@ export function withheldCredentialNames(catalog: {
   return registeredSecretNames({ catalogNames: catalog.credentialNames })
 }
 
-/** A copy of `env` without the withheld names. */
+/** A copy of `env` without the withheld names — the delivery composition (S3). */
 export function withoutCredentials(
   env: Record<string, string | undefined>,
   names: ReadonlySet<string>
 ): Record<string, string | undefined> {
-  const filtered = { ...env }
-  for (const name of names) delete filtered[name]
-  return filtered
+  return deliveryEnv(env, names)
 }

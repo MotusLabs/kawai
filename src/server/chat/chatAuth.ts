@@ -27,11 +27,20 @@ export function claudeConfigDir(
  * can authenticate — via ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN, an OAuth
  * token, or the CLI's stored login under CLAUDE_CONFIG_DIR (~/.claude by
  * default). Evaluated against the same effective environment the SDK process
- * receives (server env plus provider overrides), so the gate and the spawn
+ * receives (the resolution composition: process env < seed < store), so the gate and the spawn
  * never disagree. Credentials never leave the server.
  */
 export function hasClaudeAuth(providerEnv: ChatProviderEnv = {}): boolean {
-  const env = effectiveChatEnv(providerEnv)
+  return hasClaudeAuthIn(effectiveChatEnv(providerEnv))
+}
+
+/**
+ * The same gate over an explicit, already-composed launch environment, with
+ * no process.env merge: the manager's gate passes the environment the spawn
+ * really receives, so a key the launch withholds (a registered name, a blank
+ * store entry) never authenticates it (provider-credential-store F8).
+ */
+export function hasClaudeAuthIn(env: Record<string, string | undefined>): boolean {
   if (env.ANTHROPIC_API_KEY?.trim()) return true
   if (env.ANTHROPIC_AUTH_TOKEN?.trim()) return true
   if (env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return true
@@ -47,7 +56,7 @@ export function chatAuthErrorMessage(): string {
   return (
     'Chat sessions need Claude authentication on the server. ' +
     'Set ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or CLAUDE_CODE_OAUTH_TOKEN in the server environment ' +
-    '(or the chat provider environment in Settings), or log in with the ' +
+    '(or as a credential in Settings → Chat), or log in with the ' +
     `Claude CLI (\`claude login\`) so credentials exist at ${path.join(
       claudeConfigDir(),
       CLI_CREDENTIALS_FILE

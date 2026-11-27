@@ -19,6 +19,7 @@ export const REAL_TMUX_FILES = [
   'integration.test.ts',
   'throttled-reconnect.integration.test.ts',
   'chatRename.integration.test.ts',
+  'credentialBootstrap.integration.test.ts',
 ]
 
 // Paths whose change runs every real-tmux file (check-time-optimization D6):

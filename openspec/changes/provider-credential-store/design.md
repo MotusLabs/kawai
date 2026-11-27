@@ -100,8 +100,13 @@ absent passes through) and *delivery* = resolution minus registered names,
 with launch-env store entries delivered unchanged. It replaces
 `routes/chatProviderEnv.ts`'s `current()`, which bootstrap stops passing.
 Every consumer above takes one of the two projections, never the raw map:
-the gate, injection, availability probe and usage pulls read resolution;
-Claude and Codex launches read delivery. The registry's `secretSourceKeys`
+the credentialed gate, injection, availability probe and usage pulls read
+resolution; Claude and Codex launches read delivery. The Default
+(non-credentialed) gate reads only the explicit launch environment the
+spawn receives — delivery, with no process-env merge — so a withheld or
+blanked key never admits a chat (F8). A live session's usage pulls, usage
+reports and post-turn scheduling read the launch environment admitted at
+its spawn; only admission and spawn or resume resolve afresh or refuse (F7). The registry's `secretSourceKeys`
 source is fed from the store listing at every observation.
 
 **S4 — "The listing" is the credential listing.** The store requirement's
@@ -131,13 +136,17 @@ table below, which gets the blind reading before code.
 ### Composition table C (per variable; observable at gate and launch)
 
 `*` = don't care. "Registered" = in the registry union (catalog, store
-secret-source key, retained).
+secret-source key, retained). The delivery column is the **Claude launch**
+delivery. A Codex launch keeps D5's filtered process environment (task r2,
+decision-8391d617): the process env minus the registered names, so C1 passes
+through, C5–C7 are withheld, and the seed and the store never supply or
+override a Codex variable (C2–C4, C9).
 
-| Id | Process env | Seed | Store entry | Registered | Resolution (gate, injection, pulls) | Delivery (launch) |
+| Id | Process env | Seed | Store entry | Registered | Resolution (gate, injection, pulls) | Delivery (Claude launch) |
 | --- | --- | --- | --- | --- | --- | --- |
 | C1 | set | absent | absent | no | process value | process value |
 | C2 | * | set | absent | no | seed value | seed value |
-| C3 | * | * | launch-env set | no | store value | store value (W6) |
+| C3 | * | * | launch-env set | no | store value | store value (W6), except C11 |
 | C4 | * | * | launch-env blank | no | empty string | empty string |
 | C5 | * | * | secret-source set | yes (by construction) | store value | absent under its own name; reaches a launch only through a binding (W3) |
 | C6 | * | * | launch-env set | yes | store value | absent (W7, inert) — the credential listing marks the collision |
@@ -145,6 +154,7 @@ secret-source key, retained).
 | C8 | absent | absent | absent | * | absent | absent |
 | C9 | * | set (two variables) | launch-env for one of them | no | per variable | per variable: store for one, seed for the other ("A seed-only sibling key survives") |
 | C10 | * | * | store unreadable / unsafe / malformed | * | composes process env < seed, as if the store were absent; listing reports the fixed reason | same, minus registered names |
+| C11 | * | * | launch-env set, non-empty, for a `TRANSPORT_PIN_ENV` key | no | store value | Default, named, and wrapper launches: store value in the child env only. A credentialed launch refuses before SDK availability or spawn, naming the keys and no value (r5, decision-a15a8e4e), at creation and at every spawn or resume, from one snapshot. A blank entry pins empty (C4); process and seed values pin as before |
 
 Unreachable: a secret-source store entry whose name is not registered — the
 store's secret-source names are a registry source (S3), so C5 always has
@@ -162,14 +172,14 @@ store's secret-source names are a registry source (S3), so C5 always has
 | U6 | applied but not durable | outcome reports applied-not-durable; UI shows the warning; no retry |
 | U7 | old `/api/settings/chat-provider-env` | 404 (retired) |
 
-### Migration table M (state machine with recovery) — inputs only, for the blind reading
+### Migration table M (state machine with recovery) — bound after the blind reading
 
-Per `docs/agent-collaboration.md` ("Write acceptance as oracles"), this
-table's **outputs are deliberately `?`** in this planning package. Group 1
-commits it unchanged as A1. An advisor from another model family fills it
-from the spec scenarios alone, the author's reading is committed as A2, and
-the Lead records the resolved table as binding before any group-3 code. The
-binding properties below already constrain every output.
+Per `docs/agent-collaboration.md` ("Write acceptance as oracles"), the
+outputs were `?` in the planning package and in A1 (2de5c710). An advisor
+from another model family filled them from the spec scenarios alone, the
+author's reading was sealed as A2 (6964e921), and the Lead bound the resolved
+outputs below before any group-3 code (decision-0c2937c6). The properties
+below constrain every output; the tests use this table verbatim.
 
 Axes: stamp (absent / present) × map row (absent / empty / non-empty) ×
 store before (missing / ok / unreadable-unsafe-malformed) × per-entry
@@ -181,22 +191,22 @@ pre-upgrade backup / downgrade to a pre-change binary).
 
 | Id | Stamp | Map | Store before | Entry relation | Write outcome | Crash point | Mode | Store after | Map/stamp after | Listing shows | Delivery meanwhile |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| M1 | present | absent | * | — | — | none | normal | ? | ? | ? | ? |
-| M2 | present | non-empty | * | * | — | none | normal | ? | ? | ? | ? |
-| M3 | absent | absent or empty | * | — | — | none | normal | ? | ? | ? | ? |
-| M4 | absent | non-empty | missing or ok | name absent | durable | none | normal | ? | ? | ? | ? |
-| M5 | absent | non-empty | ok | same value | durable | none | normal | ? | ? | ? | ? |
-| M6 | absent | non-empty | ok | different value | durable | none | normal | ? | ? | ? | ? |
-| M7 | absent | non-empty | missing or ok | name registered | durable | none | normal | ? | ? | ? | ? |
-| M8 | absent | non-empty | missing or ok | * | applied-not-durable | none | normal | ? | ? | ? | ? |
-| M9 | absent | non-empty | missing or ok | * | refused (write-failed) | none | normal | ? | ? | ? | ? |
-| M10 | absent | non-empty | unreadable-unsafe-malformed | * | — | none | normal | ? | ? | ? | ? |
-| M11 | absent | non-empty | * | * | * | before store write | normal | ? | ? | ? | ? |
-| M12 | absent | non-empty | ok | * | durable | after store write, before transaction | normal | ? | ? | ? | ? |
-| M13 | present | absent | ok | — | — | after transaction | normal | ? | ? | ? | ? |
-| M14 | absent | non-empty | ok (later entries) | same or different | durable | none | restored pre-upgrade backup | ? | ? | ? | ? |
-| M15 | absent | non-empty | ok, operator cleared a migrated name while M8 repeated | name absent | durable | none | normal | ? | ? | ? | ? |
-| M16 | present | absent | ok | — | — | none | downgrade to a pre-change binary | ? | ? | ? | ? |
+| M1 | present | absent | * | — | — | none | normal | Prior state stands | Map absent, existing stamp stands | Normal, complete, with stamp's skip names | Normal |
+| M2 | present | non-empty | * | * | — | none | normal | Prior state stands | Residual map and existing stamp stand, no migration writes | Normal, complete, fixed diagnostic with ignored valid names | Normal |
+| M3 | absent | absent or empty | * | — | — | none | normal | Prior state stands, missing remains missing | Absent or empty map left as found, no stamp or migration writes | Normal, nothing to migrate | Normal |
+| M4 | absent | non-empty | missing or ok | name absent | durable | none | normal | Eligible absent entry added durably as launch-env, preserving name and value | Delete map and set stamp atomically | Normal, new store entry and complete | Normal using new entry at next eligible launch |
+| M5 | absent | non-empty | ok | same value | durable | none | normal | Identical entry absorbed, including its existing kind, with durability confirmed | Delete map and set stamp atomically | Normal, complete, no skip for equality | Normal using existing entry |
+| M6 | absent | non-empty | ok | different value | durable | none | normal | Existing different-valued entry wins with durability confirmed | Delete map and set stamp with its skip name atomically | Normal, complete, names-only collision skip | Normal using the winner |
+| M7 | absent | non-empty | missing or ok | name registered | durable | none | normal | Registered name added as inert launch-env if absent, otherwise existing entry wins with the M5/M6 rule | Delete map and set stamp atomically | Normal, mark registered launch-env collision, names-only skip if different prior value wins | Registered name withheld, required composition refuses before spawning |
+| M8 | absent | non-empty | missing or ok | * | applied-not-durable | none | normal | Applied rename stands without confirmed durability | Original map retained, stamp absent, next startup reattempts | Normal from readable applied store, pending with fixed unconfirmed-durability reason and observed skip names | Normal from current usable sources |
+| M9 | absent | non-empty | missing or ok | * | refused (write-failed) | none | normal | Prior file bytes or absence stand after refusal | Original map retained, stamp absent, next startup reattempts | Normal plus fixed write-failure pending reason | Normal from prior usable sources |
+| M10 | absent | non-empty | unreadable-unsafe-malformed | * | — | none | normal | Prior unusable store stands without repair or salvage | Original map retained, stamp absent, next startup reattempts | Fixed safe store reason plus migration pending | Process and seed under the normal filters |
+| M11 | absent | non-empty | * | * | * | before store write | normal | Prior store remains at interruption | Map retained, stamp absent. Restart follows the applicable import outcome from that state | Service unavailable while stopped. After restart use that outcome's listing | Service unavailable while stopped. After restart use that outcome's projection |
+| M12 | absent | non-empty | ok | * | durable | after store write, before transaction | normal | Durably moved entries stand. On restart absorb equal entries and preserve any different winners | Map retained and stamp absent at interruption. Successful retry deletes and stamps together. Failed retry follows M8–M10 | Service unavailable while stopped. After restart show actual outcome and collision skips | Service unavailable while stopped. After restart use normal projection |
+| M13 | present | absent | ok | — | — | after transaction | normal | Durable store stands through restart | Map absent, stamp present, no migration writes on restart | Service unavailable while stopped. On restart normal and complete with stamped skips | Service unavailable while stopped. Normal on restart |
+| M14 | absent | non-empty | ok (later entries) | same or different | durable | none | restored pre-upgrade backup | Restored map merges per name. Keep later store entries and import any eligible missing name | Delete restored map and set stamp atomically after confirmed durability | Normal, complete with differing-value skips | Normal, later store entries win |
+| M15 | absent | non-empty | ok, operator cleared a migrated name while M8 repeated | name absent | durable | none | normal | Eligible cleared name reimported durably from retained map | Delete map and set stamp atomically in this durable row | Normal and complete with reimported entry. If confirmation fails again, M8 reports pending | Normal, eligible reimported entry can deliver |
+| M16 | present | absent | ok | — | — | none | downgrade to a pre-change binary | External store remains in place across binary downgrade | Map absent and stamp ignored on the post-upgrade database. Restoring the pre-upgrade backup supplies its old map | Legacy surface reports environment or none before restore, with legacy settings source when backup supplies the map | Legacy launch reads process and seed before restore and uses its configured legacy map after restore, with that binary's filters |
 
 Open decisions the reading must settle, with the options (the Lead records
 the choice before code):
@@ -214,6 +224,55 @@ the choice before code):
   pre-upgrade database backup, which holds the map. Confirm, or ship an
   export.
 
+**Binding (task 1.1, decision-0c2937c6, Lead note-41b235b1).** The outputs
+above are bound; the inputs are A1's (2de5c710), unchanged. The independent
+reading (Codex Sol, advisory task-66ea3109) and the author's sealed A2
+(6964e921) were compared row by row and resolved as follows.
+
+- **OD-M9/M10 = (b).** The map stays intact for recovery on a failed or
+  unconfirmed import, but it is never a composition source: runtime
+  resolution stays process env < seed < usable store (S3, C10). A map-only
+  credential can be unavailable until repair and a successful retry; the
+  pending state and its fixed reason are visible. The map reader serves the
+  migration and names-only diagnostics only. (The author's (a) would add a
+  fourth effective source on the auth, launch, availability, and pull paths,
+  and contradict the published A1's Codex projection.)
+- **OD-M15 = (a).** A later startup can reimport a cleared name while the
+  old map survives; the pending status and the reimport risk are shown and
+  documented. A durable retry commits the deletion and stamp; a repeated
+  unconfirmed attempt is M8 with the map retained.
+- **OD-M16 = restore the pre-upgrade database backup** when rolling back the
+  binary; no export.
+
+Output legend. *Normal* = the existing value-free listing and the published
+projections, including all registered-name withholding and required-
+composition refusals. An unusable store reads as absent (process and seed,
+C10) with its fixed reason. Codex uses the published filtered process
+projection in every current-binary row. Listing statuses and skip/ignored
+records carry validated names and fixed safe text. File durability precedes
+the single map-deletion-and-stamp transaction for a non-empty valid import,
+even when every entry was absorbed or skipped. Same-valued entries keep their
+kind and value without a skip; different-valued entries keep the existing
+kind and value and record a names-only skip on the stamp — on first start
+and on retry.
+
+Decision rules. Apply the mode and crash boundary first, then the stamp and
+map eligibility, then the store read/write outcome. M15 is the cleared-name
+successful retry. In ordinary durable cases M7 takes priority over M4–M6 for
+a registered name. A restored backup uses the same failure rules when a
+retry cannot confirm durability. A stopped server has no listing or launch.
+PM1's paired map/stamp outcome covers attempts from a valid non-empty
+unstamped map; M2 (map beside a stamp) and M3 (no work) are covered
+explicitly. PM2 requires zero file or settings writes on restarts after
+quiescence.
+
+Disputed rows (author A2 → bound): OD-M9/M10 (a → b), so M8–M10 deliver
+from process < seed < store, not with the map as a source; M3 (A2 deleted an
+empty row and stamped → left as found, no stamp, no write); M15 (A2 kept the
+map while never durable → this row is the durable retry and commits); M16
+(A2 "old binary shows seed only" → the legacy surface shows the legacy
+source once the restored backup supplies the map).
+
 ### Properties
 
 - **PM1 — No value is lost or duplicated into SQLite.** For a seeded
@@ -230,10 +289,12 @@ the choice before code):
   changes no byte of the store and no `app_settings` row. Same generator,
   100 cases.
 - **PC1 — Composition equals the table.** For seeded (process env, seed,
-  store, registry) tuples, the gate's resolution and each launch branch's
-  delivered env equal table C's projection. The launch is checked by the
-  composed structure the real `resolveClaudeProfile`/`codexSpawnEnv`
-  produce, never a re-implementation. 200 cases.
+  store, registry) tuples, the gate's resolution and the Claude launch's
+  delivered env equal table C's projection, and the Codex launch equals the
+  process env minus the registered names (C8 and C10 under both launch
+  projections). The launches are checked by the composed structures the real
+  `resolveClaudeProfile`/`codexSpawnEnv` produce, never a re-implementation.
+  200 cases.
 - **P1s — Store secrecy (umbrella P1, store paths).** No store value in any
   HTTP body, log line, wire-log frame, SQLite row, or flag settings layer,
   including the migration write and the editor's failure log path. 200
@@ -284,7 +345,7 @@ added. Every scenario has both where the core already covers it.
 ## Implementation contract
 
 ### Acceptance
-- A1: In the composed server, every row of table C holds at the creation gate and at Claude and Codex launches, shown by PC1 and by PW2/PW3 through `ChatSessionManager` with each row's observable delivered or absent variable.
+- A1: In the composed server, every row of table C holds at the creation gate and for Claude launch delivery, shown by PC1 and PW2/PW3 through `ChatSessionManager` with the observed delivered or withheld variable. Codex launches follow D5's filtered process environment. Verify allowed unregistered process passthrough (C1), registered-name withholding (C5–C7), and seed and store entries unable to supply or override Codex variables (C2–C4/C9). PC1 checks C8 and C10 under both launch projections. A credential-bearing Claude profile refuses before SDK availability or spawn if an effective non-empty value for any TRANSPORT_PIN_ENV key comes from the credential store. The fixed refusal names the affected keys and contains no values. The rule uses fresh composition at every launch, including resume. On otherwise eligible launches, blank store entries pin empty. Existing process and seed pins, unrelated settings and the other launch branches retain their published behavior.
 - A2: `GET /api/settings/credentials` and every other read surface return name, kind, state, source, and marks only for any store contents (U1, P2); the retired `/api/settings/chat-provider-env` answers 404 (U7); mutations return the typed applied/durable outcome with fixed safe text (U2-U6).
 - A3: The startup migration behaves as the binding M table (after the blind reading) for every row, and PM1/PM2 hold; PW4 shows it on a disposable database copy through the real bootstrap.
 - A4: A secret-source store key is absent from every launch under its own name and stays withheld after reclassification to launch-env while registered ("Reclassification does not end withholding"), through the real registry collaborator (PW3).
@@ -328,12 +389,16 @@ added. Every scenario has both where the core already covers it.
 - `AGENTS.md`
 - `openspec/specs/provider-credentials/spec.md`
 - `openspec/specs/claude-session-profiles/spec.md`
+- `tests/e2e/settings-provider.spec.ts`
+- `scripts/planBatches.ts`
+- `src/server/chat/provider/claudeDriverTypes.ts`
+- `src/server/chat/provider/claudeRuntimeLaunch.ts`
 
 ### Verification
 - V1: Table C, U, and the binding M table are committed verbatim as table-driven tests next to the code; PM1, PM2, PC1, P1s, P2 run as seeded properties through `propertyCases`.
-- V2: PW1-PW5 run through the production composition, and each named wiring mutant fails its test; the result lists each mutant with its failing title.
+- V2: PW1-PW5 run through the production composition, and each named wiring mutant fails its test; the result lists each mutant with its failing title. Composed tests cover all transport pin keys, their winning source, and blank precedence. Show the names-only refusal at creation and after a store change before respawn, plus the allowed child environment and flag-layer results for unaffected cases. Extend P1s to store-backed transport values and report the named refusal-bypass mutant failing.
 - V3: Preserved workflows still pass: `src/server/__tests__/credentialStore*.test.ts`, the registry tests, the chat provider settings client tests (rewritten only where the retired GET is asserted), and the existing auth-gate and launch tests.
-- V4: The literal-citation preflight finds zero unresolved citations; the clean committed head passes `bun run check --full-properties` (pinned Bun 1.4.3); `bun scripts/verify-result.ts` exits 0.
+- V4: The literal-citation preflight finds zero unresolved citations. `bun run check --full-properties` passes on the clean committed head using the Bun version declared by `.bun-version` at that commit. `bun scripts/verify-result.ts` exits 0.
 - V5: A disposable-copy rehearsal — a copied database with a seeded map, a disposable HOME, a spare port, never the live data directory — records the PW4 outcome; e2e, if any, runs only through the CI fixture path.
 
 ### Excluded
@@ -686,7 +751,7 @@ branch receives:
 | Claude, Default (no profile), no overrides | the filtered env: process env − withheld names, plus store launch-env entries as configured | none — host claude.ai login path (or an unregistered ambient `ANTHROPIC_AUTH_TOKEN`), unchanged | today's behavior: the resolve supplies an explicit env; routing or unrelated overrides an operator set ride the launch-env entries |
 | Claude, named non-wrapper profile | the filtered env + launch-env entries + the profile's catalog env overlaid; every controlled variable the profile does not set **deleted**; absent catalog keys blanked in the flag settings layer | none unless the profile is credentialed (row below) | unrelated variables (operator overrides, launch-env entries) are retained, per today's named-profile rule |
 | Claude, wrapper (`executable`) | the filtered env + launch-env entries + the wrapper's overlay env | none **composed** — a credential-bearing id can never take an executable (trusted invariant); an unregistered ambient token passes only by name, like Default | wrappers never gain tokens or headers through the catalog |
-| Claude, credentialed or headers-only | the named-profile branch **plus** transport pins (base URL + `TRANSPORT_PIN_ENV`) in env and flag settings | `ANTHROPIC_AUTH_TOKEN` (credentialed) and composed `ANTHROPIC_CUSTOM_HEADERS` (headers) in env only | the token reaches the CLI exactly as today; headers-only has no token |
+| Claude, credentialed or headers-only | the named-profile branch **plus** transport pins (base URL + `TRANSPORT_PIN_ENV`) in env and flag settings; a non-empty pin value the store supplies refuses the launch instead (C11) | `ANTHROPIC_AUTH_TOKEN` (credentialed) and composed `ANTHROPIC_CUSTOM_HEADERS` (headers) in env only | the token reaches the CLI exactly as today; headers-only has no token |
 | Codex | the filtered env; `codexHome`/`network` from trusted tiers per the runtime-origin rules | none via Claude composition — credentials via the Codex login in its home | one workspace-write sandbox as today |
 
 Direct legacy auth (an ambient `ANTHROPIC_AUTH_TOKEN` or the claude.ai
