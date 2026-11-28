@@ -651,6 +651,11 @@ const migration31: SchemaShape['tables'] = {
     columns: [keyPart('assessment_id', 1), { ...integer('ordinal'), pk: 2 }, optional('observation_id'), column('summary_json')],
     indexes: [],
   },
+  // A quota episode's closure witness (R5): opaque limit event ids, each in one episode at most.
+  process_episode_members: {
+    columns: [keyPart('recommendation_id', 1), { ...integer('ordinal'), pk: 2 }, column('limit_event_id')],
+    indexes: [],
+  },
   process_recommendation_gaps: {
     columns: [{ name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1 }, column('team_id'), column('episode_key'), column('error_kind'), column('at')],
     indexes: [],

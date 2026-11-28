@@ -40,8 +40,8 @@ export interface AdviceHarness {
   occupants: string[]
   pending: number
   changes: string[]
-  /** Record a final limit of `profileId` on `providerId` for session s1 now. */
-  limit(options?: { profileId?: string; providerId?: string; resetsAt?: string | null; window?: string | null; final?: boolean }): void
+  /** Record a final limit of `profileId` on `providerId` for session s1 (or `sessionId`) now. */
+  limit(options?: { profileId?: string; providerId?: string; resetsAt?: string | null; window?: string | null; final?: boolean; sessionId?: string }): void
   /** Record a quota observation of `providerId` under `profileId`'s scope at `at`. */
   observe(profileId: string, providerId: string, at: number, options?: { percent?: number; outcome?: 'supported' | 'failed'; basis?: 'routed' | 'host-login'; resetsAt?: string | null }): string
   drain(): void
@@ -49,7 +49,7 @@ export interface AdviceHarness {
 }
 
 /** A harness over a fresh database, or `options.db` (a restart over the same data; left open on close). */
-export function adviceHarness(options: { db?: SessionDatabase; evaluate?: ManagerAdviceDeps['evaluate'] } = {}): AdviceHarness {
+export function adviceHarness(options: { db?: SessionDatabase; evaluate?: ManagerAdviceDeps['evaluate']; teamOf?: ManagerAdviceDeps['teamOf'] } = {}): AdviceHarness {
   const root = options.db ? null : fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-advice-')))
   const db = options.db ?? freshTestDatabase(path.join(root!, 'test.db'))
   const clock = { now: T0 }
@@ -82,7 +82,7 @@ export function adviceHarness(options: { db?: SessionDatabase; evaluate?: Manage
     db: db.db, history, limits, now,
     record: id => h.records.get(id),
     records: () => h.records.values(),
-    teamOf: id => (h.records.has(id) ? TEAM : null),
+    teamOf: options.teamOf ?? (id => (h.records.has(id) ? TEAM : null)),
     capacity,
     providerOf: profileId => h.workers.find(worker => worker.model === profileId)?.provider ?? profileId,
     scopeOf: profileId => h.scopes[profileId] ?? null,
@@ -93,7 +93,7 @@ export function adviceHarness(options: { db?: SessionDatabase; evaluate?: Manage
   })
   h.limit = (options = {}) => {
     limits.record({
-      profileId: options.profileId ?? 'glm', sessionId: 's1', groupId: 'devs', kind: 'rate_limit', final: options.final ?? true,
+      profileId: options.profileId ?? 'glm', sessionId: options.sessionId ?? 's1', groupId: 'devs', kind: 'rate_limit', final: options.final ?? true,
       status: 429, message: null, resetsAt: options.resetsAt === undefined ? new Date(clock.now + 60 * MIN).toISOString() : options.resetsAt,
       providerId: options.providerId ?? 'zai', window: options.window ?? 'five_hour', at: new Date(clock.now).toISOString(),
     })

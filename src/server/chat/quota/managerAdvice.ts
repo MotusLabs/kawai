@@ -18,8 +18,8 @@
 // subscriber runs, so a crash in between leaves a durable final event with no
 // recommendation: at startup, and again once each session's team resolves,
 // the team's quota episode still cooling (`adviceEpisodes.ts`, the rule the
-// live join uses too, closed at each episode's recorded resolution so a
-// consumed episode is never repartitioned) and every flagged context are
+// live join uses too; an episode closed with its witness — the members its
+// first resolved version recorded — is never repartitioned or replayed) and every flagged context are
 // replayed through the same path (`reconstructed`, idempotent per episode,
 // R5). Every in-force question reads the router's cooldown as of its own time
 // (`LimitEventStore.cooldownAt`, I5), never the present aggregate. Quota
@@ -36,7 +36,7 @@ import { incidentSnapshot } from '../../metrics/recommendations/snapshot'
 import { RecommendationStore, type StoredRecommendation } from '../../metrics/recommendations/store'
 import type { QuotaObservationStore } from '../../metrics/observations/quotaObservations'
 import { LIMIT_EVENT_READ_WINDOW_MS } from '../../team/routing/limitEvents'
-import { episodeFrom, episodeInForce, quotaEpisodes, type ClosedAt, type EpisodeEvent, type QuotaEpisode } from './adviceEpisodes'
+import { episodeFrom, episodeInForce, quotaEpisodes, type EpisodeClosures, type EpisodeEvent, type QuotaEpisode } from './adviceEpisodes'
 
 /** A durable `profile_limit_events` row (the limit store's own table). */
 interface LimitEventRow {
@@ -92,6 +92,8 @@ export class ManagerAdvice {
       limitsFor: providers => providers.flatMap(providerId => deps.limits.forProvider(providerId))
         .map(event => ({ id: event.id, providerId: event.providerId, at: event.at, final: event.final, window: event.window })),
       isOpen: (rec, cutoff) => this.isOpen(rec, cutoff),
+      // The closing episode's members as committed now, read before its resolved version exists (R5).
+      closure: rec => (rec.kind === 'quota' ? this.episodeOf(rec, this.now())?.events.map(event => event.id) ?? null : null),
       comparisons: (teamId, cutoffIso) => (deps.db.prepare(`SELECT COUNT(*) AS n FROM team_messages
         WHERE team_id = ? AND handoff IS NOT NULL AND delivered_at IS NOT NULL AND delivered_at <= ?`).get(teamId, cutoffIso) as { n: number }).n,
       ...(deps.onChange ? { onChange: deps.onChange } : {}),
@@ -173,8 +175,9 @@ export class ManagerAdvice {
     const since = new Date(now - LIMIT_EVENT_READ_WINDOW_MS).toISOString()
     const own = this.finalRows(since).filter(row => row.session_id === sessionId)
     for (const providerId of new Set(own.map(row => this.rowProvider(row)))) {
-      const active = quotaEpisodes(this.teamEpisodeEvents(teamId, providerId, since, now), this.closedAt(teamId, providerId)).at(-1)
-      if (!active || !this.inForce(active.events, now)) continue
+      const active = quotaEpisodes(this.teamEpisodeEvents(teamId, providerId, since, now), this.closures(teamId, providerId)).at(-1)
+      // A closed episode stays closed whatever the profile's cooldown now (another team's limit may keep it cooling).
+      if (!active || active.closed || !this.inForce(active.events, now)) continue
       for (const entry of active.events) this.quotaIncident(teamId, limitEventOf(entry.row), 'reconstructed')
     }
     this.attachStalls(teamId)
@@ -199,19 +202,36 @@ export class ManagerAdvice {
 
   /**
    * The quota episode `rec` opened, by its own cooldown, over the team's
-   * events up to `untilMs` other than `exceptId`; null when its first event
-   * is gone (pruned).
+   * events up to `untilMs` other than `exceptId`. A pruned anchor is stood in
+   * for by what the recommendation froze of it (its id, time, profile, window
+   * and reset), so its surviving members keep their episode; null when the
+   * anchor itself is excluded or lies after `untilMs`.
    */
   private episodeOf(rec: StoredRecommendation, untilMs: number, exceptId?: string): QuotaEpisode<EpisodeEvent & { row: LimitEventRow }> | null {
     if (rec.providerId === null) return null
     const firstId = rec.episodeKey.slice(`quota:${rec.providerId}:`.length)
     const events = this.teamEpisodeEvents(rec.teamId, rec.providerId, rec.cutoff, untilMs).filter(event => event.id !== exceptId)
-    return episodeFrom(events, firstId, this.closedAt(rec.teamId, rec.providerId))
+    if (firstId !== exceptId && Date.parse(rec.cutoff) <= untilMs && !events.some(event => event.id === firstId)) events.unshift(this.frozenAnchor(rec, firstId))
+    return episodeFrom(events, firstId, this.closures(rec.teamId, rec.providerId))
   }
 
-  /** The durable admission boundary of the team's episode keyed by an event (its recorded resolution, D5). */
-  private closedAt(teamId: string, providerId: string): ClosedAt {
-    return eventId => this.store.resolvedAt(teamId, 'quota', `quota:${providerId}:${eventId}`)
+  /** A pruned anchor as its recommendation recorded it. */
+  private frozenAnchor(rec: StoredRecommendation, firstId: string): EpisodeEvent & { row: LimitEventRow } {
+    const { limited } = rec.snapshot
+    const row: LimitEventRow = {
+      id: firstId, profile_id: limited.profileId, session_id: rec.sessionId ?? '', group_id: rec.groupId, at: rec.cutoff, kind: 'rate_limit', final: 1,
+      status: null, message: null, resets_at: limited.resetsAt, provider_id: limited.providerId, limit_window: limited.window,
+    }
+    return { id: firstId, at: rec.cutoff, resetsAt: limited.resetsAt, row }
+  }
+
+  /** The team's recorded closures of the provider's episodes (D5): witnesses first, else a witness-less resolution's instant. */
+  private closures(teamId: string, providerId: string): EpisodeClosures {
+    const { witness, unwitnessed } = this.store.closures(teamId, providerId)
+    return {
+      witnessOf: eventId => witness.get(eventId) ?? null,
+      closedAt: eventId => unwitnessed.get(`quota:${providerId}:${eventId}`) ?? null,
+    }
   }
 
   /** The limit event ids of a quota recommendation's episode up to now, oldest first; null when unknown or its first event is pruned. */
@@ -236,6 +256,7 @@ export class ManagerAdvice {
     for (const rec of this.store.unresolved()) {
       if (rec.teamId !== teamId || rec.kind !== 'quota' || rec.providerId !== providerId) continue
       const end = this.episodeEnd(rec, at, event.id)
+      // null: the event is this episode's own anchor (a replay), which is its episode.
       if (joined === null && (end === null || end > at)) joined = rec
       else if (end !== null && end <= at) this.service.enqueue(rec.id)
     }

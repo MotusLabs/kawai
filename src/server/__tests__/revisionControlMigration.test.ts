@@ -81,7 +81,7 @@ test('a database at version 16 with execution rows backfills seq 1, twice, keepi
   // 24 review-findings, 25 review-convergence, 29 task-publication-handoffs,
   // 30 decision-bound-task-publication, 31 process-quota-history-and-advice) also land in this upgrade.
   expect(Object.keys(after).filter(table => !(table in before)).sort())
-    .toEqual([...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', 'team_task_finding_cards', 'team_task_finding_events', 'team_task_finding_items', 'plan_execution_diagnoses', 'team_task_convergence_notices', 'team_task_stall_notices', 'team_task_handoffs', 'team_task_handoff_events', 'team_task_handoff_wakeups', 'plan_decision_publications', 'process_quota_observations', 'process_recommendations', 'process_assessments', 'process_assessment_evidence', 'process_recommendation_gaps'].sort())
+    .toEqual([...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', 'team_task_finding_cards', 'team_task_finding_events', 'team_task_finding_items', 'plan_execution_diagnoses', 'team_task_convergence_notices', 'team_task_stall_notices', 'team_task_handoffs', 'team_task_handoff_events', 'team_task_handoff_wakeups', 'plan_decision_publications', 'process_quota_observations', 'process_recommendations', 'process_assessments', 'process_assessment_evidence', 'process_episode_members', 'process_recommendation_gaps'].sort())
   expect(versions(dbPath).filter(row => row.version === 17)).toHaveLength(1)
   // The backfill: each execution's row, once, as seq 1.
   expect(after.plan_execution_revisions).toEqual([

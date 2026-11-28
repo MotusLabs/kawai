@@ -10,6 +10,10 @@
 //   assessment saw, so a stale replay never becomes the latest.
 // - `process_assessment_evidence`: the frozen evidence summaries, with the
 //   observation each one came from. They outlive observation pruning (R9).
+// - `process_episode_members`: a quota episode's closure witness (R5), the
+//   opaque ids of the limit events it held when its first `resolved` version
+//   was written in the same transaction, in episode order. Each limit event
+//   belongs to one episode at most; triggers refuse UPDATE and DELETE.
 // - `process_recommendation_gaps`: evaluator failures (R4). Managed work never
 //   waits on them.
 import type { Migration } from '../../dbSafety/migrations'
@@ -62,6 +66,16 @@ CREATE TRIGGER process_assessment_evidence_immutable BEFORE UPDATE ON process_as
 BEGIN SELECT RAISE(ABORT, 'frozen evidence is immutable'); END;
 CREATE TRIGGER process_assessment_evidence_kept BEFORE DELETE ON process_assessment_evidence
 BEGIN SELECT RAISE(ABORT, 'frozen evidence is immutable'); END;
+CREATE TABLE process_episode_members (
+  recommendation_id TEXT NOT NULL REFERENCES process_recommendations(id),
+  ordinal INTEGER NOT NULL,
+  limit_event_id TEXT NOT NULL UNIQUE,
+  PRIMARY KEY (recommendation_id, ordinal)
+);
+CREATE TRIGGER process_episode_members_immutable BEFORE UPDATE ON process_episode_members
+BEGIN SELECT RAISE(ABORT, 'episode witnesses are immutable'); END;
+CREATE TRIGGER process_episode_members_kept BEFORE DELETE ON process_episode_members
+BEGIN SELECT RAISE(ABORT, 'episode witnesses are immutable'); END;
 CREATE TABLE process_recommendation_gaps (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   team_id TEXT NOT NULL,

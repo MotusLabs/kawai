@@ -6,7 +6,8 @@
 // DELETE, I3): `append` writes version n+1 in one transaction, and writes
 // nothing when the evidence hash equals the latest one (R2) or when the
 // evaluation saw older evidence than the latest (a stale replay never
-// becomes current). Evidence summaries are copied in, so they outlive the
+// becomes current); a quota episode's first `resolved` version commits with
+// its closure witness (R5). Evidence summaries are copied in, so they outlive the
 // observations they cite; a summary whose observation was pruned is read
 // back as expired (R9).
 import type { Database } from 'bun:sqlite'
@@ -104,8 +105,7 @@ export class RecommendationStore {
 
   /**
    * When the team's episode was first recorded resolved (epoch ms, the
-   * assessment's `created_at`), else null — the durable boundary after which
-   * the episode admits no member (D5, R5). Assessments only append, so it
+   * assessment's `created_at`), else null. Assessments only append, so it
    * never moves once set.
    */
   resolvedAt(teamId: string, kind: RecommendationKind, episodeKey: string): number | null {
@@ -113,6 +113,26 @@ export class RecommendationStore {
       WHERE r.team_id = ? AND r.kind = ? AND r.episode_key = ? AND a.state = 'resolved' ORDER BY a.version LIMIT 1`)
       .get(teamId, kind, episodeKey) as { created_at: string } | null
     return row ? Date.parse(row.created_at) : null
+  }
+
+  /**
+   * The team's recorded quota closures of a provider (D5, R5): each witnessed
+   * limit event with the key of the episode that consumed it, and the
+   * resolution instant of each resolved episode recorded without a witness.
+   */
+  closures(teamId: string, providerId: string): { witness: Map<string, string>; unwitnessed: Map<string, number> } {
+    const witness = this.db.prepare(`SELECT m.limit_event_id, r.episode_key FROM process_episode_members m
+      JOIN process_recommendations r ON r.id = m.recommendation_id
+      WHERE r.team_id = ? AND r.kind = 'quota' AND r.provider_id = ?`).all(teamId, providerId) as Array<{ limit_event_id: string; episode_key: string }>
+    const unwitnessed = this.db.prepare(`SELECT r.episode_key, MIN(a.created_at) AS resolved_at FROM process_recommendations r
+      JOIN process_assessments a ON a.recommendation_id = r.id AND a.state = 'resolved'
+      WHERE r.team_id = ? AND r.kind = 'quota' AND r.provider_id = ?
+        AND NOT EXISTS (SELECT 1 FROM process_episode_members m WHERE m.recommendation_id = r.id)
+      GROUP BY r.id`).all(teamId, providerId) as Array<{ episode_key: string; resolved_at: string }>
+    return {
+      witness: new Map(witness.map(row => [row.limit_event_id, row.episode_key])),
+      unwitnessed: new Map(unwitnessed.map(row => [row.episode_key, Date.parse(row.resolved_at)])),
+    }
   }
 
   /** One recommendation by id, any team (the evaluator's own read). */
@@ -150,8 +170,12 @@ export class RecommendationStore {
    * Append the next assessment, or nothing (null) when the evidence is
    * unchanged from the latest or older than it. One transaction: the version
    * read, the checks and the writes cannot interleave with another append.
+   * The first `resolved` version closes the episode: `closure` names its
+   * members, read in this transaction before the version is written, and the
+   * witness commits with that version or not at all (R5).
    */
-  append(recommendationId: string, evaluation: Evaluation, cutoff: string, state: (previous: ProcessAdvice | null) => AssessmentState): ProcessAssessment | null {
+  append(recommendationId: string, evaluation: Evaluation, cutoff: string, state: (previous: ProcessAdvice | null) => AssessmentState,
+    closure?: () => readonly string[] | null): ProcessAssessment | null {
     return this.db.transaction((): ProcessAssessment | null => {
       const latest = this.db.prepare('SELECT * FROM process_assessments WHERE recommendation_id = ? ORDER BY version DESC LIMIT 1')
         .get(recommendationId) as AssessmentRow | null
@@ -161,14 +185,20 @@ export class RecommendationStore {
       const id = `asm-${randomUUID()}`
       const version = (latest?.version ?? 0) + 1
       const createdAt = new Date(this.now()).toISOString()
+      const next = state(previous)
+      const closing = next === 'resolved' && !this.db.prepare(`SELECT 1 FROM process_assessments
+        WHERE recommendation_id = ? AND state = 'resolved'`).get(recommendationId)
+      const members = closing ? closure?.() ?? null : null
       this.db.prepare(`INSERT INTO process_assessments
         (id, recommendation_id, version, evaluator_version, evidence_hash, source_position, state, cutoff, advice_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, recommendationId, version, EVALUATOR_VERSION, evaluation.evidenceHash, evaluation.sourcePosition,
-        state(previous), cutoff, JSON.stringify(evaluation.advice), createdAt)
+        next, cutoff, JSON.stringify(evaluation.advice), createdAt)
       const insert = this.db.prepare(`INSERT INTO process_assessment_evidence (assessment_id, ordinal, observation_id, summary_json)
         VALUES (?, ?, ?, ?)`)
       for (const entry of evaluation.evidence) insert.run(id, entry.ordinal, entry.observationId, JSON.stringify(entry))
+      const witness = this.db.prepare('INSERT INTO process_episode_members (recommendation_id, ordinal, limit_event_id) VALUES (?, ?, ?)')
+      members?.forEach((eventId, ordinal) => witness.run(recommendationId, ordinal, eventId))
       return this.mapAssessment(this.db.prepare('SELECT * FROM process_assessments WHERE id = ?').get(id) as AssessmentRow)
     })()
   }

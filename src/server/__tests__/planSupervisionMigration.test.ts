@@ -80,7 +80,7 @@ test('a database at version 15 with plan rows upgrades, twice, keeping every row
   // 22 team-approval-defaults, 24 review-findings, 25 review-convergence, 29 task-publication-handoffs,
   // 30 decision-bound-task-publication, 31 process-quota-history-and-advice) also land in this upgrade.
   expect(Object.keys(after).filter(table => !(table in before)).sort())
-    .toEqual([...SUPERVISION_TABLES, ...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', ...FINDING_TABLES, 'plan_execution_diagnoses', 'team_task_convergence_notices', 'team_task_stall_notices', 'team_task_handoffs', 'team_task_handoff_events', 'team_task_handoff_wakeups', 'plan_decision_publications', 'process_quota_observations', 'process_recommendations', 'process_assessments', 'process_assessment_evidence', 'process_recommendation_gaps'].sort())
+    .toEqual([...SUPERVISION_TABLES, ...REVISION_CONTROL_TABLES, ...PLAN_WORKSPACE_TABLES, ...VERIFICATION_TABLES, 'team_approval_defaults', ...FINDING_TABLES, 'plan_execution_diagnoses', 'team_task_convergence_notices', 'team_task_stall_notices', 'team_task_handoffs', 'team_task_handoff_events', 'team_task_handoff_wakeups', 'plan_decision_publications', 'process_quota_observations', 'process_recommendations', 'process_assessments', 'process_assessment_evidence', 'process_episode_members', 'process_recommendation_gaps'].sort())
   expect(versions(dbPath).filter(row => row.version === 16)).toHaveLength(1)
 })
 

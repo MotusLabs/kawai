@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { episodeFrom, episodeInForce, eventEnd, quotaEpisodes, type EpisodeEvent } from '../chat/quota/adviceEpisodes'
+import { episodeFrom, episodeInForce, eventEnd, quotaEpisodes, type EpisodeClosures, type EpisodeEvent } from '../chat/quota/adviceEpisodes'
 import { CREDIT_LIMIT_WINDOW } from '../chat/limitSignals'
 import type { SessionDatabase } from '../db'
 import { LimitEventStore } from '../team/routing/limitEvents'
@@ -16,6 +16,14 @@ import { freshTestDatabase } from './helpers/testDatabase'
 
 const T0 = Date.parse('2026-06-01T12:00:00.000Z')
 const MIN = 60_000
+/** Witness-less (pre-witness) closures: the recorded resolution instant of the episode keyed by an event. */
+const legacy = (closedAt: (id: string) => number | null): EpisodeClosures => ({ witnessOf: () => null, closedAt })
+/** Witnessed closures: each closed episode's key with the members its witness recorded. */
+const witnessed = (closed: Record<string, string[]>): EpisodeClosures => ({
+  witnessOf: id => Object.entries(closed).find(([, members]) => members.includes(id))?.[0] ?? null,
+  closedAt: () => null,
+})
+const ids = (episodes: ReturnType<typeof quotaEpisodes>) => episodes.map(entry => entry.events.map(event => event.id))
 const ev = (id: string, at: number, reset: number | null): EpisodeEvent & { profile: string } =>
   ({ id, at: new Date(T0 + at * MIN).toISOString(), resetsAt: reset === null ? null : new Date(T0 + reset * MIN).toISOString(), profile: id })
 
@@ -40,9 +48,29 @@ describe('quota episodes', () => {
     expect(quotaEpisodes([ev('a', 0, 10), ev('b', 5, 20), ev('c', 20, 30)]).map(entry => entry.events.map(event => event.id))).toEqual([['a', 'b'], ['c']])
   })
 
+  test('a witnessed closure keeps the members it recorded, even one at the closing instant, and admits nothing after', () => {
+    // b at 2 joined before the closing drain at 2; c at that same instant came after it.
+    const events = [ev('a', 0, 60), ev('b', 2, 2), ev('c', 2, 80), ev('d', 5, 90)]
+    const closures = witnessed({ a: ['a', 'b'] })
+    expect(ids(quotaEpisodes(events, closures))).toEqual([['a', 'b'], ['c', 'd']])
+    expect(quotaEpisodes(events, closures).map(entry => entry.closed)).toEqual([true, false])
+    expect(episodeFrom(events, 'a', closures)?.events.map(event => event.id)).toEqual(['a', 'b'])
+  })
+
+  test('a witnessed closure holds its surviving members when its anchor was pruned', () => {
+    const events = [ev('b', 2, 70), ev('c', 3, 80)]
+    expect(ids(quotaEpisodes(events, witnessed({ a: ['a', 'b'] })))).toEqual([['b'], ['c']])
+    expect(quotaEpisodes(events, witnessed({ a: ['a', 'b'] }))[0]!.closed).toBe(true)
+  })
+
+  test('a witness-less recorded resolution closes the episode for replay', () => {
+    expect(quotaEpisodes([ev('a', 0, 60), ev('b', 1, 70)], legacy(id => (id === 'a' ? T0 + 3 * MIN : null))).map(entry => entry.closed)).toEqual([true])
+    expect(quotaEpisodes([ev('a', 0, 60)]).map(entry => entry.closed)).toEqual([false])
+  })
+
   test('a recorded resolution closes admission: a later event inside the own end opens a new episode', () => {
     const events = [ev('a', 0, 60), ev('b', 1, 2), ev('c', 4, 80)]
-    const closed = (id: string) => (id === 'a' ? T0 + 3 * MIN : null)
+    const closed = legacy(id => (id === 'a' ? T0 + 3 * MIN : null))
     expect(quotaEpisodes(events, closed).map(entry => entry.events.map(event => event.id))).toEqual([['a', 'b'], ['c']])
     expect(quotaEpisodes(events).map(entry => entry.events.map(event => event.id))).toEqual([['a', 'b', 'c']])
     expect(episodeFrom(events, 'a', closed)?.events.map(event => event.id)).toEqual(['a', 'b'])
@@ -50,12 +78,12 @@ describe('quota episodes', () => {
 
   test('an event at the resolution\'s recorded instant counts as after it', () => {
     const events = [ev('a', 0, 60), ev('b', 3, 70)]
-    expect(quotaEpisodes(events, id => (id === 'a' ? T0 + 3 * MIN : null)).map(entry => entry.events.map(event => event.id))).toEqual([['a'], ['b']])
+    expect(quotaEpisodes(events, legacy(id => (id === 'a' ? T0 + 3 * MIN : null))).map(entry => entry.events.map(event => event.id))).toEqual([['a'], ['b']])
   })
 
   test('a tied leader before the anchor still closes at the anchor\'s resolution', () => {
     const events = [ev('aa', 0, 60), ev('zz', 0, 60), ev('mm', 10, 70)]
-    const closed = (id: string) => (id === 'zz' ? T0 + 5 * MIN : null)
+    const closed = legacy(id => (id === 'zz' ? T0 + 5 * MIN : null))
     expect(episodeFrom(events, 'zz', closed)?.events.map(event => event.id)).toEqual(['aa', 'zz'])
   })
 })

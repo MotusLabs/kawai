@@ -30,6 +30,8 @@ export interface AdviceServiceDeps {
   limitsFor: (providerIds: string[]) => Array<HeadroomLimit & { id: string }>
   /** Whether the incident is still in force at `cutoff` (epoch ms). */
   isOpen: (rec: StoredRecommendation, cutoff: number) => boolean
+  /** A closing episode's members, read inside the append transaction that records its first resolution (R5); null without a witness. */
+  closure?: (rec: StoredRecommendation) => readonly string[] | null
   /** The team's observed comparisons (delivered limit handoffs) at or before `cutoffIso`. */
   comparisons: (teamId: string, cutoffIso: string) => number
   /** An assessment was written for the team. */
@@ -124,7 +126,8 @@ export class ProcessAdviceService {
         open: this.deps.isOpen(rec, cutoff),
         comparisons: this.deps.comparisons(rec.teamId, cutoffIso),
       })
-      const written = this.deps.store.append(rec.id, evaluation, cutoffIso, previous => assessmentState(previous, evaluation.advice))
+      const written = this.deps.store.append(rec.id, evaluation, cutoffIso, previous => assessmentState(previous, evaluation.advice),
+        this.deps.closure ? () => this.deps.closure!(rec) : undefined)
       if (written) this.deps.onChange?.(rec.teamId)
       // A first assessment made late (a restart, the coalescing wait) froze the
       // incident-time facts; evidence that arrived since gets its own version
