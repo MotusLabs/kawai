@@ -6,7 +6,10 @@
 // open per window and slice (a cached server read), Refresh recomputes, and
 // close ends it. Every control disables while disconnected. The report
 // sections (D6) sit above the families; a location naming a report
-// (`metrics/<window>/<report id>`) shows that report in their place.
+// (`metrics/<window>/<report id>`) shows that report in their place. Incident
+// advice (process-quota-history-and-incident-advice D6) leads the families;
+// an advice link's target rides every open and refresh (`advice`), so the
+// snapshot carries it even when it is older than the newest listed.
 import { useEffect, useMemo, useState } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import {
@@ -18,6 +21,7 @@ import { emptyTabViewState, useTeamWorkspaceStore } from '../../../stores/teamWo
 import ToolDrill,{ToolMeasurement} from './ToolDrill'
 import MetricFamily from './MetricFamily'
 import MetricsReports from './MetricsReports'
+import IncidentAdvice from './IncidentAdvice'
 import type { NameOf } from './reportLabels'
 
 export const DEFAULT_METRICS_WINDOW: MetricWindow = '7d'
@@ -74,6 +78,8 @@ export default function MetricsView({
   onOpenThread: (threadId: string) => void
 }) {
   const tab = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.metrics) ?? emptyTabViewState()
+  const revealedAdvice = useMetricsStore(state => state.revealedAdvice[teamPath])
+  const advice = useMetricsStore(state => state.pinnedAdvice[teamPath]) ?? null
   const chosen = isMetricWindow(locationWindow) ? locationWindow : null
   const slice = sliceOf(tab.filters)
   const sliceKey = JSON.stringify(slice)
@@ -84,17 +90,17 @@ export default function MetricsView({
     if (!connected || !chosen) return
     const requested = JSON.parse(sliceKey) as MetricSlice | null
     useMetricsStore.getState().request(teamPath, { window: chosen, slice: requested })
-    sendMessage({ type: 'process-metrics-open', teamPath, window: chosen, slice: requested })
+    sendMessage({ type: 'process-metrics-open', teamPath, window: chosen, slice: requested, ...(advice ? { advice } : {}) })
     return () => {
       sendMessage({ type: 'process-metrics-close', teamPath })
       useMetricsStore.getState().close(teamPath)
     }
-  }, [teamPath, connected, connectionEpoch, chosen, sliceKey, sendMessage])
+  }, [teamPath, connected, connectionEpoch, chosen, sliceKey, sendMessage, advice])
 
   const refresh = () => {
     if (!chosen) return
     useMetricsStore.getState().request(teamPath, { window: chosen, slice })
-    sendMessage({ type: 'process-metrics-refresh', teamPath, window: chosen, slice })
+    sendMessage({ type: 'process-metrics-refresh', teamPath, window: chosen, slice, ...(advice ? { advice } : {}) })
   }
   const setSlice = (kind: string) => useTeamWorkspaceStore.getState().setFilters(teamPath, 'metrics', { slice: kind || undefined })
   const applyFile = () => useTeamWorkspaceStore.getState().setFilters(teamPath, 'metrics', { sliceFile: fileDraft.trim() || undefined })
@@ -151,6 +157,8 @@ export default function MetricsView({
         sendMessage={sendMessage} connected={connected} connectionEpoch={connectionEpoch} nameOf={nameOf} onOpenReport={onOpenReport} />
     </div>}
     {snapshot && reportId === undefined && <div className="mt-2 flex flex-col gap-2">
+      {view && <IncidentAdvice recommendations={view.recommendations} reveal={revealedAdvice ?? null}
+        onRevealed={() => useMetricsStore.getState().clearRevealedAdvice(teamPath)} />}
       <ToolMeasurement status={snapshot.toolMeasurement}/>
       {view&&byId.get('tool_abandoned_streaks')?.drill.toolStreaks&&<ToolDrill key={teamPath+chosen+sliceKey+snapshot.computedAt}
         teamPath={teamPath} view={view} inline={byId.get('tool_abandoned_streaks')!.drill.toolStreaks!}

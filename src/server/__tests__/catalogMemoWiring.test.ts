@@ -166,8 +166,11 @@ describe('Table W — production wiring', () => {
       }
       // Each tick resolves the unchanged launch catalog directly (one read);
       // the first tick's provider lookup also warms the shared memo, which
-      // the balance-key read then hits. A balance-key bypass reads [3, 2, 2, 2].
-      expect(reads).toEqual([2, 1, 1, 1])
+      // the balance-key read then hits. The quota reader's worker sweep
+      // (process-quota-history-and-incident-advice D1) reloads the team's
+      // group catalog once after the bump changed its stamp — one more read
+      // in the first window only. A balance-key bypass reads [4, 2, 2, 2].
+      expect(reads).toEqual([3, 1, 1, 1])
       // Parity: every credits pull, the start's and each tick's, carries the
       // value under the balance key name an independent fresh resolution names.
       const keyEnv = resolveProfileCatalog(catalogCtx(home, project)).profiles.get('or-m')!.balanceKeyEnv

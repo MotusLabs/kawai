@@ -40,7 +40,9 @@
 // `submitted_by_profile` on `team_task_results`; migration 29
 // (`task-publication-handoffs`) the handoff, event, and wakeup tables and the
 // nullable `handoff_id` on drafts and revisions (with `lineage_id` on drafts);
-// migration 30 (`decision-bound-task-publication`) adds the decision publication link and receipt table.
+// migration 30 (`decision-bound-task-publication`) adds the decision publication link and receipt table;
+// migration 31 (`process-quota-history-and-advice`) the quota history and the
+// recommendation, assessment, evidence, and gap tables.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -617,9 +619,52 @@ const migration30: SchemaShape['tables'] = {
   },
 }
 
+// Migration 31's delta (process-quota-history-and-incident-advice D3/D5):
+// quota history and the advice stores (triggers are not part of the shape).
+const migration31: SchemaShape['tables'] = {
+  process_quota_observations: {
+    columns: [
+      id, column('team_id'), column('provider_id'), column('account_alias'), column('account_scope'), column('account_basis'),
+      column('source'), column('reason'), column('outcome'), optional('status'), column('windows_json'), column('time_basis'),
+      column('observed_at'), column('recorded_at'),
+    ],
+    indexes: [
+      { name: 'process_quota_observations_recorded', unique: 0, columns: ['recorded_at'] },
+      { name: 'process_quota_observations_team', unique: 0, columns: ['team_id', 'provider_id', 'observed_at'] },
+    ],
+  },
+  process_recommendations: {
+    columns: [
+      id, column('team_id'), column('kind'), column('episode_key'), ...['session_id', 'task_id', 'group_id', 'profile_id', 'provider_id', 'attention_id'].map(optional),
+      column('cutoff'), column('snapshot_json'), column('snapshot_basis'), column('created_at'),
+    ],
+    indexes: [{ name: 'process_recommendations_team', unique: 0, columns: ['team_id', 'created_at'] }],
+  },
+  process_assessments: {
+    columns: [
+      id, column('recommendation_id'), integer('version'), column('evaluator_version'), column('evidence_hash'), column('source_position'),
+      column('state'), column('cutoff'), column('advice_json'), column('created_at'),
+    ],
+    indexes: [],
+  },
+  process_assessment_evidence: {
+    columns: [keyPart('assessment_id', 1), { ...integer('ordinal'), pk: 2 }, optional('observation_id'), column('summary_json')],
+    indexes: [],
+  },
+  // A quota episode's closure witness (R5): opaque limit event ids, each in one episode at most.
+  process_episode_members: {
+    columns: [keyPart('recommendation_id', 1), { ...integer('ordinal'), pk: 2 }, column('limit_event_id')],
+    indexes: [],
+  },
+  process_recommendation_gaps: {
+    columns: [{ name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1 }, column('team_id'), column('episode_key'), column('error_kind'), column('at')],
+    indexes: [],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25, ...migration26, ...migration29, ...migration30 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9, ...migration10, ...migration11And21, ...migration13, ...migration16, ...migration17, ...migration19, ...migration20, ...migration22, ...migration24, ...migration25, ...migration26, ...migration29, ...migration30, ...migration31 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
   // Migration 20's: the submitter's nullable coverage map (independent-
   // verification D4), appended after the baseline columns.

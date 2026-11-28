@@ -73,7 +73,7 @@ const unproposed: VersionChange[] = [{ ...change('s-m', 'mmmmmmmmmmmm', 'lllllll
 const push = (reports = [report]) => act(() => {
   handleMetricsMessage({
     type: 'process-metrics-snapshot', teamPath: '/repo', teamId: '/repo/.git', window: '7d', slice: null, computedAt: metrics.computedAt,
-    metrics, reports, freshness, unproposed,
+    metrics, reports, freshness, unproposed, recommendations: [],
   })
 })
 const result = (commandId: string, extra: { error?: string } = {}) => act(() => {

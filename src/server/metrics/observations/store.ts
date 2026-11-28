@@ -6,7 +6,9 @@
 // the ledger; every other key is deduplicated by the row's unique `source_key`
 // and leaves with it.
 // Interval detail (activity, tool, request, context, turn start/attribution)
-// prunes after 14 days, every other fact after 90.
+// prunes after 14 days, every other fact after 90. Quota history
+// (process-quota-history-and-incident-advice D3) is detail: it prunes with
+// the interval rows, in the same bounded batch.
 import type { Database } from 'bun:sqlite'
 import {
   FACT_OBSERVATION_KINDS,
@@ -20,6 +22,7 @@ import {
   type ProcessObservation,
   type StoredObservation,
 } from '../../../shared/processObservations'
+import { pruneQuotaObservations } from './quotaObservations'
 
 const DAY_MS = 24 * 3600000
 export const PRUNE_BATCH = 500
@@ -125,9 +128,10 @@ export class ObservationStore {
       const rows = this.expired(INTERVAL_OBSERVATION_KINDS, intervalCutoff, PRUNE_BATCH)
       rows.push(...this.expired(FACT_OBSERVATION_KINDS, factCutoff, PRUNE_BATCH - rows.length))
       for (const { seq } of rows) this.db.prepare('DELETE FROM process_observations WHERE seq=?').run(seq)
+      const quota = pruneQuotaObservations(this.db, intervalCutoff, PRUNE_BATCH - rows.length)
       this.setCheckpoint('detail-retained-since', intervalCutoff)
       this.setCheckpoint('facts-retained-since', factCutoff)
-      return rows.length
+      return rows.length + quota
     })()
   }
 

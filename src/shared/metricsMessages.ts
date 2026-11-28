@@ -14,8 +14,11 @@
 // with `report: null` when the team has no such report. The
 // human's proposal commands (team-process-metrics D6) carry a command key and
 // answer `process-proposal-result`; a committed one re-sends the snapshots.
+// The snapshot also carries the team's newest incident recommendations
+// (read-only: the human reads advice here; nothing approves or applies it).
 import type { MetricSlice, MetricWindow, ProcessMetrics, ToolStreakEntry } from './processMetrics'
 import type { ProcessReport, ProposalDecision, ProposalLinkEvent, ReportFreshness, VersionChange } from './processReports'
+import type { ProcessRecommendationDetail } from './processRecommendations'
 
 export interface ToolDrillPage {
   teamId:string
@@ -45,6 +48,14 @@ export type MetricsServerMessage = ({ type:'process-tool-drill-page'; teamPath:s
   freshness: ReportFreshness[]
   /** Version changes in the subscribed window that no accepted proposal's current link names. */
   unproposed: VersionChange[]
+  /**
+   * The team's newest `RECOMMENDATIONS_IN_SNAPSHOT` incident recommendations
+   * (process-quota-history-and-incident-advice D6), newest first, then the
+   * subscription's requested `advice` when it is older, each with
+   * every assessment version and its frozen evidence; read from the stores,
+   * never from Prometheus. Re-sent whenever an assessment is written.
+   */
+  recommendations: ProcessRecommendationDetail[]
 } | {
   type: 'process-report-detail'
   teamPath: string
@@ -65,10 +76,15 @@ export type MetricsServerMessage = ({ type:'process-tool-drill-page'; teamPath:s
 }
 
 export const REPORTS_IN_SNAPSHOT = 20
+export const RECOMMENDATIONS_IN_SNAPSHOT = 20
 
 export type MetricsClientMessage =
   | { type:'process-tool-drill-page'; teamPath:string; window:MetricWindow; slice:MetricSlice|null; pageSize:number; cursor:string|null }
-  | { type: 'process-metrics-open' | 'process-metrics-refresh'; teamPath: string; window: MetricWindow; slice: MetricSlice | null }
+  /**
+   * `advice`: a recommendation an attention item's advice link opened; the
+   * snapshot carries it (team-bound) even when it is not among the newest.
+   */
+  | { type: 'process-metrics-open' | 'process-metrics-refresh'; teamPath: string; window: MetricWindow; slice: MetricSlice | null; advice?: string | null }
   | { type: 'process-metrics-close'; teamPath: string }
   /** Read one report by id and keep receiving it after commits, until closed. */
   | { type: 'process-report-open' | 'process-report-close'; teamPath: string; reportId: string }

@@ -12,10 +12,16 @@
 // cleanup runs on every reconnect) clears waiting slots, so a lost result
 // never leaves a card busy. A report outside the snapshot, opened by id,
 // lands in `opened` (null when the team has none) and is dropped on close.
+// Incident recommendations ride the snapshot whole (read-only advice); an
+// attention item's advice link names the one to open in `revealedAdvice`, a
+// one-shot target the Metrics view takes once it lists that recommendation,
+// and in `pinnedAdvice`, which the view's subscription keeps asking for so the
+// snapshot carries it even when it is older than the newest listed.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { ToolStreakEntry, MetricSlice, MetricWindow, ProcessMetrics } from '@shared/processMetrics'
 import type { ProcessReport, ReportFreshness, VersionChange } from '@shared/processReports'
+import type { ProcessRecommendationDetail } from '@shared/processRecommendations'
 
 export interface MetricsRequest {
   window: MetricWindow
@@ -45,6 +51,8 @@ export interface MetricsView {
   freshness: ReportFreshness[]
   /** Version changes in the requested window no accepted proposal's link names. */
   unproposed: VersionChange[]
+  /** The team's newest incident recommendations with every assessment (read-only advice). */
+  recommendations: ProcessRecommendationDetail[]
   /** Armed proposal commands by slot (`decide:<id>`, `link:<id>`). */
   commands: Record<string, ProposalCommand>
   /** Reports opened by id; null when the team has no such report, absent while loading. */
@@ -60,7 +68,7 @@ export interface ProposalCommand {
 }
 
 export const closedMetricsView = (): MetricsView => ({
-  open: false, loading: false, requested: null, metrics: null, reports: [], freshness: [], unproposed: [], commands: {}, opened: {},
+  open: false, loading: false, requested: null, metrics: null, reports: [], freshness: [], unproposed: [], recommendations: [], commands: {}, opened: {},
 })
 
 const mintCommandId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `cmd-${Date.now()}-${Math.random()}`)
@@ -70,6 +78,13 @@ const sameRequest = (a: MetricsRequest | null, window: MetricWindow, slice: Metr
 
 interface MetricsState {
   views: Record<string, MetricsView>
+  /** Per team key: the recommendation an attention item's advice link asked to open (D6). */
+  revealedAdvice: Record<string, string>
+  /** Per team key: the latest advice-link target, requested with every Metrics open and refresh. */
+  pinnedAdvice: Record<string, string>
+  revealAdvice: (teamKey: string, recommendationId: string) => void
+  /** The view opened it: the one-shot target is spent. */
+  clearRevealedAdvice: (teamKey: string) => void
   /** The tab asked for a window and slice (an open or a refresh). */
   request: (teamKey: string, request: MetricsRequest) => void
   close: (teamKey: string) => void
@@ -88,6 +103,17 @@ interface MetricsState {
 
 export const useMetricsStore = create<MetricsState>((set, get) => ({
   views: {},
+  revealedAdvice: {},
+  pinnedAdvice: {},
+  revealAdvice: (teamKey, recommendationId) => set(state => ({
+    revealedAdvice: { ...state.revealedAdvice, [teamKey]: recommendationId },
+    pinnedAdvice: { ...state.pinnedAdvice, [teamKey]: recommendationId },
+  })),
+  clearRevealedAdvice: teamKey => set(state => {
+    if (!(teamKey in state.revealedAdvice)) return state
+    const { [teamKey]: _spent, ...rest } = state.revealedAdvice
+    return { revealedAdvice: rest }
+  }),
   request: (teamKey, request) => set(state => {
     const view = state.views[teamKey] ?? closedMetricsView()
     return { views: { ...state.views, [teamKey]: { ...view, open: true, loading: true, requested: request,toolDrill:undefined } } }
@@ -128,6 +154,7 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
     if (!view?.open || !sameRequest(view.requested, message.window, message.slice)) return state
     return { views: { ...state.views, [message.teamPath]: {
       ...view, loading: false, metrics: message.metrics, reports: message.reports, freshness: message.freshness, unproposed: message.unproposed,
+      recommendations: message.recommendations ?? [],
     } } }
   }),
   arm: (teamKey, slot, payload) => {

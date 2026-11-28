@@ -3,10 +3,14 @@
 // one shape — an unrecognized kind shows its raw kind with the same cause,
 // owner, impact, and next action, never dropped. The next action is a link to
 // where the existing action lives; this view writes nothing. State words are
-// text, not color: the section titles and the owner's kind carry them.
+// text, not color: the section titles and the owner's kind carry them. An
+// item with incident advice (process-quota-history-and-incident-advice D6)
+// also links to it in the Metrics tab — the same item, never a second alert.
 import { useEffect, useRef } from 'react'
 import type { AttentionItem } from '@shared/teamWorkspace'
+import { useMetricsStore } from '../../stores/metricsStore'
 import { attentionCounts } from '../../stores/teamWorkspaceDataStore'
+import { parseTeamHash, teamHashOf } from '../../utils/teamLocation'
 import { attentionLinkLabel } from './attentionLinks'
 
 const KIND_LABELS: Record<string, string> = {
@@ -54,7 +58,23 @@ export function focusAfterRemoval(previous: readonly string[], current: readonly
   return current[Math.min(index, current.length - 1)] ?? null
 }
 
-function Item({ item, onOpen }: { item: AttentionItem; onOpen: (item: AttentionItem) => void }) {
+/**
+ * Open a recommendation in the current team's Metrics tab: the reveal target
+ * rides the metrics store (the view opens it once listed) and the location
+ * moves to the tab. The team is the one the page shows.
+ */
+export function openAdviceInMetrics(recommendationId: string): void {
+  const location = parseTeamHash(window.location.hash)
+  if (!location) return
+  useMetricsStore.getState().revealAdvice(location.teamKey, recommendationId)
+  window.location.hash = teamHashOf({ teamKey: location.teamKey, tab: 'metrics' })
+}
+
+function Item({ item, onOpen, onOpenAdvice }: {
+  item: AttentionItem
+  onOpen: (item: AttentionItem) => void
+  onOpenAdvice: (recommendationId: string) => void
+}) {
   const impact = impactLabel(item)
   return <li className="border border-border p-2" data-testid="attention-item" data-item-id={item.id} data-kind={item.kind}>
     <p className="text-chat-meta text-secondary">
@@ -67,14 +87,20 @@ function Item({ item, onOpen }: { item: AttentionItem; onOpen: (item: AttentionI
       onClick={() => onOpen(item)}>
       {item.nextAction}<span className="text-secondary"> · {attentionLinkLabel(item.link)}</span>
     </button>
+    {item.advice && <button type="button" className="btn mt-1 ml-1 text-chat-meta" data-testid="attention-advice"
+      aria-label={`View advice: ${item.cause}`} onClick={() => onOpenAdvice(item.advice!.recommendationId)}>
+      View advice
+    </button>}
   </li>
 }
 
-export default function TeamAttentionQueue({ items, loaded, onOpen }: {
+export default function TeamAttentionQueue({ items, loaded, onOpen, onOpenAdvice = openAdviceInMetrics }: {
   items: readonly AttentionItem[]
   /** False until the first snapshot arrives, so loading is not read as empty. */
   loaded: boolean
   onOpen: (item: AttentionItem) => void
+  /** Open an item's attached advice; the current team's Metrics tab by default. */
+  onOpenAdvice?: (recommendationId: string) => void
 }) {
   const counts = attentionCounts(items)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -105,11 +131,11 @@ export default function TeamAttentionQueue({ items, loaded, onOpen }: {
     {loaded && items.length === 0 && <p className="text-chat-meta text-secondary" data-testid="attention-empty">Nothing needs attention.</p>}
     {human.length > 0 && <div data-testid="attention-human">
       <h4 className="mt-1 text-chat-meta font-medium">Needs you ({human.length})</h4>
-      <ul className="mt-1 space-y-1">{human.map(item => <Item key={item.id} item={item} onOpen={onOpen} />)}</ul>
+      <ul className="mt-1 space-y-1">{human.map(item => <Item key={item.id} item={item} onOpen={onOpen} onOpenAdvice={onOpenAdvice} />)}</ul>
     </div>}
     {agent.length > 0 && <div data-testid="attention-agent">
       <h4 className="mt-1 text-chat-meta font-medium">Waiting on agents ({agent.length})</h4>
-      <ul className="mt-1 space-y-1">{agent.map(item => <Item key={item.id} item={item} onOpen={onOpen} />)}</ul>
+      <ul className="mt-1 space-y-1">{agent.map(item => <Item key={item.id} item={item} onOpen={onOpen} onOpenAdvice={onOpenAdvice} />)}</ul>
     </div>}
   </section>
 }

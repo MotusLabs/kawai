@@ -59,11 +59,15 @@ export interface PlanAttentionFact {
   failedPromotion: { id: string; targetBranch: string; reason: string | null } | null
   /** Whether that promotion's correction task is open. */
   correctionOpen: boolean
+  /** Attention id to the incident advice attached to it (process-quota-history-and-incident-advice D6). */
+  advice?: Record<string, string>
 }
 
 /** What the gatherer reads: the supervision detail's reads plus the promotion listing. */
 export interface PlanAttentionReads extends SupervisionDetailReads {
   promotions?: Pick<IntegrationStore, 'promotionsOf'>
+  /** The team's advice attached to attention items (D6); absent without incident advice. */
+  advice?: { attachedAdvice(teamId: string): Map<string, string> }
 }
 
 const OPEN_TASK = new Set(['open', 'active', 'blocked'])
@@ -79,6 +83,7 @@ function superseded(reads: PlanAttentionReads, teamId: string, fix: PlanFixTask)
 
 /** Every open plan's facts, in the store's order. Another team's plans never enter. */
 export function planAttentionFacts(reads: PlanAttentionReads, teamId: string, now: Date): PlanAttentionFact[] {
+  const advice = reads.advice ? Object.fromEntries(reads.advice.attachedAdvice(teamId)) : undefined
   return reads.plans.openPlans(teamId).map(plan => {
     const derived = derivePlanSupervision(reads, teamId, plan.id, now)
     const revision = derived?.revision ?? plan.currentApprovedRevision
@@ -121,6 +126,7 @@ export function planAttentionFacts(reads: PlanAttentionReads, teamId: string, no
       fixes,
       failedPromotion: failed,
       correctionOpen,
+      ...(advice ? { advice } : {}),
     }
   })
 }
@@ -175,6 +181,7 @@ const amendItems = ({ plans, taskTitle, handoffs }: AttentionInput) => {
       nextAction: 'Publish a task revision',
       link: { kind: 'task' as const, id: change.taskId },
       requiresHuman: true,
+      ...adviceOf(fact, `${fact.executionId}:${change.supervision.change}:${stall.episodeKey}`),
     }]
   }))
 }
@@ -195,7 +202,14 @@ const stallItems = ({ plans, taskTitle }: AttentionInput) =>
       nextAction: 'Unblock the holder',
       link: planLink(fact, change.supervision.change),
       requiresHuman: fact.leadGroup === null,
+      ...adviceOf(fact, `${fact.executionId}:${change.supervision.change}:${change.supervision.stall!.episodeKey}`),
     })))
+
+/** The advice attached to a stall episode's item (D6), keyed by the episode's base id; none without it. */
+function adviceOf(fact: PlanAttentionFact, sourceId: string): { advice?: { recommendationId: string } } {
+  const recommendationId = fact.advice?.[attentionItemId('plan-stall', sourceId)]
+  return recommendationId ? { advice: { recommendationId } } : {}
+}
 
 /** An open decision card: its addressed group answers, else the human (D13). */
 export const decisionQuestionItems: AttentionSource = ({ plans, taskTitle }: AttentionInput) =>

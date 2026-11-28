@@ -83,7 +83,40 @@ evidence hash) suppresses duplicates. Evaluation runs off a coalescing queue
 after incident commits and quota/reset updates, targeting publication within
 five seconds; evaluator failure records a health gap and leaves work running.
 At startup, episodes with no assessment for the current evaluator version are
-enqueued once (recovery-matrix row).
+enqueued once (recovery-matrix row). A quota episode is a team's chain of final
+limits of one provider, oldest first: an event joins while the episode's own
+cooldown (the latest reset of its members, else one hour after the event) is
+still ahead of it, and otherwise opens a new episode; events at one instant
+keep their commit order. The episode's first `resolved` version closes it, and
+that version's append transaction also writes the closure witness
+(`process_episode_members`). The witness is the opaque ids of the limit events
+the episode held at that instant, read in the transaction before the version
+is written, in episode order. The version and its witness commit together or
+not at all. A limit committed before the closing drain at the same millisecond
+is a member. One committed after it is not yet a row, so it opens its own
+episode. Both orders are kept without comparing timestamps. Witnessed events
+are grouped into their closed episode first, and only the rest chain, so each
+final limit belongs to one episode only. A closed episode admits nothing, and
+startup skips it before reading any cooldown: another team's later limit may
+keep the profile cooling, but it never reopens the episode or promotes a
+consumed member. A pruned anchor (15-day limit retention) is stood in for by
+what its recommendation froze: its id, cutoff, profile, window and reset. Its
+surviving members therefore keep their episode, live and in the witness. A
+resolution recorded without a witness (a database written before witnesses)
+closes its episode at its `created_at`. Its order is unknown, so an event at
+that instant counts as after it, and such an episode keyed by a pruned anchor
+cannot hold its survivors. Prior versions are never rewritten. The episode is
+in force at a time while some member's own end is ahead of it and that
+member's profile cooldown, as the router saw it at that time, still runs
+(members can hold different model-scoped windows, so neither the first nor the
+newest member decides); after its recorded resolution it is never in force.
+"As the router saw it" is `LimitEventStore.cooldownAt` (I5): read-only, the
+router's rule over the events recorded by that time, with a credit event
+ending early only on the readings taken by then and only when this process
+recorded it, so every assessment, first or later, reads the cooldown at its
+own cutoff. The live join, the episode's open state, its members and startup
+reconstruction (only the newest episode, when open and in force) all use this
+partition.
 
 ### D6 — Surfaces
 
@@ -121,10 +154,22 @@ before code (state machine with recovery): task 0.1.
 | S13 | worker (two teams, one key) | standalone | no | tick | one request; both teams' histories get it |
 | S14 | worker | standalone | * | config change of credential | old key unsubscribed, new key polled once |
 
-Completeness: reasons × reader × in-flight × event; combinations not listed
-are unreachable: `none` with any event other than subscribe (no timer
-exists); in-flight with subscribe (subscribe on an armed key only increments
-the count — S13); `agent-only` with tick (no timer is armed for it, S9).
+Completeness (decision-ed5e5e77): reasons × reader × in-flight × event is
+4 × 2 × 2 × 11 = 176 combinations, every one in exactly one class of
+`quotaReaderTableSCompleteness.test.ts`: a row above, a bound rule (B1–B6,
+the B3 drain, P1) through a stated equivalence, or unreachable with its
+reason; each reachable class names its tests. Axes are pre-event, except
+that for the two settlement events the in-flight axis is the settled state
+(as S5/S6 record it); a settlement with another request current is a late
+answer to an abandoned attempt and is dropped (S4, P1). `unsubscribe` and
+`worker removed` both remove the key's worker reason; the pre-event reasons
+tell S7 from S8. A repeated subscribe on an armed key adds the team (S13);
+a subscribe during the B3 drain joins its request. B3 drains and B4 shutdown
+hold with no new request; B6 serves a worker only from a same-key session.
+Agent-only keys keep S9/S10 and record lifecycle changes. Unreachable: an
+agent-only request in flight, a tick or settlement of one, a timeout with
+nothing in flight, removing an absent worker reason, a restart with a
+request in flight (100 reachable, 76 unreachable).
 
 **Table F — headroom evidence.** Output: may the value establish routed
 headroom?

@@ -101,6 +101,79 @@ retention cannot restore history that was already pruned. Interrupted usage and
 unknown live gaps are never measured zero consumption. Immutable report snapshots
 and evidence are not rewritten by retention or reconciliation.
 
+## Background quota observation and incident advice
+
+`QuotaReaderService` (`src/server/chat/quota/`) polls each effective account
+configuration — provider, base URL origin, and an in-memory hash of the
+credential — of every configured team worker whose profile resolves to a
+standalone quota endpoint, whether or not a chat is running. Teams come from
+tracked sessions and the durable session directory, re-read on each team
+resolution and every minute, so editing a group file or killing the last chat
+changes nothing until the configuration does. It polls a new key at once, then
+every ten minutes ±10%, backs off 1, 2, 4, 8, 16, then 30 minutes after
+consecutive failures, bounds each request at ten seconds, allows one request in
+flight per key (live sessions' spawn pulls and cadence join it), and stops a
+key with its last worker. Host-login SDK pulls and OpenRouter keep their
+session-only behavior: a worker with no standalone reader records one
+`unsupported` observation per configuration and starts nothing. No poll starts
+an agent, makes a model request or changes a login.
+
+Each settlement and each agent-pushed report writes `process_quota_observations`
+per team: provider, the `provider@host` alias, an account scope (an HMAC of the
+account key under a per-process salt, so a new credential or a restart never
+inherits headroom), whether the data describes the routed account or may be the
+host login, the reason, the outcome (`supported`, `unavailable`,
+`auth-refused`, `failed`, `unsupported`), and each window with its own
+observation time. A status-only or failed update stores no windows and never
+freshens older ones. No response body, error text or credential is stored or
+logged. Rows are detail: they prune with the 14-day interval retention.
+
+`team_capacity` is unchanged: read-only and fetch-free, it reads the same
+in-memory usage store, which worker pulls now also fill.
+
+At a final limit event or a context-exhausted flag, Kawai records one
+recommendation per team, kind and episode with the routing facts frozen from
+`team_capacity`'s reader (caps, live counts, cooldowns, login sharing), the held
+message's worker choice and cross-model restriction, and the worktree's writer
+slot as staffing counts it (other holders and pending reservations). A
+coalescing queue (one second) evaluates it: alternatives on the limited
+account, cooling, restricted, capped, or blocked by another writer or a pending
+reservation of a task's worktree are excluded by name; when only the limited
+writer holds the slot, the advice says it must release or hand off first. The
+rest are listed with headroom known only for a routed window at most ten
+minutes old, unreset, unvetoed by a later failure or limit of the account, and
+below 100%. The first assessment reads only rows observed and recorded by the
+incident time; a reading written later, whatever its observation time, makes a
+later version.
+Advice is provisional: no numeric saving is claimed while handoff and rework
+costs are unknown, and fewer than ten observed handoffs keep the small-sample
+flag. Assessments are immutable versions: unchanged evidence writes nothing;
+later evidence writes the next version. Context advice attaches to the
+`context-exhausted` attention id, quota advice to a stall alert of the task's
+plan change when one exists, including a stall raised after the quota episode
+opened (attached on the next limit, history write or startup); neither sends
+mail or raises another alert. That
+attention item gains a **View advice** link that opens the recommendation in
+the Metrics tab, even when it is older than the snapshot's newest twenty (the
+link's target rides the Metrics subscription); it is the same item, never a
+second alert. Advice is never
+"demonstrated" here: that needs an outcome baseline this change does not build.
+Evaluator failures record a gap in `process_recommendation_gaps`. A limit
+event commits before its advice callback runs, so startup (and each session's
+team resolution) replays that session's final limit events still cooling and
+its context flag; an episode already recorded is not repeated. An episode's
+first resolved version is written with its closure witness
+(`process_episode_members`, the limit event ids it held then). A closed
+episode keeps exactly those members, admits nothing after them, and is never
+replayed, whatever the profile's cooldown later; a witness-less resolution
+from before witnesses closes at its recorded instant. Each assessment reads the router's cooldown as it
+stood at its own cutoff (`LimitEventStore.cooldownAt`). Startup then
+re-enqueues every unresolved or unassessed recommendation. The Metrics view
+lists the advice from the snapshot (no Prometheus); agents read it through
+`process_recommendations_list` and `process_recommendation_get`, and no tool
+approves or applies it. The export's `provider-quota` capability stays 0 until
+its export family lands.
+
 ## Optional Prometheus endpoint
 
 Set both server environment variables and restart:

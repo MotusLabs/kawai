@@ -32,7 +32,7 @@ Switch-versus-wait assessments SHALL use provider/account sharing, model-scoped 
 A recommendation SHALL have a stable identity and immutable numbered assessments containing evidence as of a recorded cutoff, rule version, sample sizes, coverage, uncertainty and rationale. Reassessment SHALL preserve earlier assessments and mark the current advice as new, strengthened, revised, withdrawn or resolved. Unchanged assessments SHALL NOT create duplicate advice.
 
 #### Scenario: New evidence reverses advice
-- **WHEN** later outcomes show the proposed model increases acceptance time
+- **WHEN** a later observed quota window shows that the proposed alternative has lost its headroom
 - **THEN** a new assessment explains the revision and the earlier recommendation and its evidence remain readable
 
 ### Requirement: Incident advice reuses existing episodes

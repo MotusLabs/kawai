@@ -14,7 +14,7 @@
 // through the report service as the human for the resolved team, answered by
 // `process-proposal-result`; the service's commit hook does the re-send.
 import { isMetricWindow, type MetricSlice, type MetricWindow } from '../../shared/processMetrics'
-import { REPORTS_IN_SNAPSHOT, type MetricsClientMessage } from '../../shared/metricsMessages'
+import { RECOMMENDATIONS_IN_SNAPSHOT, REPORTS_IN_SNAPSHOT, type MetricsClientMessage } from '../../shared/metricsMessages'
 import { unknownTeamError } from '../../shared/team'
 import type { ChatConnection } from '../chat/ChatConnections'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
@@ -30,6 +30,8 @@ interface Subscription {
   teamId: string
   window: MetricWindow
   slice: MetricSlice | null
+  /** A recommendation an advice link asked for, carried even outside the newest (D6). */
+  advice: string | null
 }
 
 export class MetricsConnections {
@@ -39,7 +41,7 @@ export class MetricsConnections {
   /** Reports each connection opened by id, keyed by team path and report id. */
   private readonly openReports = new Map<ChatConnection, Map<string, OpenReport>>()
 
-  constructor(private readonly manager: Pick<ChatSessionManager, 'teamScopes' | 'metrics' | 'reports'>) {}
+  constructor(private readonly manager: Pick<ChatSessionManager, 'teamScopes' | 'metrics' | 'reports'> & Partial<Pick<ChatSessionManager, 'advice'>>) {}
 
   disconnect(connection: ChatConnection) {
     this.subscriptions.delete(connection)
@@ -99,7 +101,22 @@ export class MetricsConnections {
     connection.send({
       type: 'process-metrics-snapshot', teamPath, teamId, window, slice: subscription.slice, computedAt: metrics.computedAt, metrics,
       reports, freshness, unproposed: this.manager.reports.unproposed(teamId, window),
+      recommendations: this.recommendations(teamId, subscription.advice),
     })
+  }
+
+  /**
+   * The team's newest recommendations with their versions (empty without the
+   * advice service), plus the requested one when it is older. The read is
+   * team-bound: another team's id adds nothing (R7).
+   */
+  private recommendations(teamId: string, advice: string | null) {
+    const store = this.manager.advice?.store
+    if (!store) return []
+    const newest = store.list(teamId, RECOMMENDATIONS_IN_SNAPSHOT).flatMap(rec => store.get(teamId, rec.id) ?? [])
+    if (advice === null || newest.some(rec => rec.id === advice)) return newest
+    const requested = store.get(teamId, advice)
+    return requested ? [...newest, requested] : newest
   }
 
   /** A human proposal command: decide, or link/replace/unlink, by command key. */
@@ -166,7 +183,7 @@ export class MetricsConnections {
     }
     const views = this.subscriptions.get(connection) ?? new Map<string, Subscription>()
     this.subscriptions.set(connection, views)
-    const subscription = { teamId: team.teamId, window: message.window, slice }
+    const subscription = { teamId: team.teamId, window: message.window, slice, advice: typeof message.advice === 'string' ? message.advice : null }
     views.set(teamPath, subscription)
     this.send(connection, teamPath, subscription, message.type === 'process-metrics-refresh')
   }
